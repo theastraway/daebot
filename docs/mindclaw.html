@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MINDClaw — OpenClaw with MIND Baked In</title>
+  <meta name="description" content="One install, one command. MINDClaw is OpenClaw pre-bundled with MIND — persistent knowledge graph memory wired into every agent turn. Like Obsidian, only every AI you use reads from it." />
+  <meta name="keywords" content="MINDClaw, OpenClaw distribution, MIND, AI memory, knowledge graph, persistent memory, MCP, agent memory, obsidian alternative" />
+  <meta name="robots" content="index, follow" />
+  <link rel="canonical" href="https://www.m-i-n-d.ai/mindclaw.html" />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://www.m-i-n-d.ai/mindclaw.html" />
+  <meta property="og:title" content="MINDClaw — OpenClaw with MIND Baked In" />
+  <meta property="og:description" content="One install, one command. Persistent knowledge graph memory wired into every agent turn." />
+  <meta property="og:image" content="https://www.m-i-n-d.ai/openclaw-hero.jpg" />
+  <meta property="og:site_name" content="MIND app" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="MINDClaw" />
+  <meta name="twitter:description" content="OpenClaw with MIND baked in. One install. Like Obsidian, only every AI reads from it." />
+  <meta name="twitter:image" content="https://www.m-i-n-d.ai/openclaw-hero.jpg" />
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "MINDClaw",
+    "url": "https://www.m-i-n-d.ai/mindclaw.html",
+    "description": "OpenClaw distribution with MIND pre-installed. Persistent knowledge graph memory by default for every agent turn.",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "macOS, Linux, Windows",
+    "offers": [
+      {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD",
+        "name": "Free"
+      },
+      {
+        "@type": "Offer",
+        "price": "10",
+        "priceCurrency": "USD",
+        "name": "Claw — BYO LLM"
+      }
+    ],
+    "author": { "@type": "Organization", "name": "Astra AI", "url": "https://www.m-i-n-d.ai" },
+    "softwareVersion": "0.1.0",
+    "downloadUrl": "https://www.npmjs.com/package/mindclaw",
+    "installUrl": "https://www.npmjs.com/package/mindclaw",
+    "sameAs": [
+      "https://www.npmjs.com/package/mindclaw",
+      "https://github.com/theastraway/mindclaw"
+    ]
+  }
+  </script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0f;
+      color: #e2e8f0;
+      line-height: 1.7;
+      padding: 0 1rem;
+    }
+    a { color: #e53935; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .container { max-width: 920px; margin: 0 auto; padding: 3rem 0 6rem; }
+    header { text-align: center; margin-bottom: 3rem; padding: 2rem 0 3rem; border-bottom: 1px solid #1e1e2e; }
+    .badge {
+      display: inline-block;
+      background: #1a0505;
+      color: #e53935;
+      border: 1px solid #e53935;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      padding: 0.25rem 0.9rem;
+      margin-bottom: 1.25rem;
+      text-transform: uppercase;
+    }
+    h1 { font-size: 2.75rem; font-weight: 800; line-height: 1.15; margin-bottom: 1rem; letter-spacing: -0.02em; }
+    h1 span { color: #e53935; }
+    .subtitle { font-size: 1.2rem; color: #94a3b8; max-width: 640px; margin: 0 auto 2rem; }
+    .hero-image-wrap {
+      max-width: 920px;
+      margin: 2.5rem auto 1rem;
+      border-radius: 16px;
+      overflow: hidden;
+      border: 1px solid #1e2530;
+      box-shadow: 0 24px 80px -20px rgba(229, 57, 53, 0.25), 0 0 0 1px rgba(229, 57, 53, 0.05);
+    }
+    .hero-image-wrap img { display: block; width: 100%; height: auto; }
+    .cta-row { display: flex; flex-wrap: wrap; gap: 0.75rem; justify-content: center; margin-top: 1.5rem; }
+    .npm-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: #111827;
+      border: 1px solid #374151;
+      border-radius: 8px;
+      padding: 0.7rem 1.2rem;
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 0.95rem;
+      color: #e2e8f0;
+    }
+    .cta-primary {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: #e53935;
+      color: white !important;
+      border: 1px solid #e53935;
+      border-radius: 8px;
+      padding: 0.7rem 1.4rem;
+      font-weight: 600;
+      font-size: 0.9rem;
+      transition: all 0.2s ease;
+    }
+    .cta-primary:hover { background: #c62828; text-decoration: none; transform: translateY(-1px); }
+    .cta-secondary {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: transparent;
+      color: #e2e8f0 !important;
+      border: 1px solid #374151;
+      border-radius: 8px;
+      padding: 0.7rem 1.4rem;
+      font-weight: 600;
+      font-size: 0.9rem;
+      transition: all 0.2s ease;
+    }
+    .cta-secondary:hover { border-color: #e53935; text-decoration: none; }
+    h2 { font-size: 1.65rem; font-weight: 700; margin: 3rem 0 1rem; color: #f1f5f9; letter-spacing: -0.01em; }
+    h3 { font-size: 1.1rem; font-weight: 600; margin: 2rem 0 0.75rem; color: #cbd5e1; }
+    p { color: #94a3b8; margin-bottom: 1rem; }
+    p strong { color: #e2e8f0; }
+    pre {
+      background: #0d1117;
+      border: 1px solid #1e2530;
+      border-radius: 10px;
+      padding: 1.25rem 1.5rem;
+      overflow-x: auto;
+      margin: 1rem 0 1.5rem;
+    }
+    code { font-family: 'SF Mono', Monaco, Consolas, monospace; font-size: 0.875rem; color: #e2e8f0; }
+    p code, li code, td code {
+      background: #1e2530;
+      border-radius: 4px;
+      padding: 0.1rem 0.4rem;
+      font-size: 0.85rem;
+      color: #93c5fd;
+    }
+    .step { display: flex; gap: 1.25rem; margin-bottom: 2.5rem; align-items: flex-start; }
+    .step-num {
+      background: #e53935;
+      color: white;
+      width: 2rem;
+      height: 2rem;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 0.85rem;
+      flex-shrink: 0;
+      margin-top: 0.15rem;
+    }
+    .step-body { flex: 1; }
+    .step-body h3 { margin-top: 0; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0 1.5rem; font-size: 0.9rem; }
+    th { text-align: left; padding: 0.7rem 1rem; background: #111827; color: #94a3b8; font-weight: 600; border-bottom: 1px solid #1e2530; }
+    td { padding: 0.65rem 1rem; border-bottom: 1px solid #1a1f2e; color: #cbd5e1; vertical-align: top; }
+    .check { color: #4ade80; font-weight: 700; }
+    .x { color: #ef4444; font-weight: 700; }
+    .section-divider { border: none; border-top: 1px solid #1e2530; margin: 3rem 0; }
+    footer { text-align: center; color: #4a5568; font-size: 0.875rem; margin-top: 4rem; padding-top: 2rem; border-top: 1px solid #1e2530; }
+    .pitch { text-align: center; font-size: 1.5rem; font-weight: 700; color: #f1f5f9; margin: 1.5rem 0 0.5rem; line-height: 1.3; }
+    .pitch span { color: #e53935; }
+    .pricing-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1.5rem 0; }
+    @media (max-width: 720px) { .pricing-grid { grid-template-columns: 1fr; } }
+    .pricing-card {
+      background: #0d1117;
+      border: 1px solid #1e2530;
+      border-radius: 12px;
+      padding: 1.5rem;
+    }
+    .pricing-card.featured { border-color: #e53935; }
+    .price { font-size: 2.25rem; font-weight: 800; color: #f1f5f9; }
+    .price small { font-size: 1rem; color: #94a3b8; font-weight: 500; }
+    .feature-list { list-style: none; margin-top: 1rem; }
+    .feature-list li { padding: 0.35rem 0; color: #cbd5e1; }
+    .feature-list li::before { content: "✓ "; color: #4ade80; font-weight: 700; }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <header>
+    <div class="badge">MINDClaw · Open Source</div>
+    <h1>MIND <span>×</span> Claw</h1>
+    <p class="subtitle">OpenClaw, with MIND baked in. One install, one command. Every agent turn pulls from your knowledge graph and writes back to it. Like Obsidian, only every AI you use reads from it.</p>
+
+    <div class="hero-image-wrap">
+      <img src="https://www.m-i-n-d.ai/openclaw-hero.jpg" alt="MIND coral reef and the OpenClaw lobster mascot — the official MIND × Claw mark." loading="eager" />
+    </div>
+
+    <div class="cta-row">
+      <a class="cta-primary" href="https://www.m-i-n-d.ai" target="_blank" rel="noopener">Get a MIND account →</a>
+      <a class="cta-secondary" href="https://github.com/theastraway/mindclaw" target="_blank" rel="noopener">View on GitHub</a>
+    </div>
+    <div class="cta-row" style="margin-top: 0.75rem;">
+      <div class="npm-badge">curl -fsSL m-i-n-d.ai/install/mindclaw.sh | bash</div>
+    </div>
+  </header>
+
+  <p class="pitch">Other agent runtimes start from zero. <span>MINDClaw remembers.</span></p>
+  <p style="text-align:center;max-width:640px;margin:0 auto 1.5rem;">MINDClaw is a free, open-source distribution of OpenClaw with the MIND knowledge-graph memory layer pre-installed and pre-configured. The 16 typed-document templates seed into your tenant on first run, so every agent that touches your MIND knows how to think, remember, and tag.</p>
+
+  <hr class="section-divider" />
+
+  <h2>Why a Distribution, Not Just a Plugin</h2>
+  <p>The MIND plugin for OpenClaw already exists. MINDClaw goes further: it ships the runtime, the plugin, the templates, the tagging system, and the onboarding wizard as one package. New users go from <code>curl … | bash</code> to a working agent with persistent memory in under two minutes — no API key copy-paste, no config file editing, no plugin install step.</p>
+
+  <hr class="section-divider" />
+
+  <h2>Quick Start</h2>
+
+  <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-body">
+      <h3>Install</h3>
+      <pre><code>curl -fsSL https://www.m-i-n-d.ai/install/mindclaw.sh | bash</code></pre>
+      <p>Or, with npm directly: <code>npm install -g mind-claw &amp;&amp; mindclaw init</code></p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">2</div>
+    <div class="step-body">
+      <h3>First-run wizard</h3>
+      <p>Pick one:</p>
+      <ul style="margin-left:1.25rem;color:#cbd5e1;">
+        <li>Paste an existing MIND API key, or</li>
+        <li>Create a free MIND account on the spot, or</li>
+        <li>Create an account and upgrade to Claw ($10/mo, BYO LLM).</li>
+      </ul>
+      <p>The wizard writes the OpenClaw plugin config and seeds the 16 typed-document templates into your knowledge graph automatically.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">3</div>
+    <div class="step-body">
+      <h3>Use it</h3>
+      <pre><code>mindclaw                  <span style="color:#4a5568"># launch interactive session, MIND already wired</span>
+mindclaw status           <span style="color:#4a5568"># show MIND connection + plugin state</span>
+mindclaw seed-templates   <span style="color:#4a5568"># reseed the typed templates after a major change</span>
+mindclaw upgrade          <span style="color:#4a5568"># open Stripe checkout for the $10 Claw tier</span></code></pre>
+    </div>
+  </div>
+
+  <hr class="section-divider" />
+
+  <h2>Pricing</h2>
+  <div class="pricing-grid">
+    <div class="pricing-card">
+      <h3 style="margin-top:0">Free</h3>
+      <div class="price">$0<small>/forever</small></div>
+      <p style="margin-top:0.75rem">For trying MINDClaw and personal use under the free MIND quota.</p>
+      <ul class="feature-list">
+        <li>Knowledge-graph memory by default</li>
+        <li>50 credits / month for premium MIND features</li>
+        <li>10 MB storage</li>
+        <li>All 16 typed-document templates seeded</li>
+      </ul>
+    </div>
+    <div class="pricing-card featured">
+      <h3 style="margin-top:0;color:#e53935">Claw — BYO LLM</h3>
+      <div class="price">$10<small>/month</small></div>
+      <p style="margin-top:0.75rem">For developers and agent operators using their own LLM through any MCP host. MIND provides the knowledge-graph layer; you pay for inference yourself.</p>
+      <ul class="feature-list">
+        <li>Everything in Free</li>
+        <li>MCP-host access — Claude Desktop, Cursor, any MCP client</li>
+        <li>500 MB knowledge-graph storage</li>
+        <li>Bring your own LLM, your own keys, your own bill</li>
+        <li>No per-query credit charge for graph reads/writes</li>
+      </ul>
+    </div>
+  </div>
+  <p style="text-align:center;color:#64748b;font-size:0.85rem">Need more? The Starter, Professional, Business, and Scale tiers on <a href="https://www.m-i-n-d.ai">m-i-n-d.ai</a> work seamlessly with MINDClaw.</p>
+
+  <hr class="section-divider" />
+
+  <h2>What You Get on Day One</h2>
+  <table>
+    <thead><tr><th>Capability</th><th>MINDClaw</th><th>Stock OpenClaw</th><th>Obsidian</th></tr></thead>
+    <tbody>
+      <tr><td>Persistent memory across sessions</td><td><span class="check">✓</span></td><td><span class="x">✗</span></td><td>manual notes</td></tr>
+      <tr><td>True knowledge graph</td><td><span class="check">✓</span></td><td><span class="x">✗</span></td><td>backlinks only</td></tr>
+      <tr><td>16 typed-document templates pre-seeded</td><td><span class="check">✓</span></td><td><span class="x">✗</span></td><td><span class="x">✗</span></td></tr>
+      <tr><td>Auto-recall before each agent turn</td><td><span class="check">✓</span></td><td><span class="x">✗</span></td><td><span class="x">✗</span></td></tr>
+      <tr><td>Auto-capture after each agent turn</td><td><span class="check">✓</span></td><td><span class="x">✗</span></td><td><span class="x">✗</span></td></tr>
+      <tr><td>Cross-agent memory (any MCP host reads it)</td><td><span class="check">✓</span></td><td><span class="x">✗</span></td><td><span class="x">✗</span></td></tr>
+      <tr><td>Mobile + web app on the same data</td><td><span class="check">✓</span></td><td><span class="x">✗</span></td><td>extra plugins</td></tr>
+      <tr><td>Open source</td><td><span class="check">✓</span> MIT</td><td><span class="check">✓</span></td><td><span class="x">✗</span></td></tr>
+    </tbody>
+  </table>
+
+  <hr class="section-divider" />
+
+  <h2>How It Works</h2>
+  <p><strong>1. The wrapper.</strong> The <code>mindclaw</code> CLI is a slim wrapper around the upstream <code>openclaw</code> runtime. It owns first-run onboarding and a few native commands; everything else forwards verbatim, so muscle memory carries over.</p>
+  <p><strong>2. The plugin.</strong> The MIND plugin for OpenClaw registers two lifecycle hooks — auto-recall before each turn, auto-capture after — plus 11 native tools (memory CRUD, graph traversal, emotional recall, life and CRM logging) and 4 agent skills.</p>
+  <p><strong>3. The templates.</strong> 16 typed-document specs (SOUL, IDENTITY, BELIEFS, USER, AGENTS, TOOLS, SENSES, SKILLS, BEHAVIOR, LESSON, DECISION, POLICY, WORKFLOW, PREFERENCE, GOAL, RELATIONSHIP) seed into your tenant on first run. After that, any agent can ask MIND for the spec — "what should I fill out for a BELIEFS doc?" — and the answer comes back from the user's own knowledge graph.</p>
+  <p><strong>4. The thinking docs.</strong> <code>HOW_TO_THINK.md</code>, <code>HOW_TO_REMEMBER.md</code>, and <code>TAGGING_SYSTEM.md</code> ship in the same seed bundle. They are the operating manual every agent reads before deciding whether to write to memory at all.</p>
+
+  <hr class="section-divider" />
+
+  <h2>Patents Pending</h2>
+  <p>MIND's core technology is protected by multiple pending US patent applications.</p>
+
+  <hr class="section-divider" />
+
+  <footer>
+    <p>MINDClaw is open source — MIT — built by <a href="https://www.m-i-n-d.ai">Astra AI</a></p>
+    <p style="margin-top:0.5rem">Package: <code>mindclaw</code> · Source: <a href="https://github.com/theastraway/mindclaw">github.com/theastraway/mindclaw</a> · Contact: <a href="mailto:support@theastraway.com">support@theastraway.com</a></p>
+  </footer>
+
+</div>
+</body>
+</html>
