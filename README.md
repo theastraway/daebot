@@ -9,7 +9,7 @@ curl -fsSL https://www.m-i-n-d.ai/install/mindclaw.sh | bash
 Or with npm directly:
 
 ```bash
-npm install -g mind-claw
+npm install -g @astramindapp/mind-claw
 mindclaw init
 ```
 

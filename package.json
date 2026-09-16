@@ -1,5 +1,5 @@
 {
-  "name": "mind-claw",
+  "name": "@astramindapp/mind-claw",
   "version": "0.1.0",
   "description": "MINDClaw — OpenClaw with MIND baked in. Persistent knowledge graph memory by default. One install, one command, fully wired.",
   "license": "MIT",

@@ -28,8 +28,8 @@ if ! command -v npm >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "› Installing mind-claw globally..."
-npm install --global mind-claw
+echo "› Installing mindclaw globally..."
+npm install --global @astramindapp/mind-claw
 
 echo "› Launching first-run wizard..."
 exec mindclaw init
