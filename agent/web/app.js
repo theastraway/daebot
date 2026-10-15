@@ -335,31 +335,49 @@ function newSession() {
 function notify(text) { addItem(tkey(), { kind: "notice", level: "warn", text }); }
 
 // ---------- sending ----------
+let opening = null; // one in-flight session open, shared by the boot prewarm and the first send
 async function ensureSession() {
   if (state.currentId) return state.currentId;
-  const { sessionId } = await json("/sessions", { method: "POST", body: JSON.stringify({ surface: "web", title: "New session" }) });
-  // migrate draft transcript
-  const draft = state.transcripts.get(DRAFT);
-  if (draft) { state.transcripts.set(sessionId, draft); state.transcripts.delete(DRAFT); }
-  state.currentId = sessionId;
-  return sessionId;
+  if (!opening) {
+    opening = (async () => {
+      const { sessionId } = await json("/sessions", { method: "POST", body: JSON.stringify({ surface: "web", title: "New session" }) });
+      // migrate draft transcript
+      const draft = state.transcripts.get(DRAFT);
+      if (draft && !state.transcripts.has(sessionId)) { state.transcripts.set(sessionId, draft); state.transcripts.delete(DRAFT); }
+      state.currentId = sessionId;
+      return sessionId;
+    })().finally(() => { opening = null; });
+  }
+  return opening;
 }
 
 async function sendMessage(text) {
   text = text.trim();
   if (!text) return;
+  // Show the message immediately; opening a session can take several seconds while MIND boots.
+  const startKey = tkey();
+  addItem(startKey, { kind: "user", text });
+  const waiting = addItem(startKey, { kind: "notice", level: "info", text: "Thinking…" });
+  state.busy.add(startKey); setBusyUi(); stick = true; toBottom(true);
+  const dropWaiting = () => {
+    const t = transcript(tkey());
+    const i = t.items.indexOf(waiting);
+    if (i >= 0) t.items.splice(i, 1);
+    if (waiting.node) waiting.node.remove();
+  };
   let id;
-  try { id = await ensureSession(); } catch (e) { return notify(`Could not start a session: ${e.message}`); }
-  if (state.busy.has(id)) return;
-  const tr = transcript(id);
-  if (tr.items.length === 0 || (tr.items.length === 1 && tr.items[0].kind === "notice")) {
-    // first user message names the session client-side until the server titles it
-    const meta = state.sessions.find((s) => s.id === id);
-    if (meta && (!meta.title || meta.title === "New session")) meta.title = text.slice(0, 60);
+  try { id = await ensureSession(); } catch (e) {
+    state.busy.delete(startKey); setBusyUi(); dropWaiting();
+    els.input.value = text; grow();
+    return notify(`Could not start a session: ${e.message}`);
   }
-  addItem(id, { kind: "user", text });
-  state.busy.add(id); setBusyUi(); stick = true; toBottom(true);
+  if (startKey !== id) { state.busy.delete(startKey); state.busy.add(id); }
+  refreshSessions();
+  const tr = transcript(id);
+  const meta = state.sessions.find((s) => s.id === id);
+  if (meta && (!meta.title || meta.title === "New session")) meta.title = text.slice(0, 60);
   let asst = null;
+  let first = true;
   const toolByReceipt = new Map();
   try {
     const res = await api(`/sessions/${encodeURIComponent(id)}/send`, { method: "POST", body: JSON.stringify({ text }) });
@@ -377,17 +395,39 @@ async function sendMessage(text) {
         const data = chunk.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trimStart()).join("\n");
         if (!data) continue;
         let ev; try { ev = JSON.parse(data); } catch { continue; }
+        if (first && ev.type !== "usage") { first = false; dropWaiting(); }
         asst = onEvent(id, ev, asst, toolByReceipt);
       }
     }
   } catch (e) {
     if (e.message !== "unauthorized") { notify(e.message === "Failed to fetch" ? "Lost connection to the gateway." : e.message); if (e.message === "Failed to fetch") setOnline(false); }
   } finally {
+    dropWaiting();
     if (asst) { asst.streaming = false; if (asst.node) updateAssistant(asst.node, asst); }
     state.busy.delete(id); setBusyUi();
+    saveTranscript(id);
     refreshSessions();
     if (!els.drawer.hidden) loadViolations(); else refreshViolCount();
   }
+}
+
+// Keep the visible conversation across reloads (this browser tab only).
+function saveTranscript(id) {
+  try {
+    const items = transcript(id).items.filter((it) => it.kind !== "notice" || it.level === "warn").map(({ node, parts, ...rest }) => rest);
+    sessionStorage.setItem(`daebot:t:${id}`, JSON.stringify(items.slice(-200)));
+    sessionStorage.setItem("daebot:current", id);
+  } catch { /* storage unavailable: transcript stays in memory */ }
+}
+function restoreTranscript(id) {
+  try {
+    const raw = sessionStorage.getItem(`daebot:t:${id}`);
+    if (!raw) return false;
+    const tr = transcript(id);
+    if (tr.items.length) return true;
+    for (const it of JSON.parse(raw)) tr.items.push(it);
+    return true;
+  } catch { return false; }
 }
 
 const pendingPaint = new Set();
@@ -556,6 +596,11 @@ async function boot() {
   await ping();
   if (!token && !state.hosted) return showTokenGate();
   await refreshSessions();
+  let last = null;
+  try { last = sessionStorage.getItem("daebot:current"); } catch { /* none */ }
+  const live = last && state.sessions.find((s) => s.id === last && s.live);
+  if (live && restoreTranscript(last)) { state.currentId = last; renderSessions(); renderThread(); }
+  else if (!state.currentId) { ensureSession().then(() => { renderSessions(); renderHeader(); }).catch(() => { /* first send retries */ }); }
 }
 boot();
 setInterval(ping, 10000);

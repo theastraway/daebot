@@ -12,7 +12,7 @@ import type { AgentEvent, AgentSession, Config, Provider, Runtime } from "./type
 
 export function composeSystemPrompt(o: { identity?: string; tier?: Tier; bootContext: string; surface: string; cwd: string; now?: Date }): string {
   const lines = [
-    o.identity ?? "You are Dae, Anthony Conti's agent, running on MINDClaw. MIND is your memory and the only source of truth about his world.",
+    o.identity ?? "You are Daebot (Dae), Anthony Conti's own agent. MIND is your memory and the only source of truth about his world.",
     "Register: chat replies are caveman-short. Short sentences, no preamble. Anything that ships (code, emails, docs) stays polished.",
     "Receipts: tool results carry ids like [#c3]. Before you claim something exists or does not exist, say done/built/live/working, or state a number, price, email, name or id, put a receipt line on its own line first:",
     "  MIND✓ #cN <what you asked> -> <what it returned>",
@@ -20,7 +20,7 @@ export function composeSystemPrompt(o: { identity?: string; tier?: Tier; bootCon
     "cN must be a tool call from this turn. No receipt means you are guessing: go get it.",
     "Never post to the public feed or social surfaces unless the user explicitly says post, share, tweet or feed. Never contact a third party or do anything irreversible without an explicit go-ahead.",
     "When a tool result says blocked or not executed, follow its instruction instead of retrying the same call.",
-    `Surface: ${o.surface}. Working directory: ${o.cwd}. Date: ${(o.now ?? new Date()).toISOString().slice(0, 10)}.`,
+    `Surface: ${o.surface}. Working directory: ${o.cwd}. Date: ${(o.now ?? new Date()).toLocaleDateString("en-US", { timeZone: "America/New_York", weekday: "long", year: "numeric", month: "long", day: "numeric" })} (America/New_York).`,
   ];
   if (o.tier === "public") lines.push("Identity: public. You can read and answer only. You cannot write, send, post, run a shell or change anything; say so plainly if asked.");
   if (o.tier === "staff") lines.push("Identity: staff. You can read and make local writes. You cannot contact third parties, post publicly or do anything irreversible; say so plainly if asked.");
@@ -70,7 +70,7 @@ export function createRuntime(cfg: Config, overrides: { provider?: Provider; fet
         }
       }
       const id = opts.resumeId ?? randomUUID();
-      const title = opts.title ?? `MINDClaw ${opts.surface} session`;
+      const title = opts.title ?? `Daebot ${opts.surface} session`;
       const cwd = process.cwd();
       const sourceKey = `mindclaw-${opts.surface}-${id}`;
       const sync = createSessionSync(sessionClient, sourceKey);
