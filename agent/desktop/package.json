@@ -1,0 +1,69 @@
+{
+  "name": "mindclaw-desktop",
+  "version": "0.2.0-dev",
+  "private": true,
+  "description": "MINDClaw desktop shell: menu bar item, global shortcut, native window around the gateway web UI.",
+  "license": "MIT",
+  "type": "module",
+  "main": "src/main.mjs",
+  "author": "Astra AI",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "dev": "electron .",
+    "test": "node --test --test-concurrency=2 test/*.test.mjs",
+    "smoke": "electron . --mindclaw-smoke",
+    "pack": "node scripts/stage-agent.mjs && electron-builder --dir --mac",
+    "dist": "node scripts/stage-agent.mjs && electron-builder --mac dmg zip"
+  },
+  "devDependencies": {
+    "electron": "43.7.7",
+    "electron-builder": "26.17.0"
+  },
+  "build": {
+    "appId": "ai.astra.mindclaw.desktop",
+    "productName": "MINDClaw",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build-resources"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/agent",
+        "to": "agent"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "title": "MINDClaw",
+      "contents": [
+        {
+          "x": 130,
+          "y": 150
+        },
+        {
+          "x": 400,
+          "y": 150,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
+    "afterSign": null,
+    "asar": false
+  }
+}

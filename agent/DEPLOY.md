@@ -1,0 +1,61 @@
+# Deploying the hosted agent (daebot.live)
+
+Hosted mode runs the agent as a public web service on Render with TLS terminated by Render.
+It differs from local use on purpose:
+
+- **No host tools.** `bash`, `read_file`, `write_file`, `edit_file`, `glob` and `grep` are not in the tool list and the kernel refuses them by name. Only `web_fetch` and the `mind_*` tools run. A prompt injection therefore cannot read the server's environment.
+- **Login required.** One access code (`GATEWAY_TOKEN`). `POST /login` sets an HttpOnly, Secure, SameSite=Strict session cookie (7 days). Bearer headers and `?token=` are not accepted. 5 failed logins per IP per 10 minutes returns 429.
+- **Host allowlist.** `Host` and `X-Forwarded-Host` must both be in `ALLOWED_HOSTS`. Origin must be `https://<allowed host>`. `/health` is the only route exempt (it returns `{ok:true}` and nothing else).
+- **Kernel enforced** (never shadow), identity `admin` (Anthony only, behind the login), surface `web`.
+- **Daily spend cap.** `MINDCLAW_DAILY_USD_CAP` (default 5, UTC day, in memory, resets on restart). Over the cap, new turns get a one-line notice.
+
+## Environment variables
+
+| Key | Secret | Value |
+|---|---|---|
+| `MINDCLAW_HOSTED` | no | `1` |
+| `GATEWAY_TOKEN` | yes | the login access code, 24+ characters. The service refuses to start without it. |
+| `ALLOWED_HOSTS` | no | `daebot.live,www.daebot.live` (the `<service>.onrender.com` name is added automatically from `RENDER_EXTERNAL_HOSTNAME`) |
+| `MIND_API_KEY` | yes | MIND key for the agent's tenant |
+| `MIND_SESSION_API_KEY` | yes | key with `chat:write` for Agent Session sync (falls back to `MIND_API_KEY`) |
+| `OPENROUTER_API_KEY` | yes | OpenRouter key |
+| `MINDCLAW_MODEL` | no | main model. **Set a cheap one.** The built-in default is `anthropic/claude-sonnet-4.5`, which is expensive for a public bot. The service logs a warning if this is unset. |
+| `MINDCLAW_CHEAP_MODEL` | no | cheap model for light work |
+| `MINDCLAW_KERNEL` | no | `1` |
+| `MINDCLAW_DAILY_USD_CAP` | no | `5` |
+| `MINDCLAW_CLIENT_NAMES` | no | optional comma list of client entity names for the owner gate |
+| `NODE_VERSION` | no | `24` |
+| `PORT` | auto | set by Render; the service binds `0.0.0.0:$PORT` |
+
+Generate the access code locally and keep it in a password manager: `openssl rand -base64 24`.
+
+## Steps
+
+1. Merge this branch to `main` (the Blueprint reads `render.yaml` from the repo root).
+2. Render dashboard: **New > Blueprint**, pick the repo, apply. It creates the `daebot` web service (starter plan, `rootDir: agent`, auto deploy off).
+3. In the service **Environment** tab fill every `sync: false` key above (`MIND_API_KEY`, `MIND_SESSION_API_KEY`, `OPENROUTER_API_KEY`, `GATEWAY_TOKEN`, `MINDCLAW_MODEL`, `MINDCLAW_CHEAP_MODEL`). Save; Render redeploys.
+4. **Settings > Custom Domains**: add `daebot.live` and `www.daebot.live`. At the DNS provider create the records Render shows (CNAME for `www`, ALIAS/ANAME or the shown A record for the apex). Wait for the certificate to show Verified.
+5. Verify: `https://daebot.live/health` returns `{"ok":true,"name":"mindclaw-gateway","hosted":true}`. Open `https://daebot.live/`: you get the sign-in screen. A wrong code is rejected, the right code loads the app. Ask it something that needs MIND (for example "what are my priorities") and confirm a MIND receipt comes back. Ask it to run `printenv`: it must say it has no shell.
+6. Check the Render logs once: the start line says `hosted gateway listening` and must not contain the access code.
+
+## Rollback
+
+- **Bad deploy:** Render dashboard > service > **Events/Deploys** > pick the last good deploy > **Rollback**. (Auto deploy is off, so nothing ships without a manual deploy.)
+- **Emergency stop:** Settings > **Suspend Service**. The domain then serves nothing.
+- **Leaked or lost access code:** change `GATEWAY_TOKEN` in Environment and redeploy. Every existing session cookie is signed with the old value and stops working immediately.
+- **Spend running away:** lower `MINDCLAW_DAILY_USD_CAP` and redeploy, or rotate `OPENROUTER_API_KEY` (a provider-side limit is the stronger lever).
+- **Remove entirely:** delete the service, remove the two custom domains and their DNS records.
+
+## Notes and limits
+
+- The cost cap and login rate limiter are in memory: a restart or redeploy resets both. The cap guards one process; do not run more than one instance.
+- Session history lives in MIND (Agent Sessions). In-process session state is lost on restart; the user starts a new chat.
+- Client IP for the login limiter is the right-most `X-Forwarded-For` entry (the one the platform proxy appends).
+
+## Local check without keys
+
+```
+cd agent
+MINDCLAW_HOSTED=1 GATEWAY_TOKEN=$(openssl rand -hex 18) ALLOWED_HOSTS=localhost PORT=7790 \
+  OPENROUTER_API_KEY=x node src/cli.ts serve --hosted
+```

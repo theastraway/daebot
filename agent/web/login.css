@@ -1,0 +1,14 @@
+/* Sign-in screen. Same paper-and-ink tokens as the app (style.css). */
+.login-body { overflow: auto; }
+.login { min-height: 100dvh; display: grid; place-content: center; justify-items: center; gap: 22px; padding: 24px 16px; }
+.login-card { width: min(380px, calc(100vw - 32px)); display: grid; gap: 10px; padding: 28px 26px 26px; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); }
+.login-mark { border-radius: 10px; margin-bottom: 6px; }
+.login-card h1 { margin: 0; font: 500 30px/1.15 var(--serif); letter-spacing: -.01em; }
+.login-sub { margin: 0 0 8px; color: var(--ink-2); font-size: 14.5px; }
+.login-label { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.login-card input { font: 15px var(--mono); padding: 11px 13px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--bg); color: var(--ink); width: 100%; }
+.login-card input:focus-visible { outline-offset: 1px; }
+.login-btn { margin-top: 6px; padding: 11px 14px; font-size: 15px; }
+.login-btn[disabled] { opacity: .6; cursor: progress; }
+.login-card .err { margin: 2px 0 0; min-height: 0; }
+.login-foot { margin: 0; max-width: 380px; text-align: center; color: var(--ink-3); font-size: 12.5px; }
