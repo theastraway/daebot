@@ -5,6 +5,7 @@ import { createKernel, parseTier } from "./kernel/index.ts";
 import type { Tier } from "./kernel/index.ts";
 import { tierAllows } from "./kernel/tier.ts";
 import { createAgentSession } from "./loop.ts";
+import { createLearning, resolveLearnConfig } from "./learn/index.ts";
 import { bootMind, createMindClient, createMindTools, createSessionSync } from "./mind/index.ts";
 import { BootCache } from "./mind/boot-cache.ts";
 import { createProvider } from "./provider/index.ts";
@@ -45,6 +46,7 @@ export interface HostedRuntimeOptions {
 }
 
 export interface RuntimeOverrides {
+  env?: NodeJS.ProcessEnv;
   provider?: Provider;
   fetchImpl?: typeof fetch;
   hosted?: HostedRuntimeOptions;
@@ -78,6 +80,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     return k;
   };
   const sessions = new Map<string, Entry>();
+  const learnCfg = resolveLearnConfig(overrides.env ?? process.env, { hosted: !!hosted });
   const store = overrides.store;
   const bootCache = overrides.bootCache ?? new BootCache();
   // Remote MCP tools (operator-configured). Added after the hosted filter on purpose: the operator chose them,
@@ -128,8 +131,13 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       try { await sync.open({ title, sourceKey, externalId: id }); } catch { /* sync is best effort */ }
 
       const bootContext = boot.ok ? boot.context : "";
+      // Learning (src/learn): admin-tier sessions only. Public/staff identities neither read nor write lessons,
+      // so nothing from the owner's private MIND can reach them and nothing they say can reach it.
+      const learn = learnCfg.enabled && tier === "admin"
+        ? createLearning({ client, provider, cfg, learn: learnCfg, tier, onCost: (usd) => costCap?.add(usd) })
+        : undefined;
       const inner = createAgentSession({
-        id, surface: opts.surface, provider, kernel: kernelFor(tier), tools, sync, cfg, cwd, bootContext,
+        id, surface: opts.surface, provider, kernel: kernelFor(tier), tools, sync, cfg, cwd, bootContext, learn,
         systemPrompt: composeSystemPrompt({ tier, bootContext, surface: opts.surface, cwd }),
         restore: stored ? { ...stored.state, messages: repairMessages(stored.state.messages), violations: stored.violations } : undefined,
       });
