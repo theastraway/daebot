@@ -208,3 +208,5 @@ kbd { font-size: 10.5px; background: var(--surface-2); border: 1px solid var(--l
 /* machinery rows that run in sequence read as one cluster */
 .tool + .tool, .tool + .gate, .gate + .tool, .gate + .gate { margin-top: -12px; }
 .logout { margin-left: auto; padding: 4px 10px; font-size: 12px; border-radius: 8px; }
+.side-who { padding: 12px 8px 0; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-who + .side-foot { padding-top: 6px; border-top: 0; }

@@ -29,6 +29,8 @@ services:
         sync: false
       - key: GATEWAY_TOKEN        # the login access code, at least 24 characters
         sync: false
+      - key: DAEBOT_SECRET_KEY    # AES-256-GCM key for stored user credentials, 32+ random characters. Enables Sign in with MIND.
+        sync: false
       # ---- models: set a cheap one (do not leave the built-in default on a public bot)
       - key: MINDCLAW_MODEL
         sync: false
@@ -45,3 +47,7 @@ services:
         value: "5"
       - key: ALLOWED_HOSTS        # RENDER_EXTERNAL_HOSTNAME (<service>.onrender.com) is added automatically
         value: "daebot.live,www.daebot.live"
+      - key: DAEBOT_ADMINS        # MIND usernames that get the unrestricted tier; everyone else is staff
+        value: "anthonyjconti"
+      - key: MINDCLAW_USER_DAILY_USD_CAP   # per signed-in user per UTC day (admins exempt); the global cap above still applies
+        value: "1"

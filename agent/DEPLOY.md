@@ -64,3 +64,14 @@ cd agent
 MINDCLAW_HOSTED=1 GATEWAY_TOKEN=$(openssl rand -hex 18) ALLOWED_HOSTS=localhost PORT=7790 \
   OPENROUTER_API_KEY=x node src/cli.ts serve --hosted
 ```
+
+## Sign in with MIND (per-user tenancy)
+
+Anyone can sign in with their own MIND account and Daebot then reads and writes THEIR MIND. The owner access code (`GATEWAY_TOKEN`) keeps working and maps to the server `MIND_API_KEY`.
+
+- Set `DAEBOT_SECRET_KEY` (32+ random characters; `openssl rand -base64 48`). Without it only the owner code is offered. Once users are stored, hosted mode refuses to start without it. Losing the key means users must sign in again.
+- One data dir: `DATA_DIR` (`/data`, the 1 GB disk in render.yaml). Saved chats are in `DATA_DIR/sessions` (each record carries its owning user id, so chats, history, resume and the boot cache are per user); users are in `DATA_DIR/users/daebot-users.json`, credentials sealed with AES-256-GCM.
+- `DAEBOT_ADMINS` (MIND usernames, comma list) get the unrestricted tier; everyone else is "staff" (no outward, irreversible or public tools). Optional `DAEBOT_ALLOWED_USERS` restricts who may sign in.
+- `MINDCLAW_USER_DAILY_USD_CAP` (default 1) caps each non-admin user per UTC day, on top of `MINDCLAW_DAILY_USD_CAP`. Admins and the owner login are exempt from both caps and their spend does not count toward the global one, so strangers cannot lock them out.
+- OAuth: Daebot registers itself with MIND as a public PKCE client (RFC 7591, redirect `https://daebot.live/auth/mind/callback`), so no admin action is needed. To pin a client instead, set `MIND_OAUTH_CLIENT_ID` (and optionally `MIND_OAUTH_CLIENT_SECRET`).
+- Pasting a `mind_` API key is always available as the fallback; it is checked live against `GET /developer/v1/profile`.

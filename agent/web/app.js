@@ -616,8 +616,21 @@ async function ping() {
   try {
     const r = await fetch("/health", { cache: "no-store" });
     setOnline(r.ok);
-    if (r.ok) { const h = await r.json().catch(() => ({})); state.hosted = h.hosted === true; els.btnLogout.hidden = !state.hosted; if (h.model !== state.model) { state.model = h.model || ""; renderConn(); } }
+    if (r.ok) { const h = await r.json().catch(() => ({})); state.hosted = h.hosted === true; els.btnLogout.hidden = !state.hosted; if (h.model !== state.model) { state.model = h.model || ""; renderConn(); } if (state.hosted && !state.who) showWho(); }
   } catch { setOnline(false); }
+}
+
+// Hosted: show which MIND account this session is acting as (its own MIND, or the owner's).
+async function showWho() {
+  try {
+    const r = await fetch("/auth/me", { credentials: "same-origin" });
+    if (!r.ok) return r.status === 401 ? false : true; // 401 = not signed in; anything else is a hiccup, not a sign-out
+    const me = await r.json();
+    state.who = me.username;
+    const el = document.getElementById("who");
+    if (el) { el.textContent = me.owner ? "Signed in as Owner" : `Signed in as ${me.username}`; el.title = me.owner ? "Owner access code" : `MIND account ${me.username}`; el.hidden = false; }
+    return true;
+  } catch { return true; /* network blip: not a sign-out */ }
 }
 
 function showTokenGate(msg) {
@@ -668,6 +681,8 @@ async function boot() {
   renderThread();
   await ping();
   if (!token && !state.hosted) return showTokenGate();
+  // Prewarming a session boots MIND, so it only ever runs for a signed-in user (hosted: the session cookie must be valid).
+  if (state.hosted && !(await showWho())) return location.replace("/");
   await refreshSessions();
   let last = null;
   try { last = sessionStorage.getItem("daebot:current"); } catch { /* none */ }

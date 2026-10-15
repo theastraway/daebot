@@ -2,6 +2,10 @@ import type { AgentEvent, AgentSession, Runtime } from "../types.ts";
 
 export class BusyError extends Error {}
 export class NotFoundError extends Error {}
+export class ForbiddenError extends Error {}
+
+/** Owner key for sessions opened by the single-tenant paths (local gateway, in-process channels, the hosted owner login). */
+export const LOCAL_OWNER = "owner";
 
 export interface LiveSession {
   id: string;
@@ -13,6 +17,8 @@ export interface LiveSession {
   lastUsed: number;
   createdAt: number;
   turns: number; // user messages sent through this gateway process; 0 = prewarmed and untouched
+  /** Principal id that opened it. Another principal can never list, open, send to, abort or close it. */
+  owner: string;
 }
 
 export const IDLE_MS = 6 * 60 * 60 * 1000;
@@ -24,24 +30,40 @@ export class SessionManager {
   private idleMs: number;
   private timer: NodeJS.Timeout | null = null;
 
-  constructor(runtime: Runtime, opts: { idleMs?: number; sweepMs?: number } = {}) {
+  private runtimeFor?: (owner: string) => Runtime;
+  /** Owner of a persisted (not live) session, from the shared store; undefined = unknown id. */
+  private storedOwner?: (id: string) => string | undefined;
+
+  constructor(runtime: Runtime, opts: { idleMs?: number; sweepMs?: number; runtimeFor?: (owner: string) => Runtime; storedOwner?: (id: string) => string | undefined } = {}) {
     this.runtime = runtime;
+    this.runtimeFor = opts.runtimeFor;
+    this.storedOwner = opts.storedOwner;
     this.idleMs = opts.idleMs ?? IDLE_MS;
     this.timer = setInterval(() => void this.sweep(), opts.sweepMs ?? 10 * 60 * 1000);
     this.timer.unref();
   }
 
-  async open(o: { surface: string; title?: string; resumeId?: string; identity?: string }): Promise<LiveSession> {
+  async open(o: { surface: string; title?: string; resumeId?: string; identity?: string; owner?: string }): Promise<LiveSession> {
+    const owner = o.owner ?? LOCAL_OWNER;
     if (o.resumeId) {
       const existing = this.live.get(o.resumeId);
       if (existing) {
+        if (existing.owner !== owner) throw new ForbiddenError("forbidden");
         existing.lastUsed = Date.now();
         return existing;
       }
     }
-    const session = await this.runtime.openSession({ surface: o.surface, title: o.title, resumeId: o.resumeId, identity: o.identity });
+    if (o.resumeId) {
+      const stored = this.storedOwner?.(o.resumeId);
+      if (stored !== undefined && stored !== owner) throw new ForbiddenError("forbidden");
+    }
+    const rt = this.runtimeFor ? this.runtimeFor(owner) : this.runtime;
+    const session = await rt.openSession({ surface: o.surface, title: o.title, resumeId: o.resumeId, identity: o.identity });
     const existing = this.live.get(session.id);
-    if (existing) return existing;
+    if (existing) {
+      if (existing.owner !== owner) throw new ForbiddenError("forbidden");
+      return existing;
+    }
     const now = Date.now();
     const ls: LiveSession = {
       id: session.id,
@@ -53,6 +75,7 @@ export class SessionManager {
       lastUsed: now,
       createdAt: now,
       turns: 0,
+      owner,
     };
     this.live.set(ls.id, ls);
     return ls;
@@ -62,18 +85,39 @@ export class SessionManager {
     return this.live.get(id);
   }
 
+  /** Ownership-checked lookup: the session, "forbidden" when it belongs to someone else, or undefined when unknown. */
+  access(id: string, owner: string): LiveSession | "forbidden" | undefined {
+    const ls = this.live.get(id);
+    if (!ls) {
+      // Not live: a persisted session still belongs to its owner.
+      const stored = this.storedOwner?.(id);
+      return stored !== undefined && stored !== owner ? "forbidden" : undefined;
+    }
+    return ls.owner === owner ? ls : "forbidden";
+  }
+
+  /** The runtime a principal acts through (history lookups go through it so they are tenant-scoped). */
+  runtimeOf(owner: string): Runtime {
+    return this.runtimeFor ? this.runtimeFor(owner) : this.runtime;
+  }
+
   count(): number {
     return this.live.size;
   }
 
-  list(): { id: string; surface: string; title: string; updatedAt: number; live: boolean; busy: boolean }[] {
+  list(owner: string = LOCAL_OWNER): { id: string; surface: string; title: string; updatedAt: number; live: boolean; busy: boolean }[] {
     const out = new Map<string, { id: string; surface: string; title: string; updatedAt: number; live: boolean; busy: boolean }>();
     try {
-      for (const s of this.runtime.listSessions()) out.set(s.id, { ...s, live: false, busy: false });
+      for (const s of (this.runtimeFor ? this.runtimeFor(owner) : this.runtime).listSessions()) {
+        const other = this.live.get(s.id);
+        if (other && other.owner !== owner) continue;
+        out.set(s.id, { ...s, live: false, busy: false });
+      }
     } catch {
       /* runtime listing is best-effort */
     }
     for (const ls of this.live.values()) {
+      if (ls.owner !== owner) continue;
       const prev = out.get(ls.id);
       // Prewarmed sessions with no message yet stay out of the list (the client keeps its own current id).
       // A resumed session is in the runtime listing already, so it stays.
