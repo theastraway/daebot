@@ -1,6 +1,7 @@
 // Harness pieces for the LEARNING suite: a scripted student model, a scripted reflector, and a session runner that
 // drives the REAL createAgentSession + REAL kernel + REAL learning layer against a FakeMind.
 import { createAgentSession } from "../../loop.ts";
+import { visibleText } from "../../events.ts";
 import { createKernel } from "../../kernel/index.ts";
 import { createLearning, resolveLearnConfig } from "../../learn/index.ts";
 import type { Learning } from "../../learn/index.ts";
@@ -147,7 +148,8 @@ export async function runSession(o: SessionOpts): Promise<SessionResult> {
         if (ev.type === "done") final = ev.finalText;
         if (ev.type === "notice" && ev.text.startsWith("error:")) error = ev.text;
       }
-      finalTexts.push(final);
+      // What the user actually saw: text a later `retract` withdrew (a draft the receipt gate refused) does not count.
+      finalTexts.push(visibleText(evs) || final);
       events.push(evs);
       // Reflection runs after the reply; let it land before the next turn so sessions are deterministic.
       if (learning) await learning.idle();

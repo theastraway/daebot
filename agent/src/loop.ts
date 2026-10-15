@@ -76,7 +76,8 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
   let totalCost = 0;
   const localViolations: Violation[] = [];
   if (deps.restore) {
-    messages.push(...deps.restore.messages);
+    messages.push(...deps.restore.messages.filter((m) => !(m.role === "system" && m.content.startsWith("[learned]"))));
+    for (const m of deps.restore.messages) if (m.role === "user") userHistory.push(m.content);
     receiptCounter = deps.restore.receiptCounter ?? 0;
     totalCost = deps.restore.totalCostUsd ?? 0;
     state.userMessageIndex = deps.restore.userMessageIndex ?? 0;
@@ -364,7 +365,8 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
       try { await sync.close(summary); } catch { /* best effort */ }
     },
     exportState() {
-      return { messages: messages.slice(1).map((m) => ({ ...m })), receiptCounter, totalCostUsd: totalCost, userMessageIndex: state.userMessageIndex };
+      // The recalled-lessons note is derived state (rebuilt each turn from MIND), so it is never persisted.
+      return { messages: messages.slice(1).filter((m) => m !== learnedNote).map((m) => ({ ...m })), receiptCounter, totalCostUsd: totalCost, userMessageIndex: state.userMessageIndex };
     },
   };
 }
