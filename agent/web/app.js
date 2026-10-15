@@ -603,8 +603,8 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => appl
 
 // ---------- connection ----------
 function renderConn() {
-  // "Connected · qwen/qwen3.8-flash": which LLM is powering the agent (from /health).
-  els.connText.textContent = state.online ? (state.model ? `Connected · ${state.model}` : "Connected") : "Gateway offline";
+  // The model badge in the header is filled by brand.js from /health; this line stays plain.
+  els.connText.textContent = state.online ? "Connected" : "Gateway offline";
 }
 function setOnline(on) {
   if (state.online === on) return;
