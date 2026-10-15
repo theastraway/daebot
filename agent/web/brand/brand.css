@@ -1,0 +1,68 @@
+/* ======================= Daebot brand layer =======================
+   The M mascot (real pixels, /brand/*), MIND red + warm LED yellow sampled from the M.
+   Signature motif: the dot-matrix LED face. Loaded after /style.css, tokens live there. */
+
+/* sidebar */
+.brand { gap: 11px; padding: 4px 8px 18px; }
+.brand img { width: 34px; height: 34px; border-radius: 9px; box-shadow: 0 0 0 1px var(--line), 0 6px 14px -8px rgba(0,0,0,.5); }
+.brand-name { font: 700 21px/1 var(--display); letter-spacing: -.03em; display: inline-flex; align-items: center; }
+.brand-name::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--led); box-shadow: 0 0 8px 1px rgba(255,210,90,.75); margin-left: 4px; margin-top: 8px; }
+.sidebar { background: radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--ink) 8%, transparent) 1px, transparent 1.4px) 0 0 / 14px 14px, var(--bg-side); }
+.btn-new { background: var(--ink); color: var(--bg); border-color: var(--ink); font-weight: 600; border-radius: 12px; transition: transform .15s, box-shadow .15s; }
+.btn-new:hover { border-color: var(--ink); transform: translateY(-1px); box-shadow: 0 8px 18px -10px rgba(0,0,0,.55); }
+.btn-new .ic { color: var(--led); }
+.sess[aria-current="true"] { box-shadow: inset 3px 0 0 var(--accent), 0 0 0 1px var(--line); }
+.side-label { display: flex; align-items: center; gap: 8px; }
+.side-label::after { content: ""; flex: 1; height: 5px; background: radial-gradient(circle, var(--line-strong) 1.2px, transparent 1.6px) 0 50% / 8px 5px repeat-x; }
+.dot.on { background: var(--led-deep); box-shadow: 0 0 8px 1px rgba(255,210,90,.8); }
+
+/* top bar */
+.topbar { background: color-mix(in srgb, var(--bg) 86%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.top-title h1 { font-family: var(--display); font-weight: 650; font-size: 16px; letter-spacing: -.015em; }
+
+/* which LLM is powering this (rendered by /brand/brand.js from GET /health "model") */
+.model-badge { display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 12px 0 10px; margin-right: 4px; border-radius: 999px; background: var(--plate); color: #f6ead8; font: 600 12px/1 var(--sans); letter-spacing: -.005em; white-space: nowrap; max-width: 46vw; box-shadow: 0 0 0 1px rgba(255,255,255,.08) inset; flex: none; }
+.model-badge .mb-led { width: 6px; height: 6px; border-radius: 50%; background: var(--led); box-shadow: 0 0 7px 1px rgba(255,210,90,.85); flex: none; animation: ledpulse 2.4s ease-in-out infinite; }
+.model-badge .mb-name { overflow: hidden; text-overflow: ellipsis; }
+.model-badge .mb-via { color: #a89c88; font-weight: 500; }
+@keyframes ledpulse { 50% { opacity: .45; } }
+
+/* messages: the M is the assistant avatar */
+.msg-asst { position: relative; padding-left: 44px; font: 16.5px/1.68 var(--sans); }
+.msg-asst::before { content: ""; position: absolute; left: 0; top: 1px; width: 30px; height: 30px; border-radius: 9px; background: url("/brand/icon-512.png") center / cover no-repeat; box-shadow: 0 0 0 1px var(--line), 0 5px 12px -7px rgba(0,0,0,.5); }
+.msg-asst h3, .msg-asst h4 { font-family: var(--display); font-weight: 650; }
+.msg-asst.streaming::after { width: 8px; background: var(--led-deep); box-shadow: 0 0 10px 1px rgba(255,210,90,.6); border-radius: 3px; }
+.msg-user { background: var(--ink); color: var(--bg); border-radius: 18px 18px 5px 18px; }
+.tool, .code, .confirm { border-radius: 12px; }
+.tool.run .tool-state::before { background: var(--led-deep); box-shadow: 0 0 8px rgba(255,210,90,.9); }
+
+/* dot-matrix "thinking" indicator (brand.js tags the app's "Thinking" notice) */
+.notice.thinking { display: flex; align-items: center; justify-content: flex-start; gap: 14px; font-size: 0; color: transparent; min-height: 30px; }
+.notice.thinking::before { content: ""; width: 30px; height: 30px; border-radius: 9px; flex: none; background: url("/brand/icon-512.png") center / cover no-repeat; box-shadow: 0 0 0 1px var(--line); }
+.notice.thinking::after { content: ""; width: 84px; height: 14px; background: radial-gradient(circle, var(--led-deep) 4px, transparent 4.6px) 0 50% / 21px 14px repeat-x; filter: drop-shadow(0 0 4px rgba(255,210,90,.7)); -webkit-mask: linear-gradient(90deg, transparent 0, #000 28%, #000 50%, transparent 78%) 0 0 / 200% 100%; mask: linear-gradient(90deg, transparent 0, #000 28%, #000 50%, transparent 78%) 0 0 / 200% 100%; animation: ledsweep 1.35s linear infinite; }
+@keyframes ledsweep { from { -webkit-mask-position: 120% 0; mask-position: 120% 0; } to { -webkit-mask-position: -20% 0; mask-position: -20% 0; } }
+
+/* empty state: the real LED face, lit */
+.empty { margin-top: 6vh; }
+.empty::before { content: ""; display: block; width: 188px; height: 188px; margin: 0 auto 22px; background: url("/brand/m-face.png") center / contain no-repeat; filter: drop-shadow(0 0 28px rgba(255,210,90,.28)) drop-shadow(0 14px 18px rgba(0,0,0,.28)); animation: facefloat 6s ease-in-out infinite; }
+@keyframes facefloat { 50% { transform: translateY(-5px); } }
+.empty h2 { font: 700 34px/1.1 var(--display); letter-spacing: -.035em; }
+.empty p { max-width: 380px; margin: 0 auto; }
+
+/* composer */
+.composer { border-radius: 20px; transition: border-color .15s, box-shadow .2s; }
+.composer:focus-within { border-color: var(--led-deep); box-shadow: 0 0 0 4px rgba(255,210,90,.22), var(--shadow); }
+.send { background: #d92d2d; color: #fff; border-radius: 12px; box-shadow: 0 6px 14px -8px #d92d2d; }
+.send.stop { background: var(--ink); color: var(--bg); box-shadow: none; }
+.btn-primary { border-radius: 11px; }
+.token-card h2 { font: 700 26px var(--display); letter-spacing: -.02em; }
+
+@media (max-width: 760px) {
+  .msg-asst { padding-left: 40px; font-size: 16px; }
+  .msg-asst::before, .notice.thinking::before { width: 28px; height: 28px; }
+  .model-badge { max-width: 42vw; padding: 0 9px 0 8px; font-size: 11.5px; gap: 6px; }
+  .topbar { gap: 4px; }
+  .model-badge .mb-via { display: none; }
+  .empty::before { width: 150px; height: 150px; }
+  .empty h2 { font-size: 28px; }
+}
