@@ -213,8 +213,8 @@ export function createMindTools(client: MindClient): Tool[] {
     ["list", "get"], ["create", "update", "delete"]));
   defs.push(...pair("tasks", "MIND tasks", "task_id",
     ["list", "get"], ["create", "update", "complete", "assign", "delete"]));
-  defs.push(...pair("agents", "the agent registry (admin key)", "slug",
-    ["list", "get"], ["create", "update", "heartbeat", "delete"]));
+  // mind_agents is withheld: /admin/agents lives at the origin root and returned the web app shell
+  // on the hosted deploy (2026-10-15). Re-add once the backend admin base URL is confirmed.
 
   // mind_folders is the WRITE tool (owner gate); listing lives in mind_folders_read.
   defs.push({
