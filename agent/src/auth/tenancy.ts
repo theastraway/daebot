@@ -91,6 +91,8 @@ export function createRuntimeHub(o: HubOptions): { runtimeFor(p: Principal): Run
         sharedCap: o.globalCap,
         // Admins are exempt from BOTH caps (so strangers can never lock them out); non-admin spend counts toward the global cap.
         exempt: p.tier === "admin",
+        // Learning (admin tier only, see runtime.ts) uses THIS user's client above and files their model under their MIND username.
+        username: p.username,
         userCap: p.tier === "admin" ? undefined : userCap(p.id),
         now: o.now,
         persona: `You are Daebot (Dae), a personal agent for the MIND user "${p.username}". Their MIND is your memory and the only source of truth about their world; never assume it holds anything about anyone else.`,

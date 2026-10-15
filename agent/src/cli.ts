@@ -127,7 +127,7 @@ async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promis
   const { createFileStore, dataDir } = await import("./persist.ts");
   const sessionStore = createFileStore(dataDir());
   const bootCache = new BootCache();
-  const runtime = createRuntime(cfg, { hosted: hostedRt ? { ...hostedRt, sharedCap: globalCap, exempt: true } : undefined, store: sessionStore });
+  const runtime = createRuntime(cfg, { hosted: hostedRt ? { ...hostedRt, sharedCap: globalCap, exempt: true, username: process.env.DAEBOT_OWNER_USERNAME?.trim() || "anthonyjconti" } : undefined, store: sessionStore });
   let auth: AuthContext | undefined;
   if (hosted && globalCap) {
     try {

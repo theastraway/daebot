@@ -18,6 +18,11 @@ import { repairMessages } from "./persist.ts";
 import type { SessionStore } from "./persist.ts";
 import type { AgentEvent, AgentSession, Config, HistoryEvent, Provider, Runtime } from "./types.ts";
 
+/** Same sanitising as MINDCLAW_LEARN_USER, so a MIND username is a safe doc-name part. */
+function learnUserName(u: string): string {
+  return u.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "") || "user";
+}
+
 export function composeSystemPrompt(o: { identity?: string; tier?: Tier; bootContext: string; surface: string; cwd: string; now?: Date }): string {
   const lines = [
     o.identity ?? "You are Daebot (Dae), Anthony Conti's own agent. MIND is your memory and the only source of truth about his world.",
@@ -50,6 +55,8 @@ export interface HostedRuntimeOptions {
   exempt?: boolean;
   /** Per-user cap checked in addition to the shared one. */
   userCap?: DailyCostCap;
+  /** MIND username this runtime acts for. Learning files the user model under it (default: MINDCLAW_LEARN_USER). */
+  username?: string;
   /** System-prompt identity line (per-user runtimes are not Anthony's agent). */
   persona?: string;
   /** MIND Agent Session source key for this runtime's sessions (default mindclaw-<surface>-<id>). */
@@ -155,7 +162,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       // Learning (src/learn): admin-tier sessions only. Public/staff identities neither read nor write lessons,
       // so nothing from the owner's private MIND can reach them and nothing they say can reach it.
       const learn = learnCfg.enabled && tier === "admin"
-        ? createLearning({ client, provider, cfg, learn: learnCfg, tier, onCost: (usd) => costCap?.add(usd) })
+        ? createLearning({ client, provider, cfg, learn: hosted?.username ? { ...learnCfg, user: learnUserName(hosted.username) } : learnCfg, tier, onCost: (usd) => costCap?.add(usd) })
         : undefined;
       const inner = createAgentSession({
         id, surface: opts.surface, provider, kernel: kernelFor(tier), tools, sync, cfg, cwd, bootContext, learn,
