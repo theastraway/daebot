@@ -5,8 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Daebot</title>
 <meta name="color-scheme" content="light dark">
-<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta name="theme-color" content="#0c0b0a">
+<link rel="icon" href="/brand/favicon-32.png" type="image/png" sizes="32x32">
+<link rel="icon" href="/brand/favicon-16.png" type="image/png" sizes="16x16">
+<link rel="apple-touch-icon" href="/brand/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.json">
+<link rel="preload" href="/brand/fonts/bricolage-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/brand/brand.css">
 </head>
 <body>
 <svg class="sprite" width="0" height="0" aria-hidden="true">
@@ -26,7 +32,7 @@
 <div class="app" id="app">
   <aside class="sidebar" id="sidebar" aria-label="Sessions">
     <div class="brand">
-      <img src="/favicon.svg" width="22" height="22" alt="">
+      <img src="/brand/icon-512.png" width="34" height="34" alt="Daebot">
       <span class="brand-name">Daebot</span>
     </div>
     <button class="btn-new" id="btn-new" type="button"><svg class="ic"><use href="#i-plus"/></svg><span>New session</span></button>
@@ -43,6 +49,7 @@
         <h1 id="title">New session</h1>
         <p id="subtitle">Not started</p>
       </div>
+      <span class="model-badge" id="model-badge" hidden><i class="mb-led" aria-hidden="true"></i><span class="mb-name" id="mb-name"></span><span class="mb-via" id="mb-via"></span></span>
       <div class="top-meta" id="usage" title="Tokens in / out and cost this session" hidden>
         <span id="usage-tokens"></span><span class="sep">·</span><span id="usage-cost"></span>
       </div>
@@ -85,5 +92,6 @@
 </div>
 
 <script type="module" src="/app.js"></script>
+<script type="module" src="/brand/brand.js"></script>
 </body>
 </html>

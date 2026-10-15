@@ -1,30 +1,36 @@
+@font-face { font-family: "Bricolage Grotesque"; font-style: normal; font-weight: 500 800; font-display: swap; src: url("/brand/fonts/bricolage-latin.woff2") format("woff2"); }
 /* MINDClaw web. Calm, paper-and-ink. Serif for reading, sans for chrome, mono for machinery. */
 :root {
   color-scheme: light;
-  --bg: #faf8f4;
-  --bg-side: #f3f0e9;
-  --surface: #ffffff;
-  --surface-2: #f1eee7;
-  --ink: #1d1c1a;
-  --ink-2: #55524b;
-  --ink-3: #8b877d;
-  --line: #e4dfd3;
-  --line-strong: #d3cdbf;
-  --accent: #c2352d;
-  --accent-soft: #f8e6e2;
+  --bg: #fbf6ee;
+  --bg-side: #f4ecdf;
+  --surface: #fffdfa;
+  --surface-2: #f1e7d6;
+  --ink: #141211;
+  --ink-2: #4f4940;
+  --ink-3: #857c6e;
+  --line: #e8dcc7;
+  --line-strong: #d6c7ab;
+  --accent: #dc3030;
+  --accent-soft: #fbe3dd;
+  --led: #ffd25a;
+  --led-deep: #e8a900;
+  --led-ink: #8a5a00;
+  --plate: #0c0b0a;
   --ok: #3f7a52;
   --warn: #9a6a14;
   --warn-soft: #f6ecd6;
   --focus: #1d1c1a;
-  --shadow: 0 1px 2px rgba(29,28,26,.05), 0 8px 24px -12px rgba(29,28,26,.18);
+  --shadow: 0 1px 2px rgba(20,18,17,.05), 0 10px 28px -14px rgba(20,18,17,.22);
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --display: "Bricolage Grotesque", -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif;
   --serif: "Iowan Old Style", "Charter", "Palatino Linotype", Georgia, serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { color-scheme: dark; --bg:#171614; --bg-side:#1c1b18; --surface:#201f1c; --surface-2:#292824; --ink:#ece8df; --ink-2:#b4afa3; --ink-3:#827e73; --line:#2d2b27; --line-strong:#3b3934; --accent:#ef6b60; --accent-soft:#3a2321; --ok:#79b78c; --warn:#d9a441; --warn-soft:#352c18; --focus:#ece8df; --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6); }
+  :root:not([data-theme="light"]) { color-scheme: dark; --bg:#0c0b0a; --bg-side:#100f0e; --surface:#171513; --surface-2:#211e1b; --ink:#f6ead8; --ink-2:#bdb2a0; --ink-3:#8a806f; --line:#272320; --line-strong:#38322c; --accent:#ff5a52; --accent-soft:#2e1816; --led-ink:#ffd25a; --focus:#f6ead8; --ok:#79b78c; --warn:#d9a441; --warn-soft:#352c18; --focus:#ece8df; --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6); }
 }
-:root[data-theme="dark"] { color-scheme: dark; --bg:#171614; --bg-side:#1c1b18; --surface:#201f1c; --surface-2:#292824; --ink:#ece8df; --ink-2:#b4afa3; --ink-3:#827e73; --line:#2d2b27; --line-strong:#3b3934; --accent:#ef6b60; --accent-soft:#3a2321; --ok:#79b78c; --warn:#d9a441; --warn-soft:#352c18; --focus:#ece8df; --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6); }
+:root[data-theme="dark"] { color-scheme: dark; --bg:#0c0b0a; --bg-side:#100f0e; --surface:#171513; --surface-2:#211e1b; --ink:#f6ead8; --ink-2:#bdb2a0; --ink-3:#8a806f; --line:#272320; --line-strong:#38322c; --accent:#ff5a52; --accent-soft:#2e1816; --led-ink:#ffd25a; --focus:#f6ead8; --ok:#79b78c; --warn:#d9a441; --warn-soft:#352c18; --focus:#ece8df; --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6); }
 
 * { box-sizing: border-box; }
 html, body { height: 100%; }
