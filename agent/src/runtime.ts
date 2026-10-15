@@ -23,7 +23,7 @@ function learnUserName(u: string): string {
   return u.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "") || "user";
 }
 
-export function composeSystemPrompt(o: { identity?: string; tier?: Tier; bootContext: string; surface: string; cwd: string; now?: Date }): string {
+export function composeSystemPrompt(o: { identity?: string; tier?: Tier; bootContext: string; surface: string; cwd: string; now?: Date; model?: string }): string {
   const lines = [
     o.identity ?? "You are Daebot (Dae), Anthony Conti's own agent. MIND is your memory and the only source of truth about his world.",
     "Register: chat replies are caveman-short. Short sentences, no preamble. Anything that ships (code, emails, docs) stays polished.",
@@ -33,6 +33,7 @@ export function composeSystemPrompt(o: { identity?: string; tier?: Tier; bootCon
     "cN must be a tool call from this turn. No receipt means you are guessing: go get it.",
     "Never post to the public feed or social surfaces unless the user explicitly says post, share, tweet or feed. Never contact a third party or do anything irreversible without an explicit go-ahead.",
     "When a tool result says blocked or not executed, follow its instruction instead of retrying the same call.",
+    ...(o.model ? [`Model: you run on ${o.model} via OpenRouter, inside Daebot (Astra AI). Say so plainly if asked.`] : []),
     `Surface: ${o.surface}. Working directory: ${o.cwd}. Date: ${(o.now ?? new Date()).toLocaleDateString("en-US", { timeZone: "America/New_York", weekday: "long", year: "numeric", month: "long", day: "numeric" })} (America/New_York).`,
   ];
   if (o.tier === "public") lines.push("Identity: public. You can read and answer only. You cannot write, send, post, run a shell or change anything; say so plainly if asked.");
@@ -166,7 +167,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         : undefined;
       const inner = createAgentSession({
         id, surface: opts.surface, provider, kernel: kernelFor(tier), tools, sync, cfg, cwd, bootContext, learn,
-        systemPrompt: composeSystemPrompt({ identity: hosted?.persona, tier, bootContext, surface: opts.surface, cwd }),
+        systemPrompt: composeSystemPrompt({ identity: hosted?.persona, tier, bootContext, surface: opts.surface, cwd, model: cfg.models.default }),
         restore: stored ? { ...stored.state, messages: repairMessages(stored.state.messages), violations: stored.violations } : undefined,
       });
 

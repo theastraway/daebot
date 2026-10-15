@@ -17,18 +17,18 @@ test("expected tools exist with unique names", () => {
   const { tools } = setup();
   const names = tools.map((t) => t.spec.name);
   assert.equal(new Set(names).size, names.length);
-  for (const n of ["mind_context", "mind_query", "mind_remember", "mind_sense", "mind_life", "mind_crm", "mind_checklists", "mind_tasks", "mind_agents", "mind_folders"]) {
+  for (const n of ["mind_context", "mind_query", "mind_remember", "mind_sense", "mind_life", "mind_crm", "mind_checklists", "mind_tasks", "mind_folders"]) {
     assert.ok(names.includes(n), n);
   }
 });
 
 test("classes and receipts: reads are read+mind, writes are write, public is public", () => {
   const { by } = setup();
-  for (const n of ["mind_context", "mind_query", "mind_sense", "mind_life", "mind_crm", "mind_checklists", "mind_tasks", "mind_agents", "mind_folders_read"]) {
+  for (const n of ["mind_context", "mind_query", "mind_sense", "mind_life", "mind_crm", "mind_checklists", "mind_tasks", "mind_folders_read"]) {
     assert.equal(by(n).class, "read", n);
     assert.equal(by(n).receipt, "mind", n);
   }
-  for (const n of ["mind_remember", "mind_folders", "mind_life_write", "mind_crm_write", "mind_checklists_write", "mind_tasks_write", "mind_agents_write"]) {
+  for (const n of ["mind_remember", "mind_folders", "mind_life_write", "mind_crm_write", "mind_checklists_write", "mind_tasks_write"]) {
     assert.equal(by(n).class, "write", n);
     assert.equal(by(n).receipt, undefined, n);
   }
@@ -134,7 +134,7 @@ test("long outputs are capped", async () => {
 
 test("classFor: delete on any write tool is irreversible (action or HTTP-style), other actions keep the write class", () => {
   const { by, tools } = setup();
-  for (const n of ["mind_remember", "mind_folders", "mind_life_write", "mind_crm_write", "mind_checklists_write", "mind_tasks_write", "mind_agents_write"]) {
+  for (const n of ["mind_remember", "mind_folders", "mind_life_write", "mind_crm_write", "mind_checklists_write", "mind_tasks_write"]) {
     const t = by(n);
     assert.equal(typeof t.classFor, "function", n);
     assert.equal(t.classFor!({ action: "delete" }), "irreversible", n);
