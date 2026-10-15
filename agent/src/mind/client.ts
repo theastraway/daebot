@@ -6,6 +6,10 @@ export interface MindClientOpts {
   timeoutMs?: number;        // default 60_000
   contextTimeoutMs?: number; // default 120_000 (mind_context synthesis is slow)
   retryDelayMs?: number;     // default 400
+  /** Hosted per-user clients: current key (so a refreshed OAuth key is picked up without rebuilding the client). */
+  getKey?: () => string;
+  /** Called once on HTTP 401; return true after rotating the key to retry the call with the new one. */
+  onUnauthorized?: () => Promise<boolean>;
 }
 
 const DEFAULT_CONTEXT_SECTIONS = ["soul", "user", "rules", "priorities", "recent"];
@@ -22,7 +26,7 @@ function isRetryable(e: unknown): boolean {
 
 export function createMindClient(cfg: Config, fetchImpl?: typeof fetch, opts: MindClientOpts = {}): MindClient {
   const doFetch: typeof fetch = fetchImpl ?? ((...a) => fetch(...a));
-  const key = cfg.mindApiKey;
+  const curKey = (): string => opts.getKey?.() ?? cfg.mindApiKey;
   const base = (cfg.mindBaseUrl || "https://m-i-n-d.ai/developer/v1").replace(/\/+$/, "");
   const origin = (() => { try { return new URL(base).origin; } catch { return base; } })();
   const timeoutMs = opts.timeoutMs ?? 60_000;
@@ -32,6 +36,7 @@ export function createMindClient(cfg: Config, fetchImpl?: typeof fetch, opts: Mi
   // Never let the key leak through an error string (server echo, proxy message, URL).
   function scrub(s: string): string {
     let out = s;
+    const key = curKey();
     if (key) out = out.split(key).join("[key]");
     return out.replace(/mind_[A-Za-z0-9]{12,}/g, "[key]");
   }
@@ -43,6 +48,7 @@ export function createMindClient(cfg: Config, fetchImpl?: typeof fetch, opts: Mi
   }
 
   async function once(label: string, route: Route, ms: number): Promise<string> {
+    const key = curKey();
     if (!key) throw new MindHttpError(`MIND ${label}: no API key configured (set MIND_API_KEY)`, 401);
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), ms);
@@ -82,6 +88,13 @@ export function createMindClient(cfg: Config, fetchImpl?: typeof fetch, opts: Mi
     try {
       return await once(label, route, ms);
     } catch (e) {
+      if (e instanceof MindHttpError && e.status === 401 && opts.onUnauthorized) {
+        let rotated = false;
+        try { rotated = await opts.onUnauthorized(); } catch { rotated = false; }
+        if (rotated) {
+          try { return await once(label, route, ms); } catch (e2) { throw new Error(scrub((e2 as Error).message)); }
+        }
+      }
       if (!isRetryable(e)) throw new Error(scrub((e as Error).message));
       if (retryDelayMs > 0) await new Promise((r) => setTimeout(r, retryDelayMs));
       try {

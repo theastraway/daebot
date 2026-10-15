@@ -6,9 +6,13 @@ import { dirname, join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { AgentEvent, AgentSession, ClientFrame, Config, Runtime, ServerFrame } from "../types.ts";
 import { COOKIE_NAME, hostnameOf, isLocalHost, isLocalOrigin, loadOrCreateToken, parseCookies, presentedToken, safeEqual } from "./auth.ts";
-import { HostedConfigError, LoginLimiter, MIN_TOKEN_LEN, SESSION_TTL_MS, issueSession, verifySession } from "../hosted.ts";
+import { HostedConfigError, LoginLimiter, MIN_TOKEN_LEN, SESSION_TTL_MS, issueSession, parseSession } from "../hosted.ts";
 import type { HostedOptions } from "../hosted.ts";
-import { BusyError, NotFoundError, SessionManager } from "./sessions.ts";
+import { BusyError, ForbiddenError, NotFoundError, SessionManager } from "./sessions.ts";
+import { OWNER } from "../auth/users.ts";
+import type { Principal } from "../auth/users.ts";
+import type { AuthContext } from "../auth/tenancy.ts";
+import { MindAuthError, whoami } from "../auth/mind-auth.ts";
 import { STATIC_CSP, resolveStatic, serveFile } from "./static.ts";
 import { acceptWebSocket } from "./ws.ts";
 import type { WsConnection } from "./ws.ts";
@@ -53,9 +57,14 @@ export interface GatewayOptions {
   idleMs?: number; // tests
   /** Public deployment: login screen, Host allowlist, secure cookies, security headers. */
   hosted?: HostedOptions;
+  /** Hosted multi-user sign-in (MIND OAuth / API key) and the per-user runtimes. Owner access-code login keeps working without it. */
+  auth?: AuthContext;
+  /** The shared session store (DATA_DIR/sessions); lets ownership of persisted sessions be checked without a live session. */
+  sessionStore?: { meta?(id: string): { owner?: string } | undefined };
 }
 
 export const HOSTED_COOKIE = "mc_session";
+export const OAUTH_COOKIE = "mc_oauth";
 // Reachable without a session in hosted mode (the login page and what it needs to render).
 const HOSTED_PUBLIC_STATIC = new Set(["/login.html", "/login.js", "/login.css", "/style.css", "/favicon.svg"]);
 const HSTS = "max-age=31536000; includeSubDomains";
@@ -144,7 +153,21 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   const host = opts.host ?? (hosted ? "0.0.0.0" : "127.0.0.1");
   const token = hosted ? hosted.token : loadOrCreateToken(opts.tokenPath);
   const staticDir = opts.staticDir ?? defaultStaticDir();
-  const manager = new SessionManager(opts.runtime, { idleMs: opts.idleMs });
+  const auth = hosted ? opts.auth : undefined;
+  const deadRuntime = { openSession: async () => { throw new Error("Your MIND sign-in expired. Sign in again."); }, listSessions: () => [] };
+  // Sessions are owned by the principal that opened them; each owner gets its own runtime (users: their own MIND).
+  const manager = new SessionManager(opts.runtime, {
+    idleMs: opts.idleMs,
+    storedOwner: (id) => { const m = opts.sessionStore?.meta?.(id); return m ? (m.owner ?? "owner") : undefined; },
+    runtimeFor: auth
+      ? (ownerId) => {
+          if (ownerId === OWNER.id) return opts.runtime;
+          const p = auth.store.principal(ownerId);
+          return p ? auth.runtimeFor(p) : deadRuntime;
+        }
+      : undefined,
+  });
+  const wsWho = new WeakMap<WsConnection, Principal>();
   const subscribers = new Map<string, Set<WsConnection>>(); // sessionId -> ws conns
   const wsConns = new Set<WsConnection>();
   const SESSION_ROUTE = /^\/sessions\/([^/]+)(?:\/(send|abort|violations|history))?$/;
@@ -162,11 +185,23 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     for (const c of subscribers.get(id) ?? []) c.send(text);
   }
 
+  // Who is this request? Hosted: the signed session cookie names the owner (access code) or one stored MIND user.
+  function principalOf(req: IncomingMessage): Principal | undefined {
+    const s = parseSession(token, parseCookies(req.headers["cookie"])[HOSTED_COOKIE]);
+    if (!s) return undefined;
+    if (s.uid === "owner") return OWNER;
+    return auth?.store.principal(s.uid); // a removed user's old cookie stops working
+  }
+
   function authorized(req: IncomingMessage, query: URLSearchParams, allowQuery: boolean): boolean {
     // Hosted: only a signed session cookie from /login counts. No bearer, no ?token=, so every guess goes through the rate limiter.
-    if (hosted) return verifySession(token, parseCookies(req.headers["cookie"])[HOSTED_COOKIE]);
+    if (hosted) return principalOf(req) !== undefined;
     const t = presentedToken(req, query, allowQuery);
     return t !== undefined && safeEqual(t, token);
+  }
+
+  function who(req: IncomingMessage): Principal {
+    return hosted ? principalOf(req) ?? OWNER : OWNER; // callers have already passed authorized()
   }
 
   function headerOne(req: IncomingMessage, name: string): string | undefined {
@@ -233,6 +268,93 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     return sendJson(res, 200, { ok: true });
   }
 
+  function userCookie(uid: string): string {
+    const s = issueSession(token, hosted?.sessionTtlMs ?? SESSION_TTL_MS, Date.now(), uid);
+    return `${HOSTED_COOKIE}=${s.value}; ${cookieAttrs(s.maxAgeSec)}`;
+  }
+
+  function mayUse(username: string): boolean {
+    return !auth || auth.allowedUsers.length === 0 || auth.allowedUsers.includes(username.trim().toLowerCase());
+  }
+
+  // "Use a MIND API key": validated live against MIND, then stored sealed under the key's own username.
+  async function keyLogin(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!auth?.store.enabled) return sendJson(res, 404, { error: "sign-in with a MIND account is not enabled on this deployment" });
+    const ip = clientIp(req);
+    const wait = limiter.retryAfter(ip);
+    if (wait > 0) {
+      res.setHeader("retry-after", String(wait));
+      return sendJson(res, 429, { error: "too many attempts; try again later" });
+    }
+    const b = await readJson(req);
+    const key = typeof b.key === "string" && b.key.length <= 600 ? b.key.trim() : "";
+    let name: string;
+    try {
+      name = (await whoami(auth.mindBaseUrl, key, auth.fetchImpl)).username;
+    } catch (e) {
+      const status = e instanceof MindAuthError ? e.status : 502;
+      if (status === 400 || status === 401) limiter.fail(ip);
+      return sendJson(res, status === 400 ? 401 : status, { error: e instanceof MindAuthError ? e.message : "could not check that key" });
+    }
+    if (!mayUse(name)) {
+      limiter.fail(ip);
+      return sendJson(res, 403, { error: "That MIND account is not enabled for Daebot." });
+    }
+    limiter.success(ip);
+    const user = auth.store.upsert(name, { kind: "key", mindKey: key });
+    auth.evict(user.id);
+    res.setHeader("set-cookie", userCookie(user.id));
+    return sendJson(res, 200, { ok: true, username: user.username });
+  }
+
+  // Lax, not Strict: the callback is a cross-site top-level navigation arriving from MIND.
+  function oauthCookieAttrs(maxAge: number): string {
+    return `HttpOnly; Secure; SameSite=Lax; Path=/auth/mind; Max-Age=${maxAge}`;
+  }
+
+  function loginRedirect(res: ServerResponse, code: string): void {
+    res.writeHead(302, { location: `/login?e=${code}`, "cache-control": "no-store", "set-cookie": `${OAUTH_COOKIE}=; ${oauthCookieAttrs(0)}` });
+    res.end();
+  }
+
+  async function oauthStart(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!auth?.store.enabled || !auth.oauth) return loginRedirect(res, "oauth_off");
+    const ip = clientIp(req);
+    if (limiter.retryAfter(ip) > 0) return loginRedirect(res, "slow");
+    try {
+      const { url, state } = await auth.oauth.start();
+      res.writeHead(302, { location: url, "cache-control": "no-store", "set-cookie": `${OAUTH_COOKIE}=${state}; ${oauthCookieAttrs(600)}` });
+      return void res.end();
+    } catch {
+      return loginRedirect(res, "oauth_down");
+    }
+  }
+
+  async function oauthCallback(req: IncomingMessage, res: ServerResponse, query: URLSearchParams): Promise<void> {
+    if (!auth?.store.enabled || !auth.oauth) return loginRedirect(res, "oauth_off");
+    const ip = clientIp(req);
+    if (limiter.retryAfter(ip) > 0) return loginRedirect(res, "slow");
+    const state = query.get("state") ?? "";
+    const bound = parseCookies(req.headers["cookie"])[OAUTH_COOKIE] ?? "";
+    // The state must be the one this browser was given at /auth/mind/start (blocks login-CSRF / code injection).
+    if (!state || !bound || !safeEqual(state, bound)) { limiter.fail(ip); return loginRedirect(res, "state"); }
+    if (query.get("error")) return loginRedirect(res, query.get("error") === "access_denied" ? "denied" : "oauth");
+    try {
+      const t = await auth.oauth.finish(query.get("code") ?? "", state);
+      const name = (await whoami(auth.mindBaseUrl, t.accessToken, auth.fetchImpl)).username;
+      if (!mayUse(name)) return loginRedirect(res, "notallowed");
+      const user = auth.store.upsert(name, { kind: "oauth", accessToken: t.accessToken, refreshToken: t.refreshToken, clientId: t.clientId });
+      auth.evict(user.id);
+      // A 200 page that navigates itself (not a 302): the next request is then same-site, so the Strict session cookie is sent.
+      const body = '<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/"><title>Signed in</title><a href="/">Continue</a>';
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "set-cookie": [userCookie(user.id), `${OAUTH_COOKIE}=; ${oauthCookieAttrs(0)}`] });
+      return void res.end(body);
+    } catch {
+      limiter.fail(ip);
+      return loginRedirect(res, "oauth");
+    }
+  }
+
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const raw = req.url ?? "/";
     const qi = raw.indexOf("?");
@@ -275,6 +397,23 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       if (path === "/login") {
         if (method === "POST") return login(req, res);
         if (method !== "GET" && method !== "HEAD") return sendJson(res, 405, { error: "method not allowed" });
+      } else if (path === "/auth/methods") {
+        if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+        return sendJson(res, 200, { owner: true, key: !!auth?.store.enabled, oauth: !!(auth?.store.enabled && auth.oauth) });
+      } else if (path === "/auth/key") {
+        if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+        return keyLogin(req, res);
+      } else if (path === "/auth/mind/start") {
+        if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+        return oauthStart(req, res);
+      } else if (path === "/auth/mind/callback") {
+        if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+        return oauthCallback(req, res, query);
+      } else if (path === "/auth/me") {
+        if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+        const p = principalOf(req);
+        if (!p) return sendJson(res, 401, { error: "unauthorized" });
+        return sendJson(res, 200, { username: p.owner ? "Owner" : p.username, owner: p.owner, tier: p.tier });
       } else if (path === "/logout") {
         if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
         res.setHeader("set-cookie", `${HOSTED_COOKIE}=; ${cookieAttrs(0)}`);
@@ -347,14 +486,16 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       return void res.end(data);
     }
 
+    const me = who(req);
     if (path === "/sessions") {
-      if (method === "GET") return sendJson(res, 200, { sessions: manager.list() });
+      if (method === "GET") return sendJson(res, 200, { sessions: manager.list(me.id) });
       if (method === "POST") {
         const b = await readJson(req);
         const ls = await manager.open({
           surface: optStr(b.surface, 40) ?? "web",
           title: optStr(b.title, 200),
           resumeId: optStr(b.resumeId, 200),
+          owner: me.id,
         });
         return sendJson(res, 200, { sessionId: ls.id });
       }
@@ -370,12 +511,14 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       return sendJson(res, 400, { error: "bad session id" });
     }
     const action = m[2];
-    const ls = manager.get(id);
+    const acc = manager.access(id, me.id);
+    if (acc === "forbidden") return sendJson(res, 403, { error: "forbidden" });
+    const ls = acc;
 
     if (action === "history") {
       // The visible transcript, from the live session or from disk after a restart (no live session needed).
       if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-      const events = opts.runtime.history?.(id);
+      const events = manager.runtimeOf(me.id).history?.(id);
       if (!events) return sendJson(res, 404, { error: "no such session" });
       return sendJson(res, 200, { events });
     }
@@ -443,6 +586,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (!authorized(req, query, true)) return reject("401 Unauthorized");
     const conn = acceptWebSocket(req, socket, head);
     if (!conn) return;
+    wsWho.set(conn, hosted ? principalOf(req) ?? OWNER : OWNER);
     wsConns.add(conn);
     conn.on("close", () => {
       wsConns.delete(conn);
@@ -465,6 +609,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (typeof f !== "object" || f === null || typeof (f as { t?: unknown }).t !== "string") {
       return sendFrame(c, { t: "error", message: "invalid frame" });
     }
+    const me = wsWho.get(c) ?? OWNER;
     try {
       switch (f.t) {
         case "open": {
@@ -472,6 +617,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
             surface: typeof f.surface === "string" ? f.surface.slice(0, 40) : "web",
             title: typeof f.title === "string" ? f.title.slice(0, 200) : undefined,
             resumeId: typeof f.resumeId === "string" ? f.resumeId : undefined,
+            owner: me.id,
           });
           subscribe(ls.id, c);
           return sendFrame(c, { t: "opened", sessionId: ls.id });
@@ -480,7 +626,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
           if (typeof f.sessionId !== "string" || typeof f.text !== "string" || !f.text.trim()) {
             return sendFrame(c, { t: "error", message: "send needs sessionId and text" });
           }
-          const ls = manager.get(f.sessionId);
+          const ls = manager.access(f.sessionId, me.id);
+          if (ls === "forbidden") return sendFrame(c, { t: "error", message: "forbidden" });
           if (!ls) return sendFrame(c, { t: "error", message: "no such session" });
           if (ls.busy) return sendFrame(c, { t: "error", message: "session is busy with another turn" });
           subscribe(ls.id, c);
@@ -488,10 +635,12 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
           return;
         }
         case "abort": {
+          if (manager.access(String(f.sessionId), me.id) === "forbidden") return sendFrame(c, { t: "error", message: "forbidden" });
           manager.abort(String(f.sessionId));
           return;
         }
         case "close": {
+          if (manager.access(String(f.sessionId), me.id) === "forbidden") return sendFrame(c, { t: "error", message: "forbidden" });
           await manager.close(String(f.sessionId));
           subscribers.delete(String(f.sessionId));
           return;
@@ -500,7 +649,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
           return sendFrame(c, { t: "error", message: "unknown frame type" });
       }
     } catch (err) {
-      sendFrame(c, { t: "error", message: err instanceof Error ? err.message.slice(0, 300) : "error" });
+      sendFrame(c, { t: "error", message: err instanceof ForbiddenError ? "forbidden" : err instanceof Error ? err.message.slice(0, 300) : "error" });
     }
   }
 
@@ -508,6 +657,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     handle(req, res).catch((err) => {
       if (res.headersSent) return void res.end();
       if (err instanceof HttpError) return sendJson(res, err.status, { error: err.message });
+      if (err instanceof ForbiddenError) return sendJson(res, 403, { error: "forbidden" });
       sendJson(res, 500, { error: err instanceof Error ? err.message.slice(0, 300) : "internal error" });
     });
   });

@@ -73,6 +73,8 @@ export function parseDailyCap(v: string | undefined): number {
 
 export class DailyCostCap {
   readonly capUsd: number;
+  /** Label used in the notice ("Daily cost cap", "Your daily cost cap"). */
+  label = "Daily cost cap";
   private day = "";
   private spent = 0;
   private now: () => Date;
@@ -91,7 +93,7 @@ export class DailyCostCap {
   total(): number { this.roll(); return this.spent; }
   exceeded(): boolean { this.roll(); return this.spent >= this.capUsd; }
   notice(): string {
-    return `Daily cost cap reached ($${this.spent.toFixed(2)} of $${this.capUsd.toFixed(2)}). New turns resume tomorrow (UTC) or when the cap is raised.`;
+    return `${this.label} reached ($${this.spent.toFixed(2)} of $${this.capUsd.toFixed(2)}). New turns resume tomorrow (UTC) or when the cap is raised.`;
   }
 }
 
@@ -135,23 +137,37 @@ export class LoginLimiter {
 }
 
 // ---------- session cookie ----------
-// Stateless: "<expiryMs>.<hmac>". The login secret never goes in the cookie; rotating GATEWAY_TOKEN signs everyone out.
-function mac(token: string, expiry: string): string {
-  return createHmac("sha256", token).update(`mindclaw-session:${expiry}`).digest("base64url");
+// Stateless and signed with GATEWAY_TOKEN; it never contains the login secret or any MIND credential.
+//   owner (GATEWAY_TOKEN login):  "<expiryMs>.<hmac>"                 (legacy shape, kept as is)
+//   signed-in MIND user:          "<userId>:<expiryMs>.<hmac>"        (user id only)
+// Rotating GATEWAY_TOKEN signs everyone out.
+function mac(token: string, expiry: string, uid?: string): string {
+  return createHmac("sha256", token).update(uid ? `mindclaw-session-v2:${uid}:${expiry}` : `mindclaw-session:${expiry}`).digest("base64url");
 }
 
-export function issueSession(token: string, ttlMs = SESSION_TTL_MS, now = Date.now()): { value: string; maxAgeSec: number } {
+export function issueSession(token: string, ttlMs = SESSION_TTL_MS, now = Date.now(), uid?: string): { value: string; maxAgeSec: number } {
   const expiry = String(now + ttlMs);
-  return { value: `${expiry}.${mac(token, expiry)}`, maxAgeSec: Math.floor(ttlMs / 1000) };
+  const value = uid ? `${uid}:${expiry}.${mac(token, expiry, uid)}` : `${expiry}.${mac(token, expiry)}`;
+  return { value, maxAgeSec: Math.floor(ttlMs / 1000) };
+}
+
+/** Verifies a session cookie. Returns the subject: "owner" for the access-code login, else the user id. */
+export function parseSession(token: string, value: string | undefined, now = Date.now()): { uid: string } | undefined {
+  if (!value) return undefined;
+  const dot = value.indexOf(".");
+  if (dot < 1) return undefined;
+  const head = value.slice(0, dot);
+  const colon = head.indexOf(":");
+  const uid = colon === -1 ? undefined : head.slice(0, colon);
+  const expiry = colon === -1 ? head : head.slice(colon + 1);
+  if (uid !== undefined && !/^u_[a-f0-9]{24}$/.test(uid)) return undefined;
+  if (!/^\d{10,16}$/.test(expiry) || Number(expiry) <= now) return undefined;
+  const want = Buffer.from(mac(token, expiry, uid));
+  const got = Buffer.from(value.slice(dot + 1));
+  if (want.length !== got.length || !timingSafeEqual(want, got)) return undefined;
+  return { uid: uid ?? "owner" };
 }
 
 export function verifySession(token: string, value: string | undefined, now = Date.now()): boolean {
-  if (!value) return false;
-  const i = value.indexOf(".");
-  if (i < 1) return false;
-  const expiry = value.slice(0, i);
-  if (!/^\d{10,16}$/.test(expiry) || Number(expiry) <= now) return false;
-  const want = Buffer.from(mac(token, expiry));
-  const got = Buffer.from(value.slice(i + 1));
-  return want.length === got.length && timingSafeEqual(want, got);
+  return parseSession(token, value, now) !== undefined;
 }

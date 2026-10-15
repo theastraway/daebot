@@ -22,16 +22,30 @@
     <div class="powered"><span>Powered by</span><i class="mind-logo" role="img" aria-label="MIND"></i></div>
   </section>
   <section class="panel">
-    <form class="login-card" id="login-form" autocomplete="off" novalidate>
+    <div class="login-card">
       <div class="tile" role="img" aria-label="Daebot"></div>
       <h1>Welcome back</h1>
-      <p class="login-sub">Enter your access code to continue.</p>
-      <label class="login-label" for="code">Access code</label>
-      <input id="code" name="code" type="password" autocomplete="current-password" spellcheck="false" autocapitalize="off" required aria-describedby="login-err" autofocus>
-      <button class="btn-primary login-btn" id="login-btn" type="submit">Continue</button>
+      <p class="login-sub" id="login-sub">Sign in to continue.</p>
+      <div class="login-group" id="mind-sign" hidden>
+        <a class="btn-primary login-btn login-link" id="mind-oauth" href="/auth/mind/start" hidden>Sign in with MIND</a>
+        <form id="key-form" autocomplete="off" novalidate>
+          <label class="login-label" for="mind-key">Use a MIND API key</label>
+          <input id="mind-key" name="mind-key" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="mind_...">
+          <button class="btn-quiet login-btn login-alt" id="key-btn" type="submit">Continue with key</button>
+        </form>
+        <p class="login-hint">Daebot then reads and writes your own MIND, not anyone else's.</p>
+      </div>
+      <details class="login-owner" id="owner-box">
+        <summary>Owner code</summary>
+        <form id="login-form" autocomplete="off" novalidate>
+          <label class="login-label" for="code">Access code</label>
+          <input id="code" name="code" type="password" autocomplete="current-password" spellcheck="false" autocapitalize="off" required aria-describedby="login-err">
+          <button class="btn-primary login-btn" id="login-btn" type="submit">Continue</button>
+        </form>
+      </details>
       <p class="err" id="login-err" role="alert" aria-live="polite" hidden></p>
-    </form>
-    <p class="login-foot">Sessions are private to this browser. Sign out from the sidebar when you are done.</p>
+    </div>
+    <p class="login-foot">Sessions are private to your account. Sign out from the sidebar when you are done.</p>
   </section>
 </main>
 <script type="module" src="/login.js"></script>

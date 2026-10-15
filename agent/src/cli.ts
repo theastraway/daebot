@@ -3,7 +3,9 @@
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { loadConfig } from "./config.ts";
-import { HostedConfigError, hostedPort, isHostedEnv, loadHostedOptions, parseDailyCap } from "./hosted.ts";
+import { DailyCostCap, HostedConfigError, hostedPort, isHostedEnv, loadHostedOptions, parseDailyCap } from "./hosted.ts";
+import type { AuthContext } from "./auth/tenancy.ts";
+import { BootCache } from "./mind/boot-cache.ts";
 import type { HostedOptions } from "./hosted.ts";
 import type { AgentEvent, AgentSession, Config, Runtime } from "./types.ts";
 
@@ -105,7 +107,7 @@ function argValue(argv: string[], name: string): string | undefined {
 }
 
 async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promise<number> {
-  let mod: { startGateway?: (o: { runtime: Runtime; cfg?: Config; port?: number; host?: string; hosted?: HostedOptions }) => Promise<{ url: string; token: string }> };
+  let mod: { startGateway?: (o: { runtime: Runtime; cfg?: Config; port?: number; host?: string; hosted?: HostedOptions; auth?: AuthContext; sessionStore?: unknown }) => Promise<{ url: string; token: string }> };
   try { mod = (await import("./gateway/index.ts")) as typeof mod; } catch { process.stdout.write("gateway not built yet\n"); return 1; }
   if (!mod.startGateway) { process.stdout.write("gateway not built yet\n"); return 1; }
   const hostedMode = isHostedEnv(process.env, argv);
@@ -118,18 +120,36 @@ async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promis
   }
   const bad = preflight(cfg);
   if (bad) { process.stderr.write(`${bad}\n`); return 1; }
-  const runtime = await makeRuntime(cfg, argv);
+  // Hosted: one process-wide cap shared by the owner runtime and every per-user runtime.
+  const hostedRt = hostedRuntime(argv);
+  const globalCap = hostedRt ? new DailyCostCap(hostedRt.dailyUsdCap) : undefined;
+  const { createRuntime } = await import("./runtime.ts");
+  const { createFileStore, dataDir } = await import("./persist.ts");
+  const sessionStore = createFileStore(dataDir());
+  const bootCache = new BootCache();
+  const runtime = createRuntime(cfg, { hosted: hostedRt ? { ...hostedRt, sharedCap: globalCap, exempt: true } : undefined, store: sessionStore });
+  let auth: AuthContext | undefined;
+  if (hosted && globalCap) {
+    try {
+      const { createAuthContext } = await import("./auth/index.ts");
+      auth = createAuthContext({ cfg, hosted, ownerRuntime: runtime, globalCap, sessionStore, bootCache });
+      if (auth.store.unreadable) process.stderr.write(`hosted: ${auth.store.unreadable} stored user record(s) could not be decrypted (wrong DAEBOT_SECRET_KEY or tampered); those users must sign in again.\n`);
+    } catch (e) {
+      process.stderr.write(`${e instanceof HostedConfigError ? e.message : "invalid sign-in configuration"}\n`);
+      return 1;
+    }
+  }
   const port = argValue(argv, "--port") ? Number(argValue(argv, "--port")) : hosted ? hostedPort(process.env) : undefined;
   const host = argValue(argv, "--host");
   if (hosted && !process.env.MINDCLAW_MODEL) process.stderr.write(`hosted: MINDCLAW_MODEL is not set, using the built-in default (${cfg.models.default}). Set MINDCLAW_MODEL to choose the deployed model.\n`);
   let gw: { url: string; token: string };
-  try { gw = await mod.startGateway({ runtime, cfg, port, host, hosted }); } catch (e) {
+  try { gw = await mod.startGateway({ runtime, cfg, port, host, hosted, auth, sessionStore }); } catch (e) {
     process.stderr.write(`gateway failed to start: ${String((e as Error)?.message ?? e).split("\n")[0]}\n`);
     return 1;
   }
   if (hosted) {
     // Never print the login secret (platform logs are not a safe place for it).
-    process.stdout.write(`MINDClaw hosted gateway listening on ${gw.url} (login required; allowed hosts: ${hosted.allowedHosts.join(", ")})\n`);
+    process.stdout.write(`MINDClaw hosted gateway listening on ${gw.url} (login required; allowed hosts: ${hosted.allowedHosts.join(", ")}; MIND sign-in: ${auth?.store.enabled ? `on (${auth.store.count()} users${auth.oauth ? ", OAuth" : ""})` : "off, set DAEBOT_SECRET_KEY to enable"})\n`);
   } else {
     process.stdout.write(`MINDClaw gateway on ${gw.url} (token in ~/.mindclaw/gateway-token)\n`);
     // Machine-readable line for the desktop shell and scripts.
