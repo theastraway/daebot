@@ -2,7 +2,8 @@
 //   node src/gateway/dev-fake.ts            (PORT=7788 by default, HOST=127.0.0.1)
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { AgentEvent, AgentSession, Runtime, Violation } from "../types.ts";
+import { HistoryRecorder } from "../events.ts";
+import type { AgentEvent, AgentSession, HistoryEvent, Runtime, Violation } from "../types.ts";
 import { startGateway } from "./index.ts";
 
 const sleep = (ms: number, signal?: AbortSignal) =>
@@ -12,9 +13,24 @@ const sleep = (ms: number, signal?: AbortSignal) =>
     signal?.addEventListener("abort", () => { clearTimeout(t); reject(new Error("aborted")); }, { once: true });
   });
 
+const SEED_HISTORY: HistoryEvent[] = [
+  { type: "user", text: "Triage the new TCPA claims in the queue" },
+  { type: "text", delta: "Checking MIND before I answer.\n\n" },
+  { type: "toolStart", receiptId: "c1", tool: "mind_query", args: { query: "open TCPA claims" } },
+  { type: "toolEnd", receiptId: "c1", tool: "mind_query", ok: true, preview: "3 open claims: two call-time violations, one revoked-consent." },
+  { type: "text", delta: "Draft: all three are filed.\n" },
+  { type: "retract", reason: "Draft claims 'filed' without a SURFACE receipt." },
+  { type: "gate", verdict: { gate: "receipt", action: "block", reason: "Draft claims 'filed' without a SURFACE receipt." }, enforced: true },
+  { type: "text", delta: "MIND shows **3 open claims**: two call-time violations, one revoked-consent. None filed yet." },
+  { type: "usage", usage: { promptTokens: 2100, completionTokens: 180, costUsd: 0.0031 }, totalCostUsd: 0.0031, model: "qwen/qwen3.8-flash" },
+  { type: "done", finalText: "" },
+];
+
 export function createFakeRuntime(opts: { speed?: number } = {}): Runtime {
   const speed = opts.speed ?? 1;
   const sessions = new Map<string, { id: string; surface: string; title: string; updatedAt: number }>();
+  const recorders = new Map<string, HistoryRecorder>();
+  const recorderFor = (id: string) => { let r = recorders.get(id); if (!r) recorders.set(id, (r = new HistoryRecorder())); return r; };
   let n = 0;
   let calls = 0;
 
@@ -29,6 +45,13 @@ export function createFakeRuntime(opts: { speed?: number } = {}): Runtime {
       violations: () => violations.slice(),
       close: async () => {},
       async *send(msg: string, o?: { signal?: AbortSignal }): AsyncIterable<AgentEvent> {
+        const rec = recorderFor(id);
+        rec.user(msg);
+        for await (const ev of script(msg, o)) { rec.push(ev); yield ev; }
+      },
+    };
+    async function* script(msg: string, o?: { signal?: AbortSignal }): AsyncGenerator<AgentEvent> {
+      {
         const signal = o?.signal;
         userMsgs++;
         const wait = (ms: number) => sleep(ms * speed, signal);
@@ -49,6 +72,7 @@ export function createFakeRuntime(opts: { speed?: number } = {}): Runtime {
           yield* tool("mind_query", { query: "What is the current state of the gateway work?" }, true,
             "Gateway: HTTP + WebSocket, token auth, static web UI. Open item: channel webhook adapters.");
           yield* say("MIND says the gateway is in build. Here is the shape of it:\n\n- **Transport:** HTTP, SSE and a hand-written WebSocket\n- **Auth:** bearer token, `0600` file\n- **Surfaces:** terminal, web, desktop\n\n");
+          yield { type: "retract", reason: "Draft claims 'shipped' without a SURFACE✓ receipt; verify on the live surface first." };
           yield { type: "gate", verdict: { gate: "receipt", action: "block", reason: "Draft claims 'shipped' without a SURFACE✓ receipt; verify on the live surface first." }, enforced: true };
           yield* tool("bash", { command: "curl -s http://127.0.0.1:7777/health" }, true, '{"ok":true,"name":"mindclaw-gateway","sessions":1}');
           yield { type: "gate", verdict: { gate: "owner", action: "rewrite", reason: "owner_check added: Astra AI == Astra AI." }, enforced: false };
@@ -61,14 +85,14 @@ export function createFakeRuntime(opts: { speed?: number } = {}): Runtime {
           }
           const cost = 0.0042 + userMsgs * 0.0017;
           total += cost;
-          yield { type: "usage", usage: { promptTokens: 1840 + userMsgs * 220, completionTokens: 312, costUsd: cost }, totalCostUsd: total };
+          yield { type: "usage", usage: { promptTokens: 1840 + userMsgs * 220, completionTokens: 312, costUsd: cost }, totalCostUsd: total, model: "qwen/qwen3.8-flash" };
           yield { type: "done", finalText: final };
         } catch (e) {
           if (signal?.aborted) return;
           throw e;
         }
-      },
-    };
+      }
+    }
   }
 
   return {
@@ -79,6 +103,10 @@ export function createFakeRuntime(opts: { speed?: number } = {}): Runtime {
       return make(id, o.surface);
     },
     listSessions: () => [...sessions.values()],
+    history(id): HistoryEvent[] | undefined {
+      if (id === "seed-claims") return SEED_HISTORY;
+      return recorders.get(id)?.events();
+    },
   };
 }
 

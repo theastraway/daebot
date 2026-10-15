@@ -56,6 +56,9 @@ export class TurnFolder {
         return [{ kind: "confirm", id: ev.id, tool: ev.tool, args: ev.args, reason: ev.reason }];
       case "notice":
         return [{ kind: "notice", level: ev.level, text: ev.text }];
+      case "retract":
+        // A terminal cannot unprint: mark the block above as withdrawn so nobody reads it as the answer.
+        return [{ kind: "notice", level: "warn", text: `the text above was withdrawn by a gate, rewriting: ${ev.reason}` }];
       case "usage":
         this.totalCostUsd = ev.totalCostUsd;
         this.addUsage(ev.usage);

@@ -8,10 +8,12 @@ import { createAgentSession } from "../../src/loop.ts";
 import { createKernel } from "../../src/kernel/index.ts";
 import { loadConfig } from "../../src/config.ts";
 import { createRuntime } from "../../src/runtime.ts";
+import { visibleText } from "../../src/events.ts";
 import type { AgentEvent, Tool } from "../../src/types.ts";
 import { FakeKernel, FakeProvider, FakeSync, baseCfg, call, collect, fakeTool } from "./helpers.ts";
 
-const texts = (ev: AgentEvent[]) => ev.filter((e) => e.type === "text").map((e) => (e as any).delta as string);
+// text streams before pre_answer runs, so what the user SEES is the text minus retracted drafts
+const texts = (ev: AgentEvent[]) => [visibleText(ev)];
 
 function real(rounds: ConstructorParameters<typeof FakeProvider>[0], tools: Tool[], extra: { cfg?: any; kernel?: any } = {}) {
   const provider = new FakeProvider(rounds);

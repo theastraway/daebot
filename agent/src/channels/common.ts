@@ -346,6 +346,9 @@ export class ConversationHub {
               if (part.trim()) await reply(part);
             }
             break;
+          case "retract":
+            buf = ""; // a gate withheld the draft: drop what has not been sent yet (retract always precedes its gate event)
+            break;
           case "gate":
             if (ev.enforced) { await flushAll(); await reply(renderGate(ev)); }
             break;

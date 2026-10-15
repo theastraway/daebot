@@ -19,8 +19,11 @@ It differs from local use on purpose:
 | `MIND_API_KEY` | yes | MIND key for the agent's tenant |
 | `MIND_SESSION_API_KEY` | yes | key with `chat:write` for Agent Session sync (falls back to `MIND_API_KEY`) |
 | `OPENROUTER_API_KEY` | yes | OpenRouter key |
-| `MINDCLAW_MODEL` | no | main model. **Set a cheap one.** The built-in default is `anthropic/claude-sonnet-4.5`, which is expensive for a public bot. The service logs a warning if this is unset. |
+| `MINDCLAW_MODEL` | no | main model, read from the environment only. Built-in default `qwen/qwen3.8-flash`; fallback `deepseek/deepseek-v4-flash`. `/health` reports the active model as `model` (provider `openrouter`). The service logs a warning if this is unset. |
 | `MINDCLAW_CHEAP_MODEL` | no | cheap model for light work |
+| `DATA_DIR` | no | where chats are saved as JSON (`<DATA_DIR>/sessions/<id>.json`). `/data` on Render (the 1 GB persistent disk in `render.yaml`). Default locally: `~/.mindclaw/data`. |
+| `MINDCLAW_CONTEXT_WINDOW` | no | model context window in tokens for compaction (default 128000). At 60% (`MINDCLAW_COMPACT_AT=0.6`) older turns are summarized by the cheap model; the last 8 turns and all receipt lines stay verbatim. |
+| `MINDCLAW_MCP_SERVERS` | no | JSON array of remote MCP servers: `[{"name":"acme","url":"https://...","headers":{"Authorization":"Bearer ..."},"classes":{"search":"read"}}]`. Streamable HTTP. Tools appear as `<name>__<tool>`. `classes` maps a tool (or `"*"`) to `read\|write\|outward\|irreversible\|public`; anything not listed is `outward`, so the danger gate asks before it runs. |
 | `MINDCLAW_KERNEL` | no | `1` |
 | `MINDCLAW_DAILY_USD_CAP` | no | `5` |
 | `MINDCLAW_CLIENT_NAMES` | no | optional comma list of client entity names for the owner gate |
@@ -49,7 +52,9 @@ Generate the access code locally and keep it in a password manager: `openssl ran
 ## Notes and limits
 
 - The cost cap and login rate limiter are in memory: a restart or redeploy resets both. The cap guards one process; do not run more than one instance.
-- Session history lives in MIND (Agent Sessions). In-process session state is lost on restart; the user starts a new chat.
+- Chats are saved on the persistent disk (`DATA_DIR=/data`, 1 GB, created by the Blueprint) after each completed turn, so a restart or redeploy keeps them and the web UI replays the saved transcript on resume (`GET /sessions/:id/history`). A session is only written once it has a first message. A disk means a single instance and in-place (not zero-downtime) deploys; if the disk is removed, chats fall back to MIND Agent Sessions only.
+- Every hosted response carries `X-Robots-Tag: noindex, nofollow` and `/robots.txt` disallows everything.
+- The MIND boot context is cached in memory per MIND key for 10 minutes, so new chats open fast after the first.
 - Client IP for the login limiter is the right-most `X-Forwarded-For` entry (the one the platform proxy appends).
 
 ## Local check without keys

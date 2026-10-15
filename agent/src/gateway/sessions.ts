@@ -12,9 +12,11 @@ export interface LiveSession {
   abort: AbortController | null;
   lastUsed: number;
   createdAt: number;
+  turns: number; // user messages sent through this gateway process; 0 = prewarmed and untouched
 }
 
 export const IDLE_MS = 6 * 60 * 60 * 1000;
+export const EMPTY_IDLE_MS = 15 * 60 * 1000; // a session nobody has written to is dropped sooner
 
 export class SessionManager {
   private live = new Map<string, LiveSession>();
@@ -50,6 +52,7 @@ export class SessionManager {
       abort: null,
       lastUsed: now,
       createdAt: now,
+      turns: 0,
     };
     this.live.set(ls.id, ls);
     return ls;
@@ -72,6 +75,9 @@ export class SessionManager {
     }
     for (const ls of this.live.values()) {
       const prev = out.get(ls.id);
+      // Prewarmed sessions with no message yet stay out of the list (the client keeps its own current id).
+      // A resumed session is in the runtime listing already, so it stays.
+      if (ls.turns === 0 && !prev) continue;
       out.set(ls.id, {
         id: ls.id,
         surface: ls.surface,
@@ -90,6 +96,7 @@ export class SessionManager {
     if (!ls) throw new NotFoundError("no such session");
     if (ls.busy) throw new BusyError("session is busy with another turn");
     ls.busy = true; // set synchronously: no await between check and set
+    ls.turns++;
     const ac = new AbortController();
     ls.abort = ac;
     const onExternal = () => ac.abort();
@@ -144,7 +151,8 @@ export class SessionManager {
   async sweep(now = Date.now()): Promise<number> {
     let n = 0;
     for (const ls of [...this.live.values()]) {
-      if (!ls.busy && now - ls.lastUsed > this.idleMs) {
+      const limit = ls.turns === 0 ? Math.min(this.idleMs, EMPTY_IDLE_MS) : this.idleMs;
+      if (!ls.busy && now - ls.lastUsed > limit) {
         await this.close(ls.id, "idle timeout");
         n++;
       }

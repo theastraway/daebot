@@ -147,7 +147,9 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   const manager = new SessionManager(opts.runtime, { idleMs: opts.idleMs });
   const subscribers = new Map<string, Set<WsConnection>>(); // sessionId -> ws conns
   const wsConns = new Set<WsConnection>();
-  const SESSION_ROUTE = /^\/sessions\/([^/]+)(?:\/(send|abort|violations))?$/;
+  const SESSION_ROUTE = /^\/sessions\/([^/]+)(?:\/(send|abort|violations|history))?$/;
+  // Which LLM answers (shown in the UI). Absent when the gateway was started without a Config (tests, fakes).
+  const modelInfo = (): { model?: string; provider?: string } => (opts.cfg ? { model: opts.cfg.models.default, provider: "openrouter" } : {});
 
   function subscribe(id: string, c: WsConnection): void {
     let set = subscribers.get(id);
@@ -243,8 +245,13 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       res.setHeader("x-content-type-options", "nosniff");
       res.setHeader("referrer-policy", "no-referrer");
       res.setHeader("content-security-policy", STATIC_CSP);
-      // Platform health probes may not carry our public Host; /health reveals nothing but liveness.
-      if (path === "/health" && (method === "GET" || method === "HEAD")) return sendJson(res, 200, { ok: true, name: "mindclaw-gateway", hosted: true });
+      res.setHeader("x-robots-tag", "noindex, nofollow"); // private bot: never indexed
+      if (path === "/robots.txt" && (method === "GET" || method === "HEAD")) {
+        res.writeHead(200, { "content-type": "text/plain; charset=utf-8", "cache-control": "public, max-age=3600" });
+        return void res.end(method === "HEAD" ? undefined : "User-agent: *\nDisallow: /\n");
+      }
+      // Platform health probes may not carry our public Host; /health reveals nothing but liveness and which model answers.
+      if (path === "/health" && (method === "GET" || method === "HEAD")) return sendJson(res, 200, { ok: true, name: "mindclaw-gateway", hosted: true, ...modelInfo() });
     }
 
     const hookMatch = /^\/hooks\/([^/]+)$/.exec(path);
@@ -277,7 +284,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
 
     if (path === "/health") {
       if (method !== "GET" && method !== "HEAD") return sendJson(res, 405, { error: "method not allowed" });
-      return sendJson(res, 200, { ok: true, name: "mindclaw-gateway", sessions: manager.count() });
+      return sendJson(res, 200, { ok: true, name: "mindclaw-gateway", sessions: manager.count(), ...modelInfo() });
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
@@ -364,6 +371,14 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
     const action = m[2];
     const ls = manager.get(id);
+
+    if (action === "history") {
+      // The visible transcript, from the live session or from disk after a restart (no live session needed).
+      if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+      const events = opts.runtime.history?.(id);
+      if (!events) return sendJson(res, 404, { error: "no such session" });
+      return sendJson(res, 200, { events });
+    }
 
     if (!action) {
       if (method !== "DELETE") return sendJson(res, 405, { error: "method not allowed" });

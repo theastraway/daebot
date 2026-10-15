@@ -11,7 +11,15 @@ services:
     startCommand: node src/cli.ts serve --hosted
     healthCheckPath: /health
     autoDeploy: false
+    # Persistent disk for saved chats (DATA_DIR). A disk pins the service to one instance and
+    # makes deploys restart in place instead of zero-downtime; that matches the single-process design.
+    disk:
+      name: daebot-data
+      mountPath: /data
+      sizeGB: 1
     envVars:
+      - key: DATA_DIR
+        value: /data
       # ---- secrets: set these in the Render dashboard (sync: false = never stored in this file)
       - key: MIND_API_KEY
         sync: false
