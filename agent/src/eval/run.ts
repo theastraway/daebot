@@ -30,6 +30,19 @@ function arg(name: string): string | undefined {
 }
 
 async function main(): Promise<void> {
+  if (process.argv.includes("--learning")) {
+    const { renderLearning, runLearningSuite } = await import("./learning/suite.ts");
+    const { runChecks } = await import("./learning/checks.ts");
+    const rep = await runLearningSuite();
+    console.log(renderLearning(rep));
+    const checks = await runChecks();
+    console.log("\nsafety and robustness checks:");
+    for (const c of checks) console.log(`  ${c.pass ? "PASS" : "FAIL"}  ${c.id}: ${c.what} (${c.detail})`);
+    const bad = checks.filter((c) => !c.pass).length;
+    console.log(bad ? `\nLEARNING checks: ${bad} FAILED` : `\nLEARNING checks: ${checks.length}/${checks.length} PASS`);
+    process.exitCode = rep.auditOk && !bad ? 0 : 1;
+    return;
+  }
   const only = arg("--only");
   const seedArg = arg("--seed");
   const data = await evaluate(only, seedArg ? Number(seedArg) : undefined);

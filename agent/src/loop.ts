@@ -2,6 +2,7 @@
 // pre_turn, pre_tool, pre_answer and post_turn; this file only routes verdicts, it holds no policy.
 import { createHash } from "node:crypto";
 import { effectiveClass } from "./tool-class.ts";
+import type { LearnHooks } from "./learn/types.ts";
 import type {
   AgentEvent, AgentSession, CallRecord, Config, GateVerdict, Kernel, Message, Provider,
   SessionState, SessionSync, StreamEvent, Tool, ToolCall, ToolResult, TurnState, Usage, Violation,
@@ -40,6 +41,8 @@ export interface SessionDeps {
   bootContext: string;
   /** Resume: model-facing history from a persisted session (violations too). The system prompt is always rebuilt fresh. */
   restore?: SessionState & { violations?: Violation[] };
+  /** Optional learning layer (src/learn). Absent = the loop behaves exactly as before. */
+  learn?: LearnHooks;
 }
 
 const isAbort = (e: unknown, signal?: AbortSignal) => signal?.aborted === true || (e as Error)?.name === "AbortError";
@@ -63,6 +66,11 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
   let systemText = deps.systemPrompt;
   if (deps.bootContext && !systemText.includes(deps.bootContext)) systemText += `\n\n${deps.bootContext}`;
   const messages: Message[] = [{ role: "system", content: systemText }];
+
+  // Learning hook state: the one "What you learned before" note currently in the transcript, and earlier user messages.
+  const learn = deps.learn;
+  let learnedNote: Message | undefined;
+  const userHistory: string[] = [];
 
   let receiptCounter = 0;
   let totalCost = 0;
@@ -114,6 +122,14 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
       if (v.action === "allow") { if (isShadowNote(v)) yield { type: "gate", verdict: v, enforced: false }; continue; }
       yield { type: "gate", verdict: v, enforced: enforced() };
       if (enforced()) messages.push({ role: "system", content: `[kernel:${v.gate}] ${v.reason}` });
+    }
+
+    // ---- learning: recalled lessons/skills for this message (bounded, fails open to no note)
+    const turnStartedAt = Date.now();
+    if (learn) {
+      if (learnedNote) { const i = messages.indexOf(learnedNote); if (i >= 0) messages.splice(i, 1); learnedNote = undefined; }
+      const note = await learn.beforeTurn(userMessage).catch(() => undefined);
+      if (note) { learnedNote = { role: "system", content: note }; messages.push(learnedNote); }
     }
 
     let finalText: string | undefined;
@@ -242,6 +258,17 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
         if (finalText) await sync.append("assistant", finalText);
       } catch { /* best effort */ }
     }
+    // ---- learning: reflect after the reply is out; never awaited, never able to fail the turn
+    if (learn) {
+      try {
+        learn.afterTurn({
+          sessionId: id, userMessage, finalText: finalText ?? "", userHistory: userHistory.slice(), calls: state.calls.slice(),
+          violations: safe(() => kernel.violations(), [] as Violation[]).filter((v) => v.sessionId === id && v.at >= turnStartedAt),
+          failed,
+        });
+      } catch { /* learning must not crash a turn */ }
+      userHistory.push(userMessage);
+    }
     yield { type: "done", finalText: finalText ?? "" };
   }
 
@@ -333,6 +360,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
       return [...fromKernel, ...localViolations].sort((a, b) => a.at - b.at);
     },
     async close(summary) {
+      if (learn) { try { await learn.close(); } catch { /* best effort */ } }
       try { await sync.close(summary); } catch { /* best effort */ }
     },
     exportState() {
