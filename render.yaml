@@ -1,0 +1,39 @@
+# Render Blueprint for the hosted MINDClaw agent (https://daebot.live).
+# Only the agent/ directory is deployed; the legacy wrapper at the repo root is not touched.
+services:
+  - type: web
+    name: daebot
+    runtime: node
+    plan: starter
+    rootDir: agent
+    # The agent has no runtime dependencies, so this is effectively a no-op; it keeps the build step explicit.
+    buildCommand: npm install --omit=dev --no-audit --no-fund
+    startCommand: node src/cli.ts serve --hosted
+    healthCheckPath: /health
+    autoDeploy: false
+    envVars:
+      # ---- secrets: set these in the Render dashboard (sync: false = never stored in this file)
+      - key: MIND_API_KEY
+        sync: false
+      - key: MIND_SESSION_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: GATEWAY_TOKEN        # the login access code, at least 24 characters
+        sync: false
+      # ---- models: set a cheap one (do not leave the built-in default on a public bot)
+      - key: MINDCLAW_MODEL
+        sync: false
+      - key: MINDCLAW_CHEAP_MODEL
+        sync: false
+      # ---- plain values
+      - key: NODE_VERSION
+        value: "24"
+      - key: MINDCLAW_HOSTED
+        value: "1"
+      - key: MINDCLAW_KERNEL
+        value: "1"
+      - key: MINDCLAW_DAILY_USD_CAP
+        value: "5"
+      - key: ALLOWED_HOSTS        # RENDER_EXTERNAL_HOSTNAME (<service>.onrender.com) is added automatically
+        value: "daebot.live,www.daebot.live"

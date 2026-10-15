@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sign in · Dae</title>
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/login.css">
+</head>
+<body class="login-body">
+<main class="login">
+  <form class="login-card" id="login-form" autocomplete="off" novalidate>
+    <img class="login-mark" src="/favicon.svg" width="40" height="40" alt="">
+    <h1>Dae</h1>
+    <p class="login-sub">Private agent. Enter your access code to continue.</p>
+    <label class="login-label" for="code">Access code</label>
+    <input id="code" name="code" type="password" autocomplete="current-password" spellcheck="false" autocapitalize="off" required aria-describedby="login-err" autofocus>
+    <button class="btn-primary login-btn" id="login-btn" type="submit">Continue</button>
+    <p class="err" id="login-err" role="alert" aria-live="polite" hidden></p>
+  </form>
+  <p class="login-foot">Sessions are private to this browser. Sign out from the sidebar when you are done.</p>
+</main>
+<script type="module" src="/login.js"></script>
+</body>
+</html>

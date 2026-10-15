@@ -1,0 +1,8 @@
+eval-out/
+node_modules/
+.cache/
+dist/
+build/
+*.log
+.DS_Store
+desktop/smoke/

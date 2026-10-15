@@ -1,0 +1,16 @@
+{
+  "name": "@astramindapp/mindclaw-agent",
+  "version": "0.2.0-dev",
+  "description": "MINDClaw agent: our own agent runtime with MIND built in and the MIND protocols enforced as code.",
+  "license": "MIT",
+  "type": "module",
+  "engines": { "node": ">=22.18" },
+  "bin": { "mindclaw-next": "./src/cli.ts" },
+  "scripts": {
+    "start": "node src/cli.ts",
+    "test": "node --test --test-concurrency=2 'test/**/*.test.ts'",
+    "typecheck": "tsc --noEmit",
+    "build:bin": "bun build --compile src/cli.ts --outfile dist/mindclaw"
+  },
+  "devDependencies": { "typescript": "^5.9.0", "@types/node": "^22.0.0" }
+}
