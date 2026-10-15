@@ -26,6 +26,7 @@ export function render(ev: AgentEvent, o: { streamText: boolean }): void {
     case "gate": process.stderr.write(dim(`  [gate ${ev.verdict.gate}${ev.enforced ? "" : " shadow"}] ${ev.verdict.reason}\n`)); break;
     case "confirm": process.stderr.write(`  [needs your go] ${ev.reason}\n`); break;
     case "notice": process.stderr.write(`  [${ev.level}] ${ev.text}\n`); break;
+    case "retract": if (o.streamText) process.stdout.write("\n"); process.stderr.write(`  [withdrawn by a gate, rewriting] ${ev.reason}\n`); break;
     case "usage": process.stderr.write(dim(`  $${ev.totalCostUsd.toFixed(4)} total\n`)); break;
     case "done": break;
   }
@@ -38,7 +39,8 @@ function hostedRuntime(argv: string[] = []): { dailyUsdCap: number } | undefined
 
 async function makeRuntime(cfg: ReturnType<typeof loadConfig>, argv: string[] = []): Promise<Runtime> {
   const { createRuntime } = await import("./runtime.ts");
-  return createRuntime(cfg, { hosted: hostedRuntime(argv) });
+  const { createFileStore, dataDir } = await import("./persist.ts");
+  return createRuntime(cfg, { hosted: hostedRuntime(argv), store: createFileStore(dataDir()) });
 }
 
 function preflight(cfg: ReturnType<typeof loadConfig>): string | undefined {
@@ -119,7 +121,7 @@ async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promis
   const runtime = await makeRuntime(cfg, argv);
   const port = argValue(argv, "--port") ? Number(argValue(argv, "--port")) : hosted ? hostedPort(process.env) : undefined;
   const host = argValue(argv, "--host");
-  if (hosted && !process.env.MINDCLAW_MODEL) process.stderr.write(`hosted: MINDCLAW_MODEL is not set, using the built-in default (${cfg.models.default}). Set a cheap model for the deployment.\n`);
+  if (hosted && !process.env.MINDCLAW_MODEL) process.stderr.write(`hosted: MINDCLAW_MODEL is not set, using the built-in default (${cfg.models.default}). Set MINDCLAW_MODEL to choose the deployed model.\n`);
   let gw: { url: string; token: string };
   try { gw = await mod.startGateway({ runtime, cfg, port, host, hosted }); } catch (e) {
     process.stderr.write(`gateway failed to start: ${String((e as Error)?.message ?? e).split("\n")[0]}\n`);

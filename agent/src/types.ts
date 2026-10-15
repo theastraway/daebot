@@ -143,6 +143,8 @@ export interface Config {
   shadow: boolean;           // MINDCLAW_SHADOW=1
   kernel: boolean;           // MINDCLAW_KERNEL=0 turns the kernel off (used by the eval harness)
   maxToolRoundsPerTurn: number;
+  contextWindow?: number;    // model context window in tokens, used for compaction (env MINDCLAW_CONTEXT_WINDOW); default 128000
+  compactAt?: number;        // fraction of contextWindow that triggers compaction (env MINDCLAW_COMPACT_AT); default 0.6
 }
 
 // ---------- agent session + gateway (all surfaces speak this) ----------
@@ -155,8 +157,14 @@ export type AgentEvent =
   | { type: "gate"; verdict: GateVerdict; enforced: boolean }         // kernel intervened (or would have)
   | { type: "confirm"; id: string; tool: string; args: Record<string, unknown>; reason: string } // needs a new user message
   | { type: "notice"; level: "info" | "warn"; text: string }          // e.g. pending MIND reply surfaced
-  | { type: "usage"; usage: Usage; totalCostUsd: number }
+  | { type: "usage"; usage: Usage; totalCostUsd: number; model?: string } // model = the model that produced this call
+  // The draft just streamed (the text since the last tool/gate/confirm boundary) was withheld by a gate.
+  // Clients replace that assistant block with a "rewriting: <reason>" note; the regenerated text streams after it.
+  | { type: "retract"; reason: string }
   | { type: "done"; finalText: string };
+
+// A persisted transcript item: live AgentEvents plus the user's own messages (which are never live events).
+export type HistoryEvent = AgentEvent | { type: "user"; text: string };
 
 export interface AgentSession {
   readonly id: string;
@@ -165,12 +173,18 @@ export interface AgentSession {
   send(userMessage: string, opts?: { signal?: AbortSignal }): AsyncIterable<AgentEvent>;
   violations(): Violation[];
   close(summary?: string): Promise<void>;
+  // Model-facing history (without the system prompt) so a session can be persisted and resumed.
+  exportState?(): SessionState;
 }
+
+export interface SessionState { messages: Message[]; receiptCounter: number; totalCostUsd: number; userMessageIndex: number }
 
 export interface Runtime {
   // boot: runs mind_context before returning; throws only if tools are unreachable.
   openSession(opts: { surface: string; title?: string; resumeId?: string; identity?: string }): Promise<AgentSession>;
   listSessions(): { id: string; surface: string; title: string; updatedAt: number }[];
+  // Visible transcript of a live or persisted session (replayed after a resume or restart). Undefined = unknown id.
+  history?(id: string): HistoryEvent[] | undefined;
 }
 
 // Wire protocol over HTTP (JSON) + WebSocket: gateway <-> surface. See agent/SPEC.md section 5.

@@ -45,7 +45,7 @@ export class SseParser {
   }
 }
 
-const TYPES = new Set(["text", "toolStart", "toolEnd", "gate", "confirm", "notice", "usage", "done"]);
+const TYPES = new Set(["text", "toolStart", "toolEnd", "gate", "confirm", "notice", "usage", "retract", "done"]);
 
 export function parseAgentEvent(data: string): AgentEvent | undefined {
   try {

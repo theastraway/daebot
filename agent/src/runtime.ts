@@ -6,9 +6,15 @@ import type { Tier } from "./kernel/index.ts";
 import { tierAllows } from "./kernel/tier.ts";
 import { createAgentSession } from "./loop.ts";
 import { bootMind, createMindClient, createMindTools, createSessionSync } from "./mind/index.ts";
+import { BootCache } from "./mind/boot-cache.ts";
 import { createProvider } from "./provider/index.ts";
 import { createBuiltinTools } from "./tools/index.ts";
-import type { AgentEvent, AgentSession, Config, Provider, Runtime } from "./types.ts";
+import { HistoryRecorder } from "./events.ts";
+import { createMcpLoader, parseMcpServers } from "./mcp/client.ts";
+import type { McpServerConfig } from "./mcp/client.ts";
+import { repairMessages } from "./persist.ts";
+import type { SessionStore } from "./persist.ts";
+import type { AgentEvent, AgentSession, Config, HistoryEvent, Provider, Runtime } from "./types.ts";
 
 export function composeSystemPrompt(o: { identity?: string; tier?: Tier; bootContext: string; surface: string; cwd: string; now?: Date }): string {
   const lines = [
@@ -28,7 +34,9 @@ export function composeSystemPrompt(o: { identity?: string; tier?: Tier; bootCon
   return lines.join("\n");
 }
 
-interface Entry { session: AgentSession; surface: string; title: string; updatedAt: number; tier: Tier }
+interface Entry { session: AgentSession; surface: string; title: string; updatedAt: number; tier: Tier; recorder: HistoryRecorder; createdAt: number }
+
+const DEFAULT_TITLE = /^(New session|Daebot .+ session)$/;
 
 export interface HostedRuntimeOptions {
   /** Daily spend cap in USD for the whole process (UTC day). */
@@ -36,7 +44,19 @@ export interface HostedRuntimeOptions {
   now?: () => Date;
 }
 
-export function createRuntime(cfg: Config, overrides: { provider?: Provider; fetchImpl?: typeof fetch; hosted?: HostedRuntimeOptions } = {}): Runtime {
+export interface RuntimeOverrides {
+  provider?: Provider;
+  fetchImpl?: typeof fetch;
+  hosted?: HostedRuntimeOptions;
+  /** Session persistence (DATA_DIR). Absent = sessions live in memory only, as before. */
+  store?: SessionStore;
+  bootCache?: BootCache;
+  /** Remote MCP servers (default: parsed from MINDCLAW_MCP_SERVERS). */
+  mcpServers?: McpServerConfig[];
+  mcpFetch?: typeof fetch;
+}
+
+export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Runtime {
   const hosted = overrides.hosted;
   // Hosted: the kernel is always on and always enforcing, whatever the env says.
   if (hosted) cfg = { ...cfg, kernel: true, shadow: false };
@@ -58,6 +78,28 @@ export function createRuntime(cfg: Config, overrides: { provider?: Provider; fet
     return k;
   };
   const sessions = new Map<string, Entry>();
+  const store = overrides.store;
+  const bootCache = overrides.bootCache ?? new BootCache();
+  // Remote MCP tools (operator-configured). Added after the hosted filter on purpose: the operator chose them,
+  // and every one of them is class "outward" unless the config says otherwise, so the danger gate asks first.
+  let mcpServers = overrides.mcpServers;
+  if (!mcpServers) {
+    const parsed = parseMcpServers(process.env.MINDCLAW_MCP_SERVERS);
+    for (const p of parsed.problems) process.stderr.write(`mcp: ${p}\n`);
+    mcpServers = parsed.servers;
+  }
+  const mcp = createMcpLoader({ servers: mcpServers, fetchImpl: overrides.mcpFetch });
+  if (mcp.configured) void mcp.tools(0); // warm up in the background so the first chat does not wait
+
+  function persist(id: string): void {
+    const e = sessions.get(id);
+    const st = e?.session.exportState?.();
+    if (!store || !e || !st) return;
+    void store.save({
+      v: 1, id, surface: e.surface, title: e.title, tier: e.tier, createdAt: e.createdAt, updatedAt: e.updatedAt,
+      state: st, violations: e.session.violations(), history: e.recorder.events(),
+    }).catch((err) => process.stderr.write(`persist: could not save a session (${String((err as Error)?.message ?? err).split("\n")[0].slice(0, 120)})\n`));
+  }
 
   return {
     async openSession(opts) {
@@ -70,24 +112,32 @@ export function createRuntime(cfg: Config, overrides: { provider?: Provider; fet
         }
       }
       const id = opts.resumeId ?? randomUUID();
-      const title = opts.title ?? `Daebot ${opts.surface} session`;
+      // Resume after a restart: rebuild from the persisted record (same identity tier only).
+      const stored = opts.resumeId ? store?.load(opts.resumeId) : undefined;
+      if (stored && stored.tier !== tier) throw new Error("session belongs to a different identity tier");
+      const title = stored?.title || opts.title || `Daebot ${opts.surface} session`;
       const cwd = process.cwd();
       const sourceKey = `mindclaw-${opts.surface}-${id}`;
       const sync = createSessionSync(sessionClient, sourceKey);
       // Tools a tier may not use are neither offered nor executable (the loop only knows this list).
-      const tools = tier === "admin" ? allTools : allTools.filter((t) => tierAllows(tier, t));
+      const allWithMcp = mcp.configured ? [...allTools, ...(await mcp.tools())] : allTools;
+      const tools = tier === "admin" ? allWithMcp : allWithMcp.filter((t) => tierAllows(tier, t));
 
       let boot: { ok: boolean; context: string; error?: string; degraded?: boolean };
-      try { boot = await bootMind(client); } catch (e) { boot = { ok: false, context: "", error: String((e as Error)?.message ?? e) }; }
+      try { boot = await bootCache.get(cfg.mindApiKey, () => bootMind(client)); } catch (e) { boot = { ok: false, context: "", error: String((e as Error)?.message ?? e) }; }
       try { await sync.open({ title, sourceKey, externalId: id }); } catch { /* sync is best effort */ }
 
       const bootContext = boot.ok ? boot.context : "";
       const inner = createAgentSession({
         id, surface: opts.surface, provider, kernel: kernelFor(tier), tools, sync, cfg, cwd, bootContext,
         systemPrompt: composeSystemPrompt({ tier, bootContext, surface: opts.surface, cwd }),
+        restore: stored ? { ...stored.state, messages: repairMessages(stored.state.messages), violations: stored.violations } : undefined,
       });
 
-      const entry: Entry = { session: inner, surface: opts.surface, title, updatedAt: Date.now(), tier };
+      const entry: Entry = {
+        session: inner, surface: stored?.surface ?? opts.surface, title, updatedAt: Date.now(), tier,
+        recorder: new HistoryRecorder(stored?.history), createdAt: stored?.createdAt ?? Date.now(),
+      };
       const startNotices: AgentEvent[] = boot.ok ? [] : [{
         type: "notice", level: "warn",
         text: `MIND boot failed (${(boot.error ?? "unreachable").split("\n")[0].slice(0, 160)}); running unbooted, MIND tools are gated until mind_context succeeds.`,
@@ -98,7 +148,7 @@ export function createRuntime(cfg: Config, overrides: { provider?: Provider; fet
         ? { type: "notice", level: "info", text: `MIND context loaded from the fallback path (${(boot.error ?? "mind_context was slow").split("\n")[0].slice(0, 160)}).` }
         : undefined;
 
-      let lastTotal = 0; // session-cumulative cost already counted against the daily cap
+      let lastTotal = stored?.state.totalCostUsd ?? 0; // session-cumulative cost already counted against the daily cap
       const session: AgentSession = {
         id: inner.id,
         surface: inner.surface,
@@ -109,20 +159,25 @@ export function createRuntime(cfg: Config, overrides: { provider?: Provider; fet
             yield { type: "done", finalText: "" };
             return;
           }
-          while (startNotices.length) yield startNotices.shift()!;
+          if (DEFAULT_TITLE.test(entry.title) && !entry.recorder.events().some((h) => h.type === "user")) entry.title = msg.trim().slice(0, 60) || entry.title;
+          entry.recorder.user(msg);
+          while (startNotices.length) { const n = startNotices.shift()!; entry.recorder.push(n); yield n; }
           for await (const ev of inner.send(msg, o)) {
+            entry.recorder.push(ev);
+            if (ev.type === "done") { entry.updatedAt = Date.now(); persist(id); }
             if (ev.type === "usage" && costCap) {
               // totalCostUsd is cumulative for the session: add only the delta (fall back to the per-call cost).
               const delta = ev.totalCostUsd >= lastTotal ? ev.totalCostUsd - lastTotal : ev.usage.costUsd;
               lastTotal = ev.totalCostUsd;
               costCap.add(delta);
             }
-            if (ev.type === "done" && degradedNotice) { yield degradedNotice; degradedNotice = undefined; }
+            if (ev.type === "done" && degradedNotice) { entry.recorder.push(degradedNotice); yield degradedNotice; degradedNotice = undefined; }
             yield ev;
           }
           entry.updatedAt = Date.now();
         },
         violations: () => inner.violations(),
+        exportState: () => inner.exportState!(),
         async close(summary) {
           sessions.delete(id);
           await inner.close(summary);
@@ -133,7 +188,15 @@ export function createRuntime(cfg: Config, overrides: { provider?: Provider; fet
       return session;
     },
     listSessions() {
-      return [...sessions.entries()].map(([id, e]) => ({ id, surface: e.surface, title: e.title, updatedAt: e.updatedAt }));
+      const out = new Map<string, { id: string; surface: string; title: string; updatedAt: number }>();
+      for (const m of store?.list() ?? []) out.set(m.id, m);
+      for (const [id, e] of sessions) if (out.has(id) || e.recorder.events().some((h) => h.type === "user")) out.set(id, { id, surface: e.surface, title: e.title, updatedAt: e.updatedAt });
+      return [...out.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+    },
+    history(id): HistoryEvent[] | undefined {
+      const live = sessions.get(id);
+      if (live) return live.recorder.events();
+      return store?.load(id)?.history;
     },
   };
 }

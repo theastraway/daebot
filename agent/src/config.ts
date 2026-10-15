@@ -7,11 +7,23 @@ import type { Config } from "./types.ts";
 
 const DEFAULTS = {
   mindBaseUrl: "https://m-i-n-d.ai/developer/v1",
-  defaultModel: "anthropic/claude-sonnet-4.5",
+  defaultModel: "qwen/qwen3.8-flash",
   cheapModel: "qwen/qwen3.8-flash",
-  fallback: ["qwen/qwen3.8-flash"],
+  fallback: ["deepseek/deepseek-v4-flash"],
   maxToolRoundsPerTurn: 25,
+  contextWindow: 128_000,
+  compactAt: 0.6,
 };
+
+function posInt(v: string | undefined): number | undefined {
+  const n = Number(v);
+  return v !== undefined && v.trim() !== "" && Number.isFinite(n) && n >= 1000 ? Math.floor(n) : undefined;
+}
+
+function fraction(v: string | undefined): number | undefined {
+  const n = Number(v);
+  return v !== undefined && v.trim() !== "" && Number.isFinite(n) && n >= 0.1 && n <= 0.95 ? n : undefined;
+}
 
 export function configFilePath(env: NodeJS.ProcessEnv = process.env): string {
   return env.MINDCLAW_CONFIG || join(env.HOME || homedir(), ".mindclaw", "config.json");
@@ -61,12 +73,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     clientNames: nameList(env.MINDCLAW_CLIENT_NAMES, file.clientNames),
     openrouterKey: str(env.OPENROUTER_API_KEY) ?? str(file.openrouterKey) ?? "",
     models: {
-      default: str(env.MINDCLAW_MODEL) ?? str(fileModels.default) ?? DEFAULTS.defaultModel,
+      // The main model comes from the environment only (MINDCLAW_MODEL); a stray config file never picks it.
+      default: str(env.MINDCLAW_MODEL) ?? DEFAULTS.defaultModel,
       cheap: str(env.MINDCLAW_CHEAP_MODEL) ?? str(fileModels.cheap) ?? DEFAULTS.cheapModel,
       fallback: strList(fileModels.fallback) ?? [...DEFAULTS.fallback],
     },
     shadow: shadowEnv !== undefined ? truthy(shadowEnv) : file.shadow === true,
     kernel: kernelEnv !== undefined ? kernelEnv.trim() !== "0" : file.kernel !== false,
     maxToolRoundsPerTurn: Number.isFinite(rounds) && rounds > 0 ? Math.floor(rounds) : DEFAULTS.maxToolRoundsPerTurn,
+    contextWindow: posInt(env.MINDCLAW_CONTEXT_WINDOW) ?? DEFAULTS.contextWindow,
+    compactAt: fraction(env.MINDCLAW_COMPACT_AT) ?? DEFAULTS.compactAt,
   };
 }

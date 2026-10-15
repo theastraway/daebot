@@ -39,6 +39,7 @@ const state = {
   transcripts: new Map(),  // id -> { items: [], usage: {in,out,cost}, violCount }
   busy: new Set(),         // ids with a turn in flight
   online: null,
+  model: "",               // the LLM powering the agent, from /health
   hosted: false,           // public deployment: cookie login instead of the pasted gateway token
 };
 const DRAFT = "__draft__";
@@ -236,6 +237,7 @@ function buildGate(it) {
 }
 function buildConfirm(it) {
   const c = h("div", "confirm");
+  if (it.done) c.classList.add("done"); // replayed from history: the moment to answer has passed
   c.append(h("h3", "", "Confirmation needed"), h("p", "why", it.reason));
   const act = h("div", "act"); act.append(h("div", "act-tool", it.tool), h("pre", "", pretty(it.args)));
   c.append(act);
@@ -263,6 +265,65 @@ function renderThread() {
   toBottom(true);
 }
 
+// Swap one transcript item for another in place (a retracted draft becomes a "rewriting" note).
+function replaceItem(sessionId, oldIt, newIt) {
+  const tr = transcript(sessionId);
+  const i = tr.items.indexOf(oldIt);
+  if (i < 0) return addItem(sessionId, newIt);
+  tr.items[i] = newIt;
+  if (sessionId === tkey() && oldIt.node) {
+    const node = buildItem(newIt, tr);
+    oldIt.node.replaceWith(node);
+  }
+  return newIt;
+}
+
+// Rebuild transcript items from the server's saved history (same shapes the live stream produces).
+function itemsFromHistory(events) {
+  const items = [], byReceipt = new Map(), usage = { in: 0, out: 0, cost: 0 };
+  let asst = null, model = "";
+  for (const ev of events) {
+    switch (ev.type) {
+      case "user": asst = null; items.push({ kind: "user", text: ev.text }); break;
+      case "text":
+        if (!asst) { asst = { kind: "assistant", text: "", streaming: false }; items.push(asst); }
+        asst.text += ev.delta; break;
+      case "retract": {
+        const note = { kind: "notice", level: "info", text: `rewriting: ${ev.reason}` };
+        if (asst) items[items.indexOf(asst)] = note; else items.push(note);
+        asst = null; break;
+      }
+      case "toolStart": {
+        asst = null;
+        const it = { kind: "tool", receiptId: ev.receiptId, tool: ev.tool, args: ev.args, status: "run" };
+        byReceipt.set(ev.receiptId, it); items.push(it); break;
+      }
+      case "toolEnd": { const it = byReceipt.get(ev.receiptId); if (it) { it.status = ev.ok ? "ok" : "fail"; it.preview = ev.preview; } break; }
+      case "gate": asst = null; items.push({ kind: "gate", verdict: ev.verdict, enforced: ev.enforced }); break;
+      case "confirm": asst = null; items.push({ kind: "confirm", id: ev.id, tool: ev.tool, args: ev.args, reason: ev.reason, done: true }); break;
+      case "notice": items.push({ kind: "notice", level: ev.level, text: ev.text }); break;
+      case "usage": usage.in += ev.usage.promptTokens; usage.out += ev.usage.completionTokens; usage.cost = ev.totalCostUsd; if (ev.model) model = ev.model; break;
+      default: break;
+    }
+  }
+  for (const it of items) if (it.kind === "tool" && it.status === "run") it.status = "fail";
+  return { items, usage, model };
+}
+
+// Fill an empty transcript from the server (resume after a restart, or a live session this browser has not seen).
+async function loadHistory(id) {
+  const tr = transcript(id);
+  if (tr.items.length) return;
+  try {
+    const { events } = await json(`/sessions/${encodeURIComponent(id)}/history`);
+    if (!events || !events.length || tr.items.length) return;
+    const r = itemsFromHistory(events);
+    tr.items.push(...r.items);
+    tr.usage = r.usage;
+    if (r.model) tr.model = r.model;
+  } catch { /* no saved history: the session starts empty */ }
+}
+
 function addItem(sessionId, it) {
   const tr = transcript(sessionId);
   tr.items.push(it);
@@ -284,6 +345,7 @@ function renderHeader() {
   els.usage.hidden = !(u.in || u.out || u.cost);
   els.usageTokens.textContent = `${fmtTok(u.in)} in / ${fmtTok(u.out)} out`;
   els.usageCost.textContent = fmtCost(u.cost);
+  const tm = transcript(tkey()).model || state.model; els.usage.title = tm ? `Model: ${tm}` : "";
   setBusyUi();
 }
 function setBusyUi() {
@@ -315,11 +377,11 @@ async function selectSession(s) {
       const { sessionId } = await json("/sessions", { method: "POST", body: JSON.stringify({ surface: "web", title: s.title, resumeId: s.id }) });
       if (sessionId !== s.id) { transcript(sessionId); }
       state.currentId = sessionId;
-      const tr = transcript(sessionId);
-      if (!tr.items.length) tr.items.push({ kind: "notice", level: "info", text: "Session resumed. Earlier messages are not replayed in the browser." });
+      await loadHistory(sessionId);
     } catch (e) { return notify(`Could not resume: ${e.message}`); }
   } else {
     state.currentId = s.id;
+    await loadHistory(s.id);
   }
   await refreshSessions();
   renderThread();
@@ -444,6 +506,12 @@ function onEvent(id, ev, asst, toolByReceipt) {
       if (!asst) asst = addItem(id, { kind: "assistant", text: "", streaming: true });
       asst.text += ev.delta; paintAssistant(asst);
       return asst;
+    case "retract": {
+      // A gate withheld the draft that just streamed: swap it for a small note; the rewrite streams in a new block.
+      const note = { kind: "notice", level: "info", text: `rewriting: ${ev.reason}` };
+      if (asst) replaceItem(id, asst, note); else addItem(id, note);
+      return null;
+    }
     case "toolStart": {
       if (asst) { asst.streaming = false; paintAssistant(asst); }
       const it = addItem(id, { kind: "tool", receiptId: ev.receiptId, tool: ev.tool, args: ev.args, status: "run" });
@@ -468,6 +536,7 @@ function onEvent(id, ev, asst, toolByReceipt) {
       return asst;
     case "usage":
       tr.usage.in += ev.usage.promptTokens; tr.usage.out += ev.usage.completionTokens; tr.usage.cost = ev.totalCostUsd;
+      if (ev.model) tr.model = ev.model;
       if (id === tkey()) renderHeader();
       return asst;
     case "done":
@@ -533,17 +602,21 @@ applyTheme(store.get("localStorage", "mc_theme"));
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => applyTheme(store.get("localStorage", "mc_theme")));
 
 // ---------- connection ----------
+function renderConn() {
+  // "Connected · qwen/qwen3.8-flash": which LLM is powering the agent (from /health).
+  els.connText.textContent = state.online ? (state.model ? `Connected · ${state.model}` : "Connected") : "Gateway offline";
+}
 function setOnline(on) {
   if (state.online === on) return;
   state.online = on;
   els.connDot.className = `dot ${on ? "on" : "off"}`;
-  els.connText.textContent = on ? "Connected" : "Gateway offline";
+  renderConn();
 }
 async function ping() {
   try {
     const r = await fetch("/health", { cache: "no-store" });
     setOnline(r.ok);
-    if (r.ok) { const h = await r.json().catch(() => ({})); state.hosted = h.hosted === true; els.btnLogout.hidden = !state.hosted; }
+    if (r.ok) { const h = await r.json().catch(() => ({})); state.hosted = h.hosted === true; els.btnLogout.hidden = !state.hosted; if (h.model !== state.model) { state.model = h.model || ""; renderConn(); } }
   } catch { setOnline(false); }
 }
 
@@ -598,8 +671,9 @@ async function boot() {
   await refreshSessions();
   let last = null;
   try { last = sessionStorage.getItem("daebot:current"); } catch { /* none */ }
-  const live = last && state.sessions.find((s) => s.id === last && s.live);
-  if (live && restoreTranscript(last)) { state.currentId = last; renderSessions(); renderThread(); }
+  const known = last && state.sessions.find((s) => s.id === last); // live, or saved on the server (survives restarts)
+  if (known && known.live && restoreTranscript(last)) { state.currentId = last; renderSessions(); renderThread(); }
+  else if (known) { await selectSession(known); } // resumes and replays the saved transcript
   else if (!state.currentId) { ensureSession().then(() => { renderSessions(); renderHeader(); }).catch(() => { /* first send retries */ }); }
 }
 boot();

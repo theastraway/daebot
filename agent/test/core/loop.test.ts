@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgentSession, callSignature, UNVERIFIED_FOOTER } from "../../src/loop.ts";
 import { createKernel } from "../../src/kernel/index.ts";
+import { visibleText } from "../../src/events.ts";
 import type { AgentEvent, GateVerdict, TurnState } from "../../src/types.ts";
 import { FakeKernel, FakeProvider, FakeSync, baseCfg, call, collect, fakeTool } from "./helpers.ts";
 
@@ -147,8 +148,13 @@ test("preAnswer block: draft withheld, regenerated with nudge, revised text ship
   k.hooks.preAnswer = (_s, d) => (d.includes("BAD") && n++ < 5 ? [block("receipt", "cite a MIND✓ receipt")] : []);
   const { session, provider } = make({ kernel: k, rounds: [{ text: "BAD claim" }, { text: "good claim" }] });
   const ev = await collect(session.send("q"));
-  const texts = ev.filter((e) => e.type === "text").map((e: any) => e.delta);
-  assert.deepEqual(texts, ["good claim"], "blocked draft never reaches the surface");
+  const streamed = ev.filter((e) => e.type === "text").map((e: any) => e.delta);
+  assert.deepEqual(streamed, ["BAD claim", "good claim"], "text streams live, the blocked draft included");
+  const kinds = ev.map((e) => e.type);
+  assert.ok(kinds.indexOf("retract") > kinds.indexOf("text"), "the draft is retracted after it streamed");
+  assert.ok(kinds.indexOf("retract") < kinds.indexOf("gate"), "retract precedes its gate event");
+  assert.equal((ev.find((e) => e.type === "retract") as any).reason, "cite a MIND✓ receipt");
+  assert.equal(visibleText(ev), "good claim", "a retracted draft counts as not shown");
   assert.equal(provider.requests.length, 2);
   const nudge = provider.requests[1].messages.at(-1)!;
   assert.equal(nudge.role, "system");

@@ -4,8 +4,9 @@ import { createHash } from "node:crypto";
 import { effectiveClass } from "./tool-class.ts";
 import type {
   AgentEvent, AgentSession, CallRecord, Config, GateVerdict, Kernel, Message, Provider,
-  SessionSync, StreamEvent, Tool, ToolCall, ToolResult, TurnState, Usage, Violation,
+  SessionState, SessionSync, StreamEvent, Tool, ToolCall, ToolResult, TurnState, Usage, Violation,
 } from "./types.ts";
+import { clipToolOutputs, compactMessages, estimateTokens, needsCompaction } from "./compact.ts";
 
 export const UNVERIFIED_FOOTER = "[unverified: receipt gate]";
 const MAX_REGENERATIONS = 2;
@@ -37,6 +38,8 @@ export interface SessionDeps {
   cwd: string;
   systemPrompt: string;
   bootContext: string;
+  /** Resume: model-facing history from a persisted session (violations too). The system prompt is always rebuilt fresh. */
+  restore?: SessionState & { violations?: Violation[] };
 }
 
 const isAbort = (e: unknown, signal?: AbortSignal) => signal?.aborted === true || (e as Error)?.name === "AbortError";
@@ -64,6 +67,13 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
   let receiptCounter = 0;
   let totalCost = 0;
   const localViolations: Violation[] = [];
+  if (deps.restore) {
+    messages.push(...deps.restore.messages);
+    receiptCounter = deps.restore.receiptCounter ?? 0;
+    totalCost = deps.restore.totalCostUsd ?? 0;
+    state.userMessageIndex = deps.restore.userMessageIndex ?? 0;
+    localViolations.push(...(deps.restore.violations ?? []));
+  }
 
   if (deps.bootContext.trim() !== "") {
     const rec: CallRecord = {
@@ -116,22 +126,25 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
       for (let round = 0; round < cfg.maxToolRoundsPerTurn; round++) {
         if (signal?.aborted) throw abortErr();
 
+        yield* maybeCompact(signal);
+
         const offered = safe(() => kernel.allowedTools(state, tools), tools);
         const specs = offered.map((t) => t.spec);
 
-        // ---- provider call (text is buffered per round so a blocked draft is never shown)
+        // ---- provider call. Text streams to the client as it arrives; if pre_answer then withholds the draft,
+        // a `retract` event tells every surface to take it back before the regenerated text streams.
         let text = "";
         const toolCalls: ToolCall[] = [];
         let usage: Usage | undefined;
         for await (const ev of provider.stream({ model: cfg.models.default, messages: [...messages], tools: specs, signal }) as AsyncIterable<StreamEvent>) {
-          if (ev.type === "text") text += ev.delta;
+          if (ev.type === "text") { text += ev.delta; if (ev.delta) yield { type: "text", delta: ev.delta }; }
           else if (ev.type === "toolCall") toolCalls.push(ev.call);
           else if (ev.type === "done") usage = ev.usage;
         }
         if (signal?.aborted) throw abortErr();
 
         const emitUsage = function* (): Generator<AgentEvent> {
-          if (usage) { totalCost += usage.costUsd; yield { type: "usage", usage, totalCostUsd: totalCost }; }
+          if (usage) { totalCost += usage.costUsd; yield { type: "usage", usage, totalCostUsd: totalCost, model: cfg.models.default }; }
         };
 
         // ---- tool round
@@ -147,6 +160,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
             for (const n of nv) if (isShadowNote(n)) yield { type: "gate", verdict: n, enforced: false };
             const nverdict = nv.find((v) => v.action !== "allow");
             if (nverdict) {
+              if (enforced()) yield { type: "retract", reason: nverdict.reason };
               yield { type: "gate", verdict: nverdict, enforced: enforced() };
               if (enforced()) {
                 shown = "";
@@ -155,7 +169,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
             }
           }
           messages.push({ role: "assistant", content: shown, toolCalls });
-          if (shown) { yield { type: "text", delta: shown }; pendingNarration += (pendingNarration ? "\n" : "") + shown; }
+          if (shown) pendingNarration += (pendingNarration ? "\n" : "") + shown; // already streamed above
           yield* emitUsage();
 
           for (let i = 0; i < toolCalls.length; i++) {
@@ -177,9 +191,10 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
         const answerVerdicts = safe(() => kernel.preAnswer(state, text), [] as GateVerdict[]);
         for (const n of answerVerdicts) if (isShadowNote(n)) yield { type: "gate", verdict: n, enforced: false };
         const verdict = answerVerdicts.find((v) => v.action !== "allow");
-        if (!verdict) { finalText = text; yield { type: "text", delta: text }; yield* emitUsage(); break; }
+        if (!verdict) { finalText = text; yield* emitUsage(); break; }
+        if (enforced()) yield { type: "retract", reason: verdict.reason };
         yield { type: "gate", verdict, enforced: enforced() };
-        if (!enforced()) { finalText = text; yield { type: "text", delta: text }; yield* emitUsage(); break; }
+        if (!enforced()) { finalText = text; yield* emitUsage(); break; }
         if (regenerations < MAX_REGENERATIONS) {
           regenerations++;
           messages.push({ role: "assistant", content: text });
@@ -228,6 +243,25 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
       } catch { /* best effort */ }
     }
     yield { type: "done", finalText: finalText ?? "" };
+  }
+
+  // Context compaction: past compactAt x contextWindow, older turns become one summary note (cheap model).
+  async function* maybeCompact(signal?: AbortSignal): AsyncGenerator<AgentEvent> {
+    const window = cfg.contextWindow ?? 128_000;
+    const ratio = cfg.compactAt ?? 0.6;
+    if (!needsCompaction(messages, window, ratio)) return;
+    let r: Awaited<ReturnType<typeof compactMessages>>;
+    try { r = await compactMessages(messages, { provider, model: cfg.models.cheap, signal }); } catch (e) {
+      if (isAbort(e, signal)) throw e;
+      r = undefined;
+    }
+    if (r) {
+      messages.splice(0, messages.length, ...r.messages);
+      yield { type: "notice", level: "info", text: `Compacted ${r.compacted} earlier messages into a summary to keep the chat within the context window${r.mechanical ? " (summary model unavailable; used a plain digest)" : ""}.` };
+      if (r.usage) { totalCost += r.usage.costUsd; yield { type: "usage", usage: r.usage, totalCostUsd: totalCost, model: cfg.models.cheap }; }
+    }
+    // The verbatim tail can itself be too big (huge tool outputs): clip old ones rather than fail the request.
+    if (estimateTokens(messages) > window * 0.85) clipToolOutputs(messages);
   }
 
   // Runs one tool call through pre_tool. Yields events; returns "confirm" when the turn must end.
@@ -300,6 +334,9 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     },
     async close(summary) {
       try { await sync.close(summary); } catch { /* best effort */ }
+    },
+    exportState() {
+      return { messages: messages.slice(1).map((m) => ({ ...m })), receiptCounter, totalCostUsd: totalCost, userMessageIndex: state.userMessageIndex };
     },
   };
 }
