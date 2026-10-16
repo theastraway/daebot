@@ -83,6 +83,30 @@ test("persistent 5xx falls through to the fallback model", async () => {
   assert.equal((ev[0] as any).delta, "fb");
 });
 
+test("an upstream error as the first stream chunk (200 then 429 in SSE) falls through to the fallback model", async () => {
+  const models: string[] = [];
+  const f = (async (_u: string, init: any) => {
+    const m = JSON.parse(init.body).model;
+    models.push(m);
+    return m === "m/fallback"
+      ? sse([delta({ content: "fb" }), "[DONE]"])
+      : sse([{ error: { code: 429, message: "Provider returned error" } }]);
+  }) as any;
+  const ev = await drain(createOpenRouterProvider(baseCfg(), f, { backoffMs: 0 }).stream({ model: "m/default", messages: [], tools: [] }));
+  assert.deepEqual(models, ["m/default", "m/fallback"]);
+  assert.equal((ev[0] as any).delta, "fb");
+});
+
+test("an error after text was streamed propagates (no silent model switch mid-answer)", async () => {
+  const models: string[] = [];
+  const f = (async (_u: string, init: any) => {
+    models.push(JSON.parse(init.body).model);
+    return sse([delta({ content: "partial" }), { error: { code: 502, message: "upstream died" } }]);
+  }) as any;
+  await assert.rejects(drain(createOpenRouterProvider(baseCfg(), f, { backoffMs: 0 }).stream({ model: "m/default", messages: [], tools: [] })), /upstream died/);
+  assert.deepEqual(models, ["m/default"]);
+});
+
 test("401 throws immediately without fallback; all-fail throws", async () => {
   let n = 0;
   const f401 = (async () => { n++; return new Response("no", { status: 401 }); }) as any;

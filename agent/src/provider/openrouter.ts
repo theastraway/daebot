@@ -174,9 +174,17 @@ export function createOpenRouterProvider(cfg: Config, fetchImpl: typeof fetch = 
           lastErr = e;
           continue; // fall through to the next model
         }
-        // Once bytes flow we are committed to this model; mid-stream errors propagate.
-        yield* consume(res, req.signal);
-        return;
+        // OpenRouter can answer 200 and then report an upstream failure (e.g. a provider's shared-pool 429) as the
+        // first SSE chunk. Until an event has been yielded nothing reached the user, so fall through to the next
+        // model. Once an event is out we are committed to this model and mid-stream errors propagate.
+        let emitted = false;
+        try {
+          for await (const ev of consume(res, req.signal)) { emitted = true; yield ev; }
+          return;
+        } catch (e) {
+          if (emitted || (e as Error)?.name === "AbortError") throw e;
+          lastErr = e;
+        }
       }
       throw lastErr instanceof Error ? lastErr : new Error("all models failed");
     },
