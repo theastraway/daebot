@@ -17,7 +17,16 @@ export interface MindBilling {
   tier: string;              // MIND plan id ("free", "starter", ...)
   tierName: string;          // display name ("Explorer", "Starter", ...)
   creditsRemaining: number | null;
+  /** The plan's allowance for the period (credits_limit); null/0 = no fixed allowance (pay as you go). */
+  creditsLimit: number | null;
   upgradeUrl: string;
+}
+
+/** Percent of the plan's usage still left (0-100), or null when there is no fixed allowance to measure against. */
+export function usageLeftPct(b: Pick<MindBilling, "creditsRemaining" | "creditsLimit">): number | null {
+  const { creditsRemaining: left, creditsLimit: lim } = b;
+  if (left === null || lim === null || !(lim > 0)) return null;
+  return Math.max(0, Math.min(100, Math.round((left / lim) * 100)));
 }
 
 /** "free" is shown as Explorer; any other tier id is capitalised unless MIND sent a display name. */
@@ -40,7 +49,7 @@ export class MindBillingError extends ProviderHttpError {
     const text = code === "model_not_in_plan" ? `This model needs a paid MIND plan (you are on ${plan}). Upgrade: ${b.upgradeUrl}`
       : code === "model_not_available" ? `This model is not available on MIND (${plan} plan). See plans: ${b.upgradeUrl}`
       : code === "endpoint_disabled" ? "MIND's LLM billing is not switched on yet (its LLM endpoint answered 404). Operator: set DAEBOT_BILLING=openrouter until it is."
-      : `You are out of MIND credits (${plan} plan). Add credits or upgrade: ${b.upgradeUrl}`;
+      : `You've used this month's plan usage (${plan} plan). Upgrade: ${b.upgradeUrl}`;
     super(status, text);
     this.name = "MindBillingError";
     this.fatal = true;
@@ -115,6 +124,7 @@ export class MindCredits {
         tier,
         tierName: !changed && cur ? cur.tierName : tierDisplayName(tier),
         creditsRemaining: u.creditsRemaining !== undefined && u.creditsRemaining !== null ? u.creditsRemaining : cur?.creditsRemaining ?? null,
+        creditsLimit: cur?.creditsLimit ?? null, // the allowance only changes with the plan; /credits refreshes it
         upgradeUrl: u.upgradeUrl || cur?.upgradeUrl || this.origin,
       },
     });
@@ -131,6 +141,7 @@ export class MindCredits {
         tier,
         tierName: tierDisplayName(tier, j.tier_name ?? j.tierName),
         creditsRemaining: num(j.credits_balance ?? j.credits_remaining),
+        creditsLimit: num(j.credits_limit),
         upgradeUrl: typeof j.upgrade_url === "string" && j.upgrade_url ? j.upgrade_url : stale?.upgradeUrl ?? this.origin,
       };
       this.cache.set(id, { b, at: this.now() });
@@ -194,7 +205,8 @@ export function createMindProvider(cfg: Config, o: MindProviderOptions): Provide
         // The plan lookup was wrong or stale (e.g. just downgraded), or the model is not in MIND's list: one retry on the free model, only if nothing reached the user.
         if (!(e instanceof MindBillingError) || (e.code !== "model_not_in_plan" && e.code !== "model_not_available") || onFree || emitted || req.model === freeModel) throw e;
       }
-      yield* free.stream({ ...req, model: freeModel });
+      // The user asked for a paid model and got the free one: say so (the loop shows `notice` once, after the answer).
+      for await (const ev of free.stream({ ...req, model: freeModel })) yield ev.type === "done" ? { ...ev, notice: "Answered on the free model" } : ev;
     },
   };
 }

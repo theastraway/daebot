@@ -11,7 +11,7 @@ import { userIdFor } from "../../src/auth/users.ts";
 import { loadConfig } from "../../src/config.ts";
 import { startGateway } from "../../src/gateway/index.ts";
 import { DailyCostCap } from "../../src/hosted.ts";
-import { MindBillingError, MindCredits, createMindProvider } from "../../src/provider/mind.ts";
+import { MindBillingError, MindCredits, createMindProvider, usageLeftPct } from "../../src/provider/mind.ts";
 import { createProvider } from "../../src/provider/index.ts";
 import { createRuntime } from "../../src/runtime.ts";
 import type { StreamEvent } from "../../src/types.ts";
@@ -35,7 +35,7 @@ const text = (ev: StreamEvent[]) => ev.filter((e) => e.type === "text").map((e: 
 interface LlmCall { url: string; key: string; auth: string | undefined; model: string; body: any }
 
 /** A fake MIND LLM + credits surface behind one fetch. `script` answers the Nth LLM call; `tiers` maps a MIND key to its plan. */
-function fakeMindFetch(o: { script?: (n: number, model: string, key: string) => Response; tiers?: Record<string, string>; credits?: Record<string, number>; passthrough?: typeof fetch } = {}) {
+function fakeMindFetch(o: { script?: (n: number, model: string, key: string) => Response; tiers?: Record<string, string>; credits?: Record<string, number>; limit?: number | null; passthrough?: typeof fetch } = {}) {
   const llm: LlmCall[] = [];
   const creditGets: string[] = [];
   const other: string[] = [];
@@ -50,7 +50,7 @@ function fakeMindFetch(o: { script?: (n: number, model: string, key: string) => 
     if (url.endsWith("/credits")) {
       creditGets.push(h["X-API-Key"]);
       const tier = o.tiers?.[h["X-API-Key"]] ?? "starter";
-      return new Response(JSON.stringify({ tier, credits_balance: o.credits?.[h["X-API-Key"]] ?? 412, credits_limit: 500, upgrade_url: UPGRADE }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ tier, credits_balance: o.credits?.[h["X-API-Key"]] ?? 412, credits_limit: o.limit === undefined ? 500 : o.limit, upgrade_url: UPGRADE }), { status: 200, headers: { "content-type": "application/json" } });
     }
     other.push(url);
     if (o.passthrough) return o.passthrough(input as never, init);
@@ -103,12 +103,12 @@ test("402 model_not_in_plan: no fall through to cfg.models.fallback; one retry o
   assert.deepEqual(b.llm.map((c) => c.model), ["m/default", "m/free"]);
 });
 
-test("402 insufficient_credits: one call, no fall through, no free retry; message says out of credits + link; credits cache goes to 0", async () => {
+test("402 insufficient_credits: one call, no fall through, no free retry; message says plan usage is used up + link; credits cache goes to 0", async () => {
   const w = provider({ script: () => refuse("insufficient_credits", "starter", 0) });
   await assert.rejects(ask(w.p), (e: any) => {
     assert.ok(e instanceof MindBillingError);
     assert.equal(e.code, "insufficient_credits");
-    assert.match(e.userNotice, /out of MIND credits/);
+    assert.match(e.userNotice, /^You've used this month's plan usage/);
     assert.ok(e.userNotice.includes(UPGRADE));
     assert.equal(e.status, 402);
     return true;
@@ -228,12 +228,12 @@ test("config: DAEBOT_BILLING defaults to openrouter; mind only on an explicit va
 });
 
 // ---------- hosted multi-tenancy ----------
-async function world(o: { script?: NonNullable<Parameters<typeof fakeMindFetch>[0]>["script"]; userCap?: string; globalCap?: number; credits?: Record<string, number> } = {}) {
+async function world(o: { limit?: number | null; script?: NonNullable<Parameters<typeof fakeMindFetch>[0]>["script"]; userCap?: string; globalCap?: number; credits?: Record<string, number> } = {}) {
   const keys = { alice: "mind_" + rnd(), boss: "mind_" + rnd() };
   const serverKey = "mind_server_" + rnd();
   const fake = await startFakeMind({ [keys.alice]: "alice", [keys.boss]: "boss", [serverKey]: "anthony" });
   const tiers = { [keys.alice]: "starter", [keys.boss]: "professional", [serverKey]: "scale" };
-  const llm = fakeMindFetch({ script: o.script, tiers, credits: o.credits, passthrough: (u, i) => fetch(u as never, i) });
+  const llm = fakeMindFetch({ script: o.script, tiers, credits: o.credits, limit: o.limit, passthrough: (u, i) => fetch(u as never, i) });
   const cfg = baseCfg({ mindBaseUrl: fake.base, mindApiKey: serverKey, openrouterKey: "", billing: "mind", freeModel: "m/free" });
   const credits = new MindCredits({ mindBaseUrl: cfg.mindBaseUrl, fetchImpl: llm.f });
   const globalCap = new DailyCostCap(o.globalCap ?? 50);
@@ -287,7 +287,8 @@ test("a MIND refusal reaches the user as a notice with the upgrade link, not as 
     const ev = await collect(s.send("hello"));
     const n = ev.find((e) => e.type === "notice" && (e as any).level === "warn") as any;
     assert.ok(n, "a notice is shown");
-    assert.match(n.text, /^You are out of MIND credits/);
+    assert.match(n.text, /^You've used this month's plan usage/);
+    assert.ok(!/credit/i.test(n.text), "usage language only");
     assert.ok(n.text.includes(UPGRADE));
     assert.equal(w.llm.llm.length, 1, "no other model was tried");
   } finally { await w.close(); }
@@ -318,7 +319,7 @@ test("GET /auth/me in mind mode adds {planTier, tierName, creditsRemaining, upgr
     const cookie = String(([] as string[]).concat(login.headers["set-cookie"] as string[]).find((c) => c.startsWith("mc_session="))).split(";")[0];
     const get = async (path = "/auth/me") => JSON.parse((await http(gw.url, "GET", path, { headers: { ...H, cookie } })).body);
     const before = await get();
-    assert.deepEqual(before, { username: "alice", owner: false, tier: "staff", planTier: "starter", tierName: "Starter", creditsRemaining: 412, upgradeUrl: UPGRADE });
+    assert.deepEqual(before, { username: "alice", owner: false, tier: "staff", planTier: "starter", tierName: "Starter", creditsRemaining: 412, creditsLimit: 500, usageLeftPct: 82, upgradeUrl: UPGRADE });
     assert.ok(w.llm.creditGets.every((k) => k === w.keys.alice), "the plan lookup used alice's key");
 
     const s = await w.auth.runtimeFor(w.principal("alice")).openSession({ surface: "web" });
@@ -326,6 +327,7 @@ test("GET /auth/me in mind mode adds {planTier, tierName, creditsRemaining, upgr
     const gets = w.llm.creditGets.length;
     const after = await get("/auth/me?fresh=1");
     assert.equal(after.creditsRemaining, 407);
+    assert.equal(after.usageLeftPct, 81, "balance from the header, limit from /credits");
     assert.equal(w.llm.creditGets.length, gets, "the header already refreshed it: no re-fetch");
 
     // the owner login shows the server MIND account's plan
@@ -336,4 +338,49 @@ test("GET /auth/me in mind mode adds {planTier, tierName, creditsRemaining, upgr
     assert.equal(me.tierName, "Scale");
     assert.ok(w.llm.creditGets.includes(w.serverKey));
   } finally { await gw.close(); await w.close(); }
+});
+
+test("usageLeftPct: balance / limit as a clamped percent; null for no allowance (pay as you go) or an unknown balance", () => {
+  assert.equal(usageLeftPct({ creditsRemaining: 310, creditsLimit: 500 }), 62);
+  assert.equal(usageLeftPct({ creditsRemaining: 0, creditsLimit: 500 }), 0);
+  assert.equal(usageLeftPct({ creditsRemaining: 900, creditsLimit: 500 }), 100);
+  assert.equal(usageLeftPct({ creditsRemaining: -5, creditsLimit: 500 }), 0);
+  assert.equal(usageLeftPct({ creditsRemaining: 10, creditsLimit: 0 }), null);
+  assert.equal(usageLeftPct({ creditsRemaining: 10, creditsLimit: null }), null);
+  assert.equal(usageLeftPct({ creditsRemaining: null, creditsLimit: 500 }), null);
+});
+
+test("/auth/me: no credits_limit (pay as you go) -> usageLeftPct null so the UI shows 'Usage billed as you go' with no bar", async () => {
+  const w = await world({ limit: 0 });
+  const st = tmpStatic();
+  for (const [f, c] of [["login.html", "<!doctype html>"], ["login.js", "export {}"], ["login.css", "body{}"], ["favicon.svg", "<svg/>"]]) writeFileSync(join(st.dir, f), c);
+  const gw = await startGateway({ runtime: w.ownerRuntime, cfg: w.cfg, port: 0, host: "127.0.0.1", staticDir: st.dir, hosted: w.hosted, auth: w.auth });
+  try {
+    const H = { host: "daebot.live", "x-forwarded-proto": "https" };
+    const login = await http(gw.url, "POST", "/auth/key", { headers: H, body: { key: w.keys.alice } });
+    const cookie = String(([] as string[]).concat(login.headers["set-cookie"] as string[]).find((c) => c.startsWith("mc_session="))).split(";")[0];
+    const me = JSON.parse((await http(gw.url, "GET", "/auth/me", { headers: { ...H, cookie } })).body);
+    assert.equal(me.usageLeftPct, null);
+    assert.equal(me.creditsLimit, 0);
+    assert.equal(me.tierName, "Starter");
+  } finally { await gw.close(); await w.close(); }
+});
+
+test("a paid user's call that retried on the free model shows 'Answered on the free model' once, after the answer", async () => {
+  const w = await world({ script: (_n, model) => (model === "m/default" ? refuse("model_not_in_plan") : okStream("free answer")) });
+  try {
+    const s = await w.auth.runtimeFor(w.principal("alice")).openSession({ surface: "web" });
+    const ev = await collect(s.send("hello"));
+    const notes = ev.filter((e) => e.type === "notice" && (e as any).text === "Answered on the free model");
+    assert.equal(notes.length, 1);
+    assert.equal((notes[0] as any).level, "info");
+    assert.ok(ev.some((e) => e.type === "text" && /free answer/.test((e as any).delta)));
+    assert.deepEqual(w.llm.llm.map((c) => c.model), ["m/default", "m/free"]);
+    // a plain paid call has no such notice
+    const ok = await world();
+    try {
+      const s2 = await ok.auth.runtimeFor(ok.principal("alice")).openSession({ surface: "web" });
+      assert.ok(!(await collect(s2.send("hello"))).some((e) => e.type === "notice" && /free model/.test((e as any).text)));
+    } finally { await ok.close(); }
+  } finally { await w.close(); }
 });

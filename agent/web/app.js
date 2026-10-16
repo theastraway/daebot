@@ -623,15 +623,20 @@ async function ping() {
   } catch { setOnline(false); }
 }
 
-// DAEBOT_BILLING=mind: "Starter · 412 credits" next to the sign-in line, linking to the plan page. /auth/me omits the fields otherwise.
+// DAEBOT_BILLING=mind: a usage meter ("Plan usage · 62% left", small plan name, Manage plan link). Usage language only, never the billing unit.
 function showPlan(me) {
   const box = document.getElementById("plan");
   if (!box) return;
   if (!me || !me.tierName) { box.hidden = true; return; }
-  const c = me.creditsRemaining;
-  const n = typeof c === "number" && isFinite(c) ? c.toLocaleString(undefined, { maximumFractionDigits: 1 }) : "";
-  document.getElementById("plan-text").textContent = n ? `${me.tierName} · ${n} ${c === 1 ? "credit" : "credits"}` : me.tierName;
-  box.title = n ? `MIND plan ${me.tierName}, ${n} credits left` : `MIND plan ${me.tierName}`;
+  const pct = typeof me.usageLeftPct === "number" && isFinite(me.usageLeftPct) ? Math.max(0, Math.min(100, me.usageLeftPct)) : null;
+  const bar = document.getElementById("plan-bar");
+  document.getElementById("plan-text").textContent = pct === null ? "Usage billed as you go" : `Plan usage · ${pct}% left`;
+  document.getElementById("plan-name").textContent = me.tierName;
+  bar.hidden = pct === null;
+  bar.classList.toggle("low", pct !== null && pct <= 20 && pct > 5);
+  bar.classList.toggle("empty", pct !== null && pct <= 5);
+  if (pct !== null) { bar.setAttribute("aria-valuenow", String(pct)); document.getElementById("plan-fill").style.width = `${pct}%`; }
+  box.title = pct === null ? `${me.tierName} plan, usage billed as you go` : `${me.tierName} plan, ${pct}% of this period's usage left`;
   const a = document.getElementById("plan-link");
   let href = "";
   try { const u = new URL(me.upgradeUrl || ""); if (u.protocol === "https:" || u.protocol === "http:") href = u.href; } catch { /* no link */ }

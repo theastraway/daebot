@@ -13,6 +13,7 @@ import { OWNER } from "../auth/users.ts";
 import type { Principal } from "../auth/users.ts";
 import type { AuthContext } from "../auth/tenancy.ts";
 import { MindAuthError, whoami } from "../auth/mind-auth.ts";
+import { usageLeftPct } from "../provider/mind.ts";
 import { STATIC_CSP, resolveStatic, serveFile } from "./static.ts";
 import { acceptWebSocket } from "./ws.ts";
 import type { WsConnection } from "./ws.ts";
@@ -420,7 +421,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         if (auth?.credits) {
           const key = auth.billingKey(p);
           const b = key ? await auth.credits.get(key, false, query.get("fresh") ? 2000 : undefined) : undefined;
-          if (b) Object.assign(me, { planTier: b.tier, tierName: b.tierName, creditsRemaining: b.creditsRemaining, upgradeUrl: b.upgradeUrl });
+          if (b) Object.assign(me, { planTier: b.tier, tierName: b.tierName, creditsRemaining: b.creditsRemaining, creditsLimit: b.creditsLimit, usageLeftPct: usageLeftPct(b), upgradeUrl: b.upgradeUrl });
         }
         return sendJson(res, 200, me);
       } else if (path === "/logout") {

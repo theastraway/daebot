@@ -210,7 +210,13 @@ kbd { font-size: 10.5px; background: var(--surface-2); border: 1px solid var(--l
 .logout { margin-left: auto; padding: 4px 10px; font-size: 12px; border-radius: 8px; }
 .side-who { padding: 12px 8px 0; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .side-who + .side-foot, .side-plan + .side-foot { padding-top: 6px; border-top: 0; }
-.side-plan { display: flex; align-items: baseline; gap: 8px; padding: 2px 8px 0; font-size: 12px; color: var(--ink-3); }
-.side-plan .plan-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.side-plan .plan-link { flex: none; color: var(--ink-2); text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 2px; }
+.side-plan { display: grid; gap: 6px; padding: 4px 8px 0; font-size: 12px; color: var(--ink-3); }
+.side-plan .plan-row { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.side-plan .plan-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.side-plan .plan-name { flex: none; font-size: 11px; letter-spacing: .02em; color: var(--ink-3); }
+.side-plan .plan-bar { height: 4px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.side-plan .plan-bar i { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--ok); transition: width .4s ease; }
+.side-plan .plan-bar.low i { background: var(--warn); }
+.side-plan .plan-bar.empty i { background: var(--accent); }
+.side-plan .plan-link { justify-self: start; color: var(--ink-2); text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 2px; }
 .side-plan .plan-link:hover { color: var(--ink); text-decoration-color: currentColor; }

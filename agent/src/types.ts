@@ -31,7 +31,7 @@ export interface Usage { promptTokens: number; completionTokens: number; costUsd
 export type StreamEvent =
   | { type: "text"; delta: string }
   | { type: "toolCall"; call: ToolCall }
-  | { type: "done"; usage: Usage; finishReason: string };
+  | { type: "done"; usage: Usage; finishReason: string; notice?: string }; // notice: a one-line info for the user (e.g. answered on the free model)
 
 export interface Provider {
   readonly name: string;

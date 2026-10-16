@@ -156,7 +156,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
         for await (const ev of provider.stream({ model: cfg.models.default, messages: [...messages], tools: specs, signal }) as AsyncIterable<StreamEvent>) {
           if (ev.type === "text") { text += ev.delta; if (ev.delta) yield { type: "text", delta: ev.delta }; }
           else if (ev.type === "toolCall") toolCalls.push(ev.call);
-          else if (ev.type === "done") usage = ev.usage;
+          else if (ev.type === "done") { usage = ev.usage; if (ev.notice) yield { type: "notice", level: "info", text: ev.notice }; }
         }
         if (signal?.aborted) throw abortErr();
 
