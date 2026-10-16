@@ -16,8 +16,8 @@
   <section class="stage" aria-label="Daebot">
     <div class="stage-dots" aria-hidden="true"></div>
     <div class="ghost-m" aria-hidden="true"></div>
-    <div class="face" role="img" aria-label="The M, Daebot's LED face"></div>
-    __WORDMARK__
+    <m-bot class="face" intro playful></m-bot>
+    <div class="wm">__WORDMARK__<i class="wm-flame" aria-hidden="true"></i></div>
     <p class="stage-sub">Private agent. Every claim checked by the kernel.</p>
     <div class="powered"><span>Powered by</span><i class="mind-logo" role="img" aria-label="MIND"></i></div>
   </section>
@@ -48,6 +48,7 @@
     <p class="login-foot">Sessions are private to your account. Sign out from the sidebar when you are done.</p>
   </section>
 </main>
+<script type="module" src="/brand/mbot.js"></script>
 <script type="module" src="/login.js"></script>
 </body>
 </html>
