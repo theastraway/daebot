@@ -173,7 +173,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         : undefined;
       const inner = createAgentSession({
         id, surface: opts.surface, provider, kernel: kernelFor(tier), tools, sync, cfg, cwd, bootContext, learn,
-        systemPrompt: composeSystemPrompt({ identity: hosted?.persona, tier, bootContext, surface: opts.surface, cwd, model: cfg.models.default, via: mindBilled ? "MIND" : undefined }),
+        systemPrompt: composeSystemPrompt({ identity: hosted?.persona, tier, bootContext, surface: opts.surface, cwd, model: mindBilled ? `${cfg.models.default} on paid MIND plans and ${cfg.freeModel} on the free MIND plan (Explorer)` : cfg.models.default, via: mindBilled ? "MIND" : undefined }),
         restore: stored ? { ...stored.state, messages: repairMessages(stored.state.messages), violations: stored.violations } : undefined,
       });
 
