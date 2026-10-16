@@ -10,10 +10,19 @@ export const TITLE = "MINDClaw";
 export interface ProviderOptions {
   backoffMs?: number;   // base delay before the single retry (default 800ms); tests pass 0
   url?: string;
+  name?: string;        // Provider.name (default "openrouter")
+  /** Request headers per call (default: OpenRouter bearer key + attribution). The MIND-billed provider sends X-API-Key here. */
+  headers?: () => Record<string, string>;
+  /** Sees every response (ok or not) before it is read, e.g. for billing headers. */
+  onResponse?: (res: Response) => void;
+  /** Maps a non-ok response to a typed error. Return undefined to keep the generic ProviderHttpError. */
+  errorFor?: (status: number, body: string, model: string) => ProviderHttpError | undefined;
 }
 
 export class ProviderHttpError extends Error {
   status: number;
+  /** A fatal error ends the whole stream: falling through to the next model cannot help (bad key, billing refusal). */
+  fatal = false;
   constructor(status: number, message: string) {
     super(message);
     this.name = "ProviderHttpError";
@@ -95,7 +104,7 @@ export function createOpenRouterProvider(cfg: Config, fetchImpl: typeof fetch = 
       try {
         const res = await fetchImpl(url, {
           method: "POST",
-          headers: {
+          headers: opts.headers ? opts.headers() : {
             "Content-Type": "application/json",
             Authorization: `Bearer ${cfg.openrouterKey}`,
             "HTTP-Referer": REFERER,
@@ -104,9 +113,10 @@ export function createOpenRouterProvider(cfg: Config, fetchImpl: typeof fetch = 
           body: JSON.stringify(body),
           signal: req.signal,
         });
+        opts.onResponse?.(res);
         if (res.ok && res.body) return res;
         const text = await res.text().catch(() => "");
-        const err = new ProviderHttpError(res.status, `${model}: HTTP ${res.status} ${text.slice(0, 300)}`);
+        const err = opts.errorFor?.(res.status, text, model) ?? new ProviderHttpError(res.status, `${model}: HTTP ${res.status} ${text.slice(0, 300)}`);
         if (!retryable(res.status)) throw err;
         lastErr = err;
       } catch (e) {
@@ -160,7 +170,7 @@ export function createOpenRouterProvider(cfg: Config, fetchImpl: typeof fetch = 
   }
 
   return {
-    name: "openrouter",
+    name: opts.name ?? "openrouter",
     async *stream(req) {
       const models = [req.model, ...cfg.models.fallback.filter((m) => m !== req.model)];
       let lastErr: unknown;
@@ -170,7 +180,7 @@ export function createOpenRouterProvider(cfg: Config, fetchImpl: typeof fetch = 
           res = await open(model, req);
         } catch (e) {
           if ((e as Error)?.name === "AbortError") throw e;
-          if (e instanceof ProviderHttpError && (e.status === 401 || e.status === 403)) throw e; // bad key: fallback models will not help
+          if (e instanceof ProviderHttpError && (e.status === 401 || e.status === 403 || e.fatal)) throw e; // bad key or billing refusal: fallback models will not help
           lastErr = e;
           continue; // fall through to the next model
         }

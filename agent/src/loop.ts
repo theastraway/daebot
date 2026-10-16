@@ -245,7 +245,9 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
       } else {
         failed = true;
         finalText = "";
-        yield { type: "notice", level: "warn", text: `error: ${String((e as Error)?.message ?? e).split("\n")[0].slice(0, 400)}` };
+        // A billing refusal (MIND plan/credits) carries its own user-facing line; everything else is a plain error.
+        const userNotice = (e as { userNotice?: unknown })?.userNotice;
+        yield { type: "notice", level: "warn", text: typeof userNotice === "string" && userNotice ? userNotice : `error: ${String((e as Error)?.message ?? e).split("\n")[0].slice(0, 400)}` };
       }
     }
 

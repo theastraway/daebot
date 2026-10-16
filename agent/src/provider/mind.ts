@@ -1,0 +1,200 @@
+// MIND-billed provider (DAEBOT_BILLING=mind). Same OpenRouter-style SSE stream and the same pre-output model fallback as
+// openrouter.ts (it IS that provider, parameterised), but the call goes to MIND's LLM endpoint with the USER's own MIND key,
+// so MIND plan tier and credits are the only cap. A 402 from MIND is a billing refusal, not an upstream hiccup: it never
+// falls through to another model, it surfaces as MindBillingError with a user-facing message that links the upgrade page.
+import { createHash } from "node:crypto";
+import type { Config, Provider, StreamEvent } from "../types.ts";
+import { createOpenRouterProvider, ProviderHttpError } from "./openrouter.ts";
+
+export const FREE_TIER = "free";
+export const DEFAULT_FREE_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
+export const CREDITS_TTL_MS = 5 * 60 * 1000;
+
+// model_not_available: MIND answered 400, the model is not in its list. endpoint_disabled: MIND answered 404, the LLM proxy flag is off.
+export type BillingCode = "insufficient_credits" | "model_not_in_plan" | "model_not_available" | "endpoint_disabled";
+
+export interface MindBilling {
+  tier: string;              // MIND plan id ("free", "starter", ...)
+  tierName: string;          // display name ("Explorer", "Starter", ...)
+  creditsRemaining: number | null;
+  upgradeUrl: string;
+}
+
+/** "free" is shown as Explorer; any other tier id is capitalised unless MIND sent a display name. */
+export function tierDisplayName(tier: string, sent?: unknown): string {
+  if (typeof sent === "string" && sent.trim()) return sent.trim();
+  const t = tier.trim();
+  if (!t || t.toLowerCase() === FREE_TIER) return "Explorer";
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+export class MindBillingError extends ProviderHttpError {
+  code: BillingCode;
+  tier: string;
+  creditsRemaining: number | null;
+  upgradeUrl: string;
+  /** The line the gateway shows the user (the loop prefers it over the raw error text). */
+  userNotice: string;
+  constructor(code: BillingCode, b: { tier: string; creditsRemaining: number | null; upgradeUrl: string }, status = 402) {
+    const plan = tierDisplayName(b.tier);
+    const text = code === "model_not_in_plan" ? `This model needs a paid MIND plan (you are on ${plan}). Upgrade: ${b.upgradeUrl}`
+      : code === "model_not_available" ? `This model is not available on MIND (${plan} plan). See plans: ${b.upgradeUrl}`
+      : code === "endpoint_disabled" ? "MIND's LLM billing is not switched on yet (its LLM endpoint answered 404). Operator: set DAEBOT_BILLING=openrouter until it is."
+      : `You are out of MIND credits (${plan} plan). Add credits or upgrade: ${b.upgradeUrl}`;
+    super(status, text);
+    this.name = "MindBillingError";
+    this.fatal = true;
+    this.code = code;
+    this.tier = b.tier;
+    this.creditsRemaining = b.creditsRemaining;
+    this.upgradeUrl = b.upgradeUrl;
+    this.userNotice = text;
+  }
+}
+
+export const mindLlmUrl = (cfg: Config): string => `${cfg.mindBaseUrl.replace(/\/+$/, "")}/llm/chat/completions`;
+
+const keyId = (key: string): string => createHash("sha256").update(key).digest("hex").slice(0, 24);
+const num = (v: unknown): number | null => (v !== undefined && v !== null && v !== "" && Number.isFinite(Number(v)) ? Number(v) : null);
+
+interface Entry { b: MindBilling; at: number }
+
+/**
+ * Per-user tier + credits, cached ~5 minutes. One instance is shared by the providers (which feed it the
+ * X-MIND-* response headers after every call) and the gateway (which reads it for /auth/me).
+ */
+export class MindCredits {
+  private base: string;
+  private origin: string;
+  private doFetch: typeof fetch;
+  private ttl: number;
+  private now: () => number;
+  private cache = new Map<string, Entry>();
+  private inflight = new Map<string, Promise<MindBilling | undefined>>();
+  constructor(o: { mindBaseUrl: string; fetchImpl?: typeof fetch; ttlMs?: number; now?: () => number }) {
+    this.base = o.mindBaseUrl.replace(/\/+$/, "");
+    this.origin = (() => { try { return new URL(this.base).origin; } catch { return this.base; } })();
+    this.doFetch = o.fetchImpl ?? ((...a) => fetch(...a));
+    this.ttl = o.ttlMs ?? CREDITS_TTL_MS;
+    this.now = o.now ?? Date.now;
+  }
+
+  /** Where "manage your plan" points when MIND did not send an upgrade_url. */
+  get defaultUpgradeUrl(): string { return this.origin; }
+
+  /**
+   * Cached billing state, fetched from GET /credits when missing, older than `maxAgeMs` (default the 5 minute TTL) or `force`d.
+   * Undefined when MIND is unreachable and nothing is cached.
+   */
+  async get(key: string, force = false, maxAgeMs = this.ttl): Promise<MindBilling | undefined> {
+    if (!key) return undefined;
+    const id = keyId(key);
+    const hit = this.cache.get(id);
+    if (hit && !force && this.now() - hit.at < Math.min(maxAgeMs, this.ttl)) return hit.b;
+    const running = this.inflight.get(id);
+    if (running) return running;
+    const p = this.fetchOne(key, id, hit?.b).finally(() => this.inflight.delete(id));
+    this.inflight.set(id, p);
+    return p;
+  }
+
+  /** Last known state without any network call. */
+  peek(key: string): MindBilling | undefined { return this.cache.get(keyId(key))?.b; }
+
+  /** Fold in fresher numbers (X-MIND-* headers, or a 402 body). Needs a known tier from the cache or the update itself. */
+  note(key: string, u: { tier?: string | null; creditsRemaining?: number | null; upgradeUrl?: string | null }): void {
+    if (!key) return;
+    const id = keyId(key);
+    const cur = this.cache.get(id)?.b;
+    const tier = (u.tier ?? "").trim() || cur?.tier;
+    if (!tier) return; // no tier yet: the next get() fetches it
+    const changed = cur && cur.tier !== tier;
+    this.cache.set(id, {
+      at: this.now(),
+      b: {
+        tier,
+        tierName: !changed && cur ? cur.tierName : tierDisplayName(tier),
+        creditsRemaining: u.creditsRemaining !== undefined && u.creditsRemaining !== null ? u.creditsRemaining : cur?.creditsRemaining ?? null,
+        upgradeUrl: u.upgradeUrl || cur?.upgradeUrl || this.origin,
+      },
+    });
+  }
+
+  private async fetchOne(key: string, id: string, stale?: MindBilling): Promise<MindBilling | undefined> {
+    try {
+      const res = await this.doFetch(`${this.base}/credits`, { headers: { "X-API-Key": key, Accept: "application/json" }, signal: AbortSignal.timeout(10_000) });
+      if (!res.ok) return stale;
+      const j = (await res.json()) as Record<string, unknown>;
+      const tier = typeof j.tier === "string" && j.tier.trim() ? j.tier.trim() : stale?.tier;
+      if (!tier) return stale;
+      const b: MindBilling = {
+        tier,
+        tierName: tierDisplayName(tier, j.tier_name ?? j.tierName),
+        creditsRemaining: num(j.credits_balance ?? j.credits_remaining),
+        upgradeUrl: typeof j.upgrade_url === "string" && j.upgrade_url ? j.upgrade_url : stale?.upgradeUrl ?? this.origin,
+      };
+      this.cache.set(id, { b, at: this.now() });
+      return b;
+    } catch {
+      return stale; // keep serving the last known state through a blip
+    }
+  }
+}
+
+export interface MindProviderOptions {
+  /** The user's current MIND key (live, so a rotated OAuth key is picked up). Never the server's key for a user runtime. */
+  getKey: () => string;
+  credits: MindCredits;
+  fetchImpl?: typeof fetch;
+  backoffMs?: number;
+}
+
+export function createMindProvider(cfg: Config, o: MindProviderOptions): Provider {
+  const freeModel = cfg.freeModel || DEFAULT_FREE_MODEL;
+  const url = mindLlmUrl(cfg);
+  const f = o.fetchImpl ?? fetch;
+
+  const shared = {
+    url, name: "mind", backoffMs: o.backoffMs,
+    headers: () => ({ "Content-Type": "application/json", "X-API-Key": o.getKey() }),
+    onResponse: (res: Response) => {
+      const tier = res.headers.get("x-mind-tier");
+      const left = res.headers.get("x-mind-credits-remaining");
+      if (tier || left) o.credits.note(o.getKey(), { tier, creditsRemaining: num(left) });
+    },
+    errorFor: (status: number, body: string): ProviderHttpError | undefined => {
+      const known = o.credits.peek(o.getKey());
+      if (status === 404) return new MindBillingError("endpoint_disabled", { tier: known?.tier ?? "", creditsRemaining: null, upgradeUrl: o.credits.defaultUpgradeUrl }, 404);
+      if (status !== 402 && status !== 400) return undefined;
+      let j: any;
+      try { j = JSON.parse(body); } catch { return undefined; }
+      const code = j?.error;
+      if (status === 402 ? code !== "insufficient_credits" && code !== "model_not_in_plan" : code !== "model_not_available") return undefined;
+      const tier = typeof j.tier === "string" && j.tier ? j.tier : known?.tier ?? "";
+      const upgradeUrl = typeof j.upgrade_url === "string" && j.upgrade_url ? j.upgrade_url : known?.upgradeUrl ?? o.credits.defaultUpgradeUrl;
+      const creditsRemaining = num(j.credits_balance ?? j.credits_remaining);
+      if (tier) o.credits.note(o.getKey(), { tier, creditsRemaining, upgradeUrl });
+      return new MindBillingError(code, { tier, creditsRemaining, upgradeUrl }, status);
+    },
+  };
+  // Paid plans: the normal default model with cfg.models.fallback. Free plan: only the free model (a paid fallback would 402).
+  const paid = createOpenRouterProvider(cfg, f, shared);
+  const free = createOpenRouterProvider({ ...cfg, models: { ...cfg.models, fallback: [] } }, f, shared);
+
+  return {
+    name: "mind",
+    async *stream(req) {
+      const b = await o.credits.get(o.getKey());
+      const onFree = b?.tier === FREE_TIER;
+      let emitted = false;
+      try {
+        for await (const ev of (onFree ? free : paid).stream({ ...req, model: onFree ? freeModel : req.model }) as AsyncIterable<StreamEvent>) { emitted = true; yield ev; }
+        return;
+      } catch (e) {
+        // The plan lookup was wrong or stale (e.g. just downgraded), or the model is not in MIND's list: one retry on the free model, only if nothing reached the user.
+        if (!(e instanceof MindBillingError) || (e.code !== "model_not_in_plan" && e.code !== "model_not_available") || onFree || emitted || req.model === freeModel) throw e;
+      }
+      yield* free.stream({ ...req, model: freeModel });
+    },
+  };
+}

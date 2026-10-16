@@ -195,7 +195,9 @@ function buildItem(it, tr) {
     case "tool": node = buildTool(it); break;
     case "gate": node = buildGate(it); break;
     case "confirm": node = buildConfirm(it); break;
-    default: node = h("div", `notice ${it.level === "warn" ? "warn" : ""}`, it.text);
+    default: // a billing notice carries an upgrade link; anything else stays plain text
+      node = h("div", `notice ${it.level === "warn" ? "warn" : ""}`, /https?:\/\//.test(it.text) ? undefined : it.text);
+      if (/https?:\/\//.test(it.text)) inline(node, it.text);
   }
   it.node = node;
   return node;
@@ -541,6 +543,7 @@ function onEvent(id, ev, asst, toolByReceipt) {
       return asst;
     case "done":
       if (asst) { asst.streaming = false; paintAssistant(asst); }
+      refreshPlan();
       return null;
     default: return asst;
   }
@@ -620,6 +623,28 @@ async function ping() {
   } catch { setOnline(false); }
 }
 
+// DAEBOT_BILLING=mind: "Starter · 412 credits" next to the sign-in line, linking to the plan page. /auth/me omits the fields otherwise.
+function showPlan(me) {
+  const box = document.getElementById("plan");
+  if (!box) return;
+  if (!me || !me.tierName) { box.hidden = true; return; }
+  const c = me.creditsRemaining;
+  const n = typeof c === "number" && isFinite(c) ? c.toLocaleString(undefined, { maximumFractionDigits: 1 }) : "";
+  document.getElementById("plan-text").textContent = n ? `${me.tierName} · ${n} ${c === 1 ? "credit" : "credits"}` : me.tierName;
+  box.title = n ? `MIND plan ${me.tierName}, ${n} credits left` : `MIND plan ${me.tierName}`;
+  const a = document.getElementById("plan-link");
+  let href = "";
+  try { const u = new URL(me.upgradeUrl || ""); if (u.protocol === "https:" || u.protocol === "http:") href = u.href; } catch { /* no link */ }
+  a.hidden = !href; if (href) a.href = href;
+  box.hidden = false;
+}
+
+// Re-read the plan after a turn: the gateway already holds the X-MIND-Credits-Remaining value from that turn's calls, else it re-fetches.
+async function refreshPlan() {
+  if (!state.hosted || document.getElementById("plan").hidden) return; // only when a plan is shown (mind billing)
+  try { const r = await fetch("/auth/me?fresh=1", { credentials: "same-origin" }); if (r.ok) showPlan(await r.json()); } catch { /* keep what is shown */ }
+}
+
 // Hosted: show which MIND account this session is acting as (its own MIND, or the owner's).
 async function showWho() {
   try {
@@ -627,6 +652,7 @@ async function showWho() {
     if (!r.ok) return r.status === 401 ? false : true; // 401 = not signed in; anything else is a hiccup, not a sign-out
     const me = await r.json();
     state.who = me.username;
+    showPlan(me);
     const el = document.getElementById("who");
     if (el) { el.textContent = me.owner ? "Signed in as Owner" : `Signed in as ${me.username}`; el.title = me.owner ? "Owner access code" : `MIND account ${me.username}`; el.hidden = false; }
     return true;

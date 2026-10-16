@@ -5,6 +5,7 @@ import { createRuntime } from "../runtime.ts";
 import type { Provider, Config, Runtime } from "../types.ts";
 import type { SessionStore } from "../persist.ts";
 import type { BootCache } from "../mind/boot-cache.ts";
+import type { MindCredits } from "../provider/mind.ts";
 import { MindOAuth } from "./mind-auth.ts";
 import { OWNER } from "./users.ts";
 import type { Principal, UserStore } from "./users.ts";
@@ -19,6 +20,9 @@ export interface AuthContext {
   runtimeFor(p: Principal): Runtime;
   /** Drops a user's cached runtime (call after they sign in again with fresh credentials). */
   evict(uid: string): void;
+  /** DAEBOT_BILLING=mind only: tier + credits cache shared with every provider, and the MIND key a principal's calls are billed to. */
+  credits?: MindCredits;
+  billingKey(p: Principal): string | undefined;
   /** Live MIND API base the sign-in checks against. */
   mindBaseUrl: string;
   fetchImpl?: typeof fetch;
@@ -37,6 +41,8 @@ export interface HubOptions {
   /** Shared session store + boot cache: records carry the owning user id; the boot cache is keyed by the user's MIND key hash. */
   sessionStore?: SessionStore;
   bootCache?: BootCache;
+  /** Set in mind billing mode. */
+  credits?: MindCredits;
 }
 
 interface UserSlot { runtime: Runtime; key: string; refreshing?: Promise<boolean> }
@@ -83,6 +89,7 @@ export function createRuntimeHub(o: HubOptions): { runtimeFor(p: Principal): Run
     const inner = createRuntime(cfg, {
       provider: o.provider,
       fetchImpl: o.fetchImpl,
+      credits: o.credits,
       store: o.sessionStore,
       bootCache: o.bootCache,
       owner: p.id,

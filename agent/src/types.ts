@@ -138,7 +138,9 @@ export interface Config {
   mindApiKey: string;        // from env MIND_API_KEY or ~/.mindclaw/config.json
   mindSessionApiKey?: string; // env MIND_SESSION_API_KEY; key with chat:write for Agent Session sync; falls back to mindApiKey
   clientNames?: string[];    // optional registry of client entity names (env MINDCLAW_CLIENT_NAMES, comma separated); default empty
-  openrouterKey: string;     // env OPENROUTER_API_KEY
+  openrouterKey: string;     // env OPENROUTER_API_KEY (not needed when billing is "mind")
+  billing?: "openrouter" | "mind"; // env DAEBOT_BILLING; "mind" bills each user's MIND plan/credits instead of our OpenRouter key. Default openrouter.
+  freeModel?: string;        // env DAEBOT_FREE_MODEL; the model MIND's free tier (Explorer) runs on
   models: { default: string; cheap: string; fallback: string[] };
   shadow: boolean;           // MINDCLAW_SHADOW=1
   kernel: boolean;           // MINDCLAW_KERNEL=0 turns the kernel off (used by the eval harness)

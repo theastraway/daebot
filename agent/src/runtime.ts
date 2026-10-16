@@ -10,6 +10,7 @@ import { bootMind, createMindClient, createMindTools, createSessionSync } from "
 import { BootCache } from "./mind/boot-cache.ts";
 import type { MindClientOpts } from "./mind/client.ts";
 import { createProvider } from "./provider/index.ts";
+import type { MindCredits } from "./provider/mind.ts";
 import { createBuiltinTools } from "./tools/index.ts";
 import { HistoryRecorder } from "./events.ts";
 import { createMcpLoader, parseMcpServers } from "./mcp/client.ts";
@@ -23,7 +24,7 @@ function learnUserName(u: string): string {
   return u.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "") || "user";
 }
 
-export function composeSystemPrompt(o: { identity?: string; tier?: Tier; bootContext: string; surface: string; cwd: string; now?: Date; model?: string }): string {
+export function composeSystemPrompt(o: { identity?: string; tier?: Tier; bootContext: string; surface: string; cwd: string; now?: Date; model?: string; via?: string }): string {
   const lines = [
     o.identity ?? "You are Daebot (Dae), Anthony Conti's own agent. MIND is your memory and the only source of truth about his world.",
     "Register: chat replies are caveman-short. Short sentences, no preamble. Anything that ships (code, emails, docs) stays polished.",
@@ -33,7 +34,7 @@ export function composeSystemPrompt(o: { identity?: string; tier?: Tier; bootCon
     "cN must be a tool call from this turn. No receipt means you are guessing: go get it.",
     "Never post to the public feed or social surfaces unless the user explicitly says post, share, tweet or feed. Never contact a third party or do anything irreversible without an explicit go-ahead.",
     "When a tool result says blocked or not executed, follow its instruction instead of retrying the same call.",
-    ...(o.model ? [`Model: you run on ${o.model} via OpenRouter, inside Daebot (Astra AI). Say so plainly if asked.`] : []),
+    ...(o.model ? [`Model: you run on ${o.model} via ${o.via ?? "OpenRouter"}, inside Daebot (Astra AI). Say so plainly if asked.`] : []),
     `Surface: ${o.surface}. Working directory: ${o.cwd}. Date: ${(o.now ?? new Date()).toLocaleDateString("en-US", { timeZone: "America/New_York", weekday: "long", year: "numeric", month: "long", day: "numeric" })} (America/New_York).`,
   ];
   if (o.tier === "public") lines.push("Identity: public. You can read and answer only. You cannot write, send, post, run a shell or change anything; say so plainly if asked.");
@@ -79,6 +80,8 @@ export interface RuntimeOverrides {
   /** Remote MCP servers (default: parsed from MINDCLAW_MCP_SERVERS). */
   mcpServers?: McpServerConfig[];
   mcpFetch?: typeof fetch;
+  /** DAEBOT_BILLING=mind: the tier + credits cache shared with the gateway (the provider feeds it from MIND's response headers). */
+  credits?: MindCredits;
 }
 
 export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Runtime {
@@ -86,10 +89,13 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
   // Hosted: the kernel is always on and always enforcing, whatever the env says.
   if (hosted) cfg = { ...cfg, kernel: true, shadow: false };
   const exempt = hosted?.exempt === true;
-  const costCap = hosted && !exempt ? (hosted.sharedCap ?? new DailyCostCap(hosted.dailyUsdCap, hosted.now)) : undefined;
-  const userCap = exempt ? undefined : hosted?.userCap;
+  // MIND billing: the user's MIND plan and credits are the cap, so Daebot's own USD caps do not apply.
+  const mindBilled = cfg.billing === "mind";
+  const costCap = hosted && !exempt && !mindBilled ? (hosted.sharedCap ?? new DailyCostCap(hosted.dailyUsdCap, hosted.now)) : undefined;
+  const userCap = exempt || mindBilled ? undefined : hosted?.userCap;
   const client = createMindClient(cfg, overrides.fetchImpl, hosted?.mindClient);
-  const provider = overrides.provider ?? createProvider(cfg, overrides.fetchImpl);
+  // MIND billing: this runtime's own live MIND key (a user's, or the server key for the owner login), never anyone else's.
+  const provider = overrides.provider ?? createProvider(cfg, overrides.fetchImpl, { getKey: hosted?.mindClient?.getKey, credits: overrides.credits });
   // Agent Session sync may need a different key (chat:write); falls back to the main key.
   const sessionClient = cfg.mindSessionApiKey && cfg.mindSessionApiKey !== cfg.mindApiKey
     ? createMindClient({ ...cfg, mindApiKey: cfg.mindSessionApiKey }, overrides.fetchImpl, hosted?.mindClient)
@@ -167,7 +173,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         : undefined;
       const inner = createAgentSession({
         id, surface: opts.surface, provider, kernel: kernelFor(tier), tools, sync, cfg, cwd, bootContext, learn,
-        systemPrompt: composeSystemPrompt({ identity: hosted?.persona, tier, bootContext, surface: opts.surface, cwd, model: cfg.models.default }),
+        systemPrompt: composeSystemPrompt({ identity: hosted?.persona, tier, bootContext, surface: opts.surface, cwd, model: cfg.models.default, via: mindBilled ? "MIND" : undefined }),
         restore: stored ? { ...stored.state, messages: repairMessages(stored.state.messages), violations: stored.violations } : undefined,
       });
 
