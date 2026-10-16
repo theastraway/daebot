@@ -13,6 +13,10 @@ const DEFAULTS = {
   maxToolRoundsPerTurn: 25,
   contextWindow: 128_000,
   compactAt: 0.6,
+  // Explorer (free tier) model when DAEBOT_BILLING=mind. On MIND's free list (mindapp /llm-models, tier "free") and, per OpenRouter's
+  // live model metadata (supported_parameters), one of the free models that supports tool calling, which the agent loop needs.
+  // 262k context; the other free picks are smaller, vision/omni variants, or have no tool support.
+  freeModel: "nvidia/nemotron-3-super-120b-a12b:free",
 };
 
 function posInt(v: string | undefined): number | undefined {
@@ -72,6 +76,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     mindSessionApiKey: str(env.MIND_SESSION_API_KEY) ?? str(file.mindSessionApiKey) ?? mindApiKey,
     clientNames: nameList(env.MINDCLAW_CLIENT_NAMES, file.clientNames),
     openrouterKey: str(env.OPENROUTER_API_KEY) ?? str(file.openrouterKey) ?? "",
+    billing: (str(env.DAEBOT_BILLING) ?? str(file.billing) ?? "").toLowerCase() === "mind" ? "mind" : "openrouter",
+    freeModel: str(env.DAEBOT_FREE_MODEL) ?? str(file.freeModel) ?? DEFAULTS.freeModel,
     models: {
       // The main model comes from the environment only (MINDCLAW_MODEL); a stray config file never picks it.
       default: str(env.MINDCLAW_MODEL) ?? DEFAULTS.defaultModel,

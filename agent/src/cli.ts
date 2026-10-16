@@ -46,6 +46,8 @@ async function makeRuntime(cfg: ReturnType<typeof loadConfig>, argv: string[] = 
 }
 
 function preflight(cfg: ReturnType<typeof loadConfig>): string | undefined {
+  // DAEBOT_BILLING=mind: calls are billed to MIND accounts (the owner login to MIND_API_KEY), so no OpenRouter key is needed.
+  if (cfg.billing === "mind") return cfg.mindApiKey ? undefined : "DAEBOT_BILLING=mind needs MIND_API_KEY (the owner login is billed to that MIND account).";
   if (!cfg.openrouterKey) return "OPENROUTER_API_KEY is not set (env or ~/.mindclaw/config.json).";
   return undefined;
 }
@@ -127,12 +129,14 @@ async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promis
   const { createFileStore, dataDir } = await import("./persist.ts");
   const sessionStore = createFileStore(dataDir());
   const bootCache = new BootCache();
-  const runtime = createRuntime(cfg, { hosted: hostedRt ? { ...hostedRt, sharedCap: globalCap, exempt: true, username: process.env.DAEBOT_OWNER_USERNAME?.trim() || "anthonyjconti" } : undefined, store: sessionStore });
+  // MIND billing: one tier + credits cache shared by the owner runtime, every user runtime and the gateway.
+  const credits = cfg.billing === "mind" ? new (await import("./provider/mind.ts")).MindCredits({ mindBaseUrl: cfg.mindBaseUrl }) : undefined;
+  const runtime = createRuntime(cfg, { hosted: hostedRt ? { ...hostedRt, sharedCap: globalCap, exempt: true, username: process.env.DAEBOT_OWNER_USERNAME?.trim() || "anthonyjconti" } : undefined, store: sessionStore, credits });
   let auth: AuthContext | undefined;
   if (hosted && globalCap) {
     try {
       const { createAuthContext } = await import("./auth/index.ts");
-      auth = createAuthContext({ cfg, hosted, ownerRuntime: runtime, globalCap, sessionStore, bootCache });
+      auth = createAuthContext({ cfg, hosted, ownerRuntime: runtime, globalCap, sessionStore, bootCache, credits });
       if (auth.store.unreadable) process.stderr.write(`hosted: ${auth.store.unreadable} stored user record(s) could not be decrypted (wrong DAEBOT_SECRET_KEY or tampered); those users must sign in again.\n`);
     } catch (e) {
       process.stderr.write(`${e instanceof HostedConfigError ? e.message : "invalid sign-in configuration"}\n`);

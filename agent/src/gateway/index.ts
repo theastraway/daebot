@@ -13,6 +13,7 @@ import { OWNER } from "../auth/users.ts";
 import type { Principal } from "../auth/users.ts";
 import type { AuthContext } from "../auth/tenancy.ts";
 import { MindAuthError, whoami } from "../auth/mind-auth.ts";
+import { usageLeftPct } from "../provider/mind.ts";
 import { STATIC_CSP, resolveStatic, serveFile } from "./static.ts";
 import { acceptWebSocket } from "./ws.ts";
 import type { WsConnection } from "./ws.ts";
@@ -172,7 +173,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   const wsConns = new Set<WsConnection>();
   const SESSION_ROUTE = /^\/sessions\/([^/]+)(?:\/(send|abort|violations|history))?$/;
   // Which LLM answers (shown in the UI). Absent when the gateway was started without a Config (tests, fakes).
-  const modelInfo = (): { model?: string; provider?: string } => (opts.cfg ? { model: opts.cfg.models.default, provider: "openrouter" } : {});
+  const modelInfo = (): { model?: string; provider?: string } => (opts.cfg ? { model: opts.cfg.models.default, provider: opts.cfg.billing === "mind" ? "MIND" : "openrouter" } : {});
 
   function subscribe(id: string, c: WsConnection): void {
     let set = subscribers.get(id);
@@ -413,7 +414,16 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
         const p = principalOf(req);
         if (!p) return sendJson(res, 401, { error: "unauthorized" });
-        return sendJson(res, 200, { username: p.owner ? "Owner" : p.username, owner: p.owner, tier: p.tier });
+        const me: Record<string, unknown> = { username: p.owner ? "Owner" : p.username, owner: p.owner, tier: p.tier };
+        // DAEBOT_BILLING=mind: the MIND plan and credits this principal's calls are billed to (`tier` stays Daebot's identity tier,
+        // so the MIND plan id is `planTier`). ?fresh=1 (sent after a turn) re-reads
+        // unless a response header already refreshed the number moments ago.
+        if (auth?.credits) {
+          const key = auth.billingKey(p);
+          const b = key ? await auth.credits.get(key, false, query.get("fresh") ? 2000 : undefined) : undefined;
+          if (b) Object.assign(me, { planTier: b.tier, tierName: b.tierName, creditsRemaining: b.creditsRemaining, creditsLimit: b.creditsLimit, usageLeftPct: usageLeftPct(b), upgradeUrl: b.upgradeUrl });
+        }
+        return sendJson(res, 200, me);
       } else if (path === "/logout") {
         if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
         res.setHeader("set-cookie", `${HOSTED_COOKIE}=; ${cookieAttrs(0)}`);
