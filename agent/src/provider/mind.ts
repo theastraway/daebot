@@ -199,14 +199,14 @@ export function createMindProvider(cfg: Config, o: MindProviderOptions): Provide
       const onFree = b?.tier === FREE_TIER;
       let emitted = false;
       try {
-        for await (const ev of (onFree ? free : paid).stream({ ...req, model: onFree ? freeModel : req.model }) as AsyncIterable<StreamEvent>) { emitted = true; yield ev; }
+        for await (const ev of (onFree ? free : paid).stream({ ...req, model: onFree ? freeModel : req.model }) as AsyncIterable<StreamEvent>) { emitted = true; yield onFree && ev.type === "done" ? { ...ev, model: freeModel } : ev; }
         return;
       } catch (e) {
         // The plan lookup was wrong or stale (e.g. just downgraded), or the model is not in MIND's list: one retry on the free model, only if nothing reached the user.
         if (!(e instanceof MindBillingError) || (e.code !== "model_not_in_plan" && e.code !== "model_not_available") || onFree || emitted || req.model === freeModel) throw e;
       }
       // The user asked for a paid model and got the free one: say so (the loop shows `notice` once, after the answer).
-      for await (const ev of free.stream({ ...req, model: freeModel })) yield ev.type === "done" ? { ...ev, notice: "Answered on the free model" } : ev;
+      for await (const ev of free.stream({ ...req, model: freeModel })) yield ev.type === "done" ? { ...ev, notice: "Answered on the free model", model: freeModel } : ev;
     },
   };
 }
