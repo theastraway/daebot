@@ -66,7 +66,7 @@ export interface GatewayOptions {
 export const HOSTED_COOKIE = "mc_session";
 export const OAUTH_COOKIE = "mc_oauth";
 // Reachable without a session in hosted mode (the login page and what it needs to render).
-const HOSTED_PUBLIC_STATIC = new Set(["/login.html", "/login.js", "/login.css", "/style.css", "/favicon.svg"]);
+const HOSTED_PUBLIC_STATIC = new Set(["/login.html", "/login.js", "/login.css", "/style.css", "/favicon.svg", "/brand/mbot.js", "/brand/daebot-head.webp"]);
 const HSTS = "max-age=31536000; includeSubDomains";
 
 const MAX_BODY = 1 << 20;

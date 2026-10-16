@@ -9,9 +9,12 @@
 .stage-dots { position: absolute; inset: 0; z-index: -1; background: radial-gradient(circle, rgba(255,210,90,.34) 1.3px, transparent 1.8px) 0 0 / 20px 20px; -webkit-mask: linear-gradient(180deg, transparent 0, #000 22%, #000 42%, transparent 66%) 0 -100% / 100% 300%; mask: linear-gradient(180deg, transparent 0, #000 22%, #000 42%, transparent 66%) 0 -100% / 100% 300%; animation: sweep 7s ease-in-out infinite; opacity: .9; }
 @keyframes sweep { 0% { -webkit-mask-position: 0 0; mask-position: 0 0; } 100% { -webkit-mask-position: 0 100%; mask-position: 0 100%; } }
 .stage-dots::after { content: ""; position: absolute; inset: 0; background: radial-gradient(circle, rgba(255,255,255,.07) 1px, transparent 1.4px) 0 0 / 20px 20px; -webkit-mask: radial-gradient(70% 70% at 50% 50%, #000, transparent); mask: radial-gradient(70% 70% at 50% 50%, #000, transparent); }
-.face { width: min(330px, 52vw); aspect-ratio: 673 / 645; background: url("data:image/png;base64,__FACE__") center / contain no-repeat; filter: drop-shadow(0 0 46px rgba(255,210,90,.30)) drop-shadow(0 22px 28px rgba(0,0,0,.6)); animation: float 7s ease-in-out infinite; }
+.face { display: block; width: min(330px, 52vw); aspect-ratio: 1; cursor: pointer; filter: drop-shadow(0 0 46px rgba(255,210,90,.30)) drop-shadow(0 22px 28px rgba(0,0,0,.6)); animation: float 7s ease-in-out infinite; }
+.face svg { width: 100%; height: 100%; overflow: visible; transform-origin: 50% 60%; }
 @keyframes float { 50% { transform: translateY(-7px); } }
-.wordmark { width: min(300px, 62vw); height: auto; margin-top: 34px; color: #f6ead8; overflow: visible; }
+.wm { display: flex; align-items: flex-end; justify-content: center; margin-top: 34px; }
+.wm-flame { flex: none; width: clamp(11px, 3.4vw, 16px); aspect-ratio: 112 / 133; margin: 0 0 .35em .3em; background: url("data:image/png;base64,__FLAME__") center / contain no-repeat; }
+.wordmark { width: min(300px, 62vw); height: auto; color: #f6ead8; overflow: visible; }
 .stage-sub { margin: 18px 0 0; font-size: 15px; color: #b9ad98; max-width: 34ch; text-wrap: balance; }
 .ghost-m { position: absolute; z-index: -1; right: -120px; bottom: -120px; width: 420px; height: 420px; background: url("data:image/png;base64,__MGHOST__") center / contain no-repeat; opacity: .045; transform: rotate(-8deg); }
 .tile { width: 56px; height: 56px; border-radius: 15px; background: url("data:image/png;base64,__TILE__") center / cover no-repeat; box-shadow: 0 0 0 1px var(--line), 0 12px 24px -12px rgba(0,0,0,.5); margin-bottom: 18px; }
