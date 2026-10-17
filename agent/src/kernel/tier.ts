@@ -22,7 +22,7 @@ export function parseTier(identity: string | undefined | null): Tier {
 export function tierAllows(tier: Tier, tool: Pick<Tool, "spec" | "class" | "classFor">, args?: Record<string, unknown>): boolean {
   const allowed = CLASSES[tier];
   if (!allowed) return true;
-  if (tier === "public" && tool.spec.name === "bash") return false;
+  if (tier === "public" && (tool.spec.name === "bash" || tool.spec.name === "decide")) return false; // decide spends the server's money
   // With no args (listing) judge by the loosest class the tool can take: static class, then classFor({}) is not trusted.
   return allowed.includes(args === undefined ? tool.class : effectiveClass(tool, args));
 }

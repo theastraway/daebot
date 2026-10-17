@@ -73,3 +73,8 @@ If a license allows reuse (MIT, Apache-2.0, BSD, ISC), code may be used verbatim
 - Do not launch GUI apps, do not drive the user's mouse/windows, do not run `agent-browser close --all` or any kill-all.
 - Do not git commit, push, or run mship. The orchestrator commits.
 - Finish by reporting: files created, test results (the summary line, not the exit code of a piped command), open questions, and the exact commands to run it.
+
+## 9. Decisions (decide, mind_decision_record, Decision Protocol)
+- `decide` (tools/decide.ts, class read, offered only when OPENROUTER_API_KEY is set, runs hosted, not offered to the public tier): POST https://openrouter.ai/api/alpha/decisions with `typesafe/jev-1.13` (default) or `perplexity/pplx-decider-v1.1-27b`, falling back to the other on any failure. Returns choice, probabilities, confidence. Its cost is reported in `meta.costUsd`; the loop adds it to the turn's usage. TODO: DAEBOT_BILLING=mind does not cover this endpoint yet (MIND proxies chat completions only), so it uses the server key; move it behind MIND when the proxy supports /api/alpha/decisions.
+- `mind_decision_record` (mind/tools.ts, class write, owner_check required): files a PRIVATE document "Decision - <subject> - YYYY-MM-DD" via the existing MindClient.remember.
+- The Decision Protocol (OOC/EMR) lives in `composeSystemPrompt`. A decide result is advice and never overrides a user instruction or a kernel gate.
