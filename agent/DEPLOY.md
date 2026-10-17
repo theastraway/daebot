@@ -76,3 +76,14 @@ Anyone can sign in with their own MIND account and Daebot then reads and writes 
 - **MIND billing** (`DAEBOT_BILLING=mind`, default `openrouter`): every user's LLM calls go to `POST $MIND_BASE_URL/developer/v1/llm/chat/completions` with THEIR OWN MIND key (the owner login uses the server `MIND_API_KEY`), so their MIND plan and credits are the cap: both USD caps above are skipped and `OPENROUTER_API_KEY` is not needed. Explorer (tier `free`) runs on `DAEBOT_FREE_MODEL` (default `nvidia/nemotron-3-super-120b-a12b:free`); a refusal (`model_not_in_plan`, `model_not_available`, `insufficient_credits`) shows the user an upgrade link instead of trying other models. The sidebar shows a usage meter ("Plan usage · 62% left", from `credits_balance` / `credits_limit`; "Usage billed as you go" when there is no limit) and never says "credits"; `/auth/me` carries the numbers. Turn it on only after MIND's proxy is live (a 404 from it is reported as a misconfiguration); turn it off by setting `DAEBOT_BILLING=openrouter`.
 - OAuth: Daebot registers itself with MIND as a public PKCE client (RFC 7591, redirect `https://daebot.live/auth/mind/callback`), so no admin action is needed. To pin a client instead, set `MIND_OAUTH_CLIENT_ID` (and optionally `MIND_OAUTH_CLIENT_SECRET`).
 - Pasting a `mind_` API key is always available as the fallback; it is checked live against `GET /developer/v1/profile`.
+
+## Server-to-server agent API (MIND chat agent mode)
+
+`POST /api/agent/turn` lets MIND's backend run a Daebot turn for an end user. Hosted mode with user sign-in enabled (`DAEBOT_SECRET_KEY`) only.
+
+- Auth: header `X-MIND-Key: <the user's mind_ key>`, validated live against MIND (`GET /profile`). No cookie, no bearer. The turn runs in that user's own runtime and MIND, billed to their MIND usage (`DAEBOT_BILLING=mind`).
+- Body: `{ "text": "...", "sessionId": "<from a previous turn, optional>", "surface": "mind-chat" }`.
+- Response: `text/event-stream`, the same events as `/sessions/:id/send`. The session id is returned in the `X-Daebot-Session` header and as the first event `{"type":"session","sessionId":"..."}`. Send it back as `sessionId` to continue the conversation.
+- Errors (JSON): 400 bad body, 401 missing/invalid key, 403 host/Origin/not allowed/not your session, 409 session busy, 429 rate limited (Retry-After), 502 MIND unreachable.
+- Browser-safe by construction: any `Origin` header is refused (server callers send none); the Host allowlist and https rules still apply. Bad keys count against the per-IP login limiter.
+- Rate limit: `DAEBOT_AGENT_API_RPM` turns per user per minute (default 30).
