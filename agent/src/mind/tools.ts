@@ -121,6 +121,41 @@ function pair(
   ];
 }
 
+// ---------- decision_record ----------
+// The OOC/EMR decision document. MIND titles never carry / ( ) [ ] or dashes other than the plain separators.
+function titlePart(s: string): string {
+  return s.replace(/[\/()\[\]]/g, " ").replace(/[\u2013\u2014]/g, "-").replace(/\s+/g, " ").trim().slice(0, 80);
+}
+
+function todayET(now: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+}
+
+function list(v: unknown): string[] {
+  return Array.isArray(v) ? v.map((x) => (typeof x === "string" ? x : x && typeof x === "object" ? Object.entries(x as Record<string, unknown>).map(([k, val]) => `${k}: ${typeof val === "string" ? val : JSON.stringify(val)}`).join("; ") : String(x))).filter((x) => x.trim()) : [];
+}
+
+export function decisionTitle(subject: string, date: string): string {
+  return `Decision - ${titlePart(subject)} - ${date}`;
+}
+
+export function renderDecision(a: Record<string, unknown>, date: string): string {
+  const sec = (h: string, items: string[], numbered = false) => (items.length ? `## ${h}\n${items.map((x, i) => (numbered ? `${i + 1}. ${x}` : `- ${x}`)).join("\n")}\n\n` : "");
+  const text = (h: string, v: unknown) => (typeof v === "string" && v.trim() ? `## ${h}\n${v.trim()}\n\n` : "");
+  return (
+    `# Decision: ${String(a.subject).trim()}\nDate: ${date}\n\n` +
+    sec("Outcomes, ranked (first is the aim)", list(a.outcomes), true) +
+    sec("Options", list(a.options)) +
+    sec("Consequences and evidence", list(a.consequences)) +
+    text("Evaluation", a.evaluation) +
+    text("Decision", a.decision) +
+    text("Confidence", a.confidence) +
+    sec("Mitigations", list(a.mitigations)) +
+    sec("Plan (action, owner)", list(a.plan), true) +
+    text("Decision model result", a.decide_result)
+  ).trimEnd();
+}
+
 export function createMindTools(client: MindClient): Tool[] {
   const defs: Def[] = [];
 
@@ -167,6 +202,31 @@ export function createMindTools(client: MindClient): Tool[] {
       if (type !== "entry" && type !== "document") throw new Error(`mind_remember: unknown type '${type}'`);
       if (typeof a.title !== "string" || typeof a.content !== "string" || !a.title || !a.content) throw new Error("mind_remember needs title and content");
       return c.remember({ type, title: a.title, content: a.content, tags: a.tags as string[] | undefined, source: a.source as string | undefined });
+    },
+  });
+
+  defs.push({
+    name: "mind_decision_record",
+    description: "After a decision, file the decision document as a PRIVATE MIND document titled 'Decision - <subject> - YYYY-MM-DD'. Every call needs owner_check.",
+    properties: {
+      subject: { type: "string", description: "What was decided, a few words" },
+      outcomes: { type: "array", items: { type: "string" }, description: "Ranked outcomes, the user's aim first" },
+      options: { type: "array", items: { type: "string" }, description: "Every option considered, each with a short definition" },
+      consequences: { type: "array", items: { type: "string" }, description: "Upsides and downsides per option, with evidence" },
+      evaluation: { type: "string", description: "How options scored against outcomes" },
+      decision: { type: "string", description: "The one decision sentence" },
+      confidence: { type: "string", description: "Confidence, stated plainly (include the decide tool's number if used)" },
+      mitigations: { type: "array", items: { type: "string" }, description: "One countermeasure per downside of the winner" },
+      plan: { type: "array", items: { type: "string" }, description: "Sequenced actions, each with a named owner" },
+      decide_result: { type: "string", description: "Paste of the decide tool result, if used" },
+      date: { type: "string", description: "YYYY-MM-DD (default today, New York)" },
+    },
+    required: ["subject", "decision"], cls: "write", ownerGate: true,
+    run: (c, a) => {
+      if (typeof a.subject !== "string" || !titlePart(a.subject)) throw new Error("mind_decision_record needs a subject");
+      if (typeof a.decision !== "string" || !a.decision.trim()) throw new Error("mind_decision_record needs the decision sentence");
+      const date = typeof a.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(a.date) ? a.date : todayET();
+      return c.remember({ type: "document", title: decisionTitle(a.subject, date), content: renderDecision(a, date), tags: ["decision", "oocemr"], source: "daebot" });
     },
   });
 

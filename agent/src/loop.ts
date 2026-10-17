@@ -337,6 +337,14 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     state.calls.push(rec);
     state.allCalls.push(rec);
     if (tool.spec.name === "mind_context" && result.ok) state.booted = true;
+    // A tool that spent money outside the chat model (e.g. decide) reports it in meta.costUsd; it counts in the turn's usage.
+    const toolCost = result.meta?.costUsd;
+    if (typeof toolCost === "number" && Number.isFinite(toolCost) && toolCost > 0) {
+      totalCost += toolCost;
+      const m = result.meta ?? {};
+      const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+      yield { type: "usage", usage: { promptTokens: n(m.inputTokens), completionTokens: n(m.outputTokens), costUsd: toolCost }, totalCostUsd: totalCost, model: typeof m.model === "string" ? m.model : tool.spec.name };
+    }
     yield { type: "toolEnd", receiptId, tool: tool.spec.name, ok: result.ok, preview: result.output.replace(/\s+/g, " ").slice(0, 200) };
     messages.push(toolMsg(call, `[#${receiptId} ${tool.spec.name}${result.ok ? "" : " FAILED"}] ${result.output.length > MAX_TOOL_OUTPUT ? result.output.slice(0, MAX_TOOL_OUTPUT) + "\n[truncated]" : result.output}`));
     return "ok";

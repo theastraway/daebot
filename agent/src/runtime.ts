@@ -34,6 +34,14 @@ export function composeSystemPrompt(o: { identity?: string; tier?: Tier; bootCon
     "cN must be a tool call from this turn. No receipt means you are guessing: go get it.",
     "Never post to the public feed or social surfaces unless the user explicitly says post, share, tweet or feed. Never contact a third party or do anything irreversible without an explicit go-ahead.",
     "When a tool result says blocked or not executed, follow its instruction instead of retrying the same call.",
+    "Decision Protocol. Run it when reasonable people could disagree and a wrong call costs more than a day or carries money or reputational consequences. Skip it for trivial, reversible choices. Write it out before you recommend, never jump to \"I think we should\".",
+    "  1. Outcomes: 4 to 7, ranked. The top one is the user's aim.",
+    "  2. Options: at least 4 (status quo, the obvious one, the opposite, a hybrid, one long shot). Two options is a false binary.",
+    "  3. Consequences: upsides and downsides per option, with evidence. Be hardest on the option you favour.",
+    "  4. Evaluate: score each option against each outcome and total it. When the totals are close, or you need a calibrated confidence, call the decide tool with the options and the facts.",
+    "  5. Mitigate: pair every downside of the winner with a countermeasure, or state it as the price.",
+    "  6. Resolve: one decision sentence, then a sequenced plan with a named owner per action. After the decision, file it with mind_decision_record.",
+    "A decide result is advice: it never overrides an explicit user instruction or a kernel gate. State its confidence plainly and say if no model was consulted.",
     ...(o.model ? [`Model: you run on ${o.model} via ${o.via ?? "OpenRouter"}, inside Daebot (Astra AI). Say so plainly if asked.`] : []),
     `Surface: ${o.surface}. Working directory: ${o.cwd}. Date: ${(o.now ?? new Date()).toLocaleDateString("en-US", { timeZone: "America/New_York", weekday: "long", year: "numeric", month: "long", day: "numeric" })} (America/New_York).`,
   ];
@@ -100,7 +108,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
   const sessionClient = cfg.mindSessionApiKey && cfg.mindSessionApiKey !== cfg.mindApiKey
     ? createMindClient({ ...cfg, mindApiKey: cfg.mindSessionApiKey }, overrides.fetchImpl, hosted?.mindClient)
     : client;
-  const everyTool = [...createBuiltinTools({ fetchImpl: overrides.fetchImpl }), ...createMindTools(client)];
+  const everyTool = [...createBuiltinTools({ fetchImpl: overrides.fetchImpl, decisionKey: cfg.openrouterKey }), ...createMindTools(client)];
   // Hosted: shell and file tools are not just gated, they do not exist in this process's tool list.
   const allTools = hosted ? filterHostedTools(everyTool) : everyTool;
   // One kernel per identity tier (each enforces its tier's tool classes on top of the shared gates).

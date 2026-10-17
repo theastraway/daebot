@@ -3,7 +3,7 @@ import { normalizeEntity } from "./util.ts";
 
 // Real MIND write tools end in `_write`; mind_remember and mind_folders are write tools without the suffix.
 // The legacy read-tool names stay gated for any non-read action.
-export const OWNER_TOOLS = new Set(["mind_remember", "mind_folders", "mind_life", "mind_crm", "mind_checklists"]);
+export const OWNER_TOOLS = new Set(["mind_remember", "mind_decision_record", "mind_folders", "mind_life", "mind_crm", "mind_checklists"]);
 export function isOwnerTool(name: string): boolean {
   return name.endsWith("_write") || OWNER_TOOLS.has(name);
 }

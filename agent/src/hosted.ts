@@ -55,10 +55,10 @@ export function hostedPort(env: NodeJS.ProcessEnv = process.env): number | undef
 }
 
 // ---------- tools ----------
-// The ONLY tools a hosted session may offer or run: web_fetch, the mind_* family, and tools of remote MCP servers
+// The ONLY tools a hosted session may offer or run: web_fetch, decide (read-only decision advice), the mind_* family, and tools of remote MCP servers
 // the operator listed in MINDCLAW_MCP_SERVERS (named `<server>__<tool>`; no host tool name contains "__").
 export function hostedToolAllowed(name: string): boolean {
-  return name === "web_fetch" || /^mind_[a-z0-9_]+$/.test(name) || /^[a-z0-9][a-z0-9-]{0,30}__[A-Za-z0-9_-]+$/.test(name);
+  return name === "web_fetch" || name === "decide" || /^mind_[a-z0-9_]+$/.test(name) || /^[a-z0-9][a-z0-9-]{0,30}__[A-Za-z0-9_-]+$/.test(name);
 }
 
 export function filterHostedTools(tools: Tool[]): Tool[] {
