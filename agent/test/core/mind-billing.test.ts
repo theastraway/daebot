@@ -130,9 +130,9 @@ test("400 model_not_available behaves like model_not_in_plan: one retry on the f
   assert.equal(text(await ask(c.p)), "fb");
 });
 
-test("404 from the LLM route (MIND flag off) is a clear misconfiguration error, no fall through", async () => {
+test("404 from the LLM route (MIND flag off) gives a plain user message, no fall through", async () => {
   const w = provider({ script: () => new Response("Not Found", { status: 404 }) });
-  await assert.rejects(ask(w.p), (e: any) => e instanceof MindBillingError && e.code === "endpoint_disabled" && /DAEBOT_BILLING=openrouter/.test(e.userNotice));
+  await assert.rejects(ask(w.p), (e: any) => e instanceof MindBillingError && e.code === "endpoint_disabled" && /can.t reach the AI on your MIND account/.test(e.userNotice) && !/DAEBOT_BILLING|Operator/.test(e.userNotice));
   assert.equal(w.llm.length, 1);
 });
 
