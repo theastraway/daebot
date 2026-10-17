@@ -43,6 +43,17 @@ export interface BotsApi {
   roster(): RosterEntry[];
 }
 
+/** An upgrade link is shown to the user as a clickable link, so only m-i-n-d.ai (and its subdomains) over https passes. */
+export function safeUpgradeUrl(u: unknown): string | undefined {
+  if (typeof u !== "string") return undefined;
+  try {
+    const x = new URL(u);
+    if (x.protocol !== "https:" || x.username || x.password) return undefined;
+    const h = x.hostname.toLowerCase();
+    return h === "m-i-n-d.ai" || h.endsWith(".m-i-n-d.ai") ? x.href : undefined;
+  } catch { return undefined; }
+}
+
 export const SLUG_RE = /^[a-z0-9-]{1,32}$/;
 export const MAX_INSTRUCTIONS_BYTES = 8 * 1024;
 

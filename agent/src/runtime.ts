@@ -23,7 +23,9 @@ import { createMcpLoader, parseMcpServers } from "./mcp/client.ts";
 import type { McpServerConfig } from "./mcp/client.ts";
 import { repairMessages } from "./persist.ts";
 import type { SessionStore } from "./persist.ts";
-import type { AgentEvent, AgentSession, Config, HistoryEvent, MindClient, Provider, Runtime, Tool } from "./types.ts";
+import type { AgentEvent, AgentSession, Config, HistoryEvent, MindClient, Provider, Runtime, SessionSync, Tool } from "./types.ts";
+
+const noSync: SessionSync = { async open() {}, async append() {}, async pendingReplies() { return []; }, async close() {} };
 
 /** Same sanitising as MINDCLAW_LEARN_USER, so a MIND username is a safe doc-name part. */
 function learnUserName(u: string): string {
@@ -34,8 +36,21 @@ const MAX_ROSTER = 40;
 const clipLine = (s: string, n: number): string => { const t = s.replace(/\s+/g, " ").trim(); return t.length > n ? t.slice(0, n - 1) + "…" : t; };
 const noKernelSpoof = (s: string): string => s.replace(/\[kernel/gi, "[ kernel");
 
+/**
+ * A bot's writes go ONLY to its own MIND. So a bot session has no shell and no file writes (in every mode, not just hosted),
+ * and a web_fetch that carries a query string or a body can leak data, so it counts as an outward action there.
+ */
+export function botSessionTools(tools: Tool[]): Tool[] {
+  return tools
+    .filter((t) => !["bash", "write_file", "edit_file"].includes(t.spec.name))
+    .map((t) => (t.spec.name !== "web_fetch" ? t : {
+      ...t,
+      classFor: (a: Record<string, unknown>) => (/[?#]/.test(String(a.url ?? "")) || a.body !== undefined || (typeof a.method === "string" && a.method.toUpperCase() !== "GET") ? "outward" : t.class),
+    } as Tool));
+}
+
 export function botIdentity(b: Pick<BotRecord, "name" | "slug" | "purpose">, userName?: string): string {
-  return `You are ${b.name} (bot "${b.slug}"), a persistent Daebot agent${userName ? ` working for the MIND user "${userName}"` : ""}.${b.purpose ? ` Purpose: ${clipLine(b.purpose, 300)}.` : ""} Your home MIND is the bot MIND "${b.slug}": it is your memory and what you read and write by default. The user's main MIND is readable with mind:"main"; you never write to it.`;
+  return `You are ${noKernelSpoof(clipLine(b.name, 80))} (bot "${b.slug}"), a persistent Daebot agent${userName ? ` working for the MIND user "${userName}"` : ""}.${b.purpose ? ` Purpose: ${noKernelSpoof(clipLine(b.purpose, 300))}.` : ""} Your home MIND is the bot MIND "${b.slug}": it is your memory and what you read and write by default. The user's main MIND is readable with mind:"main"; you never write to it.`;
 }
 
 export function composeSystemPrompt(o: {
@@ -79,7 +94,7 @@ export function composeSystemPrompt(o: {
   }
   if (o.bot || roster.length) {
     lines.push("", "## MINDs and bots", o.bot ? `main: the user's main MIND (read-only for you: mind:"main")` : `main: the user's main MIND (your own, the default)`);
-    for (const b of roster) lines.push(`- ${b.slug} (${clipLine(b.name, 60)})${o.bot && b.slug === o.bot.slug ? " (you)" : ""}${b.purpose ? `: ${clipLine(b.purpose, 160)}` : ""}`);
+    for (const b of roster) lines.push(`- ${b.slug} (${noKernelSpoof(clipLine(b.name, 60))})${o.bot && b.slug === o.bot.slug ? " (you)" : ""}${b.purpose ? `: ${noKernelSpoof(clipLine(b.purpose, 160))}` : ""}`);
     if (roster.length) lines.push(`Read another MIND on any read tool with mind:"<slug>" (mind_tenants lists them live).`);
   }
   if (o.bot) {
@@ -175,7 +190,8 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       home, clientFor: clientForMind, roster: () => botStore?.roster() ?? [],
       refresh: botStore ? async () => { await botStore.list(); } : undefined,
     }, { user: hosted?.username }).filter((t) => on || t.spec.name !== "mind_tenants"), ...talk];
-    return hosted ? filterHostedTools(every) : every;
+    const all = hosted ? filterHostedTools(every) : every;
+    return selfBot ? botSessionTools(all) : all;
   };
   // One kernel per identity tier (each enforces its tier's tool classes on top of the shared gates).
   const kernels = new Map<Tier, ReturnType<typeof createKernel>>();
@@ -242,7 +258,9 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       const cwd = process.cwd();
       const sourceKey = botRec ? `daebot-bot-${botRec.slug}` : hosted?.sourceKey ? hosted.sourceKey(opts.surface, id) : `mindclaw-${opts.surface}-${id}`;
       // MIND Chat sync uses the MAIN key (sessionClient); the bot's name is only the source label.
-      const sync = createSessionSync(sessionClient, sourceKey);
+      // Human <-> bot threads sync to MAIN (the user's own chat history, source daebot-bot-<slug>). Bot-to-bot DM threads (peer set) do NOT:
+      // what bots say to each other never lands in MAIN, which every other agent of the user can read.
+      const sync: SessionSync = peer ? noSync : createSessionSync(sessionClient, sourceKey);
       // Tools a tier may not use are neither offered nor executable (the loop only knows this list).
       const sessionTools = toolsFor(home, botRec?.id);
       const allWithMcp = mcp.configured ? [...sessionTools, ...(await mcp.tools())] : sessionTools;
@@ -352,6 +370,20 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     },
     bots: botStore,
     settings,
+    async purgeBotSessions(botId) {
+      let n = 0;
+      const ids = new Set<string>();
+      for (const m of store?.list() ?? []) if (mine(m) && (m.bot === botId || m.peer === botId)) ids.add(m.id);
+      for (const [id, e] of sessions) if (e.bot === botId || e.peer === botId) ids.add(id);
+      for (const id of ids) {
+        const live = sessions.get(id);
+        sessions.delete(id);
+        if (live) await live.session.close("bot deleted").catch(() => {});
+        await store?.remove?.(id);
+        n++;
+      }
+      return n;
+    },
     sessionInfo(id) {
       const live = sessions.get(id);
       if (live) return { bot: live.bot, peer: live.peer, model: live.model };

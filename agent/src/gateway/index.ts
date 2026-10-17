@@ -18,7 +18,7 @@ import { AGENT_SURFACE_RE, AGENT_TURN_PATH, KeyIdentityCache, TurnRateLimiter } 
 import { userIdFor } from "../auth/users.ts";
 import { FREE_TIER, usageLeftPct } from "../provider/mind.ts";
 import { createBotBus } from "../bots/bus.ts";
-import { BotError } from "../bots/types.ts";
+import { BotError, safeUpgradeUrl } from "../bots/types.ts";
 import type { BotRecord, BotsContext } from "../bots/types.ts";
 import { botsEnabled } from "../bots/flag.ts";
 import { createModelCatalog } from "../models.ts";
@@ -207,7 +207,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   });
   const botsOn = (): boolean => (opts.botsEnabled ? opts.botsEnabled() : botsEnabled());
   // ---- Bots: the bus runs a recipient bot's turn in-process through this same SessionManager.
-  if (opts.bots) opts.bots.bus.current = createBotBus({ manager, botsFor: (owner) => manager.runtimeOf(owner).bots });
+  if (opts.bots) opts.bots.bus.current = createBotBus({ manager, botsFor: (owner) => manager.runtimeOf(owner).bots, tierOf: (owner) => (owner === OWNER.id ? OWNER.tier : auth?.store.principal(owner)?.tier) });
   const catalog = createModelCatalog({ cfg: opts.cfg ?? ({ mindBaseUrl: "", models: { default: "", cheap: "", fallback: [] } } as unknown as Config), fetchImpl: opts.fetchImpl ?? opts.auth?.fetchImpl });
   // ---- MIND Voice: billed to the caller's own MIND key (owner: the server key). Off when there is no MIND base URL.
   const voiceBase = opts.voice?.baseUrl ?? opts.cfg?.mindBaseUrl;
@@ -467,11 +467,11 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       return sendJson(res, 502, { error: e instanceof Error ? e.message.slice(0, 300) : "could not open a session" });
     }
     if (ls.busy) return sendJson(res, 409, { error: "session is busy with another turn", sessionId: ls.id });
-    return streamTurn(res, ls.id, text, { "x-daebot-session": ls.id }, { type: "session", sessionId: ls.id });
+    return streamTurn(res, ls.id, text, { "x-daebot-session": ls.id }, { type: "session", sessionId: ls.id }, principal);
   }
 
   // One SSE turn: shared by POST /sessions/:id/send and POST /api/agent/turn.
-  async function streamTurn(res: ServerResponse, id: string, text: string, extraHeaders: Record<string, string> = {}, first?: Record<string, unknown>): Promise<void> {
+  async function streamTurn(res: ServerResponse, id: string, text: string, extraHeaders: Record<string, string> = {}, first?: Record<string, unknown>, me?: Principal): Promise<void> {
     res.writeHead(200, {
       "content-type": "text/event-stream; charset=utf-8",
       "cache-control": "no-store, no-transform",
@@ -482,6 +482,10 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     });
     res.write(": open\n\n");
     if (first) res.write(`data: ${JSON.stringify(first)}\n\n`);
+    if (me) {
+      const note = await enforceModel(me, id).catch(() => undefined);
+      if (note) res.write(`data: ${JSON.stringify({ type: "notice", level: "warn", text: note })}\n\n`);
+    }
     const ac = new AbortController();
     res.on("close", () => {
       if (!res.writableEnded) ac.abort(); // client went away mid-turn
@@ -675,6 +679,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       if (method === "DELETE") {
         await bots.remove(id);
         await manager.closeBotSessions(me.id, id);
+        await manager.runtimeOf(me.id).purgeBotSessions?.(id); // saved threads (and DM threads with it as peer or recipient) go too
         return sendJson(res, 200, { ok: true });
       }
       if (method === "GET") return sendJson(res, 200, { bot: botView(rec) });
@@ -682,6 +687,29 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     } catch (e) {
       return botFail(res, e);
     }
+  }
+
+  /**
+   * The plan can change after a model was chosen (a downgrade, a resumed old session, a stored default). Before a turn and when a
+   * session resumes, re-run the catalog check on the session's model and on the user default; a model that is no longer allowed is
+   * replaced by the free model. Returns the notice to show, if any.
+   */
+  async function enforceModel(me: Principal, id: string): Promise<string | undefined> {
+    const free = opts.cfg?.freeModel;
+    if (!opts.cfg || !free) return undefined;
+    const rt = manager.runtimeOf(me.id);
+    let notice: string | undefined;
+    const dflt = rt.settings?.get().defaultModel;
+    if (dflt && (await modelProblem(me, dflt))?.status === 402) {
+      rt.settings?.set({ defaultModel: null });
+      notice = `Your default model (${dflt}) is not on your plan. Using the free model.`;
+    }
+    const cur = rt.sessionInfo?.(id)?.model;
+    if (cur && cur !== free && (await modelProblem(me, cur))?.status === 402) {
+      manager.setModel(id, free);
+      notice = `The model for this chat (${cur}) is not on your plan. Switched to the free model.`;
+    } else if (!cur && notice) manager.setModel(id, free);
+    return notice;
   }
 
   function billingKeyOf(p: Principal): string | undefined {
@@ -707,7 +735,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     const cat = await catalog.list(billingKeyOf(p), plan.free);
     const row = cat.models.find((m) => m.id === model);
     if (!row) return { status: 400, body: { error: "unknown_model", message: "that model is not in your model list (GET /models)" } };
-    if (!row.allowed) return { status: 402, body: { error: "model_not_in_plan", message: "That model is not on the free plan. Pick a free model or upgrade.", upgradeUrl: plan.upgradeUrl, upgrade_url: plan.upgradeUrl } };
+    if (!row.allowed) return { status: 402, body: { error: "model_not_in_plan", message: "That model is not on the free plan. Pick a free model or upgrade.", ...(safeUpgradeUrl(plan.upgradeUrl) ? { upgradeUrl: safeUpgradeUrl(plan.upgradeUrl), upgrade_url: safeUpgradeUrl(plan.upgradeUrl) } : {}) } };
     return undefined;
   }
 
@@ -787,7 +815,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
           if (e instanceof Error && e.message === "session belongs to a different bot") return sendJson(res, 409, { error: e.message });
           throw e;
         }
-        return sendJson(res, 200, { sessionId: ls.id });
+        const notice = b.resumeId ? await enforceModel(me, ls.id).catch(() => undefined) : undefined;
+        return sendJson(res, 200, { sessionId: ls.id, ...(notice ? { notice } : {}) });
       }
       return sendJson(res, 405, { error: "method not allowed" });
     }
@@ -851,7 +880,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (!text || !text.trim()) return sendJson(res, 400, { error: "text required" });
     if (ls.busy) return sendJson(res, 409, { error: "session is busy with another turn" });
 
-    return streamTurn(res, id, text);
+    return streamTurn(res, id, text, {}, undefined, me);
   }
 
   // ---------- WebSocket ----------

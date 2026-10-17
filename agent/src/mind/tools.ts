@@ -76,14 +76,28 @@ export function isDeleteCall(args: Record<string, unknown>): boolean {
 }
 
 // Arguments that steer the tool locally and never reach MIND: the owner check and the `mind` (tenant) choice.
-function stripLocal(args: Record<string, unknown>): Record<string, unknown> {
-  const { owner_check: _o, mind: _m, ...rest } = args;
-  // A model may tuck them inside `fields` too; they never reach a request body from there either.
-  if (rest.fields && typeof rest.fields === "object" && !Array.isArray(rest.fields)) {
-    const { owner_check: _fo, mind: _fm, ...f } = rest.fields as Record<string, unknown>;
-    rest.fields = f;
-  }
-  return rest;
+// Removed at EVERY depth (a model may tuck them inside fields, arrays of fields, nested objects), before any body is built.
+const LOCAL_ARG_KEYS = new Set(["owner_check", "mind"]);
+function deepStrip(v: unknown, depth = 0): unknown {
+  if (depth > 12 || v === null || typeof v !== "object") return v;
+  if (Array.isArray(v)) return v.map((x) => deepStrip(x, depth + 1));
+  const out: Record<string, unknown> = {};
+  for (const [k, x] of Object.entries(v as Record<string, unknown>)) if (!LOCAL_ARG_KEYS.has(k)) out[k] = deepStrip(x, depth + 1);
+  return out;
+}
+export function stripLocal(args: Record<string, unknown>): Record<string, unknown> {
+  return deepStrip(args) as Record<string, unknown>;
+}
+
+/** A client whose every request is aborted with the caller's signal (a turn abort or a bot_talk timeout). */
+function withSignal(c: MindClient, signal?: AbortSignal): MindClient {
+  if (!signal) return c;
+  return {
+    context: (s, f) => c.context(s, f, signal),
+    query: (q, o) => c.query(q, { ...o, signal }),
+    remember: (a) => c.remember(a, signal),
+    call: (t, a) => c.call(t, a, signal),
+  };
 }
 
 function botUnsupported(e: unknown): boolean {
@@ -119,7 +133,7 @@ function build(t: TenantResolver, user: string, cross: Semaphore, d: Def): Tool 
   const tool: Tool = {
     spec,
     class: d.cls,
-    async run(args) {
+    async run(args, ctx) {
       if (d.ownerGate) {
         const p = ownerProblem(args, user);
         if (p) return fail(p);
@@ -146,7 +160,7 @@ function build(t: TenantResolver, user: string, cross: Semaphore, d: Def): Tool 
       const crossRead = d.cls === "read" && target !== t.home;
       const release = crossRead ? await cross.acquire() : undefined;
       try {
-        const out = await d.run(t.clientFor(target), stripLocal(args));
+        const out = await d.run(withSignal(t.clientFor(target), ctx?.signal), stripLocal(args));
         return { ok: true, output: cap(out) };
       } catch (e) {
         if (botUnsupported(e)) {

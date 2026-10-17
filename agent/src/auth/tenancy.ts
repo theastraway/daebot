@@ -119,6 +119,7 @@ export function createRuntimeHub(o: HubOptions): { runtimeFor(p: Principal): Run
       bots: inner.bots,
       sessionInfo: (id) => inner.sessionInfo?.(id),
       settings: inner.settings,
+      purgeBotSessions: (id) => inner.purgeBotSessions?.(id) ?? Promise.resolve(0),
     };
     return slot.runtime;
   }

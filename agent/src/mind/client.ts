@@ -57,11 +57,15 @@ export function createMindClient(cfg: Config, fetchImpl?: typeof fetch, opts: Mi
     return root + route.path + qs;
   }
 
-  async function once(label: string, route: Route, ms: number): Promise<string> {
+  async function once(label: string, route: Route, ms: number, signal?: AbortSignal): Promise<string> {
     const key = curKey();
     if (!key) throw new MindHttpError(`MIND ${label}: no API key configured (set MIND_API_KEY)`, 401);
+    if (signal?.aborted) throw new MindHttpError(`MIND ${label}: aborted`, -1);
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), ms);
+    // A caller's signal (turn abort, bot_talk timeout) aborts the HTTP request itself.
+    const onCaller = () => ctrl.abort();
+    if (signal) { if (signal.aborted) ctrl.abort(); else signal.addEventListener("abort", onCaller, { once: true }); }
     try {
       const init: RequestInit = {
         method: route.method,
@@ -74,6 +78,7 @@ export function createMindClient(cfg: Config, fetchImpl?: typeof fetch, opts: Mi
         res = await doFetch(urlFor(route), init);
       } catch (e) {
         const aborted = ctrl.signal.aborted || (e as Error)?.name === "AbortError";
+        if (signal?.aborted) throw new MindHttpError(`MIND ${label}: aborted`, -1);
         throw new MindHttpError(aborted ? `MIND ${label}: timed out after ${Math.round(ms / 1000)}s` : `MIND ${label}: network error (${scrub(String((e as Error)?.message ?? e)).slice(0, 80)})`, 0);
       }
       const text = await res.text();
@@ -92,25 +97,26 @@ export function createMindClient(cfg: Config, fetchImpl?: typeof fetch, opts: Mi
       return text;
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onCaller);
     }
   }
 
-  async function request(label: string, route: Route): Promise<string> {
+  async function request(label: string, route: Route, signal?: AbortSignal): Promise<string> {
     const ms = route.timeoutMs ?? timeoutMs;
     try {
-      return await once(label, route, ms);
+      return await once(label, route, ms, signal);
     } catch (e) {
       if (e instanceof MindHttpError && e.status === 401 && opts.onUnauthorized) {
         let rotated = false;
         try { rotated = await opts.onUnauthorized(); } catch { rotated = false; }
         if (rotated) {
-          try { return await once(label, route, ms); } catch (e2) { throw surfaced(scrub((e2 as Error).message), e2); }
+          try { return await once(label, route, ms, signal); } catch (e2) { throw surfaced(scrub((e2 as Error).message), e2); }
         }
       }
-      if (!isRetryable(e)) throw surfaced(scrub((e as Error).message), e);
+      if (signal?.aborted || !isRetryable(e)) throw surfaced(scrub((e as Error).message), e);
       if (retryDelayMs > 0) await new Promise((r) => setTimeout(r, retryDelayMs));
       try {
-        return await once(label, route, ms);
+        return await once(label, route, ms, signal);
       } catch (e2) {
         throw surfaced(scrub((e2 as Error).message), e2);
       }
@@ -148,30 +154,30 @@ export function createMindClient(cfg: Config, fetchImpl?: typeof fetch, opts: Mi
   }
 
   const client: MindClient = {
-    async context(sections, forTask) {
+    async context(sections, forTask, signal) {
       const args: Record<string, unknown> = { sections: sections && sections.length ? sections : DEFAULT_CONTEXT_SECTIONS };
       if (forTask) args.for_task = forTask;
       const route = routeFor("context", args);
       route.timeoutMs = contextTimeoutMs;
-      return formatContext(parse(await request("context", route)));
+      return formatContext(parse(await request("context", route, signal)));
     },
     async query(query, o) {
       const mt = Math.max(1000, o?.maxContextTokens ?? 4000); // API rejects < 1000
       const route = routeFor("query", { query, mode: o?.mode ?? "hybrid", retrieve_only: true, max_context_tokens: mt });
-      return textOf("query", parse(await request("query", route)));
+      return textOf("query", parse(await request("query", route, o?.signal)));
     },
-    async remember(a) {
+    async remember(a, signal) {
       const type = a.type ?? "entry";
       const route = routeFor("remember", { type, title: a.title, content: a.content, tags: a.tags, source: a.source ?? "mindclaw" });
-      const data = parse(await request(`remember ${type}`, route)) as any;
+      const data = parse(await request(`remember ${type}`, route, signal)) as any;
       const id = data?.id ?? data?.entry_id ?? data?.document_id ?? data?.doc_id;
       return id ? `saved ${type} ${id}` : `saved ${type}: ${JSON.stringify(data).slice(0, 300)}`;
     },
-    async call(tool, args) {
+    async call(tool, args, signal) {
       const name = tool.replace(/^mind_/, "");
-      if (name === "context") return client.context(args.sections as string[] | undefined, args.for_task as string | undefined);
+      if (name === "context") return client.context(args.sections as string[] | undefined, args.for_task as string | undefined, signal);
       const route = routeFor(name, args);
-      return textOf(name, parse(await request(name + (args.action ? ` ${String(args.action)}` : ""), route)));
+      return textOf(name, parse(await request(name + (args.action ? ` ${String(args.action)}` : ""), route, signal)));
     },
   };
   return client;

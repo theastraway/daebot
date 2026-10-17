@@ -121,10 +121,10 @@ export interface Violation {
 
 // ---------- MIND ----------
 export interface MindClient {
-  context(sections?: string[], forTask?: string): Promise<string>;
-  query(query: string, opts?: { mode?: string; maxContextTokens?: number }): Promise<string>;
-  remember(a: { type?: "entry" | "document"; title: string; content: string; tags?: string[]; source?: string }): Promise<string>;
-  call(tool: string, args: Record<string, unknown>): Promise<string>; // generic /developer/v1/<tool>
+  context(sections?: string[], forTask?: string, signal?: AbortSignal): Promise<string>;
+  query(query: string, opts?: { mode?: string; maxContextTokens?: number; signal?: AbortSignal }): Promise<string>;
+  remember(a: { type?: "entry" | "document"; title: string; content: string; tags?: string[]; source?: string }, signal?: AbortSignal): Promise<string>;
+  call(tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string>; // generic /developer/v1/<tool>; signal aborts the HTTP request
 }
 
 export interface SessionSync {
@@ -195,6 +195,8 @@ export interface Runtime {
   bots?: BotsApi;
   /** Bot / peer / model of a live or persisted session of this owner. */
   sessionInfo?(id: string): { bot?: string; peer?: string; model?: string } | undefined;
+  /** Deletes every saved session of a deleted bot: its own threads and the DM threads where it is the peer or the recipient. */
+  purgeBotSessions?(botId: string): Promise<number>;
   /** The owner's per-user settings (default model). */
   settings?: { get(): { defaultModel?: string }; set(patch: { defaultModel?: string | null }): void };
   // Visible transcript of a live or persisted session (replayed after a resume or restart). Undefined = unknown id.

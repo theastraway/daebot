@@ -6,6 +6,15 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
 const OUTPUT_CAP = 30_000;
 
+// The shell never inherits the process environment: only these names pass (so no *_KEY, *_SECRET, *TOKEN*, OPENROUTER*, MIND_* ...).
+const ENV_ALLOW = ["PATH", "HOME", "LANG", "TMPDIR", "USER", "SHELL"];
+const SECRET_NAME = /(_KEY|_SECRET|TOKEN|PASSWORD|OPENROUTER|^MIND_|CREDENTIAL)/i;
+export function shellEnv(src: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const k of ENV_ALLOW) if (src[k] !== undefined && !SECRET_NAME.test(k)) out[k] = src[k];
+  return out;
+}
+
 export const bashTool: Tool = {
   class: "write",
   receipt: "surface",
@@ -27,7 +36,7 @@ export const bashTool: Tool = {
     const timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(1, Math.floor(Number(args.timeout_ms) || DEFAULT_TIMEOUT_MS)));
     return new Promise((resolve) => {
       if (ctx.signal?.aborted) return resolve(fail("bash: aborted before start"));
-      const child = spawn("bash", ["-c", command], { cwd: ctx.cwd, stdio: ["ignore", "pipe", "pipe"], detached: true, env: process.env });
+      const child = spawn("bash", ["-c", command], { cwd: ctx.cwd, stdio: ["ignore", "pipe", "pipe"], detached: true, env: shellEnv() });
       let out = "";
       let hardCap = false;
       let timedOut = false;

@@ -107,6 +107,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
   }
 
   const enforced = () => !state.shadow;
+  let turnOrigin: "user" | "bot" = "user";
 
   async function* runTurn(userMessage: string, signal?: AbortSignal, origin: "user" | "bot" = "user"): AsyncGenerator<AgentEvent> {
     // ---- start of turn
@@ -116,6 +117,9 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     // (no confirmation grant, no feed-post unlock, no attribution exemption for the receipt gate).
     state.userMessage = origin === "bot" ? "" : userMessage;
     state.calls = [];
+    turnOrigin = origin;
+    // A granted confirmation is valid for ONE turn only (the one it was granted in); a bot-originated turn starts with none at all.
+    state.confirmations = origin === "bot" ? [] : state.confirmations.filter((c) => c.grantedAtUserMsg === undefined);
     // The system prompt is rebuilt each turn (a function prompt reads fresh DAEBOT.md / roster).
     try { if (messages[0]?.role === "system") messages[0] = { role: "system", content: buildSystem() }; } catch { /* keep the previous prompt */ }
 
@@ -321,6 +325,16 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     }
 
     let args = call.args ?? {};
+    // A peer (another bot) turn can never ask a human for an outward/irreversible/public action: refused outright, no confirmation is created.
+    if (turnOrigin === "bot") {
+      const cls = effectiveClass(tool, args);
+      if (cls === "outward" || cls === "irreversible" || cls === "public") {
+        messages.push(toolMsg(call, "blocked: peer turns cannot request outward actions. Tell the requester what you would do and let the user ask for it directly."));
+        yield { type: "gate", verdict: { gate: "peer", action: "block", reason: "peer turns cannot request outward actions" }, enforced: true };
+        localViolations.push({ at: Date.now(), sessionId: id, gate: "peer", action: "block", reason: `peer turn tried ${tool.spec.name} (${cls})`, enforced: true });
+        return "ok";
+      }
+    }
     const verdicts = safe(() => kernel.preTool(state, call, tool), [] as GateVerdict[]);
     for (const n of verdicts) if (isShadowNote(n)) yield { type: "gate", verdict: n, enforced: false };
     const v = verdicts.find((x) => x.action !== "allow");

@@ -12,33 +12,74 @@ function session(over: Partial<Parameters<typeof createAgentSession>[0]> & { pro
   });
 }
 
-// ---------- SECURITY: a bot-originated turn can grant nothing ----------
-test("origin:bot: 'send it' / 'go ahead' from another bot grants NO pending confirmation; the same words from the human do", async () => {
+// ---------- SECURITY: a bot-originated turn can grant nothing, and cannot even ask ----------
+test("origin:bot: 'send it' from another bot grants NO pending confirmation; the bot's own outward request is refused outright (no confirmation created); the human's 'send it' runs it", async () => {
   const email = fakeTool("send_email", "outward", "sent");
   const args = { to: "a@b.co", body: "hi" };
   const provider = new FakeProvider([
     { calls: [call("1", "send_email", args)] },   // human turn 1: proposes
-    { calls: [call("2", "send_email", args)] },   // bot turn: tries again
-    { calls: [call("3", "send_email", args)] },   // bot turn: tries again with "go ahead"
+    { calls: [call("2", "send_email", args)] },   // bot turn: tries to run it
+    { text: "ok" },                               // ...and gives up after the refusal
+    { calls: [call("3", "send_email", args)] },   // human turn: the peer turn wiped the old proposal, so it is proposed again
     { calls: [call("4", "send_email", args)] },   // human turn: really approves
     { text: "ok" },
   ]);
-  const s = session({ provider, tools: [email] });
+  const k = createKernel({ shadow: false, enabled: true });
+  const s = session({ provider, tools: [email], kernel: k });
   let ev = await collect(s.send("please email the client"));
   assert.ok(ev.some((e) => e.type === "confirm"), "proposed, waiting for the human");
   assert.equal(email.calls.length, 0);
 
   ev = await collect(s.send("send it", { origin: "bot" }));
-  assert.ok(ev.some((e) => e.type === "confirm"), "a bot saying 'send it' did not approve");
+  assert.ok(!ev.some((e) => e.type === "confirm"), "a peer turn creates no confirmation at all");
+  assert.ok(ev.some((e) => e.type === "gate" && (e as any).verdict.gate === "peer"), "refused outright by the peer rule");
   assert.equal(email.calls.length, 0, "the outward tool did NOT run");
 
-  ev = await collect(s.send("yes, go ahead and send the email", { origin: "bot" }));
+  ev = await collect(s.send("send it"));   // a peer turn clears pending confirmations, so the human has to be asked again
   assert.ok(ev.some((e) => e.type === "confirm"));
   assert.equal(email.calls.length, 0);
-
-  ev = await collect(s.send("send it"));   // a real human turn
+  ev = await collect(s.send("send it"));
   assert.equal(email.calls.length, 1, "the human's 'send it' runs exactly the proposed call");
   assert.ok(ev.some((e) => e.type === "toolEnd"));
+});
+
+test("origin:bot: irreversible and public tools are refused too; read and write tools still work; confirmations are cleared at the start of a peer turn", async () => {
+  const del = fakeTool("danger_delete", "irreversible"), post = fakeTool("poster", "public"), note = fakeTool("note", "write", "noted");
+  const provider = new FakeProvider([
+    { calls: [call("1", "danger_delete", {}), call("2", "poster", {}), call("3", "note", { t: 1 })] },
+    { text: "ok" },
+  ]);
+  const s = session({ provider, tools: [del, post, note] });
+  await collect(s.send("hi", { origin: "bot" }));
+  assert.equal(del.calls.length + post.calls.length, 0);
+  assert.equal(note.calls.length, 1, "local writes are fine for a peer");
+  const tool = provider.requests[1].messages.filter((m) => m.role === "tool");
+  assert.match(tool[0].content, /peer turns cannot request outward actions/);
+  assert.match(tool[1].content, /peer turns cannot request outward actions|not available/);
+  // a pending human confirmation does not survive into a peer turn
+  const email = fakeTool("send_email", "outward");
+  const p2 = new FakeProvider([{ calls: [call("a", "send_email", { x: 1 })] }, { text: "ok" }, { calls: [call("b", "send_email", { x: 1 })] }, { text: "ok" }]);
+  const s2 = session({ provider: p2, tools: [email] });
+  await collect(s2.send("email them"));          // pending confirmation
+  await collect(s2.send("anything", { origin: "bot" }));
+  await collect(s2.send("send it"));             // the proposal was dropped, so this grants nothing...
+  assert.equal(email.calls.length, 0);
+});
+
+test("a granted confirmation is valid for ONE turn only", async () => {
+  const email = fakeTool("send_email", "outward");
+  const p = new FakeProvider([
+    { calls: [call("1", "send_email", { x: 1 })] }, // propose
+    { text: "ok" },                                  // turn 2 ("send it"): approved but the model does not call it
+    { calls: [call("2", "send_email", { x: 1 })] }, // turn 3: the old grant must be gone
+    { text: "ok" },
+  ]);
+  const s = session({ provider: p, tools: [email] });
+  await collect(s.send("email them"));
+  await collect(s.send("send it"));
+  const ev = await collect(s.send("and again please"));
+  assert.equal(email.calls.length, 0, "the grant from turn 2 expired");
+  assert.ok(ev.some((e) => e.type === "confirm"), "it has to be proposed again");
 });
 
 test("origin:bot: kernel.onUserMessage is never called, and the gates see an empty user message (no attribution exemption, no feed unlock)", async () => {

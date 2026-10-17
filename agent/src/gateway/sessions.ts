@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { AgentEvent, AgentSession, Runtime } from "../types.ts";
 
 export class BusyError extends Error {}
@@ -22,6 +23,10 @@ export interface LiveSession {
   /** Bot id when this is a thread of a bot (and `peer`: the other end of a bot-to-bot DM thread). */
   bot?: string;
   peer?: string;
+  /** Identity tier this session was opened with (undefined = the runtime's own). */
+  identity?: string;
+  /** A fresh random value per turn (the bot bus keys its per-user-message budget on it). */
+  turnNonce: string;
 }
 
 export interface SessionRow { id: string; surface: string; title: string; updatedAt: number; live: boolean; busy: boolean; bot?: string; peer?: string; model?: string }
@@ -85,6 +90,8 @@ export class SessionManager {
       owner,
       bot: info?.bot ?? o.bot,
       peer: info?.peer ?? o.peer,
+      identity: o.identity,
+      turnNonce: randomUUID(),
     };
     this.live.set(ls.id, ls);
     return ls;
@@ -154,6 +161,7 @@ export class SessionManager {
     if (ls.busy) throw new BusyError("session is busy with another turn");
     ls.busy = true; // set synchronously: no await between check and set
     ls.turns++;
+    ls.turnNonce = randomUUID();
     const ac = new AbortController();
     ls.abort = ac;
     const onExternal = () => ac.abort();
@@ -194,7 +202,7 @@ export class SessionManager {
 
   /** Closes every live session of one bot (the bot was deleted). */
   async closeBotSessions(owner: string, botId: string): Promise<void> {
-    for (const ls of [...this.live.values()]) if (ls.owner === owner && ls.bot === botId) await this.close(ls.id, "bot deleted");
+    for (const ls of [...this.live.values()]) if (ls.owner === owner && (ls.bot === botId || ls.peer === botId)) await this.close(ls.id, "bot deleted");
   }
 
   /** Changes the model the NEXT turn of a live session runs on. */

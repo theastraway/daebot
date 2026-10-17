@@ -2,7 +2,7 @@
 // does not lose chats. Hosted: DATA_DIR=/data (a Render persistent disk). Local default: ~/.mindclaw/data.
 // Zero dependencies; writes are atomic (tmp + rename) and serialized per session.
 import { mkdirSync, readFileSync, readdirSync, existsSync } from "node:fs";
-import { rename, writeFile, mkdir } from "node:fs/promises";
+import { rename, writeFile, mkdir, unlink } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -41,6 +41,8 @@ export interface SessionStore {
   list(): StoredMeta[];
   /** Cheap ownership lookup (no file read after the first scan). */
   meta?(id: string): StoredMeta | undefined;
+  /** Deletes a saved session (used when a bot is deleted: its threads go with it). */
+  remove?(id: string): Promise<void>;
 }
 
 export function dataDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -110,6 +112,13 @@ export function createFileStore(dir: string): SessionStore {
     meta(id) {
       scan();
       return index.get(id);
+    },
+    async remove(id) {
+      scan();
+      const prev = queues.get(id) ?? Promise.resolve();
+      await prev.catch(() => {});
+      index.delete(id);
+      await unlink(join(root, fileNameFor(id))).catch(() => {});
     },
   };
 }

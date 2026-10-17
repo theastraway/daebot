@@ -107,7 +107,7 @@ test("ownership: user B cannot see, read, change or delete user A's bots (all 40
   assert.throws(() => b.setInstructions("../u_a/x", "pwn"), (e: any) => e.status === 404);
 });
 
-test("reconcile: MIND is the source of truth for existence", async () => {
+test("reconcile: MIND is the source of truth, but a bot is only dropped after 3 consecutive misses and its DAEBOT.md goes to .trash", async () => {
   const dir = mkdtempSync(join(tmpdir(), "bots-"));
   const mind = fakeMindApi();
   const s = mk(dir, "u1", mind);
@@ -116,14 +116,73 @@ test("reconcile: MIND is the source of truth for existence", async () => {
   s.setInstructions(gone.id, "lost with the bot");
   mind.remote.delete("gone");          // deleted elsewhere
   mind.remote.set("fresh", "Fresh");   // created elsewhere
-  const list = await s.list();
-  assert.deepEqual(list.map((b) => b.slug).sort(), ["fresh", "keep"]);
+  let list = await s.list();
+  assert.deepEqual(list.map((b) => b.slug).sort(), ["fresh", "gone", "keep"], "one miss changes nothing");
+  assert.deepEqual(s.staleSlugs(), ["gone"]);
+  assert.equal(s.instructions(gone.id), "lost with the bot");
+  await s.list();
+  assert.ok(s.get(gone.id), "two misses: still here");
+  list = await s.list();
+  assert.deepEqual(list.map((b) => b.slug).sort(), ["fresh", "keep"], "third consecutive miss drops it");
   assert.equal(s.get(gone.id), undefined);
   assert.equal(s.bySlug("keep")?.id, keep.id, "an existing bot keeps its id");
   assert.equal(s.bySlug("fresh")?.name, "Fresh");
+  const trash = readdirSync(join(dir, "bots", "u1", ".trash"));
+  assert.equal(trash.length, 1);
+  assert.equal(readFileSync(join(dir, "bots", "u1", ".trash", trash[0], "DAEBOT.md"), "utf8"), "lost with the bot", "instructions are moved, never deleted");
+  // a miss counter resets when MIND lists the bot again
+  mind.remote.delete("keep");
+  await s.list(); await s.list();
+  mind.remote.set("keep", "Keep");
+  await s.list();
+  mind.remote.delete("keep");
+  await s.list(); await s.list();
+  assert.ok(s.bySlug("keep"), "misses were not consecutive");
   // a MIND outage changes nothing
   mind.failList = true;
-  assert.deepEqual((await s.list()).map((b) => b.slug).sort(), ["fresh", "keep"]);
+  for (let i = 0; i < 5; i++) await s.list();
+  assert.ok(s.bySlug("keep"));
+});
+
+test("an EMPTY list from MIND never deletes anything, however many times it repeats", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bots-"));
+  const mind = fakeMindApi();
+  const s = mk(dir, "u1", mind);
+  const b = await s.create({ slug: "solo" });
+  s.setInstructions(b.id, "precious");
+  mind.remote.clear();
+  for (let i = 0; i < 6; i++) await s.list();
+  assert.ok(s.bySlug("solo"));
+  assert.equal(s.instructions(b.id), "precious");
+  assert.ok(!existsSync(join(dir, "bots", "u1", ".trash")));
+});
+
+test("create, remove and list run one at a time per owner (a promise-chain mutex); a duplicate slug race writes one record", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bots-"));
+  const order: string[] = [];
+  const gate: (() => void)[] = [];
+  const mind: BotMindApi = {
+    list: async () => { order.push("list"); return []; },
+    create: async (slug) => { order.push(`create-start:${slug}`); await new Promise<void>((r) => gate.push(r)); order.push(`create-end:${slug}`); },
+    remove: async () => {},
+  };
+  const s = mk(dir, "u1", mind);
+  const a = s.create({ slug: "a" });
+  const l = s.list();
+  const b = s.create({ slug: "b" });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(order, ["create-start:a"], "list and the second create wait for the first create");
+  gate.shift()!();
+  await a;
+  await new Promise((r) => setTimeout(r, 20));
+  gate.shift()?.();
+  await Promise.all([l, b]);
+  assert.deepEqual(order, ["create-start:a", "create-end:a", "list", "create-start:b", "create-end:b"]);
+  // same slug twice at once: the second is refused, one record
+  const s2 = mk(mkdtempSync(join(tmpdir(), "bots-")), "u1", fakeMindApi());
+  const r = await Promise.allSettled([s2.create({ slug: "same" }), s2.create({ slug: "same" })]);
+  assert.deepEqual(r.map((x) => x.status).sort(), ["fulfilled", "rejected"]);
+  assert.equal(s2.snapshot().length, 1);
 });
 
 test("botMindApi maps MIND statuses: 409 duplicate, 402 bot_limit with limit/tier/upgrade url, 404 delete is fine", async () => {
@@ -134,8 +193,15 @@ test("botMindApi maps MIND statuses: 409 duplicate, 402 bot_limit with limit/tie
   const http = (status: number, payload?: unknown) => Object.assign(new Error(`MIND bots: HTTP ${status}`), { status, payload });
   const dup = botMindApi(mkClient(() => http(409)));
   await assert.rejects(() => dup.create("x", "X"), (e: any) => e.status === 409 && e.code === "duplicate");
-  const lim = botMindApi(mkClient(() => http(402, { error: "bot_limit", limit: 3, tier: "free", upgrade_url: "https://up" })));
-  await assert.rejects(() => lim.create("x", "X"), (e: any) => e.status === 402 && e.code === "bot_limit" && e.extra.limit === 3 && e.extra.tier === "free" && e.extra.upgradeUrl === "https://up");
+  const lim = botMindApi(mkClient(() => http(402, { error: "bot_limit", limit: 3, tier: "free", upgrade_url: "https://app.m-i-n-d.ai/billing" })));
+  await assert.rejects(() => lim.create("x", "X"), (e: any) => e.status === 402 && e.code === "bot_limit" && e.extra.limit === 3 && e.extra.tier === "free" && e.extra.upgradeUrl === "https://app.m-i-n-d.ai/billing");
+  // F-8: only https m-i-n-d.ai links survive; the limit is coerced to a number
+  for (const evil of ["http://m-i-n-d.ai/x", "https://m-i-n-d.ai.evil.com/x", "https://evil.com/m-i-n-d.ai", "javascript:alert(1)", "https://user:pw@m-i-n-d.ai/x", "//m-i-n-d.ai"]) {
+    const l = botMindApi(mkClient(() => http(402, { error: "bot_limit", limit: "7", tier: "free", upgrade_url: evil })));
+    await assert.rejects(() => l.create("x", "X"), (e: any) => e.extra.limit === 7 && e.extra.upgradeUrl === undefined && e.extra.upgrade_url === undefined, evil);
+  }
+  const root = botMindApi(mkClient(() => http(402, { error: "bot_limit", limit: "<b>x</b>", upgrade_url: "https://m-i-n-d.ai/billing" })));
+  await assert.rejects(() => root.create("x", "X"), (e: any) => e.extra.limit === undefined && e.extra.upgradeUrl === "https://m-i-n-d.ai/billing");
   const gone = botMindApi(mkClient(() => http(404)));
   await gone.remove("x"); // no throw
   const list = botMindApi(mkClient(() => ({ bots: [{ slug: "a", label: "A" }, { nope: 1 }] })));

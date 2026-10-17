@@ -6,7 +6,7 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { MindClient } from "../types.ts";
-import { BotError, MAX_INSTRUCTIONS_BYTES, SLUG_RE } from "./types.ts";
+import { BotError, MAX_INSTRUCTIONS_BYTES, SLUG_RE, safeUpgradeUrl } from "./types.ts";
 import type { BotRecord, BotsApi, RosterEntry } from "./types.ts";
 
 /** The MIND side: POST/GET/DELETE /developer/v1/bots, always with the user's MAIN key. */
@@ -41,7 +41,11 @@ export function botMindApi(client: MindClient): BotMindApi {
         if (f.status === 409) throw new BotError(409, "duplicate", `a bot named "${slug}" already exists`);
         if (f.status === 402 || f.payload?.error === "bot_limit") {
           const p = f.payload ?? {};
-          throw new BotError(402, "bot_limit", `Your plan allows ${p.limit ?? "a limited number of"} bots. Upgrade to add more.`, { limit: p.limit, tier: p.tier, upgradeUrl: p.upgrade_url, upgrade_url: p.upgrade_url });
+          const limit = Number(p.limit);
+          const url = safeUpgradeUrl(p.upgrade_url);
+          throw new BotError(402, "bot_limit", `Your plan allows ${Number.isFinite(limit) ? limit : "a limited number of"} bots. Upgrade to add more.`, {
+            ...(Number.isFinite(limit) ? { limit } : {}), tier: typeof p.tier === "string" ? p.tier.slice(0, 40) : undefined, ...(url ? { upgradeUrl: url, upgrade_url: url } : {}),
+          });
         }
         throw new BotError(502, "mind_error", `MIND could not create the bot (${(f.message ?? "error").slice(0, 160)})`);
       }
@@ -56,6 +60,7 @@ export function botMindApi(client: MindClient): BotMindApi {
   };
 }
 
+const MISS_LIMIT = 3;
 const PALETTE = ["#6366f1", "#14b8a6", "#f59e0b", "#ec4899", "#22c55e", "#0ea5e9", "#a855f7", "#ef4444"];
 const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const ID_RE = /^b_[0-9a-f]{12}$/;
@@ -83,6 +88,9 @@ export class BotStore implements BotsApi {
   private mind: BotMindApi;
   private now: () => number;
   private bots: Record<string, BotRecord> = {};
+  /** Consecutive reconcile passes in which MIND did not list a bot (a bot is only dropped after MISS_LIMIT in a row). */
+  private misses = new Map<string, number>();
+  private chain: Promise<unknown> = Promise.resolve();
 
   constructor(o: BotStoreOptions) {
     this.root = join(o.dir, "bots", safeSegment(o.owner));
@@ -111,6 +119,13 @@ export class BotStore implements BotsApi {
     try { chmodSync(this.file, 0o600); } catch { /* best effort */ }
   }
 
+  /** create, remove and list run one at a time per owner. */
+  private serial<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.chain.then(fn, fn);
+    this.chain = run.catch(() => undefined);
+    return run;
+  }
+
   snapshot(): BotRecord[] {
     return Object.values(this.bots).sort((a, b) => a.createdAt - b.createdAt || a.slug.localeCompare(b.slug)).map((b) => ({ ...b }));
   }
@@ -135,28 +150,52 @@ export class BotStore implements BotsApi {
     }
   }
 
-  /** Reconciles with MIND. Only a well-formed answer changes anything; a failure leaves the local view as it was. */
-  async list(): Promise<BotRecord[]> {
-    let remote: { slug: string; label?: string }[];
-    try { remote = await this.mind.list(); } catch { return this.snapshot(); }
-    const have = new Map(Object.values(this.bots).map((b) => [b.slug, b]));
-    const want = new Set(remote.map((r) => r.slug));
-    let changed = false;
-    for (const r of remote) {
-      if (have.has(r.slug) || !SLUG_RE.test(r.slug) || r.slug === "main") continue;
-      const id = this.newId();
-      const t = this.now();
-      this.bots[id] = { id, slug: r.slug, name: clip(r.label, 80) || r.slug, purpose: "", color: PALETTE[this.colorIndex(r.slug)], createdAt: t, updatedAt: t };
-      changed = true;
-    }
-    for (const b of have.values()) {
-      if (want.has(b.slug)) continue;
-      delete this.bots[b.id];
-      try { rmSync(join(this.root, b.id), { recursive: true, force: true }); } catch { /* best effort */ }
-      changed = true;
-    }
-    if (changed) this.save();
-    return this.snapshot();
+  /**
+   * Reconciles with MIND. Only a well-formed answer changes anything. MIND is the source of truth for existence, but one odd answer
+   * must never destroy a user's instructions: an EMPTY list never deletes anything, and a bot MIND stops listing is marked stale and
+   * only dropped after MISS_LIMIT consecutive misses (its DAEBOT.md is moved to <root>/.trash/, never deleted).
+   */
+  list(): Promise<BotRecord[]> {
+    return this.serial(async () => {
+      let remote: { slug: string; label?: string }[];
+      try { remote = await this.mind.list(); } catch { return this.snapshot(); }
+      const have = new Map(Object.values(this.bots).map((b) => [b.slug, b]));
+      const want = new Set(remote.map((r) => r.slug));
+      let changed = false;
+      for (const r of remote) {
+        this.misses.delete(r.slug);
+        if (have.has(r.slug) || !SLUG_RE.test(r.slug) || r.slug === "main") continue;
+        const id = this.newId();
+        const t = this.now();
+        this.bots[id] = { id, slug: r.slug, name: clip(r.label, 80) || r.slug, purpose: "", color: PALETTE[this.colorIndex(r.slug)], createdAt: t, updatedAt: t };
+        changed = true;
+      }
+      if (remote.length === 0 && have.size > 0) return this.snapshot(); // an empty answer is never proof that every bot is gone
+      for (const b of have.values()) {
+        if (want.has(b.slug)) continue;
+        const n = (this.misses.get(b.slug) ?? 0) + 1;
+        this.misses.set(b.slug, n);
+        if (n < MISS_LIMIT) continue;
+        this.misses.delete(b.slug);
+        delete this.bots[b.id];
+        this.trash(b.id);
+        changed = true;
+      }
+      if (changed) this.save();
+      return this.snapshot();
+    });
+  }
+
+  /** Bots MIND did not list in the latest pass (still present locally). */
+  staleSlugs(): string[] { return [...this.misses.keys()]; }
+
+  private trash(id: string): void {
+    const from = join(this.root, id);
+    if (!existsSync(from)) return;
+    try {
+      mkdirSync(join(this.root, ".trash"), { recursive: true, mode: 0o700 });
+      renameSync(from, join(this.root, ".trash", `${id}-${this.now()}`));
+    } catch { /* leave it where it is rather than delete it */ }
   }
 
   private colorIndex(slug: string): number {
@@ -165,7 +204,11 @@ export class BotStore implements BotsApi {
     return h % PALETTE.length;
   }
 
-  async create(a: { slug: string; name?: string; purpose?: string; color?: string }): Promise<BotRecord> {
+  create(a: { slug: string; name?: string; purpose?: string; color?: string }): Promise<BotRecord> {
+    return this.serial(() => this.createLocked(a));
+  }
+
+  private async createLocked(a: { slug: string; name?: string; purpose?: string; color?: string }): Promise<BotRecord> {
     const slug = typeof a.slug === "string" ? a.slug.trim() : "";
     if (!SLUG_RE.test(slug)) throw new BotError(400, "bad_slug", "slug must be 1 to 32 characters: lowercase letters, digits and dashes");
     if (slug === "main") throw new BotError(400, "bad_slug", 'the slug "main" is reserved for your main MIND');
@@ -174,6 +217,8 @@ export class BotStore implements BotsApi {
     const purpose = clip(a.purpose, 500);
     const color = typeof a.color === "string" && COLOR_RE.test(a.color.trim()) ? a.color.trim().toLowerCase() : PALETTE[this.colorIndex(slug)];
     await this.mind.create(slug, name); // MIND first: if it refuses (limit, duplicate), nothing is written here
+    const raced = this.bySlug(slug); // re-check after the await: never write a second record for one slug
+    if (raced) return raced;
     const id = this.newId();
     const t = this.now();
     const rec: BotRecord = { id, slug, name, purpose, color, createdAt: t, updatedAt: t };
@@ -204,7 +249,11 @@ export class BotStore implements BotsApi {
     return { ...b };
   }
 
-  async remove(id: string): Promise<void> {
+  remove(id: string): Promise<void> {
+    return this.serial(() => this.removeLocked(id));
+  }
+
+  private async removeLocked(id: string): Promise<void> {
     const b = ID_RE.test(id) ? this.bots[id] : undefined;
     if (!b) throw new BotError(404, "not_found", "no such bot");
     await this.mind.remove(b.slug); // MIND first; a failure keeps the local record so the user can retry
