@@ -19,6 +19,8 @@ export interface FakeMind {
   codes: Map<string, { challenge: string; username: string; client: string; redirect: string }>;
   refreshTokens: Map<string, { username: string; key: string; client: string }>;
   lastVerifier?: string;
+  /** audio endpoints: force an HTTP status (e.g. 402 / 404) for the next calls; undefined = succeed */
+  audioStatus?: number;
   newKey(username: string): string;
   close(): Promise<void>;
 }
@@ -100,6 +102,12 @@ export async function startFakeMind(initial: Record<string, string> = {}): Promi
       const username = m.keys.get(key);
       if (!username) return json(res, 401, { detail: "Invalid or revoked API key." });
       const rest = u.pathname.slice("/developer/v1".length);
+      if (rest === "/audio/transcriptions" || rest === "/audio/speech") {
+        if (m.audioStatus) return json(res, m.audioStatus, m.audioStatus === 402 ? { error: "insufficient_credits", message: "Not enough MIND credits for voice.", upgrade_url: "https://m-i-n-d.ai/#/billing" } : { detail: "x" });
+        if (rest === "/audio/transcriptions") return json(res, 200, { text: `hello from ${username}`, duration: 2.5, credits_used: 0.01 }, { "x-mind-credits-used": "0.01" });
+        res.writeHead(200, { "content-type": "audio/mpeg", "x-mind-credits-used": "0.25" });
+        return void res.end(Buffer.from("ID3fakemp3"));
+      }
       if (rest === "/profile") return json(res, 200, { username, bio: "" });
       if (rest === "/context") return json(res, 200, { sections: [{ section: "soul", items: [{ text: `MIND of ${username}` }] }] });
       if (rest === "/agent-sessions/open") return json(res, 200, { session_id: `ms-${username}`, pending_replies: [] });

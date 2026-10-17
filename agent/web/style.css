@@ -220,3 +220,31 @@ kbd { font-size: 10.5px; background: var(--surface-2); border: 1px solid var(--l
 .side-plan .plan-bar.empty i { background: var(--accent); }
 .side-plan .plan-link { justify-self: start; color: var(--ink-2); text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 2px; }
 .side-plan .plan-link:hover { color: var(--ink); text-decoration-color: currentColor; }
+
+/* MIND Voice */
+.mic { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px; border: 0; background: var(--surface-2); color: var(--ink-2); flex: none; position: relative; touch-action: manipulation; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.mic:hover { color: var(--ink); }
+.mic:disabled { opacity: .35; cursor: default; }
+.mic.on { background: var(--accent); color: #fff; }
+.mic.on::after { content: ""; position: absolute; inset: -4px; border-radius: 14px; border: 2px solid var(--accent); opacity: .5; animation: mic-ring 1.2s ease-out infinite; }
+@keyframes mic-ring { from { transform: scale(.9); opacity: .6; } to { transform: scale(1.25); opacity: 0; } }
+.voice-btn.on { background: var(--surface-2); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.voice-dock { max-width: 740px; margin: 0 auto 8px; display: flex; align-items: center; gap: 12px; padding: 7px 8px 7px 14px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: var(--shadow); }
+.voice-dock .vstatus { flex: 1; min-width: 0; font-size: 13.5px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.voice-dock .vbars { display: flex; align-items: center; gap: 3px; height: 22px; flex: none; }
+.voice-dock .vbars i { display: block; width: 4px; height: 22px; border-radius: 2px; background: var(--ink-3); transform: scaleY(.2); transition: transform .06s linear; }
+.voice-dock[data-state="listening"] .vbars i { background: var(--accent); }
+.voice-dock[data-state="speaking"] .vbars i { background: var(--led-deep); }
+.voice-dock .vstop { padding: 5px 10px; font-size: 12.5px; border-radius: 8px; display: inline-flex; align-items: center; gap: 6px; }
+.voice-dock .vstop kbd { font-size: 10.5px; padding: 1px 5px; border: 1px solid var(--line-strong); border-radius: 4px; color: var(--ink-3); }
+/* the docked mascot stays visible while voice is live, whatever the transcript looks like */
+.bot-dock.voice-live { opacity: 1; transform: none; }
+@media (max-width: 760px) { .voice-dock { margin-bottom: 6px; } .voice-dock .vstop kbd { display: none; } }
+/* phones: the two voice toggles fit the top bar by trimming the badge and tightening the buttons */
+@media (max-width: 560px) {
+  .topbar { padding: 0 8px; gap: 2px; }
+  .voice-btn, .topbar .icon-btn { width: 34px; }
+  .model-badge { max-width: 24vw; }
+  .top-title { flex: 1 1 70px; }
+  .top-title p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}

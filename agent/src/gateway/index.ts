@@ -16,6 +16,8 @@ import { MindAuthError, whoami } from "../auth/mind-auth.ts";
 import { usageLeftPct } from "../provider/mind.ts";
 import { STATIC_CSP, resolveStatic, serveFile } from "./static.ts";
 import { acceptWebSocket } from "./ws.ts";
+import { createVoiceHandler } from "./voice.ts";
+import type { VoiceOptions } from "./voice.ts";
 import type { WsConnection } from "./ws.ts";
 
 // ---------- inbound webhooks (channel adapters register here) ----------
@@ -62,6 +64,8 @@ export interface GatewayOptions {
   auth?: AuthContext;
   /** The shared session store (DATA_DIR/sessions); lets ownership of persisted sessions be checked without a live session. */
   sessionStore?: { meta?(id: string): { owner?: string } | undefined };
+  /** MIND Voice (/voice/stt, /voice/tts). Defaults from cfg + auth; pass to override (tests). */
+  voice?: Partial<VoiceOptions>;
 }
 
 export const HOSTED_COOKIE = "mc_session";
@@ -168,6 +172,17 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         }
       : undefined,
   });
+  // ---- MIND Voice: billed to the caller's own MIND key (owner: the server key). Off when there is no MIND base URL.
+  const voiceBase = opts.voice?.baseUrl ?? opts.cfg?.mindBaseUrl;
+  const voice = voiceBase
+    ? createVoiceHandler({
+        baseUrl: voiceBase,
+        keyFor: opts.voice?.keyFor ?? ((p) => (auth ? auth.billingKey(p) : opts.cfg?.mindApiKey || undefined)),
+        fetchImpl: opts.voice?.fetchImpl ?? opts.auth?.fetchImpl,
+        now: opts.voice?.now,
+        onUsed: opts.voice?.onUsed ?? ((key) => { try { auth?.credits?.get(key, true).catch(() => {}); } catch { /* best effort */ } }),
+      })
+    : undefined;
   const wsWho = new WeakMap<WsConnection, Principal>();
   const subscribers = new Map<string, Set<WsConnection>>(); // sessionId -> ws conns
   const wsConns = new Set<WsConnection>();
@@ -437,7 +452,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path.startsWith("/hooks/") || path === "/ws";
+    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path.startsWith("/hooks/") || path.startsWith("/voice/") || path === "/ws";
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -497,6 +512,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     const me = who(req);
+    if (path.startsWith("/voice/")) return voice ? voice(req, res, path, _query, me) : sendJson(res, 404, { error: "voice is not available" });
     if (path === "/sessions") {
       if (method === "GET") return sendJson(res, 200, { sessions: manager.list(me.id) });
       if (method === "POST") {
