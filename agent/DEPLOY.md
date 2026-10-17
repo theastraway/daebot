@@ -89,3 +89,14 @@ hands-free conversation button. The gateway exposes `POST /voice/stt` (raw audio
 - Limits per user: 20 STT and 30 TTS calls a minute, 2 in flight. A user with no credits gets a clear message with the upgrade link.
 - If MIND answers 404/503 the UI says voice is not switched on and stops retrying until reload.
 - The CSP gained `media-src 'self' blob:` (spoken answers play from a blob URL); nothing else was loosened.
+
+## Server-to-server agent API (MIND chat agent mode)
+
+`POST /api/agent/turn` lets MIND's backend run a Daebot turn for an end user. Hosted mode with user sign-in enabled (`DAEBOT_SECRET_KEY`) only.
+
+- Auth: header `X-MIND-Key: <the user's mind_ key>`, validated live against MIND (`GET /profile`). No cookie, no bearer. The turn runs in that user's own runtime and MIND, billed to their MIND usage (`DAEBOT_BILLING=mind`).
+- Body: `{ "text": "...", "sessionId": "<from a previous turn, optional>", "surface": "mind-chat" }`.
+- Response: `text/event-stream`, the same events as `/sessions/:id/send`. The session id is returned in the `X-Daebot-Session` header and as the first event `{"type":"session","sessionId":"..."}`. Send it back as `sessionId` to continue the conversation.
+- Errors (JSON): 400 bad body, 401 missing/invalid key, 403 host/Origin/not allowed/not your session, 409 session busy, 429 rate limited (Retry-After), 502 MIND unreachable.
+- Browser-safe by construction: any `Origin` header is refused (server callers send none); the Host allowlist and https rules still apply. Bad keys count against the per-IP login limiter.
+- Rate limit: `DAEBOT_AGENT_API_RPM` turns per user per minute (default 30).
