@@ -9,6 +9,7 @@
 //   <m-bot playful>                       click or tap it for a random reaction
 //   el.say(ms)                            pulse the mouth as if speaking for ms
 //   el.flash(mood, ms)                    show a mood briefly, then return to idle
+//   <m-bot accent="#7dff9a">              tint the lit LEDs (a bot's identity colour); red alert and white twinkle stay as they are
 //
 // One shared requestAnimationFrame loop drives every live instance; LEDs are only touched when they change.
 
@@ -122,7 +123,7 @@ function tick(now) {
 }
 
 class MBot extends HTMLElement {
-  static get observedAttributes() { return ["mood"]; }
+  static get observedAttributes() { return ["mood", "accent"]; }
 
   connectedCallback() {
     if (!this._svg) {
@@ -140,6 +141,7 @@ class MBot extends HTMLElement {
   disconnectedCallback() { live.delete(this); }
   attributeChangedCallback() { if (this._svg) this._paint(performance.now(), true); }
 
+  get accent() { const a = this.getAttribute("accent") || ""; return /^#[0-9a-f]{6}$/i.test(a) ? a : LED_ON; }
   get mood() { return this.getAttribute("mood") || "idle"; }
   set mood(m) { if (m !== this.getAttribute("mood")) this.setAttribute("mood", m); }
   say(ms = 260) { this._sayUntil = performance.now() + ms; }
@@ -238,6 +240,7 @@ class MBot extends HTMLElement {
     if (m.blush) blush(set);
     if (this.mood === "sleep") { const k = Math.floor(t * 1.4) % 4; for (let i = 0; i < k; i++) line(set, 26 + i * 2, 4 - i * 2, 27 + i * 2, 4 - i * 2); }
 
+    const accent = this.accent;
     const twinkle = !still && Math.random() < .03 ? (Math.random() * ROWS * COLS) | 0 : -1;
     for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
       const d = this._dots[r][c]; if (!d) continue;
@@ -248,7 +251,7 @@ class MBot extends HTMLElement {
       if (force || d._v !== v) {
         d._v = v;
         if (v === 0) d.setAttribute("visibility", "hidden");
-        else { d.setAttribute("visibility", "visible"); d.setAttribute("fill", v === 2 ? LED_RED : v === 3 ? LED_HOT : LED_ON); }
+        else { d.setAttribute("visibility", "visible"); d.setAttribute("fill", v === 2 ? LED_RED : v === 3 ? LED_HOT : accent); }
       }
     }
 
