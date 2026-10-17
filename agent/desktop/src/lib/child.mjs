@@ -10,6 +10,9 @@ export function parseReadyLine(line) {
   if (s.startsWith("{")) {
     try {
       const j = JSON.parse(s);
+      // `daebot serve` (the compiled binary) prints {"mindclawGateway":{"url":...,"token":...}}.
+      const g = j && j.mindclawGateway;
+      if (g && typeof g.url === "string") return { url: g.url, token: typeof g.token === "string" ? g.token : undefined };
       if (j && j[READY_MARKER] === "ready" && typeof j.url === "string") return { url: j.url, token: typeof j.token === "string" ? j.token : undefined };
       if (j && j[READY_MARKER] === "error") return { error: String(j.message ?? "gateway failed to start").slice(0, 300) };
     } catch { /* not ours */ }
@@ -74,6 +77,8 @@ export class ChildGateway extends EventEmitter {
           const r = parseReadyLine(line);
           if (!r) continue;
           if (r.error) return finish(new Error(r.error));
+          // The human banner carries no token; `daebot serve` prints the JSON line (with the token) right after it, so wait for that.
+          if (!r.token && !this.readToken) continue;
           Promise.resolve(r.token ? r.token : this.readToken?.(r.url)).then((token) => {
             if (!token) return finish(new Error("gateway ready but no token available"));
             this.info = { url: r.url, token };

@@ -1,0 +1,168 @@
+# Daebot desktop app: Windows (x64 + arm64) and Linux (x64) installers, plus an optional signed Mac build.
+#
+# Triggers: workflow_dispatch (any branch) and a pushed tag matching daebot-v* (e.g. daebot-v0.2.0).
+#
+# What runs
+#   verify  : agent typecheck + tests, desktop tests (ubuntu). Every build job waits for it.
+#   windows : bun-compiled gateway (x64 + arm64) + electron-builder NSIS installers. UNSIGNED: there is no Windows code-signing
+#             certificate yet, so SmartScreen shows "Windows protected your PC" on first launch (More info, Run anyway).
+#   linux   : bun-compiled gateway + AppImage and .deb (x64).
+#   mac     : DISABLED unless the repository secret CSC_LINK exists. Builds the universal DMG + zip signed with the
+#             Developer ID identity (DAEBOT_SIGN=1). Notarization needs the MINDNotarize keychain profile, which only exists on the
+#             owner's signing Mac, so this job's output is signed-only; to ship a notarized DMG run `DAEBOT_SIGN=1 npm run dist:mac`
+#             on the signing Mac (see agent/desktop/README.md).
+#
+# No secrets are needed for windows/linux. Artifacts are uploaded to the run; nothing is published or released from here.
+# After uploading the files to https://download.m-i-n-d.ai/daebot/<version>/, run agent/scripts/release-manifest.mjs to fill
+# agent/web/download/releases.json (size, sha256, URL) and merge it; the page on daebot.live/download then lights up.
+
+name: Daebot desktop
+
+on:
+  workflow_dispatch: {}
+  push:
+    tags: ["daebot-v*"]
+
+permissions:
+  contents: read
+
+env:
+  BUN_VERSION: "1.3.14"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Agent typecheck and tests
+        working-directory: agent
+        run: |
+          npm install --no-audit --no-fund
+          npx tsc --noEmit
+          npm test
+      - name: Desktop tests
+        working-directory: agent/desktop
+        run: |
+          npm install --no-audit --no-fund
+          npm test
+
+  windows:
+    needs: verify
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: agent/desktop
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: npm install --no-audit --no-fund
+      - name: Compile the gateway binaries (x64, arm64)
+        run: node scripts/stage-bin.mjs win
+      - name: electron-builder --win (unsigned)
+        run: npx electron-builder --config electron-builder.config.mjs --win --x64 --arm64 --publish never
+      - name: Check the installers carry the bundled gateway
+        shell: pwsh
+        run: |
+          Get-ChildItem dist -Filter "Daebot-Setup-*.exe" | Format-Table Name, Length
+          $setups = @(Get-ChildItem dist -Filter "Daebot-Setup-*.exe")
+          if ($setups.Count -lt 2) { Write-Host "::error::expected an x64 and an arm64 installer"; exit 1 }
+          foreach ($d in @("win-unpacked", "win-arm64-unpacked")) {
+            if (-not (Test-Path "dist/$d/resources/bin")) { Write-Host "::error::dist/$d/resources/bin is missing"; exit 1 }
+            Get-ChildItem "dist/$d/resources/bin" | Format-Table Name, Length
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Daebot-windows-${{ github.sha }}
+          path: agent/desktop/dist/Daebot-Setup-*.exe
+          if-no-files-found: error
+          retention-days: 30
+
+  linux:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: agent/desktop
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: npm install --no-audit --no-fund
+      - name: Compile the gateway binary (x64)
+        run: node scripts/stage-bin.mjs linux
+      - name: electron-builder --linux (AppImage + deb)
+        run: npx electron-builder --config electron-builder.config.mjs --linux --x64 --publish never
+      - name: Check the packages carry the bundled gateway
+        run: |
+          ls -la dist/*.AppImage dist/*.deb
+          test -x dist/linux-unpacked/resources/bin/daebot-linux-x64
+          dpkg-deb --contents dist/*.deb | grep -q "resources/bin/daebot-linux-x64"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Daebot-linux-${{ github.sha }}
+          path: |
+            agent/desktop/dist/*.AppImage
+            agent/desktop/dist/*.deb
+          if-no-files-found: error
+          retention-days: 30
+
+  # The Mac job cannot read `secrets` in its own `if`, so a tiny job reports whether the signing secret exists.
+  mac-check:
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.probe.outputs.enabled }}
+    steps:
+      - id: probe
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+        run: |
+          if [ -n "$CSC_LINK" ]; then echo "enabled=true" >> "$GITHUB_OUTPUT"; else echo "enabled=false" >> "$GITHUB_OUTPUT"; echo "CSC_LINK is not set: the Mac job is skipped (build it on the signing Mac)."; fi
+
+  mac:
+    needs: [verify, mac-check]
+    if: needs.mac-check.outputs.enabled == 'true'
+    runs-on: macos-14
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: agent/desktop
+    env:
+      DAEBOT_SIGN: "1"
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: npm install --no-audit --no-fund
+      - name: Compile the gateway binaries (arm64 + x64)
+        run: node scripts/stage-bin.mjs mac
+      - name: electron-builder --mac --universal (signed; notarization is skipped without the MINDNotarize profile)
+        run: npx electron-builder --config electron-builder.config.mjs --mac --universal --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Daebot-mac-signed-${{ github.sha }}
+          path: |
+            agent/desktop/dist/Daebot-*-mac-universal.dmg
+            agent/desktop/dist/Daebot-*-mac-universal.zip
+          if-no-files-found: error
+          retention-days: 30

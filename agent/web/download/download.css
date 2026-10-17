@@ -1,0 +1,19 @@
+/* Download page. Layout and tokens come from /style.css and /login.css (the stage, wordmark and panel are the login page's). */
+.dl-card { width: min(420px, calc(100vw - 40px)); gap: 12px; }
+.dl-list { display: grid; gap: 10px; margin-top: 4px; }
+.dl-item { display: grid; gap: 6px; }
+.dl-btn { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 2px 12px; padding: 14px 16px; border-radius: 14px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); text-decoration: none; transition: transform .15s, border-color .15s, box-shadow .2s; }
+.dl-btn:hover { transform: translateY(-1px); border-color: var(--led-deep); }
+.dl-btn:focus-visible { outline: 0; border-color: var(--led-deep); box-shadow: 0 0 0 4px rgba(255,210,90,.25); }
+.dl-btn.is-primary { background: #d92d2d; border-color: #d92d2d; color: #fff; box-shadow: 0 10px 22px -12px #d92d2d; }
+.dl-btn.is-primary:hover { border-color: #d92d2d; }
+.dl-name { font-weight: 650; font-size: 16px; letter-spacing: -.01em; }
+.dl-state { font-size: 12px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; opacity: .85; }
+.dl-detail { grid-column: 1 / -1; font-size: 12.5px; opacity: .8; }
+.dl-btn.is-soon { cursor: default; opacity: .7; border-style: dashed; }
+.dl-btn.is-soon:hover { transform: none; border-color: var(--line-strong); }
+.dl-flag { justify-self: start; font-size: 11px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+.dl-alt { font-size: 13px; color: var(--ink-2); text-underline-offset: 3px; justify-self: start; }
+.dl-meta { margin: 0; font: 12px/1.5 var(--mono); color: var(--ink-3); overflow-wrap: anywhere; }
+.dl-note { margin: 0; color: var(--ink-3); font-size: 12.5px; }
+.dl-note a { color: var(--ink-2); text-underline-offset: 3px; }

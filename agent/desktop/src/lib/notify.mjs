@@ -14,7 +14,7 @@ export function buildConfirmNotification(event) {
   const tool = typeof event.tool === "string" ? clean(event.tool) : "an action";
   const reason = typeof event.reason === "string" ? clean(event.reason) : "";
   return {
-    title: clip(`MINDClaw needs your go: ${tool}`, 80),
+    title: clip(`Daebot needs your go: ${tool}`, 80),
     body: clip(reason || "An action is waiting for your confirmation.", 200),
   };
 }
