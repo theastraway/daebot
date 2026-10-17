@@ -6,10 +6,13 @@ import { loadConfig } from "./config.ts";
 import { DailyCostCap, HostedConfigError, hostedPort, isHostedEnv, loadHostedOptions, parseDailyCap } from "./hosted.ts";
 import type { AuthContext } from "./auth/tenancy.ts";
 import { BootCache } from "./mind/boot-cache.ts";
+import { embeddedVersion } from "./embedded.ts";
 import type { HostedOptions } from "./hosted.ts";
 import type { AgentEvent, AgentSession, Config, Runtime } from "./types.ts";
 
 function version(): string {
+  const baked = embeddedVersion(); // a compiled binary has no package.json next to it
+  if (baked) return baked;
   try {
     return JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
   } catch {
@@ -109,7 +112,7 @@ function argValue(argv: string[], name: string): string | undefined {
 }
 
 async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promise<number> {
-  let mod: { startGateway?: (o: { runtime: Runtime; cfg?: Config; port?: number; host?: string; hosted?: HostedOptions; auth?: AuthContext; sessionStore?: unknown; bots?: { dir: string; bus: { current?: unknown } } }) => Promise<{ url: string; token: string }> };
+  let mod: { startGateway?: (o: { runtime: Runtime; cfg?: Config; port?: number; host?: string; hosted?: HostedOptions; auth?: AuthContext; sessionStore?: unknown; bots?: { dir: string; bus: { current?: unknown } } }) => Promise<{ url: string; token: string; close?: () => Promise<void> }> };
   try { mod = (await import("./gateway/index.ts")) as typeof mod; } catch { process.stdout.write("gateway not built yet\n"); return 1; }
   if (!mod.startGateway) { process.stdout.write("gateway not built yet\n"); return 1; }
   const hostedMode = isHostedEnv(process.env, argv);
@@ -148,7 +151,7 @@ async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promis
   const port = argValue(argv, "--port") ? Number(argValue(argv, "--port")) : hosted ? hostedPort(process.env) : undefined;
   const host = argValue(argv, "--host");
   if (hosted && !process.env.MINDCLAW_MODEL) process.stderr.write(`hosted: MINDCLAW_MODEL is not set, using the built-in default (${cfg.models.default}). Set MINDCLAW_MODEL to choose the deployed model.\n`);
-  let gw: { url: string; token: string };
+  let gw: { url: string; token: string; close?: () => Promise<void> };
   try { gw = await mod.startGateway({ runtime, cfg, port, host, hosted, auth, sessionStore, bots }); } catch (e) {
     process.stderr.write(`gateway failed to start: ${String((e as Error)?.message ?? e).split("\n")[0]}\n`);
     return 1;
@@ -160,6 +163,15 @@ async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promis
     process.stdout.write(`MINDClaw gateway on ${gw.url} (token in ~/.mindclaw/gateway-token)\n`);
     // Machine-readable line for the desktop shell and scripts.
     process.stdout.write(`${JSON.stringify({ mindclawGateway: { url: gw.url, token: gw.token } })}\n`);
+  }
+  // Desktop shell: it spawns this process with a stdin pipe and sets MINDCLAW_PARENT_PIPE=1. If the shell dies without
+  // signalling us, the pipe closes and we exit instead of lingering as an orphan; SIGTERM/SIGINT close the gateway first.
+  if (process.env.MINDCLAW_PARENT_PIPE === "1") {
+    const stop = () => { (gw.close?.() ?? Promise.resolve()).catch(() => {}).finally(() => process.exit(0)); setTimeout(() => process.exit(0), 2500).unref(); };
+    process.once("SIGTERM", stop);
+    process.once("SIGINT", stop);
+    process.stdin.once("end", stop);
+    process.stdin.resume();
   }
   try {
     const ch = await import("./channels/index.ts");

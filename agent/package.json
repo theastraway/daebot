@@ -1,6 +1,6 @@
 {
   "name": "@astramindapp/mindclaw-agent",
-  "version": "0.2.0-dev",
+  "version": "0.2.0",
   "description": "MINDClaw agent: our own agent runtime with MIND built in and the MIND protocols enforced as code.",
   "license": "MIT",
   "type": "module",

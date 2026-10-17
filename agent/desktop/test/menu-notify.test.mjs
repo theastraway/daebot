@@ -14,14 +14,14 @@ const mk = () => {
 test("tray menu: toggle label follows visibility; kernel radios reflect the mode and call back", () => {
   const { h, calls } = mk();
   const shown = flatten(buildTrayTemplate({ windowVisible: true, kernelMode: "shadow", shortcut: "Alt+Space", handlers: h }));
-  assert.ok(shown.some((i) => i.path === "Hide MINDClaw"));
+  assert.ok(shown.some((i) => i.path === "Hide Daebot"));
   const hidden = flatten(buildTrayTemplate({ windowVisible: false, kernelMode: "enforced", shortcut: null, handlers: h }));
-  assert.ok(hidden.some((i) => i.path === "Show MINDClaw"));
+  assert.ok(hidden.some((i) => i.path === "Show Daebot"));
   const radios = shown.filter((i) => i.path.startsWith("Kernel mode > "));
   assert.deepEqual(radios.map((r) => [r.item.label, r.item.checked]), [["Enforced", false], ["Shadow (log only)", true], ["Off", false]]);
   radios[2].item.click();
   shown.find((i) => i.path === "New Session").item.click();
-  shown.find((i) => i.path === "Quit MINDClaw").item.click();
+  shown.find((i) => i.path === "Quit Daebot").item.click();
   assert.deepEqual(calls, ["kernel:off", "newSession", "quit"]);
 });
 
@@ -34,7 +34,7 @@ test("app menu carries Cmd+N, Cmd+W, Cmd+Q exactly once each", () => {
   assert.equal(acc("CmdOrCtrl+Q").length, 1);
   acc("CmdOrCtrl+N")[0].item.click(); acc("CmdOrCtrl+W")[0].item.click(); acc("CmdOrCtrl+Q")[0].item.click();
   assert.deepEqual(calls, ["newSession", "hideWindow", "quit"]);
-  assert.ok(!flatten(buildAppMenuTemplate({ handlers: h, isMac: false })).some((i) => i.path.startsWith("MINDClaw >")));
+  assert.ok(!flatten(buildAppMenuTemplate({ handlers: h, isMac: false })).some((i) => i.path.startsWith("Daebot >")));
 });
 
 test("shouldNotify: only confirm events, and only when the window is not visible+focused", () => {
@@ -49,7 +49,7 @@ test("shouldNotify: only confirm events, and only when the window is not visible
 
 test("confirm notification text is single-line, bounded, and never includes tool args", () => {
   const n = buildConfirmNotification({ type: "confirm", id: "k", tool: "send_email", args: { to: "jane@example.com", body: "SECRET-BODY" }, reason: "Outward action:\nemails a real third party.\u0007" });
-  assert.equal(n.title, "MINDClaw needs your go: send_email");
+  assert.equal(n.title, "Daebot needs your go: send_email");
   assert.ok(!/\n|\u0007/.test(n.body));
   assert.ok(!JSON.stringify(n).includes("jane@example.com") && !JSON.stringify(n).includes("SECRET-BODY"));
   const long = buildConfirmNotification({ type: "confirm", tool: "t".repeat(500), reason: "r".repeat(1000) });

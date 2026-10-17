@@ -3,6 +3,7 @@ import type { IncomingHttpHeaders, IncomingMessage, Server, ServerResponse } fro
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import type { AgentEvent, AgentSession, ClientFrame, Config, Runtime, ServerFrame } from "../types.ts";
 import { COOKIE_NAME, hostnameOf, isLocalHost, isLocalOrigin, loadOrCreateToken, parseCookies, presentedToken, safeEqual } from "./auth.ts";
@@ -21,7 +22,9 @@ import { BotError } from "../bots/types.ts";
 import type { BotRecord, BotsContext } from "../bots/types.ts";
 import { createModelCatalog } from "../models.ts";
 import { validModelId } from "../settings.ts";
-import { STATIC_CSP, resolveStatic, serveFile } from "./static.ts";
+import { STATIC_CSP, resolveStatic, serveEmbedded, serveFile } from "./static.ts";
+import { EMBEDDED_FILES } from "../embedded.generated.ts";
+import { hasEmbeddedSite } from "../embedded.ts";
 import { acceptWebSocket } from "./ws.ts";
 import { createVoiceHandler } from "./voice.ts";
 import type { VoiceOptions } from "./voice.ts";
@@ -63,6 +66,8 @@ export interface GatewayOptions {
   port?: number;
   host?: string;
   staticDir?: string;
+  /** Web UI baked into a compiled binary (path -> base64). Defaults to the generated module, which is empty on Node. Tests only. */
+  embeddedFiles?: Record<string, string>;
   tokenPath?: string;
   idleMs?: number; // tests
   /** Public deployment: login screen, Host allowlist, secure cookies, security headers. */
@@ -84,12 +89,21 @@ export interface GatewayOptions {
 export const HOSTED_COOKIE = "mc_session";
 export const OAUTH_COOKIE = "mc_oauth";
 // Reachable without a session in hosted mode (the login page and what it needs to render).
-const HOSTED_PUBLIC_STATIC = new Set(["/login.html", "/login.js", "/login.css", "/style.css", "/favicon.svg", "/brand/mbot.js", "/brand/daebot-head.webp"]);
+// The download page (daebot.live/download) is public: it only links to release files hosted elsewhere.
+const HOSTED_PUBLIC_STATIC = new Set([
+  "/login.html", "/login.js", "/login.css", "/style.css", "/favicon.svg", "/brand/mbot.js", "/brand/daebot-head.webp",
+  "/download", "/download/", "/download/index.html", "/download/download.js", "/download/download.css", "/download/releases.json",
+]);
 const HSTS = "max-age=31536000; includeSubDomains";
 
 const MAX_BODY = 1 << 20;
 
+// Where the web UI lives when it is not embedded: a web/ folder next to a compiled binary, else the source tree.
 function defaultStaticDir(): string {
+  if (typeof (process.versions as Record<string, string | undefined>).bun === "string") {
+    const beside = join(dirname(process.execPath), "web");
+    if (existsSync(join(beside, "index.html"))) return beside;
+  }
   return join(dirname(fileURLToPath(import.meta.url)), "..", "..", "web");
 }
 
@@ -170,7 +184,10 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   const limiter = new LoginLimiter({ maxFails: hosted?.loginMaxFails, windowMs: hosted?.loginWindowMs });
   const host = opts.host ?? (hosted ? "0.0.0.0" : "127.0.0.1");
   const token = hosted ? hosted.token : loadOrCreateToken(opts.tokenPath);
-  const staticDir = opts.staticDir ?? defaultStaticDir();
+  // Static source order: an explicit staticDir, then the site embedded in a compiled binary, then web/ beside it, then the source tree.
+  const embeddedFiles = opts.embeddedFiles ?? EMBEDDED_FILES;
+  const useEmbedded = !opts.staticDir && hasEmbeddedSite(embeddedFiles);
+  const staticDir = opts.staticDir ?? (useEmbedded ? "" : defaultStaticDir());
   const auth = hosted ? opts.auth : undefined;
   const deadRuntime = { openSession: async () => { throw new Error("Your MIND sign-in expired. Sign in again."); }, listSessions: () => [] };
   // Sessions are owned by the principal that opened them; each owner gets its own runtime (users: their own MIND).
@@ -585,13 +602,14 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         extra["cache-control"] = "no-store";
       }
     }
-    const file = resolveStatic(staticDir, staticPath);
-    if (!file) return sendJson(res, 404, { error: "not found" });
+    const file = useEmbedded ? null : resolveStatic(staticDir, staticPath);
+    if (!file && !useEmbedded) return sendJson(res, 404, { error: "not found" });
     const qt = hosted ? null : query.get("token");
     if ((path === "/" || path === "/index.html") && qt && safeEqual(qt, token)) {
       extra["set-cookie"] = `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000`;
     }
-    serveFile(file, res, method === "HEAD", extra);
+    if (file) return serveFile(file, res, method === "HEAD", extra);
+    if (!serveEmbedded(staticPath, res, method === "HEAD", extra, embeddedFiles)) return sendJson(res, 404, { error: "not found" });
   }
 
   // ---------- bots + models REST (same cookie auth and origin rules as /sessions; one owner's bots are invisible to everyone else) ----------

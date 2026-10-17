@@ -1,5 +1,6 @@
 import { createReadStream, realpathSync, statSync } from "node:fs";
 import { extname, join, sep } from "node:path";
+import { resolveEmbedded } from "../embedded.ts";
 import type { ServerResponse } from "node:http";
 
 const TYPES: Record<string, string> = {
@@ -66,4 +67,21 @@ export function serveFile(file: string, res: ServerResponse, headOnly: boolean, 
   const s = createReadStream(file);
   s.on("error", () => res.destroy());
   s.pipe(res);
+}
+
+/** Serves a file baked into the compiled binary (see src/embedded.ts). Same headers as serveFile. */
+export function serveEmbedded(rawPath: string, res: ServerResponse, headOnly: boolean, extraHeaders: Record<string, string>, files?: Record<string, string>): boolean {
+  const hit = resolveEmbedded(rawPath, files);
+  if (!hit) return false;
+  res.writeHead(200, {
+    "content-type": TYPES[extname(hit.key).toLowerCase()] ?? "application/octet-stream",
+    "content-length": String(hit.data.length),
+    "cache-control": "no-cache",
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "no-referrer",
+    "content-security-policy": STATIC_CSP,
+    ...extraHeaders,
+  });
+  res.end(headOnly ? undefined : hit.data);
+  return true;
 }

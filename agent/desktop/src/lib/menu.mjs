@@ -3,7 +3,7 @@ import { KERNEL_MODES } from "./kernel.mjs";
 
 export function buildTrayTemplate({ windowVisible, kernelMode, shortcut, handlers }) {
   return [
-    { label: windowVisible ? "Hide MINDClaw" : "Show MINDClaw", accelerator: shortcut || undefined, registerAccelerator: false, click: handlers.toggle },
+    { label: windowVisible ? "Hide Daebot" : "Show Daebot", accelerator: shortcut || undefined, registerAccelerator: false, click: handlers.toggle },
     { label: "New Session", click: handlers.newSession },
     { type: "separator" },
     {
@@ -13,11 +13,12 @@ export function buildTrayTemplate({ windowVisible, kernelMode, shortcut, handler
       })),
     },
     { type: "separator" },
-    { label: "Quit MINDClaw", accelerator: "CmdOrCtrl+Q", click: handlers.quit },
+    { label: "Sign out of MIND", click: handlers.signOut },
+    { label: "Quit Daebot", accelerator: "CmdOrCtrl+Q", click: handlers.quit },
   ];
 }
 
-export function buildAppMenuTemplate({ handlers, isMac = true, name = "MINDClaw" }) {
+export function buildAppMenuTemplate({ handlers, isMac = true, name = "Daebot" }) {
   const app = isMac
     ? [{ label: name, submenu: [{ role: "about" }, { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, { label: `Quit ${name}`, accelerator: "CmdOrCtrl+Q", click: handlers.quit }] }]
     : [];

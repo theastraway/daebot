@@ -42,6 +42,7 @@
 .login-btn[disabled] { opacity: .6; cursor: progress; }
 .login-card .err { margin: 2px 0 0; min-height: 0; }
 .login-foot { margin: 0; max-width: 380px; text-align: center; color: var(--ink-3); font-size: 12.5px; }
+.login-foot-link { color: var(--ink-2); text-underline-offset: 3px; white-space: nowrap; }
 
 @media (max-width: 860px) {
   .panel { border-left: 0; border-top: 1px solid var(--line); }
