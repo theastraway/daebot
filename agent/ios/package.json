@@ -1,0 +1,12 @@
+{
+  "name": "daebot-ios",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Daebot iPhone app: Capacitor shell around https://daebot.live",
+  "scripts": { "sync": "cap sync ios" },
+  "dependencies": {
+    "@capacitor/core": "^8.0.0",
+    "@capacitor/ios": "^8.0.0"
+  },
+  "devDependencies": { "@capacitor/cli": "^8.0.0" }
+}

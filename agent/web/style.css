@@ -45,7 +45,7 @@ code, pre, kbd { font-family: var(--mono); }
 .app { display: grid; grid-template-columns: 272px minmax(0, 1fr); height: 100dvh; position: relative; }
 
 /* sidebar */
-.sidebar { background: var(--bg-side); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; padding: 16px 12px 12px; }
+.sidebar { background: var(--bg-side); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; padding: calc(16px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left)); }
 .brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px 16px; }
 .brand img { border-radius: 6px; }
 .brand-name { font-weight: 650; letter-spacing: -.01em; font-size: 15px; }
@@ -67,7 +67,7 @@ code, pre, kbd { font-family: var(--mono); }
 
 /* main */
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.topbar { display: flex; align-items: center; gap: 8px; height: 56px; padding: 0 16px; border-bottom: 1px solid var(--line); flex: none; }
+.topbar { display: flex; align-items: center; gap: 8px; height: calc(56px + env(safe-area-inset-top)); padding: env(safe-area-inset-top) calc(16px + env(safe-area-inset-right)) 0 calc(16px + env(safe-area-inset-left)); border-bottom: 1px solid var(--line); flex: none; }
 .top-title { flex: 1; min-width: 0; }
 .top-title h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -.005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .top-title p { margin: 0; font-size: 12px; color: var(--ink-3); }
@@ -169,7 +169,7 @@ kbd { font-size: 10.5px; background: var(--surface-2); border: 1px solid var(--l
 
 /* drawer */
 .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(400px, 100vw); background: var(--surface); border-left: 1px solid var(--line); box-shadow: var(--shadow); z-index: 30; display: flex; flex-direction: column; }
-.drawer-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px 10px 20px; border-bottom: 1px solid var(--line); height: 56px; }
+.drawer-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px 10px 20px; border-bottom: 1px solid var(--line); height: calc(56px + env(safe-area-inset-top)); padding-top: calc(10px + env(safe-area-inset-top)); }
 .drawer-head h2 { margin: 0; font-size: 15px; font-weight: 650; }
 .drawer-note { margin: 0; padding: 12px 20px 0; font-size: 12.5px; color: var(--ink-3); }
 .viol-list { list-style: none; margin: 0; padding: 12px 20px 24px; overflow-y: auto; display: grid; gap: 10px; align-content: start; }
@@ -242,7 +242,7 @@ kbd { font-size: 10.5px; background: var(--surface-2); border: 1px solid var(--l
 @media (max-width: 760px) { .voice-dock { margin-bottom: 6px; } .voice-dock .vstop kbd { display: none; } }
 /* phones: the two voice toggles fit the top bar by trimming the badge and tightening the buttons */
 @media (max-width: 560px) {
-  .topbar { padding: 0 8px; gap: 2px; }
+  .topbar { padding: env(safe-area-inset-top) calc(8px + env(safe-area-inset-right)) 0 calc(8px + env(safe-area-inset-left)); gap: 2px; }
   .voice-btn, .topbar .icon-btn { width: 34px; }
   .model-badge { max-width: 24vw; }
   .top-title { flex: 1 1 70px; }
@@ -357,9 +357,12 @@ button.model-badge[aria-expanded="true"] { box-shadow: 0 0 0 1px rgba(255,255,25
 }
 @media (max-width: 420px) {
   #btn-speak { display: none; } /* the hands-free button stays; the mic is in the composer */
-  .topbar { gap: 0; padding: 0 6px; }
+  .topbar { gap: 0; padding: env(safe-area-inset-top) calc(6px + env(safe-area-inset-right)) 0 calc(6px + env(safe-area-inset-left)); }
   .topbar .icon-btn, .btn-chip { width: 32px; }
   #model-badge { max-width: 31vw; padding: 0 7px 0 10px; gap: 4px; }
   #model-badge .mb-led { display: none; }
   #top-badge { display: none; } /* the title's subtitle names the bot, and the mascot wears its colour */
 }
+
+/* iOS shell: pages that have no topbar still clear the notch */
+.login-body { padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
