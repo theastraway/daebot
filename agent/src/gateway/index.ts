@@ -15,7 +15,12 @@ import type { AuthContext } from "../auth/tenancy.ts";
 import { MindAuthError, whoami } from "../auth/mind-auth.ts";
 import { AGENT_SURFACE_RE, AGENT_TURN_PATH, KeyIdentityCache, TurnRateLimiter } from "./agent-api.ts";
 import { userIdFor } from "../auth/users.ts";
-import { usageLeftPct } from "../provider/mind.ts";
+import { FREE_TIER, usageLeftPct } from "../provider/mind.ts";
+import { createBotBus } from "../bots/bus.ts";
+import { BotError } from "../bots/types.ts";
+import type { BotRecord, BotsContext } from "../bots/types.ts";
+import { createModelCatalog } from "../models.ts";
+import { validModelId } from "../settings.ts";
 import { STATIC_CSP, resolveStatic, serveFile } from "./static.ts";
 import { acceptWebSocket } from "./ws.ts";
 import { createVoiceHandler } from "./voice.ts";
@@ -70,6 +75,10 @@ export interface GatewayOptions {
   voice?: Partial<VoiceOptions>;
   /** POST /api/agent/turn per-user limit (turns per minute). Default DAEBOT_AGENT_API_RPM or 30. */
   agentApiPerMinute?: number;
+  /** Bots: the late-bound bus holder shared with the runtimes. startGateway sets bus.current to the in-process bot bus. */
+  bots?: BotsContext;
+  /** Tests: the fetch used for the model catalog. */
+  fetchImpl?: typeof fetch;
 }
 
 export const HOSTED_COOKIE = "mc_session";
@@ -176,6 +185,9 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         }
       : undefined,
   });
+  // ---- Bots: the bus runs a recipient bot's turn in-process through this same SessionManager.
+  if (opts.bots) opts.bots.bus.current = createBotBus({ manager, botsFor: (owner) => manager.runtimeOf(owner).bots });
+  const catalog = createModelCatalog({ cfg: opts.cfg ?? ({ mindBaseUrl: "", models: { default: "", cheap: "", fallback: [] } } as unknown as Config), fetchImpl: opts.fetchImpl ?? opts.auth?.fetchImpl });
   // ---- MIND Voice: billed to the caller's own MIND key (owner: the server key). Off when there is no MIND base URL.
   const voiceBase = opts.voice?.baseUrl ?? opts.cfg?.mindBaseUrl;
   const voice = voiceBase
@@ -548,7 +560,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path.startsWith("/hooks/") || path.startsWith("/voice/") || path === "/ws";
+    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path.startsWith("/hooks/") || path.startsWith("/voice/") || path === "/ws";
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -582,6 +594,113 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     serveFile(file, res, method === "HEAD", extra);
   }
 
+  // ---------- bots + models REST (same cookie auth and origin rules as /sessions; one owner's bots are invisible to everyone else) ----------
+  const botView = (b: BotRecord) => ({ id: b.id, slug: b.slug, name: b.name, purpose: b.purpose, color: b.color, createdAt: b.createdAt, updatedAt: b.updatedAt });
+
+  function botFail(res: ServerResponse, e: unknown): void {
+    if (e instanceof BotError) return sendJson(res, e.status, { error: e.code, message: e.message, ...(e.extra ?? {}) });
+    throw e;
+  }
+
+  async function botsApi(req: IncomingMessage, res: ServerResponse, path: string, method: string, me: Principal): Promise<void> {
+    const bots = manager.runtimeOf(me.id).bots;
+    if (!bots) return sendJson(res, 404, { error: "bots are not enabled on this deployment" });
+    try {
+      if (path === "/bots") {
+        if (method === "GET") return sendJson(res, 200, { bots: (await bots.list()).map(botView) });
+        if (method === "POST") {
+          const b = await readJson(req);
+          const slug = optStr(b.slug, 64);
+          if (!slug) return sendJson(res, 400, { error: "bad_slug", message: "slug required" });
+          const rec = await bots.create({ slug, name: optStr(b.name, 120), purpose: optStr(b.purpose, 1000), color: optStr(b.color, 20) });
+          return sendJson(res, 201, { bot: botView(rec) });
+        }
+        return sendJson(res, 405, { error: "method not allowed" });
+      }
+      const m = /^\/bots\/([^/]+)(?:\/(instructions))?$/.exec(path);
+      if (!m) return sendJson(res, 404, { error: "not found" });
+      let id: string;
+      try { id = decodeURIComponent(m[1]); } catch { return sendJson(res, 400, { error: "bad bot id" }); }
+      const rec = bots.get(id);
+      if (!rec) return sendJson(res, 404, { error: "not_found", message: "no such bot" });
+      if (m[2] === "instructions") {
+        if (method === "GET") return sendJson(res, 200, { instructions: bots.instructions(id) });
+        if (method === "PUT") {
+          const b = await readJson(req);
+          if (typeof b.instructions !== "string") return sendJson(res, 400, { error: "bad_instructions", message: "instructions must be text" });
+          bots.setInstructions(id, b.instructions);
+          return sendJson(res, 200, { ok: true });
+        }
+        return sendJson(res, 405, { error: "method not allowed" });
+      }
+      if (method === "PATCH") {
+        const b = await readJson(req);
+        return sendJson(res, 200, { bot: botView(bots.update(id, { name: optStr(b.name, 120), purpose: optStr(b.purpose, 1000), color: optStr(b.color, 20) })) });
+      }
+      if (method === "DELETE") {
+        await bots.remove(id);
+        await manager.closeBotSessions(me.id, id);
+        return sendJson(res, 200, { ok: true });
+      }
+      if (method === "GET") return sendJson(res, 200, { bot: botView(rec) });
+      return sendJson(res, 405, { error: "method not allowed" });
+    } catch (e) {
+      return botFail(res, e);
+    }
+  }
+
+  function billingKeyOf(p: Principal): string | undefined {
+    return auth ? auth.billingKey(p) : opts.cfg?.mindApiKey || undefined;
+  }
+
+  async function planOf(p: Principal): Promise<{ free: boolean; upgradeUrl?: string }> {
+    const key = billingKeyOf(p);
+    if (!auth?.credits || !key) return { free: false };
+    try {
+      const b = await auth.credits.get(key, false);
+      return { free: b?.tier === FREE_TIER, upgradeUrl: b?.upgradeUrl };
+    } catch {
+      return { free: false };
+    }
+  }
+
+  /** undefined = the model may be used; else the status + body to answer with (free plan: only free models). */
+  async function modelProblem(p: Principal, model: string): Promise<{ status: number; body: Record<string, unknown> } | undefined> {
+    if (!validModelId(model)) return { status: 400, body: { error: "bad_model", message: "that is not a valid model id" } };
+    if (!opts.cfg) return undefined;
+    const plan = await planOf(p);
+    const cat = await catalog.list(billingKeyOf(p), plan.free);
+    const row = cat.models.find((m) => m.id === model);
+    if (!row) return { status: 400, body: { error: "unknown_model", message: "that model is not in your model list (GET /models)" } };
+    if (!row.allowed) return { status: 402, body: { error: "model_not_in_plan", message: "That model is not on the free plan. Pick a free model or upgrade.", upgradeUrl: plan.upgradeUrl } };
+    return undefined;
+  }
+
+  async function modelsApi(req: IncomingMessage, res: ServerResponse, path: string, method: string, me: Principal): Promise<void> {
+    if (!opts.cfg) return sendJson(res, 404, { error: "models are not available here" });
+    const settings = manager.runtimeOf(me.id).settings;
+    if (path === "/models") {
+      if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+      const plan = await planOf(me);
+      const cat = await catalog.list(billingKeyOf(me), plan.free);
+      return sendJson(res, 200, {
+        models: cat.models, source: cat.source, plan: auth?.credits ? (plan.free ? "free" : "paid") : null,
+        default: settings?.get().defaultModel ?? opts.cfg.models.default, freeModel: opts.cfg.freeModel ?? null,
+      });
+    }
+    if (path === "/models/default") {
+      if (method !== "PUT") return sendJson(res, 405, { error: "method not allowed" });
+      if (!settings) return sendJson(res, 404, { error: "settings are not enabled on this deployment" });
+      const b = await readJson(req);
+      const model = b.model === null ? null : optStr(b.model, 130);
+      if (model === undefined) return sendJson(res, 400, { error: "model required (or null to clear)" });
+      if (model) { const bad = await modelProblem(me, model); if (bad) return sendJson(res, bad.status, bad.body); }
+      settings.set({ defaultModel: model });
+      return sendJson(res, 200, { ok: true, default: model ?? opts.cfg.models.default });
+    }
+    return sendJson(res, 404, { error: "not found" });
+  }
+
   async function api(
     req: IncomingMessage,
     res: ServerResponse,
@@ -609,16 +728,29 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
 
     const me = who(req);
     if (path.startsWith("/voice/")) return voice ? voice(req, res, path, _query, me) : sendJson(res, 404, { error: "voice is not available" });
+    if (path === "/bots" || path.startsWith("/bots/")) return botsApi(req, res, path, method, me);
+    if (path === "/models" || path.startsWith("/models/")) return modelsApi(req, res, path, method, me);
     if (path === "/sessions") {
-      if (method === "GET") return sendJson(res, 200, { sessions: manager.list(me.id) });
+      if (method === "GET") return sendJson(res, 200, { sessions: manager.list(me.id, { bot: optStr(_query.get("bot") ?? undefined, 80) || undefined }) });
       if (method === "POST") {
         const b = await readJson(req);
-        const ls = await manager.open({
-          surface: optStr(b.surface, 40) ?? "web",
-          title: optStr(b.title, 200),
-          resumeId: optStr(b.resumeId, 200),
-          owner: me.id,
-        });
+        const model = optStr(b.model, 130);
+        if (model) { const bad = await modelProblem(me, model); if (bad) return sendJson(res, bad.status, bad.body); }
+        let ls;
+        try {
+          ls = await manager.open({
+            surface: optStr(b.surface, 40) ?? "web",
+            title: optStr(b.title, 200),
+            resumeId: optStr(b.resumeId, 200),
+            owner: me.id,
+            bot: optStr(b.bot, 40),
+            model: model || undefined,
+          });
+        } catch (e) {
+          if (e instanceof Error && e.message === "no such bot") return sendJson(res, 404, { error: "no such bot" });
+          if (e instanceof Error && e.message === "session belongs to a different bot") return sendJson(res, 409, { error: e.message });
+          throw e;
+        }
         return sendJson(res, 200, { sessionId: ls.id });
       }
       return sendJson(res, 405, { error: "method not allowed" });
@@ -643,6 +775,20 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       const events = manager.runtimeOf(me.id).history?.(id);
       if (!events) return sendJson(res, 404, { error: "no such session" });
       return sendJson(res, 200, { events });
+    }
+
+    if (!action && method === "PATCH") {
+      // Change the model of a session (its next turn onward). A persisted session is brought back to life first.
+      const b = await readJson(req);
+      const model = b.model === null ? null : optStr(b.model, 130);
+      if (model === undefined) return sendJson(res, 400, { error: "model required (or null for the default)" });
+      if (model) { const bad = await modelProblem(me, model); if (bad) return sendJson(res, bad.status, bad.body); }
+      let target = ls;
+      if (!target) {
+        if (!manager.runtimeOf(me.id).history?.(id)) return sendJson(res, 404, { error: "no such session" });
+        try { target = await manager.open({ surface: "web", resumeId: id, owner: me.id }); } catch (e) { if (e instanceof ForbiddenError) throw e; return sendJson(res, 404, { error: "no such session" }); }
+      }
+      return sendJson(res, manager.setModel(id, model || undefined) ? 200 : 409, { ok: true, model: model || null });
     }
 
     if (!action) {

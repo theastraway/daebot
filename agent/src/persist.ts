@@ -16,6 +16,12 @@ export interface StoredSession {
   tier: string;
   /** Principal that owns the session ("owner" for the access-code login, else the MIND user id). Absent on old records = "owner". */
   owner?: string;
+  /** Bot id when this is a thread of a bot (its home MIND is the bot's). Absent = a plain session. */
+  bot?: string;
+  /** Bot-to-bot DM thread: the other end ("main" for a person's session, else a bot id). */
+  peer?: string;
+  /** Model this session runs on (absent = the default). */
+  model?: string;
   createdAt: number;
   updatedAt: number;
   state: SessionState;
@@ -23,7 +29,11 @@ export interface StoredSession {
   history: HistoryEvent[];
 }
 
-export interface StoredMeta { id: string; surface: string; title: string; updatedAt: number; owner?: string }
+export interface StoredMeta { id: string; surface: string; title: string; updatedAt: number; owner?: string; bot?: string; peer?: string; model?: string }
+
+function metaOf(rec: StoredSession): StoredMeta {
+  return { id: rec.id, surface: rec.surface, title: rec.title, updatedAt: rec.updatedAt, owner: rec.owner, bot: rec.bot, peer: rec.peer, model: rec.model };
+}
 
 export interface SessionStore {
   save(rec: StoredSession): Promise<void>;
@@ -65,7 +75,7 @@ export function createFileStore(dir: string): SessionStore {
       if (!n.endsWith(".json")) continue;
       try {
         const rec = JSON.parse(readFileSync(join(root, n), "utf8"));
-        if (validRecord(rec)) index.set(rec.id, { id: rec.id, surface: rec.surface, title: rec.title, updatedAt: rec.updatedAt, owner: rec.owner });
+        if (validRecord(rec)) index.set(rec.id, metaOf(rec));
       } catch { /* a torn or foreign file is skipped, never fatal */ }
     }
   }
@@ -80,7 +90,7 @@ export function createFileStore(dir: string): SessionStore {
         const tmp = `${file}.${process.pid}.tmp`;
         await writeFile(tmp, data, { mode: 0o600 });
         await rename(tmp, file);
-        index.set(rec.id, { id: rec.id, surface: rec.surface, title: rec.title, updatedAt: rec.updatedAt, owner: rec.owner });
+        index.set(rec.id, metaOf(rec));
       });
       queues.set(rec.id, next);
       return next.finally(() => { if (queues.get(rec.id) === next) queues.delete(rec.id); });

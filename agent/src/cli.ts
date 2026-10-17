@@ -109,7 +109,7 @@ function argValue(argv: string[], name: string): string | undefined {
 }
 
 async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promise<number> {
-  let mod: { startGateway?: (o: { runtime: Runtime; cfg?: Config; port?: number; host?: string; hosted?: HostedOptions; auth?: AuthContext; sessionStore?: unknown }) => Promise<{ url: string; token: string }> };
+  let mod: { startGateway?: (o: { runtime: Runtime; cfg?: Config; port?: number; host?: string; hosted?: HostedOptions; auth?: AuthContext; sessionStore?: unknown; bots?: { dir: string; bus: { current?: unknown } } }) => Promise<{ url: string; token: string }> };
   try { mod = (await import("./gateway/index.ts")) as typeof mod; } catch { process.stdout.write("gateway not built yet\n"); return 1; }
   if (!mod.startGateway) { process.stdout.write("gateway not built yet\n"); return 1; }
   const hostedMode = isHostedEnv(process.env, argv);
@@ -131,12 +131,14 @@ async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promis
   const bootCache = new BootCache();
   // MIND billing: one tier + credits cache shared by the owner runtime, every user runtime and the gateway.
   const credits = cfg.billing === "mind" ? new (await import("./provider/mind.ts")).MindCredits({ mindBaseUrl: cfg.mindBaseUrl }) : undefined;
-  const runtime = createRuntime(cfg, { hosted: hostedRt ? { ...hostedRt, sharedCap: globalCap, exempt: true, username: process.env.DAEBOT_OWNER_USERNAME?.trim() || "anthonyjconti" } : undefined, store: sessionStore, credits });
+  // Bots: one data dir + one late-bound bus shared by the owner runtime, every user runtime and the gateway (which sets bus.current).
+  const bots = { dir: dataDir(), bus: {} };
+  const runtime = createRuntime(cfg, { hosted: hostedRt ? { ...hostedRt, sharedCap: globalCap, exempt: true, username: process.env.DAEBOT_OWNER_USERNAME?.trim() || "anthonyjconti" } : undefined, store: sessionStore, credits, bots });
   let auth: AuthContext | undefined;
   if (hosted && globalCap) {
     try {
       const { createAuthContext } = await import("./auth/index.ts");
-      auth = createAuthContext({ cfg, hosted, ownerRuntime: runtime, globalCap, sessionStore, bootCache, credits });
+      auth = createAuthContext({ cfg, hosted, ownerRuntime: runtime, globalCap, sessionStore, bootCache, credits, bots });
       if (auth.store.unreadable) process.stderr.write(`hosted: ${auth.store.unreadable} stored user record(s) could not be decrypted (wrong DAEBOT_SECRET_KEY or tampered); those users must sign in again.\n`);
     } catch (e) {
       process.stderr.write(`${e instanceof HostedConfigError ? e.message : "invalid sign-in configuration"}\n`);
@@ -147,7 +149,7 @@ async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promis
   const host = argValue(argv, "--host");
   if (hosted && !process.env.MINDCLAW_MODEL) process.stderr.write(`hosted: MINDCLAW_MODEL is not set, using the built-in default (${cfg.models.default}). Set MINDCLAW_MODEL to choose the deployed model.\n`);
   let gw: { url: string; token: string };
-  try { gw = await mod.startGateway({ runtime, cfg, port, host, hosted, auth, sessionStore }); } catch (e) {
+  try { gw = await mod.startGateway({ runtime, cfg, port, host, hosted, auth, sessionStore, bots }); } catch (e) {
     process.stderr.write(`gateway failed to start: ${String((e as Error)?.message ?? e).split("\n")[0]}\n`);
     return 1;
   }

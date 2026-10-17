@@ -82,19 +82,35 @@ export function validReceipts(draft: string, calls: CallRecord[]): ReceiptCheck[
   return out;
 }
 
+// The MIND a call asked: its `mind` argument, or the session's own MIND (the empty string).
+function tenantOf(c: CallRecord): string {
+  const m = c.call.args.mind;
+  return typeof m === "string" ? m.trim().toLowerCase() : "";
+}
+
+// Query text WITH the tenant: the same sentence asked of two different MINDs is two different queries.
 function queryText(c: CallRecord): string {
   const a = c.call.args;
   const q = a.query ?? a.question ?? a.q ?? a.search;
   const raw = typeof q === "string" ? q : JSON.stringify(a);
-  return raw.toLowerCase().replace(/\s+/g, " ").trim();
+  return `${tenantOf(c)}|${raw.toLowerCase().replace(/\s+/g, " ").trim()}`;
 }
 
-// Negative claims need >= 2 successful mind calls with different query text, or one call with list_bare:true.
+// Negative claims need, on EACH tenant the turn queried, >= 2 successful mind calls with different query text,
+// or one call with list_bare:true on that tenant. (The roster tool is not evidence about any MIND's content.)
 export function negativeEvidenceOk(calls: CallRecord[]): boolean {
-  const ok = calls.filter((c) => c.result.ok);
-  if (ok.some((c) => c.call.args.list_bare === true)) return true;
-  const queries = new Set(ok.filter((c) => c.receipt === "mind").map(queryText));
-  return queries.size >= 2;
+  const ok = calls.filter((c) => c.result.ok && c.tool !== "mind_tenants");
+  const bare = new Set(ok.filter((c) => c.call.args.list_bare === true).map(tenantOf));
+  const perTenant = new Map<string, Set<string>>();
+  for (const c of ok.filter((x) => x.receipt === "mind")) {
+    const t = tenantOf(c);
+    if (!perTenant.has(t)) perTenant.set(t, new Set());
+    perTenant.get(t)!.add(queryText(c));
+  }
+  for (const t of bare) if (!perTenant.has(t)) perTenant.set(t, new Set());
+  if (perTenant.size === 0) return false;
+  for (const [t, qs] of perTenant) if (!bare.has(t) && qs.size < 2) return false;
+  return true;
 }
 
 export const receiptGate: Gate = {

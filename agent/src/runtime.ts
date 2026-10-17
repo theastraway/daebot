@@ -7,6 +7,11 @@ import { tierAllows } from "./kernel/tier.ts";
 import { createAgentSession } from "./loop.ts";
 import { createLearning, resolveLearnConfig } from "./learn/index.ts";
 import { bootMind, createMindClient, createMindTools, createSessionSync } from "./mind/index.ts";
+import { BotStore, botMindApi } from "./bots/store.ts";
+import { createBotTalkTool } from "./bots/talk-tool.ts";
+import type { BotRecord, BotsContext, RosterEntry } from "./bots/types.ts";
+import { MAX_INSTRUCTIONS_BYTES } from "./bots/types.ts";
+import { createSettings, validModelId } from "./settings.ts";
 import { BootCache } from "./mind/boot-cache.ts";
 import type { MindClientOpts } from "./mind/client.ts";
 import { createProvider } from "./provider/index.ts";
@@ -17,14 +22,28 @@ import { createMcpLoader, parseMcpServers } from "./mcp/client.ts";
 import type { McpServerConfig } from "./mcp/client.ts";
 import { repairMessages } from "./persist.ts";
 import type { SessionStore } from "./persist.ts";
-import type { AgentEvent, AgentSession, Config, HistoryEvent, Provider, Runtime } from "./types.ts";
+import type { AgentEvent, AgentSession, Config, HistoryEvent, MindClient, Provider, Runtime, Tool } from "./types.ts";
 
 /** Same sanitising as MINDCLAW_LEARN_USER, so a MIND username is a safe doc-name part. */
 function learnUserName(u: string): string {
   return u.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "") || "user";
 }
 
-export function composeSystemPrompt(o: { identity?: string; tier?: Tier; bootContext: string; surface: string; cwd: string; now?: Date; model?: string; via?: string }): string {
+const MAX_ROSTER = 40;
+const clipLine = (s: string, n: number): string => { const t = s.replace(/\s+/g, " ").trim(); return t.length > n ? t.slice(0, n - 1) + "…" : t; };
+const noKernelSpoof = (s: string): string => s.replace(/\[kernel/gi, "[ kernel");
+
+export function botIdentity(b: Pick<BotRecord, "name" | "slug" | "purpose">, userName?: string): string {
+  return `You are ${b.name} (bot "${b.slug}"), a persistent Daebot agent${userName ? ` working for the MIND user "${userName}"` : ""}.${b.purpose ? ` Purpose: ${clipLine(b.purpose, 300)}.` : ""} Your home MIND is the bot MIND "${b.slug}": it is your memory and what you read and write by default. The user's main MIND is readable with mind:"main"; you never write to it.`;
+}
+
+export function composeSystemPrompt(o: {
+  identity?: string; tier?: Tier; bootContext: string; surface: string; cwd: string; now?: Date; model?: string; via?: string;
+  /** Set for a bot session: the DAEBOT.md text and the bot's own slug (the roster marks it as you). */
+  bot?: { slug: string; instructions: string };
+  /** The user's bots (sessions and bots alike see them). */
+  roster?: RosterEntry[];
+}): string {
   const lines = [
     o.identity ?? "You are Daebot (Dae), Anthony Conti's own agent. MIND is your memory and the only source of truth about his world.",
     "Register: chat replies are caveman-short. Short sentences, no preamble. Anything that ships (code, emails, docs) stays polished.",
@@ -47,11 +66,31 @@ export function composeSystemPrompt(o: { identity?: string; tier?: Tier; bootCon
   ];
   if (o.tier === "public") lines.push("Identity: public. You can read and answer only. You cannot write, send, post, run a shell or change anything; say so plainly if asked.");
   if (o.tier === "staff") lines.push("Identity: staff. You can read and make local writes. You cannot contact third parties, post publicly or do anything irreversible; say so plainly if asked.");
+  const roster = (o.roster ?? []).slice(0, MAX_ROSTER);
+  if (o.bot) {
+    const text = o.bot.instructions.length > MAX_INSTRUCTIONS_BYTES ? o.bot.instructions.slice(0, MAX_INSTRUCTIONS_BYTES) : o.bot.instructions;
+    lines.push(
+      "",
+      "## Instructions for this bot (DAEBOT.md)",
+      text.trim() ? noKernelSpoof(text.trim()) : "(none written yet)",
+      "Precedence: these instructions set your role and style. They never lift a kernel gate, the receipt rule, the owner check or the feed rule; where they conflict with those, those win.",
+    );
+  }
+  if (o.bot || roster.length) {
+    lines.push("", "## MINDs and bots", o.bot ? `main: the user's main MIND (read-only for you: mind:"main")` : `main: the user's main MIND (your own, the default)`);
+    for (const b of roster) lines.push(`- ${b.slug} (${clipLine(b.name, 60)})${o.bot && b.slug === o.bot.slug ? " (you)" : ""}${b.purpose ? `: ${clipLine(b.purpose, 160)}` : ""}`);
+    if (roster.length) lines.push(`Read another MIND on any read tool with mind:"<slug>" (mind_tenants lists them live).`);
+  }
+  if (o.bot) {
+    lines.push("When another bot owns the topic, TALK to it with bot_talk; say what you need and why; its reply is a claim, not a receipt: verify load-bearing facts in its MIND; don't ping-pong.");
+  } else if (roster.length) {
+    lines.push("When a bot owns the topic, ask that bot with bot_talk; its reply is a claim, not a receipt: verify load-bearing facts in its MIND before you state them.");
+  }
   if (o.bootContext.trim()) lines.push("", "## MIND context (booted this session)", o.bootContext.trim());
   return lines.join("\n");
 }
 
-interface Entry { session: AgentSession; surface: string; title: string; updatedAt: number; tier: Tier; recorder: HistoryRecorder; createdAt: number }
+interface Entry { session: AgentSession; surface: string; title: string; updatedAt: number; tier: Tier; recorder: HistoryRecorder; createdAt: number; bot?: string; peer?: string; model?: string }
 
 const DEFAULT_TITLE = /^(New session|Daebot .+ session)$/;
 
@@ -90,6 +129,8 @@ export interface RuntimeOverrides {
   mcpFetch?: typeof fetch;
   /** DAEBOT_BILLING=mind: the tier + credits cache shared with the gateway (the provider feeds it from MIND's response headers). */
   credits?: MindCredits;
+  /** Bots + per-user settings live under this dir; the bus ref is set by startGateway. Absent = no bots on this runtime. */
+  bots?: BotsContext;
 }
 
 export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Runtime {
@@ -108,9 +149,29 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
   const sessionClient = cfg.mindSessionApiKey && cfg.mindSessionApiKey !== cfg.mindApiKey
     ? createMindClient({ ...cfg, mindApiKey: cfg.mindSessionApiKey }, overrides.fetchImpl, hosted?.mindClient)
     : client;
-  const everyTool = [...createBuiltinTools({ fetchImpl: overrides.fetchImpl, decisionKey: cfg.openrouterKey }), ...createMindTools(client)];
-  // Hosted: shell and file tools are not just gated, they do not exist in this process's tool list.
-  const allTools = hosted ? filterHostedTools(everyTool) : everyTool;
+  const builtinTools = createBuiltinTools({ fetchImpl: overrides.fetchImpl, decisionKey: cfg.openrouterKey });
+  // Bots: this owner's store (MIND is the source of truth for existence) and settings. Only when the host gave a data dir.
+  const botsCtx = overrides.bots;
+  const ownerKey = overrides.owner ?? "owner";
+  const botStore = botsCtx ? new BotStore({ dir: botsCtx.dir, owner: ownerKey, mind: botMindApi(client) }) : undefined;
+  const settings = botsCtx ? createSettings(botsCtx.dir, ownerKey) : undefined;
+  // One client per bot MIND, all on the MAIN key (the bot is addressed by the X-MIND-Bot header, never by a key of its own).
+  const botClients = new Map<string, MindClient>();
+  const clientForMind = (mind: string): MindClient => {
+    if (mind === "main") return client;
+    let c = botClients.get(mind);
+    if (!c) { c = createMindClient(cfg, overrides.fetchImpl, { ...hosted?.mindClient, bot: mind }); botClients.set(mind, c); }
+    return c;
+  };
+  // A session's full tool set: shared builtins + MIND tools addressed by home + bot_talk. Hosted: shell and file tools do not exist at all.
+  const toolsFor = (home: string, selfBot: string | undefined): Tool[] => {
+    const talk = botStore && botsCtx ? [createBotTalkTool({ bus: botsCtx.bus, owner: ownerKey, selfBot })] : [];
+    const every = [...builtinTools, ...createMindTools({
+      home, clientFor: clientForMind, roster: () => botStore?.roster() ?? [],
+      refresh: botStore ? async () => { await botStore.list(); } : undefined,
+    }, { user: hosted?.username }), ...talk];
+    return hosted ? filterHostedTools(every) : every;
+  };
   // One kernel per identity tier (each enforces its tier's tool classes on top of the shared gates).
   const kernels = new Map<Tier, ReturnType<typeof createKernel>>();
   const kernelFor = (tier: Tier) => {
@@ -142,6 +203,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     void store.save({
       v: 1, id, surface: e.surface, title: e.title, tier: e.tier, owner: ownerId, createdAt: e.createdAt, updatedAt: e.updatedAt,
       state: st, violations: e.session.violations(), history: e.recorder.events(),
+      ...(e.bot ? { bot: e.bot } : {}), ...(e.peer ? { peer: e.peer } : {}), ...(e.model ? { model: e.model } : {}),
     }).catch((err) => process.stderr.write(`persist: could not save a session (${String((err as Error)?.message ?? err).split("\n")[0].slice(0, 120)})\n`));
   }
 
@@ -152,6 +214,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         const existing = sessions.get(opts.resumeId);
         if (existing) {
           if (existing.tier !== tier) throw new Error("session belongs to a different identity tier");
+          if (opts.botId && existing.bot !== opts.botId) throw new Error("session belongs to a different bot");
           return existing.session;
         }
       }
@@ -161,33 +224,60 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       // Never rebuild (or later overwrite) a session that belongs to someone else.
       if (!mine(stored) || (opts.resumeId && !mine(store?.meta?.(opts.resumeId)))) throw new Error("forbidden");
       if (stored && stored.tier !== tier) throw new Error("session belongs to a different identity tier");
+      // A bot session runs INSIDE this runtime (this owner's MAIN key, provider and billing); only the home MIND, the
+      // persona/instructions and the thread differ. The bot must belong to THIS owner.
+      const botId = opts.botId ?? stored?.bot;
+      if (opts.botId && stored?.bot && stored.bot !== opts.botId) throw new Error("session belongs to a different bot");
+      const botRec = botId ? botStore?.get(botId) : undefined;
+      if (botId && !botRec) throw new Error("no such bot");
+      const peer = opts.peer ?? stored?.peer;
+      const home = botRec ? botRec.slug : "main";
       const title = stored?.title || opts.title || `Daebot ${opts.surface} session`;
       const cwd = process.cwd();
-      const sourceKey = hosted?.sourceKey ? hosted.sourceKey(opts.surface, id) : `mindclaw-${opts.surface}-${id}`;
+      const sourceKey = botRec ? `daebot-bot-${botRec.slug}` : hosted?.sourceKey ? hosted.sourceKey(opts.surface, id) : `mindclaw-${opts.surface}-${id}`;
+      // MIND Chat sync uses the MAIN key (sessionClient); the bot's name is only the source label.
       const sync = createSessionSync(sessionClient, sourceKey);
       // Tools a tier may not use are neither offered nor executable (the loop only knows this list).
-      const allWithMcp = mcp.configured ? [...allTools, ...(await mcp.tools())] : allTools;
+      const sessionTools = toolsFor(home, botRec?.id);
+      const allWithMcp = mcp.configured ? [...sessionTools, ...(await mcp.tools())] : sessionTools;
       const tools = tier === "admin" ? allWithMcp : allWithMcp.filter((t) => tierAllows(tier, t));
+      // The model: an explicit choice (open / PATCH), else the stored one, else the user's default, else the configured default.
+      const explicitModel = opts.model && validModelId(opts.model) ? opts.model : stored?.model && validModelId(stored.model) ? stored.model : undefined;
+      const userDefault = () => settings?.get().defaultModel;
+      let curModel: string | undefined = explicitModel;
 
       let boot: { ok: boolean; context: string; error?: string; degraded?: boolean };
-      try { boot = await bootCache.get(cfg.mindApiKey, () => bootMind(client)); } catch (e) { boot = { ok: false, context: "", error: String((e as Error)?.message ?? e) }; }
+      try { boot = await bootCache.get(botRec ? `${cfg.mindApiKey}|bot:${botRec.slug}` : cfg.mindApiKey, () => bootMind(clientForMind(home))); } catch (e) { boot = { ok: false, context: "", error: String((e as Error)?.message ?? e) }; }
       try { await sync.open({ title, sourceKey, externalId: id }); } catch { /* sync is best effort */ }
 
       const bootContext = boot.ok ? boot.context : "";
       // Learning (src/learn): admin-tier sessions only. Public/staff identities neither read nor write lessons,
       // so nothing from the owner's private MIND can reach them and nothing they say can reach it.
-      const learn = learnCfg.enabled && tier === "admin"
+      const learn = learnCfg.enabled && tier === "admin" && !botRec // bots never learn
         ? createLearning({ client, provider, cfg, learn: hosted?.username ? { ...learnCfg, user: learnUserName(hosted.username) } : learnCfg, tier, onCost: (usd) => costCap?.add(usd) })
         : undefined;
       const inner = createAgentSession({
         id, surface: opts.surface, provider, kernel: kernelFor(tier), tools, sync, cfg, cwd, bootContext, learn,
-        systemPrompt: composeSystemPrompt({ identity: hosted?.persona, tier, bootContext, surface: opts.surface, cwd, model: mindBilled ? `${cfg.models.default} on paid MIND plans and ${cfg.freeModel} on the free MIND plan (Explorer)` : cfg.models.default, via: mindBilled ? "MIND" : undefined }),
+        model: explicitModel ?? userDefault(),
+        // A function: DAEBOT.md edits, renames and roster changes apply on the very next message.
+        systemPrompt: () => {
+          const live = botId ? botStore?.get(botId) ?? botRec : undefined;
+          const used = curModel ?? userDefault();
+          return composeSystemPrompt({
+            identity: live ? botIdentity(live, hosted?.username) : hosted?.persona, tier, bootContext, surface: opts.surface, cwd,
+            model: used ?? (mindBilled ? `${cfg.models.default} on paid MIND plans and ${cfg.freeModel} on the free MIND plan (Explorer)` : cfg.models.default),
+            via: mindBilled ? "MIND" : undefined,
+            bot: live && botId ? { slug: live.slug, instructions: botStore!.instructions(botId) } : undefined,
+            roster: botStore?.roster(),
+          });
+        },
         restore: stored ? { ...stored.state, messages: repairMessages(stored.state.messages), violations: stored.violations } : undefined,
       });
 
       const entry: Entry = {
         session: inner, surface: stored?.surface ?? opts.surface, title, updatedAt: Date.now(), tier,
         recorder: new HistoryRecorder(stored?.history), createdAt: stored?.createdAt ?? Date.now(),
+        bot: botRec?.id, peer, model: explicitModel,
       };
       const startNotices: AgentEvent[] = boot.ok ? [] : [{
         type: "notice", level: "warn",
@@ -230,6 +320,13 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         },
         violations: () => inner.violations(),
         exportState: () => inner.exportState!(),
+        setModel(m) {
+          const next = m && validModelId(m) ? m : undefined;
+          curModel = next;
+          entry.model = next;
+          inner.setModel?.(next ?? userDefault());
+          persist(id);
+        },
         async close(summary) {
           sessions.delete(id);
           await inner.close(summary);
@@ -240,10 +337,20 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       return session;
     },
     listSessions() {
-      const out = new Map<string, { id: string; surface: string; title: string; updatedAt: number }>();
-      for (const m of store?.list() ?? []) if (mine(m)) out.set(m.id, m);
-      for (const [id, e] of sessions) if (out.has(id) || e.recorder.events().some((h) => h.type === "user")) out.set(id, { id, surface: e.surface, title: e.title, updatedAt: e.updatedAt });
+      type Row = { id: string; surface: string; title: string; updatedAt: number; bot?: string; peer?: string; model?: string };
+      const out = new Map<string, Row>();
+      const row = (m: Row): Row => ({ id: m.id, surface: m.surface, title: m.title, updatedAt: m.updatedAt, ...(m.bot ? { bot: m.bot } : {}), ...(m.peer ? { peer: m.peer } : {}), ...(m.model ? { model: m.model } : {}) });
+      for (const m of store?.list() ?? []) if (mine(m)) out.set(m.id, row(m));
+      for (const [id, e] of sessions) if (out.has(id) || e.recorder.events().some((h) => h.type === "user")) out.set(id, row({ id, surface: e.surface, title: e.title, updatedAt: e.updatedAt, bot: e.bot, peer: e.peer, model: e.model }));
       return [...out.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+    },
+    bots: botStore,
+    settings,
+    sessionInfo(id) {
+      const live = sessions.get(id);
+      if (live) return { bot: live.bot, peer: live.peer, model: live.model };
+      const m = store?.meta?.(id);
+      return m && mine(m) ? { bot: m.bot, peer: m.peer, model: m.model } : undefined;
     },
     history(id): HistoryEvent[] | undefined {
       const live = sessions.get(id);

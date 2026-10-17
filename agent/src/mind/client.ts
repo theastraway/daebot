@@ -10,13 +10,23 @@ export interface MindClientOpts {
   getKey?: () => string;
   /** Called once on HTTP 401; return true after rotating the key to retry the call with the new one. */
   onUnauthorized?: () => Promise<boolean>;
+  /** Address a bot's MIND instead of the main one: sends X-MIND-Bot: <slug> with the same (MAIN) key. */
+  bot?: string;
 }
 
 const DEFAULT_CONTEXT_SECTIONS = ["soul", "user", "rules", "priorities", "recent"];
 
 class MindHttpError extends Error {
   status: number;
-  constructor(message: string, status: number) { super(message); this.status = status; }
+  payload?: unknown;
+  constructor(message: string, status: number, payload?: unknown) { super(message); this.status = status; this.payload = payload; }
+}
+
+/** The error a caller sees: scrubbed message plus the HTTP status and the (parsed) error body, so callers can branch on 402/409/400 codes. */
+function surfaced(message: string, e: unknown): Error {
+  const out = new Error(message) as Error & { status?: number; payload?: unknown };
+  if (e instanceof MindHttpError) { out.status = e.status; out.payload = e.payload; }
+  return out;
 }
 
 function isRetryable(e: unknown): boolean {
@@ -55,7 +65,7 @@ export function createMindClient(cfg: Config, fetchImpl?: typeof fetch, opts: Mi
     try {
       const init: RequestInit = {
         method: route.method,
-        headers: { "X-API-Key": key, "Content-Type": "application/json", Accept: "application/json" },
+        headers: { "X-API-Key": key, "Content-Type": "application/json", Accept: "application/json", ...(opts.bot ? { "X-MIND-Bot": opts.bot } : {}) },
         signal: ctrl.signal,
       };
       if (route.method !== "GET" && route.method !== "DELETE") init.body = JSON.stringify(route.body ?? {});
@@ -69,13 +79,15 @@ export function createMindClient(cfg: Config, fetchImpl?: typeof fetch, opts: Mi
       const text = await res.text();
       if (!res.ok) {
         let detail = "";
+        let payload: unknown;
         try {
           const j = JSON.parse(text);
+          payload = j;
           const d = j?.detail ?? j?.error ?? j?.message;
           detail = typeof d === "string" ? d : d !== undefined ? JSON.stringify(d) : "";
         } catch { detail = text; }
         detail = scrub(detail).replace(/\s+/g, " ").slice(0, 160);
-        throw new MindHttpError(`MIND ${label}: HTTP ${res.status}${detail ? ` ${detail}` : ""}`, res.status);
+        throw new MindHttpError(`MIND ${label}: HTTP ${res.status}${detail ? ` ${detail}` : ""}`, res.status, payload);
       }
       return text;
     } finally {
@@ -92,15 +104,15 @@ export function createMindClient(cfg: Config, fetchImpl?: typeof fetch, opts: Mi
         let rotated = false;
         try { rotated = await opts.onUnauthorized(); } catch { rotated = false; }
         if (rotated) {
-          try { return await once(label, route, ms); } catch (e2) { throw new Error(scrub((e2 as Error).message)); }
+          try { return await once(label, route, ms); } catch (e2) { throw surfaced(scrub((e2 as Error).message), e2); }
         }
       }
-      if (!isRetryable(e)) throw new Error(scrub((e as Error).message));
+      if (!isRetryable(e)) throw surfaced(scrub((e as Error).message), e);
       if (retryDelayMs > 0) await new Promise((r) => setTimeout(r, retryDelayMs));
       try {
         return await once(label, route, ms);
       } catch (e2) {
-        throw new Error(scrub((e2 as Error).message));
+        throw surfaced(scrub((e2 as Error).message), e2);
       }
     }
   }

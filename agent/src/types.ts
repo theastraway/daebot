@@ -2,6 +2,8 @@
 // updating agent/SPEC.md and telling the orchestrator. Erasable TypeScript only (no enums,
 // no parameter properties, no namespaces) so Node strips types natively.
 
+import type { BotsApi } from "./bots/types.ts";
+
 // ---------- messages ----------
 export type Role = "system" | "user" | "assistant" | "tool";
 
@@ -172,7 +174,10 @@ export interface AgentSession {
   readonly id: string;
   readonly surface: string;             // "tui" | "web" | "desktop" | "telegram" | "discord" | "imessage" | "headless"
   // Sends one user message; yields events until "done". Calling again after done = next turn.
-  send(userMessage: string, opts?: { signal?: AbortSignal }): AsyncIterable<AgentEvent>;
+  // origin "bot": the text came from another bot (bot_talk), not from the human. Such a turn can never grant a pending confirmation.
+  send(userMessage: string, opts?: { signal?: AbortSignal; origin?: "user" | "bot" }): AsyncIterable<AgentEvent>;
+  /** Model for the next turn (per-session model). undefined = the configured default. */
+  setModel?(model: string | undefined): void;
   violations(): Violation[];
   close(summary?: string): Promise<void>;
   // Model-facing history (without the system prompt) so a session can be persisted and resumed.
@@ -183,8 +188,15 @@ export interface SessionState { messages: Message[]; receiptCounter: number; tot
 
 export interface Runtime {
   // boot: runs mind_context before returning; throws only if tools are unreachable.
-  openSession(opts: { surface: string; title?: string; resumeId?: string; identity?: string }): Promise<AgentSession>;
-  listSessions(): { id: string; surface: string; title: string; updatedAt: number }[];
+  // botId: open a session of that bot (home MIND = the bot's); peer: the other end of a bot-to-bot DM thread; model: per-session model.
+  openSession(opts: { surface: string; title?: string; resumeId?: string; identity?: string; botId?: string; peer?: string; model?: string }): Promise<AgentSession>;
+  listSessions(): { id: string; surface: string; title: string; updatedAt: number; bot?: string; peer?: string; model?: string }[];
+  /** Bots of this runtime's owner (absent on runtimes built without a bots context). */
+  bots?: BotsApi;
+  /** Bot / peer / model of a live or persisted session of this owner. */
+  sessionInfo?(id: string): { bot?: string; peer?: string; model?: string } | undefined;
+  /** The owner's per-user settings (default model). */
+  settings?: { get(): { defaultModel?: string }; set(patch: { defaultModel?: string | null }): void };
   // Visible transcript of a live or persisted session (replayed after a resume or restart). Undefined = unknown id.
   history?(id: string): HistoryEvent[] | undefined;
 }
