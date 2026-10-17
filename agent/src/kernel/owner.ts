@@ -9,7 +9,7 @@ export function isOwnerTool(name: string): boolean {
 }
 const READ_ACTIONS = new Set(["list", "get", "search", "query", "read", "find", "show", "view", "tree", "describe"]);
 
-const FAIL = "owner check failed: state '<material> belongs to A; Anthony asked about B; A == B' and stop if A differs from B";
+const FAIL = "owner check failed: state '<material> belongs to A; the user asked about B; A == B' and stop if A differs from B";
 
 // Words that do not identify an entity ("Astra AI (ours)" == "the Astra AI").
 const FILLER = new Set(["the", "our", "ours", "inc", "llc", "ltd", "corp", "co", "company"]);

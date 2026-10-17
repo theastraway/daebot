@@ -4,7 +4,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { HistoryRecorder } from "../events.ts";
 import type { AgentEvent, AgentSession, HistoryEvent, Runtime, Violation } from "../types.ts";
+import { createServer, request as httpRequest } from "node:http";
 import { startGateway } from "./index.ts";
+import { createBotsFake } from "./dev-fake-bots.ts";
 
 const sleep = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
@@ -116,12 +118,26 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   void runtime.openSession({ surface: "web", title: "Earlier: claims triage", resumeId: "seed-claims" }).then((s) => s.close());
   const gw = await startGateway({
     runtime,
-    port: Number(process.env.PORT ?? 7788),
-    host: process.env.HOST ?? "127.0.0.1",
+    port: 0, // the real gateway sits behind the bots/models fake below (a pass-through proxy), on a private port
+    host: "127.0.0.1",
     tokenPath: join(homedir(), ".mindclaw", "dev-fake-token"), // dev-only token, separate from the real gateway token
   });
-  console.log(`MINDClaw gateway (FAKE runtime) listening\n  ${gw.url}/?token=${gw.token}`);
-  const stop = () => void gw.close().then(() => process.exit(0));
+  const backendPort = Number(new URL(gw.url).port);
+  const fake = createBotsFake({ token: gw.token, backendPort, botLimit: Number(process.env.BOT_LIMIT ?? 3) });
+  for (const t of fake.seedThreads) void runtime.openSession({ surface: "web", title: t.title, resumeId: t.id }).then((s) => s.close());
+  const port = Number(process.env.PORT ?? 7788);
+  const host = process.env.HOST ?? "127.0.0.1";
+  const front = createServer(async (req, res) => {
+    try {
+      if (await fake.handle(req, res)) return;
+    } catch { if (!res.headersSent) { res.writeHead(500); res.end(); } return; }
+    const up = httpRequest({ host: "127.0.0.1", port: backendPort, method: req.method, path: req.url, headers: req.headers }, (r) => { res.writeHead(r.statusCode ?? 502, r.headers); r.pipe(res); });
+    up.on("error", () => { if (!res.headersSent) res.writeHead(502); res.end(); });
+    req.pipe(up);
+  });
+  await new Promise<void>((resolve) => front.listen(port, host, () => resolve()));
+  console.log(`MINDClaw gateway (FAKE runtime + fake bots/models REST) listening\n  http://${host}:${port}/?token=${gw.token}`);
+  const stop = () => void gw.close().then(() => { front.close(); front.closeAllConnections(); process.exit(0); });
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
 }

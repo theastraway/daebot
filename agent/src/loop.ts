@@ -37,8 +37,11 @@ export interface SessionDeps {
   sync: SessionSync;
   cfg: Config;
   cwd: string;
-  systemPrompt: string;
+  /** A function is re-evaluated at the start of EVERY turn (so DAEBOT.md edits and roster changes apply on the next message). */
+  systemPrompt: string | (() => string);
   bootContext: string;
+  /** Model for this session's turns (read per turn); absent = cfg.models.default. */
+  model?: string;
   /** Resume: model-facing history from a persisted session (violations too). The system prompt is always rebuilt fresh. */
   restore?: SessionState & { violations?: Violation[] };
   /** Optional learning layer (src/learn). Absent = the loop behaves exactly as before. */
@@ -63,9 +66,14 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     shadow: cfg.shadow,
   };
 
-  let systemText = deps.systemPrompt;
-  if (deps.bootContext && !systemText.includes(deps.bootContext)) systemText += `\n\n${deps.bootContext}`;
-  const messages: Message[] = [{ role: "system", content: systemText }];
+  const buildSystem = (): string => {
+    let t = typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt;
+    if (deps.bootContext && !t.includes(deps.bootContext)) t += `\n\n${deps.bootContext}`;
+    return t;
+  };
+  const messages: Message[] = [{ role: "system", content: buildSystem() }];
+  let model: string | undefined = deps.model;
+  const modelNow = (): string => model || cfg.models.default;
 
   // Learning hook state: the one "What you learned before" note currently in the transcript, and earlier user messages.
   const learn = deps.learn;
@@ -99,16 +107,24 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
   }
 
   const enforced = () => !state.shadow;
+  let turnOrigin: "user" | "bot" = "user";
 
-  async function* runTurn(userMessage: string, signal?: AbortSignal): AsyncGenerator<AgentEvent> {
+  async function* runTurn(userMessage: string, signal?: AbortSignal, origin: "user" | "bot" = "user"): AsyncGenerator<AgentEvent> {
     // ---- start of turn
     state.userMessageIndex += 1;
     state.turnIndex += 1;
-    state.userMessage = userMessage;
+    // A bot-originated turn is NOT the human speaking: its text is never the "latest user message" the gates read
+    // (no confirmation grant, no feed-post unlock, no attribution exemption for the receipt gate).
+    state.userMessage = origin === "bot" ? "" : userMessage;
     state.calls = [];
+    turnOrigin = origin;
+    // A granted confirmation is valid for ONE turn only (the one it was granted in); a bot-originated turn starts with none at all.
+    state.confirmations = origin === "bot" ? [] : state.confirmations.filter((c) => c.grantedAtUserMsg === undefined);
+    // The system prompt is rebuilt each turn (a function prompt reads fresh DAEBOT.md / roster).
+    try { if (messages[0]?.role === "system") messages[0] = { role: "system", content: buildSystem() }; } catch { /* keep the previous prompt */ }
 
-    // Pending confirmations from earlier turns are granted by the kernel only on an explicit action phrase.
-    try { kernel.onUserMessage?.(state, userMessage); } catch { /* gate bug must not kill the turn */ }
+    // Pending confirmations from earlier turns are granted by the kernel only on an explicit action phrase, spoken by a HUMAN.
+    if (origin !== "bot") { try { kernel.onUserMessage?.(state, userMessage); } catch { /* gate bug must not kill the turn */ } }
 
     let replies: string[] = [];
     try { replies = await sync.pendingReplies(); } catch { /* sync is best effort */ }
@@ -153,8 +169,9 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
         let text = "";
         const toolCalls: ToolCall[] = [];
         let usage: Usage | undefined;
-        let servedBy = cfg.models.default;
-        for await (const ev of provider.stream({ model: cfg.models.default, messages: [...messages], tools: specs, signal }) as AsyncIterable<StreamEvent>) {
+        const useModel = modelNow();
+        let servedBy = useModel;
+        for await (const ev of provider.stream({ model: useModel, messages: [...messages], tools: specs, signal }) as AsyncIterable<StreamEvent>) {
           if (ev.type === "text") { text += ev.delta; if (ev.delta) yield { type: "text", delta: ev.delta }; }
           else if (ev.type === "toolCall") toolCalls.push(ev.call);
           else if (ev.type === "done") { usage = ev.usage; if (ev.model) servedBy = ev.model; if (ev.notice) yield { type: "notice", level: "info", text: ev.notice }; }
@@ -308,6 +325,16 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     }
 
     let args = call.args ?? {};
+    // A peer (another bot) turn can never ask a human for an outward/irreversible/public action: refused outright, no confirmation is created.
+    if (turnOrigin === "bot") {
+      const cls = effectiveClass(tool, args);
+      if (cls === "outward" || cls === "irreversible" || cls === "public") {
+        messages.push(toolMsg(call, "blocked: peer turns cannot request outward actions. Tell the requester what you would do and let the user ask for it directly."));
+        yield { type: "gate", verdict: { gate: "peer", action: "block", reason: "peer turns cannot request outward actions" }, enforced: true };
+        localViolations.push({ at: Date.now(), sessionId: id, gate: "peer", action: "block", reason: `peer turn tried ${tool.spec.name} (${cls})`, enforced: true });
+        return "ok";
+      }
+    }
     const verdicts = safe(() => kernel.preTool(state, call, tool), [] as GateVerdict[]);
     for (const n of verdicts) if (isShadowNote(n)) yield { type: "gate", verdict: n, enforced: false };
     const v = verdicts.find((x) => x.action !== "allow");
@@ -365,8 +392,9 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     surface,
     send(userMessage, opts) {
       currentSignal = opts?.signal;
-      return runTurn(userMessage, opts?.signal);
+      return runTurn(userMessage, opts?.signal, opts?.origin === "bot" ? "bot" : "user");
     },
+    setModel(m) { model = m && m.trim() ? m.trim() : undefined; },
     violations() {
       const fromKernel = safe(() => kernel.violations(), [] as Violation[]).filter((v) => v.sessionId === id);
       return [...fromKernel, ...localViolations].sort((a, b) => a.at - b.at);

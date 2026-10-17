@@ -2,10 +2,52 @@ import type { MindClient, Tool, ToolClass, ToolResult, ToolSpec } from "../types
 
 const MAX_OUT = 24_000;
 
-const OWNER_CHECK_DESC =
-  "State: '<material> belongs to <entity A>; Anthony asked about <entity B>; A == B'. If A differs from B, stop.";
+/** Which MINDs a tool set can reach. `home` is where WRITES always go ("main" or a bot slug); reads may name another one. */
+export interface TenantResolver {
+  home: string;
+  /** Live list of the user's bots (the roster the model sees). */
+  roster(): { slug: string; name: string; purpose: string }[];
+  /** A client for "main" or a bot slug (a bot client sends X-MIND-Bot with the MAIN key). */
+  clientFor(mind: string): MindClient;
+  /** Optional: reconcile the roster with MIND before it is listed. */
+  refresh?(): Promise<void>;
+}
 
-const ownerCheckProp = { type: "string", description: OWNER_CHECK_DESC };
+export interface MindToolsOptions {
+  /** The signed-in username, used in the owner_check wording (never a hardcoded name). */
+  user?: string;
+  /** Max cross-MIND reads in flight at once (default 3). */
+  maxCrossReads?: number;
+}
+
+/** Small counting semaphore (the cap on cross-MIND reads in flight). */
+export class Semaphore {
+  private free: number;
+  private waiters: (() => void)[] = [];
+  constructor(n: number) { this.free = Math.max(1, n); }
+  async acquire(): Promise<() => void> {
+    if (this.free > 0) this.free--;
+    else await new Promise<void>((r) => this.waiters.push(r));
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      const next = this.waiters.shift();
+      if (next) next(); else this.free++;
+    };
+  }
+}
+
+const isResolver = (x: MindClient | TenantResolver): x is TenantResolver => typeof (x as TenantResolver).clientFor === "function";
+
+function ownerCheckDesc(user: string): string {
+  return `State: '<material> belongs to <entity A>; ${user} asked about <entity B>; A == B'. If A differs from B, stop.`;
+}
+
+const MIND_PROP = {
+  type: "string",
+  description: 'Which MIND to read: "main" or a bot slug (see mind_tenants). Default: your own MIND. Writes always go to your own MIND and take no such argument.',
+};
 
 function cap(s: string): string {
   return s.length > MAX_OUT ? s.slice(0, MAX_OUT) + `\n[truncated ${s.length - MAX_OUT} chars]` : s;
@@ -16,10 +58,10 @@ function fail(msg: string): ToolResult {
 }
 
 // owner_check must be present and assert A == B. The kernel does the hard check; this is the cheap first line.
-function ownerProblem(args: Record<string, unknown>): string | undefined {
+function ownerProblem(args: Record<string, unknown>, user: string): string | undefined {
   const v = args.owner_check;
   if (typeof v !== "string" || !v.includes("==")) {
-    return "owner_check required: state '<material> belongs to <A>; Anthony asked about <B>; A == B' before any MIND write.";
+    return `owner_check required: state '<material> belongs to <A>; ${user} asked about <B>; A == B' before any MIND write.`;
   }
   return undefined;
 }
@@ -33,9 +75,34 @@ export function isDeleteCall(args: Record<string, unknown>): boolean {
   return a === "delete" || m === "delete" || fa === "delete";
 }
 
-function stripLocal(args: Record<string, unknown>): Record<string, unknown> {
-  const { owner_check: _o, ...rest } = args;
-  return rest;
+// Arguments that steer the tool locally and never reach MIND: the owner check and the `mind` (tenant) choice.
+// Removed at EVERY depth (a model may tuck them inside fields, arrays of fields, nested objects), before any body is built.
+const LOCAL_ARG_KEYS = new Set(["owner_check", "mind"]);
+function deepStrip(v: unknown, depth = 0): unknown {
+  if (depth > 12 || v === null || typeof v !== "object") return v;
+  if (Array.isArray(v)) return v.map((x) => deepStrip(x, depth + 1));
+  const out: Record<string, unknown> = {};
+  for (const [k, x] of Object.entries(v as Record<string, unknown>)) if (!LOCAL_ARG_KEYS.has(k)) out[k] = deepStrip(x, depth + 1);
+  return out;
+}
+export function stripLocal(args: Record<string, unknown>): Record<string, unknown> {
+  return deepStrip(args) as Record<string, unknown>;
+}
+
+/** A client whose every request is aborted with the caller's signal (a turn abort or a bot_talk timeout). */
+function withSignal(c: MindClient, signal?: AbortSignal): MindClient {
+  if (!signal) return c;
+  return {
+    context: (s, f) => c.context(s, f, signal),
+    query: (q, o) => c.query(q, { ...o, signal }),
+    remember: (a) => c.remember(a, signal),
+    call: (t, a) => c.call(t, a, signal),
+  };
+}
+
+function botUnsupported(e: unknown): boolean {
+  const x = e as { payload?: { error?: unknown }; message?: unknown };
+  return x?.payload?.error === "bot_unsupported" || /\bbot_unsupported\b/.test(String(x?.message ?? ""));
 }
 
 interface Def {
@@ -50,13 +117,14 @@ interface Def {
   run: (client: MindClient, args: Record<string, unknown>) => Promise<string>;
 }
 
-function build(client: MindClient, d: Def): Tool {
+function build(t: TenantResolver, user: string, cross: Semaphore, d: Def): Tool {
   const properties: Record<string, unknown> = { ...d.properties };
   const required = [...(d.required ?? [])];
   if (d.ownerGate) {
-    properties.owner_check = ownerCheckProp;
+    properties.owner_check = { type: "string", description: ownerCheckDesc(user) };
     required.push("owner_check");
   }
+  if (d.cls === "read") properties.mind = MIND_PROP; // only READ tools may name another MIND
   const spec: ToolSpec = {
     name: d.name,
     description: d.description,
@@ -65,9 +133,9 @@ function build(client: MindClient, d: Def): Tool {
   const tool: Tool = {
     spec,
     class: d.cls,
-    async run(args) {
+    async run(args, ctx) {
       if (d.ownerGate) {
-        const p = ownerProblem(args);
+        const p = ownerProblem(args, user);
         if (p) return fail(p);
       }
       if (d.actions) {
@@ -76,11 +144,36 @@ function build(client: MindClient, d: Def): Tool {
           return fail(`${d.name}: action '${action}' not allowed here. Allowed: ${d.actions.join(", ")}.`);
         }
       }
+      // Which MIND? Writes ALWAYS go to the home MIND. Reads default to home and may name "main" or any bot of the roster.
+      let target = t.home;
+      const asked = args.mind;
+      if (asked !== undefined && asked !== null && asked !== "") {
+        if (typeof asked !== "string") return fail('mind must be "main" or a bot slug');
+        if (d.cls === "read") {
+          const valid = [...new Set(["main", t.home, ...t.roster().map((b) => b.slug)])];
+          if (!valid.includes(asked)) return fail(`unknown MIND "${asked}". Valid: ${valid.join(", ")}`);
+          target = asked;
+        } else if (asked !== t.home) {
+          return fail(`${d.name} writes only to your own MIND (${t.home}). To change another MIND, ask the bot that owns it with bot_talk.`);
+        }
+      }
+      const crossRead = d.cls === "read" && target !== t.home;
+      const release = crossRead ? await cross.acquire() : undefined;
       try {
-        const out = await d.run(client, stripLocal(args));
+        const out = await d.run(withSignal(t.clientFor(target), ctx?.signal), stripLocal(args));
         return { ok: true, output: cap(out) };
       } catch (e) {
+        if (botUnsupported(e)) {
+          const what = d.name.replace(/^mind_/, "");
+          return fail(target === "main"
+            ? `MIND does not support ${what} on this route.`
+            : d.cls === "read"
+              ? `that MIND (${target}) doesn't support ${what} for bots; use mind:"main" (bot MINDs support query, context, documents, entries, graph and profile).`
+              : `your bot MIND (${target}) doesn't support ${what}: bot MINDs support query, context, documents, entries, graph and profile. Ask a main session to do it.`);
+        }
         return fail((e as Error).message);
+      } finally {
+        release?.();
       }
     },
   };
@@ -103,7 +196,9 @@ function pair(
 ): Def[] {
   const passthrough = (tool: string) => (c: MindClient, a: Record<string, unknown>) => {
     const { fields, ...rest } = a as { fields?: Record<string, unknown> };
-    return c.call(tool, { ...(fields ?? {}), ...rest });
+    // `mind` may also be tucked inside fields by a model; it must never reach a request body.
+    const { mind: _m, owner_check: _o, ...f } = fields && typeof fields === "object" ? fields : ({} as Record<string, unknown>);
+    return c.call(tool, { ...f, ...rest });
   };
   return [
     {
@@ -156,7 +251,13 @@ export function renderDecision(a: Record<string, unknown>, date: string): string
   ).trimEnd();
 }
 
-export function createMindTools(client: MindClient): Tool[] {
+export function createMindTools(source: MindClient | TenantResolver, opts: MindToolsOptions = {}): Tool[] {
+  // Back-compat: a plain client is a single-MIND tool set (home "main", no bots).
+  const t: TenantResolver = isResolver(source)
+    ? source
+    : { home: "main", roster: () => [], clientFor: () => source };
+  const user = opts.user?.trim() || "the user";
+  const cross = new Semaphore(opts.maxCrossReads ?? 3);
   const defs: Def[] = [];
 
   defs.push({
@@ -292,5 +393,31 @@ export function createMindTools(client: MindClient): Tool[] {
     run: (c, a) => { const { fields, ...r } = a as { fields?: Record<string, unknown> }; return c.call("folders", { ...(fields ?? {}), ...r }); },
   });
 
-  return defs.map((d) => build(client, d));
+  const tools = defs.map((d) => build(t, user, cross, d));
+  tools.push(tenantsTool(t));
+  return tools;
+}
+
+// mind_tenants: the live roster of MINDs this tool set can read.
+function tenantsTool(t: TenantResolver): Tool {
+  return {
+    spec: {
+      name: "mind_tenants",
+      description: 'List the MINDs you can read: "main" (the user\'s main MIND) and every bot with its purpose. Pass a slug as `mind` on any read tool to read it. Writes always go to your own MIND.',
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+    },
+    class: "read",
+    receipt: "mind",
+    async run() {
+      try { await t.refresh?.(); } catch { /* the local roster is still valid */ }
+      const bots = t.roster();
+      const lines = [
+        `home: ${t.home === "main" ? "main (the user's main MIND)" : `bot ${t.home}`}`,
+        `main: the user's main MIND`,
+        ...bots.map((b) => `bot ${b.slug} (${b.name})${b.purpose ? `: ${b.purpose}` : ""}`),
+      ];
+      if (!bots.length) lines.push("(no bots yet)");
+      return { ok: true, output: cap(lines.join("\n")) };
+    },
+  };
 }

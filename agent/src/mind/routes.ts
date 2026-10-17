@@ -12,7 +12,8 @@ export interface Route {
 }
 
 // Args that never go to MIND.
-const LOCAL_KEYS = new Set(["owner_check"]);
+// "mind" picks which MIND a read goes to (it becomes the X-MIND-Bot header); it is never part of a request.
+const LOCAL_KEYS = new Set(["owner_check", "mind"]);
 
 function enc(v: unknown): string {
   return encodeURIComponent(String(v ?? ""));
@@ -108,6 +109,13 @@ export function routeFor(toolIn: string, args: Record<string, unknown>): Route {
       return crud(tool, "/admin/agents", "slug", args, {
         heartbeat: (a) => ({ method: "POST", path: `/admin/agents/${need(a, "slug", tool, "heartbeat")}/heartbeat`, body: clean(a, ["slug"]) }),
       });
+    case "bots": {
+      // The bots admin API (always the MAIN key, never a bot header): POST /bots {slug,label}, GET /bots, DELETE /bots/{slug}.
+      if (action === "create") return { method: "POST", path: "/bots", body: { slug: args.slug, label: args.label } };
+      if (action === "delete") return { method: "DELETE", path: `/bots/${need(args, "slug", tool, action)}` };
+      if (action === "list" || action === "") return { method: "GET", path: "/bots" };
+      throw new Error(`bots: unknown action '${action}'`);
+    }
     case "folders":
       return crud(tool, "/folders", "folder_id", args, {
         routes: () => ({ method: "GET", path: "/folders/routes" }),

@@ -189,7 +189,7 @@ test("owner code still works and maps to the server key, not a user", async () =
     assert.equal(login.status, 200);
     const h = { ...H, cookie: cookieOf(login) };
     const me = JSON.parse((await http(r.gw.url, "GET", "/auth/me", { headers: h })).body);
-    assert.deepEqual(me, { username: "Owner", owner: true, tier: "admin" });
+    assert.deepEqual(me, { username: "Owner", owner: true, tier: "admin", bots: false });
     const sid = JSON.parse((await http(r.gw.url, "POST", "/sessions", { headers: h, body: { surface: "web" } })).body).sessionId;
     await http(r.gw.url, "POST", `/sessions/${sid}/send`, { headers: h, body: { text: "hello" } });
     // the owner's MIND traffic used the server key; no user key was involved
@@ -214,7 +214,7 @@ test("API key sign-in: valid key -> cookie + stored sealed + /auth/me; invalid k
     assert.ok(!cookie.includes("alice") && !cookie.includes(r.keys.alice), "cookie carries only the user id");
     assert.match(String(ok.headers["set-cookie"]), /HttpOnly; Secure; SameSite=Strict/);
     const me = JSON.parse((await http(r.gw.url, "GET", "/auth/me", { headers: { ...H, cookie } })).body);
-    assert.deepEqual(me, { username: "alice", owner: false, tier: "staff" });
+    assert.deepEqual(me, { username: "alice", owner: false, tier: "staff", bots: false });
     const onDisk = readFileSync(join(r.dir, "users", "daebot-users.json"), "utf8");
     assert.ok(!onDisk.includes(r.keys.alice), "key encrypted at rest");
     // admin by DAEBOT_ADMINS
@@ -275,7 +275,7 @@ test("MIND OAuth: code + PKCE end to end, state bound to the browser, single use
     assert.ok(r.fake.lastVerifier && r.fake.lastVerifier.length >= 43, "PKCE verifier was sent and matched the challenge");
     const cookie = cookieOf(done);
     const me = JSON.parse((await http(r.gw.url, "GET", "/auth/me", { headers: { ...H, cookie } })).body);
-    assert.deepEqual(me, { username: "alice", owner: false, tier: "staff" });
+    assert.deepEqual(me, { username: "alice", owner: false, tier: "staff", bots: false });
     const stored = readFileSync(join(r.dir, "users", "daebot-users.json"), "utf8");
     assert.ok(!/mind_rt_/.test(stored) && !/"mind_/.test(stored), "tokens are sealed on disk");
 

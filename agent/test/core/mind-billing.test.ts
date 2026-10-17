@@ -319,7 +319,7 @@ test("GET /auth/me in mind mode adds {planTier, tierName, creditsRemaining, upgr
     const cookie = String(([] as string[]).concat(login.headers["set-cookie"] as string[]).find((c) => c.startsWith("mc_session="))).split(";")[0];
     const get = async (path = "/auth/me") => JSON.parse((await http(gw.url, "GET", path, { headers: { ...H, cookie } })).body);
     const before = await get();
-    assert.deepEqual(before, { username: "alice", owner: false, tier: "staff", planTier: "starter", tierName: "Starter", creditsRemaining: 412, creditsLimit: 500, usageLeftPct: 82, upgradeUrl: UPGRADE });
+    assert.deepEqual(before, { username: "alice", owner: false, tier: "staff", bots: false, planTier: "starter", tierName: "Starter", creditsRemaining: 412, creditsLimit: 500, usageLeftPct: 82, upgradeUrl: UPGRADE });
     assert.ok(w.llm.creditGets.every((k) => k === w.keys.alice), "the plan lookup used alice's key");
 
     const s = await w.auth.runtimeFor(w.principal("alice")).openSession({ surface: "web" });

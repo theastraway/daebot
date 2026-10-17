@@ -6,6 +6,7 @@ import type { Provider, Config, Runtime } from "../types.ts";
 import type { SessionStore } from "../persist.ts";
 import type { BootCache } from "../mind/boot-cache.ts";
 import type { MindCredits } from "../provider/mind.ts";
+import type { BotsContext } from "../bots/types.ts";
 import { MindOAuth } from "./mind-auth.ts";
 import { OWNER } from "./users.ts";
 import type { Principal, UserStore } from "./users.ts";
@@ -43,6 +44,8 @@ export interface HubOptions {
   bootCache?: BootCache;
   /** Set in mind billing mode. */
   credits?: MindCredits;
+  /** Bots + settings dir and the late-bound bot bus (shared with the gateway). */
+  bots?: BotsContext;
 }
 
 interface UserSlot { runtime: Runtime; key: string; refreshing?: Promise<boolean> }
@@ -92,6 +95,7 @@ export function createRuntimeHub(o: HubOptions): { runtimeFor(p: Principal): Run
       credits: o.credits,
       store: o.sessionStore,
       bootCache: o.bootCache,
+      bots: o.bots,
       owner: p.id,
       hosted: {
         dailyUsdCap: o.globalCap.capUsd,
@@ -112,6 +116,10 @@ export function createRuntimeHub(o: HubOptions): { runtimeFor(p: Principal): Run
       openSession: (opts) => inner.openSession({ ...opts, identity: p.tier }),
       listSessions: () => inner.listSessions(),
       history: (id) => inner.history?.(id),
+      bots: inner.bots,
+      sessionInfo: (id) => inner.sessionInfo?.(id),
+      settings: inner.settings,
+      purgeBotSessions: (id) => inner.purgeBotSessions?.(id) ?? Promise.resolve(0),
     };
     return slot.runtime;
   }

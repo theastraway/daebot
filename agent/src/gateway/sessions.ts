@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { AgentEvent, AgentSession, Runtime } from "../types.ts";
 
 export class BusyError extends Error {}
@@ -19,7 +20,16 @@ export interface LiveSession {
   turns: number; // user messages sent through this gateway process; 0 = prewarmed and untouched
   /** Principal id that opened it. Another principal can never list, open, send to, abort or close it. */
   owner: string;
+  /** Bot id when this is a thread of a bot (and `peer`: the other end of a bot-to-bot DM thread). */
+  bot?: string;
+  peer?: string;
+  /** Identity tier this session was opened with (undefined = the runtime's own). */
+  identity?: string;
+  /** A fresh random value per turn (the bot bus keys its per-user-message budget on it). */
+  turnNonce: string;
 }
+
+export interface SessionRow { id: string; surface: string; title: string; updatedAt: number; live: boolean; busy: boolean; bot?: string; peer?: string; model?: string }
 
 export const IDLE_MS = 6 * 60 * 60 * 1000;
 export const EMPTY_IDLE_MS = 15 * 60 * 1000; // a session nobody has written to is dropped sooner
@@ -43,12 +53,13 @@ export class SessionManager {
     this.timer.unref();
   }
 
-  async open(o: { surface: string; title?: string; resumeId?: string; identity?: string; owner?: string }): Promise<LiveSession> {
+  async open(o: { surface: string; title?: string; resumeId?: string; identity?: string; owner?: string; bot?: string; peer?: string; model?: string }): Promise<LiveSession> {
     const owner = o.owner ?? LOCAL_OWNER;
     if (o.resumeId) {
       const existing = this.live.get(o.resumeId);
       if (existing) {
         if (existing.owner !== owner) throw new ForbiddenError("forbidden");
+        if (o.bot && existing.bot !== o.bot) throw new Error("session belongs to a different bot");
         existing.lastUsed = Date.now();
         return existing;
       }
@@ -58,7 +69,8 @@ export class SessionManager {
       if (stored !== undefined && stored !== owner) throw new ForbiddenError("forbidden");
     }
     const rt = this.runtimeFor ? this.runtimeFor(owner) : this.runtime;
-    const session = await rt.openSession({ surface: o.surface, title: o.title, resumeId: o.resumeId, identity: o.identity });
+    const session = await rt.openSession({ surface: o.surface, title: o.title, resumeId: o.resumeId, identity: o.identity, botId: o.bot, peer: o.peer, model: o.model });
+    const info = rt.sessionInfo?.(session.id);
     const existing = this.live.get(session.id);
     if (existing) {
       if (existing.owner !== owner) throw new ForbiddenError("forbidden");
@@ -76,6 +88,10 @@ export class SessionManager {
       createdAt: now,
       turns: 0,
       owner,
+      bot: info?.bot ?? o.bot,
+      peer: info?.peer ?? o.peer,
+      identity: o.identity,
+      turnNonce: randomUUID(),
     };
     this.live.set(ls.id, ls);
     return ls;
@@ -105,8 +121,9 @@ export class SessionManager {
     return this.live.size;
   }
 
-  list(owner: string = LOCAL_OWNER): { id: string; surface: string; title: string; updatedAt: number; live: boolean; busy: boolean }[] {
-    const out = new Map<string, { id: string; surface: string; title: string; updatedAt: number; live: boolean; busy: boolean }>();
+  /** Sessions of one owner. Bot threads are left out by default; `bot` returns only that bot's threads. */
+  list(owner: string = LOCAL_OWNER, filter: { bot?: string } = {}): SessionRow[] {
+    const out = new Map<string, SessionRow>();
     try {
       for (const s of (this.runtimeFor ? this.runtimeFor(owner) : this.runtime).listSessions()) {
         const other = this.live.get(s.id);
@@ -129,18 +146,22 @@ export class SessionManager {
         updatedAt: Math.max(prev?.updatedAt ?? 0, ls.lastUsed),
         live: true,
         busy: ls.busy,
+        ...((prev?.bot ?? ls.bot) ? { bot: prev?.bot ?? ls.bot } : {}),
+        ...((prev?.peer ?? ls.peer) ? { peer: prev?.peer ?? ls.peer } : {}),
+        ...(prev?.model ? { model: prev.model } : {}),
       });
     }
-    return [...out.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+    return [...out.values()].filter((r) => (filter.bot ? r.bot === filter.bot : !r.bot)).sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
   /** Runs one turn. Throws BusyError / NotFoundError synchronously-in-promise before any event is emitted. */
-  async turn(id: string, text: string, onEvent: (e: AgentEvent) => void, external?: AbortSignal): Promise<void> {
+  async turn(id: string, text: string, onEvent: (e: AgentEvent) => void, external?: AbortSignal, origin: "user" | "bot" = "user"): Promise<void> {
     const ls = this.live.get(id);
     if (!ls) throw new NotFoundError("no such session");
     if (ls.busy) throw new BusyError("session is busy with another turn");
     ls.busy = true; // set synchronously: no await between check and set
     ls.turns++;
+    ls.turnNonce = randomUUID();
     const ac = new AbortController();
     ls.abort = ac;
     const onExternal = () => ac.abort();
@@ -150,7 +171,7 @@ export class SessionManager {
     }
     let sawDone = false;
     try {
-      for await (const ev of ls.session.send(text, { signal: ac.signal })) {
+      for await (const ev of ls.session.send(text, { signal: ac.signal, origin })) {
         if (ev.type === "done") sawDone = true;
         onEvent(ev);
         if (sawDone) break;
@@ -170,6 +191,26 @@ export class SessionManager {
       ls.abort = null;
       ls.lastUsed = Date.now();
     }
+  }
+
+  /** Whether any live thread of the bot exists / is mid-turn. */
+  botState(owner: string, botId: string): { live: boolean; busy: boolean } {
+    let live = false, busy = false;
+    for (const ls of this.live.values()) if (ls.owner === owner && ls.bot === botId) { live = true; busy = busy || ls.busy; }
+    return { live, busy };
+  }
+
+  /** Closes every live session of one bot (the bot was deleted). */
+  async closeBotSessions(owner: string, botId: string): Promise<void> {
+    for (const ls of [...this.live.values()]) if (ls.owner === owner && (ls.bot === botId || ls.peer === botId)) await this.close(ls.id, "bot deleted");
+  }
+
+  /** Changes the model the NEXT turn of a live session runs on. */
+  setModel(id: string, model: string | undefined): boolean {
+    const ls = this.live.get(id);
+    if (!ls || !ls.session.setModel) return false;
+    ls.session.setModel(model);
+    return true;
   }
 
   abort(id: string): boolean {

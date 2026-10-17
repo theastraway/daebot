@@ -2,6 +2,8 @@
 // All dynamic text goes through textContent / createTextNode. No innerHTML anywhere.
 
 import { initVoice } from "/voice.js";
+import { initBots, generalSessions, peerLabel } from "/bots.js";
+import { initModels } from "/models.js";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -43,6 +45,7 @@ const state = {
   online: null,
   model: "",               // the LLM powering the agent, from /health
   hosted: false,           // public deployment: cookie login instead of the pasted gateway token
+  curBot: "",              // id of the bot whose thread is on screen (or being drafted); "" = a plain session
 };
 const DRAFT = "__draft__";
 const tkey = () => state.currentId ?? DRAFT;
@@ -340,16 +343,22 @@ function addItem(sessionId, it) {
 }
 
 // ---------- header / sessions ----------
-function currentMeta() { return state.sessions.find((s) => s.id === state.currentId); }
+function metaById(id) { return state.sessions.find((s) => s.id === id) || bots.threads().find((s) => s.id === id); }
+function currentMeta() { return metaById(state.currentId); }
 function renderHeader() {
   const meta = currentMeta();
-  els.title.textContent = meta ? meta.title || "Untitled" : "New session";
-  els.subtitle.textContent = meta ? `${meta.surface}${meta.live ? " · live" : ""}` : "Not started";
+  const bot = state.curBot ? bots.bot(state.curBot) : null;
+  els.title.textContent = meta ? meta.title || "Untitled" : bot ? "New thread" : "New session";
+  els.subtitle.textContent = meta
+    ? [bot && bot.name, meta.peer && peerLabel(meta.peer, bots.bots()), `${meta.surface}${meta.live ? " · live" : ""}`].filter(Boolean).join(" · ")
+    : bot ? `${bot.name} · Not started` : "Not started";
   const u = transcript(tkey()).usage;
   els.usage.hidden = !(u.in || u.out || u.cost);
   els.usageTokens.textContent = `${fmtTok(u.in)} in / ${fmtTok(u.out)} out`;
   els.usageCost.textContent = fmtCost(u.cost);
   const tm = transcript(tkey()).model || state.model; els.usage.title = tm ? `Model: ${tm}` : "";
+  models.setServed(transcript(tkey()).model || "");
+  bots.sync();
   setBusyUi();
 }
 function setBusyUi() {
@@ -358,8 +367,9 @@ function setBusyUi() {
 }
 function renderSessions() {
   els.list.replaceChildren();
-  if (!state.sessions.length) { els.list.append(h("div", "empty-side", "No sessions yet.")); return; }
-  for (const s of state.sessions) {
+  const shown = generalSessions(state.sessions); // bot threads live under their bot, in the Bots view
+  if (!shown.length) { els.list.append(h("div", "empty-side", "No sessions yet.")); return; }
+  for (const s of shown) {
     const b = h("button", "sess"); b.type = "button";
     if (s.id === state.currentId) b.setAttribute("aria-current", "true");
     const m = h("span", "sess-m");
@@ -370,21 +380,27 @@ function renderSessions() {
     els.list.append(b);
   }
 }
+// View-aware: the Sessions view lists plain sessions; the Bots view also refreshes the bots and the selected bot's threads.
+// A bot thread can be open while the Sessions view shows, so its bot is kept fresh too.
 async function refreshSessions() {
-  try { state.sessions = (await json("/sessions")).sessions; renderSessions(); renderHeader(); } catch { /* shown via connection state */ }
+  try { state.sessions = (await json("/sessions")).sessions; } catch { /* shown via connection state */ }
+  if (bots.view() === "bots" || state.curBot) await bots.refresh();
+  renderSessions(); renderHeader();
 }
 
 async function selectSession(s) {
   closeSidebar();
   if (!s.live) {
     try {
-      const { sessionId } = await json("/sessions", { method: "POST", body: JSON.stringify({ surface: "web", title: s.title, resumeId: s.id }) });
+      const { sessionId } = await json("/sessions", { method: "POST", body: JSON.stringify({ surface: "web", title: s.title, resumeId: s.id, ...(s.bot ? { bot: s.bot } : {}) }) });
       if (sessionId !== s.id) { transcript(sessionId); }
       state.currentId = sessionId;
+      state.curBot = s.bot || "";
       await loadHistory(sessionId);
     } catch (e) { return notify(`Could not resume: ${e.message}`); }
   } else {
     state.currentId = s.id;
+    state.curBot = s.bot || "";
     await loadHistory(s.id);
   }
   await refreshSessions();
@@ -394,8 +410,19 @@ async function selectSession(s) {
 function newSession() {
   closeSidebar();
   state.currentId = null;
+  state.curBot = "";
   state.transcripts.delete(DRAFT);
   renderSessions(); renderThread();
+  els.input.focus();
+}
+// A new thread with one of the user's bots: a draft until the first message, like a new session.
+function newBotThread(botId) {
+  closeSidebar();
+  state.currentId = null;
+  state.curBot = botId;
+  state.transcripts.delete(DRAFT);
+  renderSessions(); renderThread();
+  bots.renderList();
   els.input.focus();
 }
 function notify(text) { addItem(tkey(), { kind: "notice", level: "warn", text }); }
@@ -406,7 +433,12 @@ async function ensureSession() {
   if (state.currentId) return state.currentId;
   if (!opening) {
     opening = (async () => {
-      const { sessionId } = await json("/sessions", { method: "POST", body: JSON.stringify({ surface: "web", title: "New session" }) });
+      const body = { surface: "web", title: "New session" };
+      if (state.curBot) body.bot = state.curBot;
+      const dm = models.defaultForNew();
+      let sessionId;
+      try { ({ sessionId } = await json("/sessions", { method: "POST", body: JSON.stringify(dm ? { ...body, model: dm } : body) })); }
+      catch (e) { if (!dm || e.message === "unauthorized") throw e; ({ sessionId } = await json("/sessions", { method: "POST", body: JSON.stringify(body) })); } // a remembered model the plan no longer allows: start on the default
       // migrate draft transcript
       const draft = state.transcripts.get(DRAFT);
       if (draft && !state.transcripts.has(sessionId)) { state.transcripts.set(sessionId, draft); state.transcripts.delete(DRAFT); }
@@ -441,7 +473,7 @@ async function sendMessage(text) {
   if (startKey !== id) { state.busy.delete(startKey); state.busy.add(id); }
   refreshSessions();
   const tr = transcript(id);
-  const meta = state.sessions.find((s) => s.id === id);
+  const meta = metaById(id);
   if (meta && (!meta.title || meta.title === "New session")) meta.title = text.slice(0, 60);
   let asst = null;
   let first = true;
@@ -492,6 +524,7 @@ function saveTranscript(id) {
     const items = transcript(id).items.filter((it) => it.kind !== "notice" || it.level === "warn").map(({ node, parts, ...rest }) => rest);
     sessionStorage.setItem(`daebot:t:${id}`, JSON.stringify(items.slice(-200)));
     sessionStorage.setItem("daebot:current", id);
+    sessionStorage.setItem("daebot:bot", state.curBot || "");
   } catch { /* storage unavailable: transcript stays in memory */ }
 }
 function restoreTranscript(id) {
@@ -550,6 +583,7 @@ function onEvent(id, ev, asst, toolByReceipt) {
     case "usage":
       tr.usage.in += ev.usage.promptTokens; tr.usage.out += ev.usage.completionTokens; tr.usage.cost = ev.totalCostUsd;
       if (ev.model) tr.model = ev.model;
+      models.answered(id, id === state.currentId ? ev.model : "");
       if (id === tkey()) renderHeader();
       return asst;
     case "done":
@@ -595,7 +629,7 @@ function setViolCount(n) { els.violCount.hidden = n === 0; els.violCount.textCon
 function toggleDrawer(open) {
   els.drawer.hidden = !open;
   els.btnViol.setAttribute("aria-expanded", String(open));
-  if (open) loadViolations();
+  if (open) { bots.closeDrawer(); loadViolations(); }
 }
 
 // ---------- theme ----------
@@ -608,10 +642,12 @@ const effectiveDark = () => {
   const t = document.documentElement.dataset.theme;
   return t ? t === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
 };
-els.btnTheme.addEventListener("click", () => {
+const toggleTheme = () => {
   const next = effectiveDark() ? "light" : "dark";
   store.set("localStorage", "mc_theme", next); applyTheme(next);
-});
+};
+els.btnTheme.addEventListener("click", toggleTheme);
+$("btn-theme-side").addEventListener("click", toggleTheme); // phones: the top bar has no room for it
 applyTheme(store.get("localStorage", "mc_theme"));
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => applyTheme(store.get("localStorage", "mc_theme")));
 
@@ -626,11 +662,17 @@ function setOnline(on) {
   els.connDot.className = `dot ${on ? "on" : "off"}`;
   renderConn();
 }
+// DAEBOT_BOTS_ENABLED: when the gateway says bots are off, the Sessions|Bots toggle is hidden and the sidebar stays on Sessions.
+function applyBotsFlag(on) {
+  const seg = document.getElementById("seg");
+  if (seg) { seg.hidden = !on; seg.style.display = on ? "" : "none"; }
+  if (!on && typeof bots !== "undefined" && bots.view() === "bots") bots.setView("sessions", { silent: true });
+}
 async function ping() {
   try {
     const r = await fetch("/health", { cache: "no-store" });
     setOnline(r.ok);
-    if (r.ok) { const h = await r.json().catch(() => ({})); state.hosted = h.hosted === true; els.btnLogout.hidden = !state.hosted; if (h.model !== state.model) { state.model = h.model || ""; renderConn(); } if (state.hosted && !state.who) showWho(); }
+    if (r.ok) { const h = await r.json().catch(() => ({})); state.hosted = h.hosted === true; applyBotsFlag(h.bots === true); els.btnLogout.hidden = !state.hosted; if (h.model !== state.model) { state.model = h.model || ""; renderConn(); models.setHealth(typeof state.model === "string" ? state.model : state.model.id || state.model.name || ""); } if (state.hosted && !state.who) showWho(); }
   } catch { setOnline(false); }
 }
 
@@ -694,7 +736,7 @@ function openSidebar() { els.sidebar.classList.add("open"); els.scrim.hidden = f
 function closeSidebar() { els.sidebar.classList.remove("open"); els.scrim.hidden = true; }
 els.btnMenu.addEventListener("click", openSidebar);
 els.scrim.addEventListener("click", closeSidebar);
-els.btnNew.addEventListener("click", newSession);
+els.btnNew.addEventListener("click", () => (bots.view() === "bots" ? bots.openCard() : newSession()));
 els.btnViol.addEventListener("click", () => toggleDrawer(els.drawer.hidden));
 els.drawerClose.addEventListener("click", () => toggleDrawer(false));
 els.btnStop.addEventListener("click", abortTurn);
@@ -715,6 +757,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (state.busy.has(tkey())) { e.preventDefault(); abortTurn(); }
   else if (!els.drawer.hidden) toggleDrawer(false);
+  else if (bots.drawerOpen()) bots.closeDrawer();
   else closeSidebar();
 });
 
@@ -730,6 +773,26 @@ const voice = initVoice({
   bots: () => [...document.querySelectorAll(".hero-bot, .bot-dock m-bot")],
 });
 
+// ---------- bots + model picker ----------
+const models = initModels({
+  json, store, notify, icon,
+  getSessionId: () => state.currentId,
+  onPicked: () => renderHeader(),
+});
+const bots = initBots({
+  json, api, store, h, icon, ago, notify,
+  app: {
+    currentBot: () => state.curBot,
+    currentId: () => state.currentId,
+    refresh: () => refreshSessions(),
+    newThread: (id) => newBotThread(id),
+    openThread: (s) => selectSession(s),
+    closeViolations: () => { if (!els.drawer.hidden) toggleDrawer(false); },
+    botChanged: () => renderHeader(),
+    botDeleted: (id) => { if (state.curBot === id) newSession(); refreshSessions(); },
+  },
+});
+
 // ---------- boot ----------
 async function boot() {
   renderThread();
@@ -740,8 +803,12 @@ async function boot() {
   await refreshSessions();
   let last = null;
   try { last = sessionStorage.getItem("daebot:current"); } catch { /* none */ }
-  const known = last && state.sessions.find((s) => s.id === last); // live, or saved on the server (survives restarts)
-  if (known && known.live && restoreTranscript(last)) { state.currentId = last; renderSessions(); renderThread(); }
+  let known = last && state.sessions.find((s) => s.id === last); // live, or saved on the server (survives restarts)
+  let lastBot = ""; try { lastBot = sessionStorage.getItem("daebot:bot") || ""; } catch { /* none */ }
+  if (!known && last && lastBot) { // a bot thread may not be in the plain list
+    try { known = ((await json(`/sessions?bot=${encodeURIComponent(lastBot)}`)).sessions || []).find((s) => s.id === last); if (known && !known.bot) known = { ...known, bot: lastBot }; } catch { /* no such bot */ }
+  }
+  if (known && known.live && restoreTranscript(last)) { state.currentId = last; state.curBot = known.bot || ""; await bots.ensureLoaded(); renderSessions(); renderThread(); }
   else if (known) { await selectSession(known); } // resumes and replays the saved transcript
   else if (!state.currentId) { ensureSession().then(() => { renderSessions(); renderHeader(); }).catch(() => { /* first send retries */ }); }
 }

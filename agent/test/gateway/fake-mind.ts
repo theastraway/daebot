@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
-export interface Seen { method: string; path: string; key: string; body: any }
+export interface Seen { method: string; path: string; key: string; body: any; bot?: string }
 
 export interface FakeMind {
   url: string;            // origin
@@ -21,6 +21,14 @@ export interface FakeMind {
   lastVerifier?: string;
   /** audio endpoints: force an HTTP status (e.g. 402 / 404) for the next calls; undefined = succeed */
   audioStatus?: number;
+  /** bots by username -> slug -> record (POST/GET/DELETE /developer/v1/bots) */
+  bots: Map<string, Map<string, { slug: string; label: string; workspace_id: string; created_at: string }>>;
+  /** max bots per user before POST /bots answers 402 bot_limit (default: unlimited) */
+  botLimit?: number;
+  /** when true GET /bots answers 503 (MIND down) */
+  botsDown?: boolean;
+  /** GET /profile/models (MIND's model list); undefined = the route answers the generic {ok:true} */
+  models?: { id: string; name: string; tier?: string }[];
   newKey(username: string): string;
   close(): Promise<void>;
 }
@@ -37,6 +45,7 @@ const json = (res: ServerResponse, status: number, v: unknown, extra: Record<str
 export async function startFakeMind(initial: Record<string, string> = {}): Promise<FakeMind> {
   const m: FakeMind = {
     url: "", base: "", seen: [], keys: new Map(Object.entries(initial)), registered: [], consentUser: "", codes: new Map(), refreshTokens: new Map(),
+    bots: new Map(),
     newKey(username) { const k = "mind_" + randomBytes(24).toString("base64url"); m.keys.set(k, username); return k; },
     close: () => new Promise((r) => { server.close(() => r()); server.closeAllConnections(); }),
   };
@@ -46,7 +55,8 @@ export async function startFakeMind(initial: Record<string, string> = {}): Promi
     const key = String(req.headers["x-api-key"] ?? "");
     let parsed: any = raw;
     try { parsed = raw && String(req.headers["content-type"]).includes("json") ? JSON.parse(raw) : raw; } catch { /* keep raw */ }
-    m.seen.push({ method: req.method ?? "GET", path: u.pathname, key, body: parsed });
+    const botHdr = req.headers["x-mind-bot"] ? String(req.headers["x-mind-bot"]) : undefined;
+    m.seen.push({ method: req.method ?? "GET", path: u.pathname, key, body: parsed, ...(botHdr ? { bot: botHdr } : {}) });
 
     if (u.pathname === "/.well-known/oauth-authorization-server") {
       return json(res, 200, {
@@ -102,6 +112,34 @@ export async function startFakeMind(initial: Record<string, string> = {}): Promi
       const username = m.keys.get(key);
       if (!username) return json(res, 401, { detail: "Invalid or revoked API key." });
       const rest = u.pathname.slice("/developer/v1".length);
+      // ---- bots admin API (main key only)
+      if (rest === "/bots" || rest.startsWith("/bots/")) {
+        const mine = m.bots.get(username) ?? m.bots.set(username, new Map()).get(username)!;
+        if (rest === "/bots" && req.method === "GET") return m.botsDown ? json(res, 503, { detail: "down" }) : json(res, 200, { bots: [...mine.values()] });
+        if (rest === "/bots" && req.method === "POST") {
+          const slug = String(parsed?.slug ?? "");
+          if (mine.has(slug)) return json(res, 409, { detail: "duplicate" });
+          if (m.botLimit !== undefined && mine.size >= m.botLimit) return json(res, 402, { error: "bot_limit", limit: m.botLimit, tier: "free", upgrade_url: "https://m-i-n-d.ai/#/billing" });
+          const rec = { slug, label: String(parsed?.label ?? slug), workspace_id: `ws_${username}_${slug}`, created_at: new Date().toISOString() };
+          mine.set(slug, rec);
+          return json(res, 200, rec);
+        }
+        if (rest.startsWith("/bots/") && req.method === "DELETE") {
+          const slug = decodeURIComponent(rest.slice(6));
+          if (!mine.delete(slug)) return json(res, 404, { detail: "no such bot" });
+          return json(res, 200, { ok: true });
+        }
+        return json(res, 405, { detail: "method" });
+      }
+      // ---- X-MIND-Bot: only these routes work on a bot's MIND
+      if (botHdr) {
+        const mine = m.bots.get(username);
+        if (!mine?.has(botHdr)) return json(res, 404, { error: "bot_not_found" });
+        if (!/^\/(query|context|documents|entries|graph|profile)(\/|$)/.test(rest)) return json(res, 400, { error: "bot_unsupported" });
+        if (rest === "/context") return json(res, 200, { sections: [{ section: "soul", items: [{ text: `MIND of ${username} / bot ${botHdr}` }] }] });
+        if (rest === "/query") return json(res, 200, { response: `bot ${botHdr} of ${username} says hello` });
+        return json(res, 200, { ok: true, bot: botHdr });
+      }
       if (rest === "/audio/transcriptions" || rest === "/audio/speech") {
         if (m.audioStatus) return json(res, m.audioStatus, m.audioStatus === 402 ? { error: "insufficient_credits", message: "Not enough MIND credits for voice.", upgrade_url: "https://m-i-n-d.ai/#/billing" } : { detail: "x" });
         if (rest === "/audio/transcriptions") return json(res, 200, { text: `hello from ${username}`, duration: 2.5, credits_used: 0.01 }, { "x-mind-credits-used": "0.01" });
@@ -109,6 +147,7 @@ export async function startFakeMind(initial: Record<string, string> = {}): Promi
         return void res.end(Buffer.from("ID3fakemp3"));
       }
       if (rest === "/profile") return json(res, 200, { username, bio: "" });
+      if (rest === "/profile/models" && m.models) return json(res, 200, { models: m.models, current: m.models[0]?.id });
       if (rest === "/context") return json(res, 200, { sections: [{ section: "soul", items: [{ text: `MIND of ${username}` }] }] });
       if (rest === "/agent-sessions/open") return json(res, 200, { session_id: `ms-${username}`, pending_replies: [] });
       return json(res, 200, { ok: true });

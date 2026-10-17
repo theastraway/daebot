@@ -33,6 +33,7 @@ export function describeModel(health) {
 
 function render(health) {
   if (!badge) return;
+  if (badge.dataset.owned === "1") return; // /models.js owns the label once it has one (the model actually served)
   const d = describeModel(health);
   if (!d) { badge.hidden = true; return; }
   nameEl.textContent = d.name;
@@ -74,6 +75,7 @@ function heroize() {
   if (empty && !empty.querySelector("m-bot")) {
     const hero = document.createElement("m-bot");
     hero.className = "hero-bot"; hero.setAttribute("intro", ""); hero.setAttribute("playful", "");
+    if (document.body.dataset.botAccent) hero.setAttribute("accent", document.body.dataset.botAccent); // a bot thread: its own LED colour
     empty.prepend(hero);
   }
   dock.classList.toggle("show", !!thread && !empty && thread.children.length > 0);
