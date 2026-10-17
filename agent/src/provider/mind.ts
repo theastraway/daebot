@@ -48,7 +48,7 @@ export class MindBillingError extends ProviderHttpError {
     const plan = tierDisplayName(b.tier);
     const text = code === "model_not_in_plan" ? `This model needs a paid MIND plan (you are on ${plan}). Upgrade: ${b.upgradeUrl}`
       : code === "model_not_available" ? `This model is not available on MIND (${plan} plan). See plans: ${b.upgradeUrl}`
-      : code === "endpoint_disabled" ? "MIND's LLM billing is not switched on yet (its LLM endpoint answered 404). Operator: set DAEBOT_BILLING=openrouter until it is."
+      : code === "endpoint_disabled" ? "Daebot can't reach the AI on your MIND account right now. Please try again in a few minutes."
       : `You've used this month's plan usage (${plan} plan). Upgrade: ${b.upgradeUrl}`;
     super(status, text);
     this.name = "MindBillingError";
