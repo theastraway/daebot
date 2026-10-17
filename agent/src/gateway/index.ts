@@ -13,6 +13,8 @@ import { OWNER } from "../auth/users.ts";
 import type { Principal } from "../auth/users.ts";
 import type { AuthContext } from "../auth/tenancy.ts";
 import { MindAuthError, whoami } from "../auth/mind-auth.ts";
+import { AGENT_SURFACE_RE, AGENT_TURN_PATH, KeyIdentityCache, TurnRateLimiter } from "./agent-api.ts";
+import { userIdFor } from "../auth/users.ts";
 import { usageLeftPct } from "../provider/mind.ts";
 import { STATIC_CSP, resolveStatic, serveFile } from "./static.ts";
 import { acceptWebSocket } from "./ws.ts";
@@ -62,6 +64,8 @@ export interface GatewayOptions {
   auth?: AuthContext;
   /** The shared session store (DATA_DIR/sessions); lets ownership of persisted sessions be checked without a live session. */
   sessionStore?: { meta?(id: string): { owner?: string } | undefined };
+  /** POST /api/agent/turn per-user limit (turns per minute). Default DAEBOT_AGENT_API_RPM or 30. */
+  agentApiPerMinute?: number;
 }
 
 export const HOSTED_COOKIE = "mc_session";
@@ -168,6 +172,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         }
       : undefined,
   });
+  const turnLimiter = new TurnRateLimiter({ max: opts.agentApiPerMinute ?? (Number(process.env.DAEBOT_AGENT_API_RPM) || 30) });
+  const keyIdentities = new KeyIdentityCache();
   const wsWho = new WeakMap<WsConnection, Principal>();
   const subscribers = new Map<string, Set<WsConnection>>(); // sessionId -> ws conns
   const wsConns = new Set<WsConnection>();
@@ -356,6 +362,94 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
   }
 
+  // POST /api/agent/turn: server-to-server (MIND backend). Header-authenticated with the user's own mind_ key, never a cookie,
+  // so it sits outside the browser Origin/CSRF rules. It is deliberately STRICTER than them: any Origin header at all is refused
+  // (a browser always sends one on a cross-site POST; a server caller sends none), and the Host allowlist + https rules still apply.
+  async function agentTurn(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+    if (!auth?.store.enabled) return sendJson(res, 404, { error: "agent API is not enabled on this deployment" });
+    if (!hostOk(req)) return sendJson(res, 403, { error: "forbidden host" });
+    if (req.headers.origin !== undefined) return sendJson(res, 403, { error: "browser origins are not allowed on the agent API" });
+    if (headerOne(req, "x-forwarded-proto")?.split(",")[0].trim().toLowerCase() === "http") return sendJson(res, 400, { error: "https required" });
+    const ip = clientIp(req);
+    const wait = limiter.retryAfter(ip);
+    if (wait > 0) {
+      res.setHeader("retry-after", String(wait));
+      return sendJson(res, 429, { error: "too many attempts; try again later" });
+    }
+    const key = (headerOne(req, "x-mind-key") ?? "").trim();
+    if (!key) return sendJson(res, 401, { error: "X-MIND-Key header required" });
+    let name = keyIdentities.get(key);
+    if (!name) {
+      try {
+        name = (await whoami(auth.mindBaseUrl, key, auth.fetchImpl)).username;
+      } catch (e) {
+        const status = e instanceof MindAuthError ? e.status : 502;
+        if (status === 400 || status === 401) limiter.fail(ip);
+        return sendJson(res, status === 400 ? 401 : status, { error: e instanceof MindAuthError ? e.message : "could not check that key" });
+      }
+      keyIdentities.set(key, name);
+    }
+    if (!mayUse(name)) return sendJson(res, 403, { error: "That MIND account is not enabled for Daebot." });
+    const uid = userIdFor(name);
+    const retry = turnLimiter.take(uid);
+    if (retry > 0) {
+      res.setHeader("retry-after", String(retry));
+      return sendJson(res, 429, { error: "too many agent turns; slow down" });
+    }
+    const b = await readJson(req);
+    const text = optStr(b.text, 200_000);
+    if (!text || !text.trim()) return sendJson(res, 400, { error: "text required" });
+    const surface = optStr(b.surface, 40) ?? "mind-chat";
+    if (!AGENT_SURFACE_RE.test(surface)) return sendJson(res, 400, { error: "bad surface" });
+    const sessionId = optStr(b.sessionId, 200);
+    // The user's runtime is built from THEIR key. A browser sign-in (OAuth or key) already stored is kept; a new or rotated key is stored.
+    const have = auth.store.creds(uid);
+    if (!have || (have.kind === "key" && have.mindKey !== key)) {
+      auth.store.upsert(name, { kind: "key", mindKey: key });
+      auth.evict(uid);
+    }
+    const principal = auth.store.principal(uid);
+    if (!principal) return sendJson(res, 500, { error: "could not load the user" });
+    let ls;
+    try {
+      ls = await manager.open({ surface, title: optStr(b.title, 200) ?? "MIND chat", resumeId: sessionId || undefined, owner: principal.id });
+    } catch (e) {
+      if (e instanceof ForbiddenError) throw e;
+      return sendJson(res, 502, { error: e instanceof Error ? e.message.slice(0, 300) : "could not open a session" });
+    }
+    if (ls.busy) return sendJson(res, 409, { error: "session is busy with another turn", sessionId: ls.id });
+    return streamTurn(res, ls.id, text, { "x-daebot-session": ls.id }, { type: "session", sessionId: ls.id });
+  }
+
+  // One SSE turn: shared by POST /sessions/:id/send and POST /api/agent/turn.
+  async function streamTurn(res: ServerResponse, id: string, text: string, extraHeaders: Record<string, string> = {}, first?: Record<string, unknown>): Promise<void> {
+    res.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-store, no-transform",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+      ...BASE_HEADERS,
+      ...extraHeaders,
+    });
+    res.write(": open\n\n");
+    if (first) res.write(`data: ${JSON.stringify(first)}\n\n`);
+    const ac = new AbortController();
+    res.on("close", () => {
+      if (!res.writableEnded) ac.abort(); // client went away mid-turn
+    });
+    try {
+      await manager.turn(id, text, (ev) => {
+        if (!res.writableEnded && !res.destroyed) res.write(`data: ${JSON.stringify(ev)}\n\n`);
+        broadcast(id, ev);
+      }, ac.signal);
+    } catch (err) {
+      const msg = err instanceof BusyError || err instanceof NotFoundError ? err.message : "internal error";
+      if (!res.writableEnded) res.write(`data: ${JSON.stringify({ type: "notice", level: "warn", text: msg })}\n\n`);
+    }
+    if (!res.writableEnded) res.end();
+  }
+
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const raw = req.url ?? "/";
     const qi = raw.indexOf("?");
@@ -376,6 +470,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       // Platform health probes may not carry our public Host; /health reveals nothing but liveness and which model answers.
       if (path === "/health" && (method === "GET" || method === "HEAD")) return sendJson(res, 200, { ok: true, name: "mindclaw-gateway", hosted: true, ...modelInfo() });
     }
+
+    if (hosted && path === AGENT_TURN_PATH) return agentTurn(req, res);
 
     const hookMatch = /^\/hooks\/([^/]+)$/.exec(path);
     const hook = hookMatch ? webhooks.get(decodeURIComponent(hookMatch[1]).toLowerCase()) : undefined;
@@ -557,28 +653,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (!text || !text.trim()) return sendJson(res, 400, { error: "text required" });
     if (ls.busy) return sendJson(res, 409, { error: "session is busy with another turn" });
 
-    res.writeHead(200, {
-      "content-type": "text/event-stream; charset=utf-8",
-      "cache-control": "no-store, no-transform",
-      connection: "keep-alive",
-      "x-accel-buffering": "no",
-      ...BASE_HEADERS,
-    });
-    res.write(": open\n\n");
-    const ac = new AbortController();
-    res.on("close", () => {
-      if (!res.writableEnded) ac.abort(); // client went away mid-turn
-    });
-    try {
-      await manager.turn(id, text, (ev) => {
-        if (!res.writableEnded && !res.destroyed) res.write(`data: ${JSON.stringify(ev)}\n\n`);
-        broadcast(id, ev);
-      }, ac.signal);
-    } catch (err) {
-      const msg = err instanceof BusyError || err instanceof NotFoundError ? err.message : "internal error";
-      if (!res.writableEnded) res.write(`data: ${JSON.stringify({ type: "notice", level: "warn", text: msg })}\n\n`);
-    }
-    if (!res.writableEnded) res.end();
+    return streamTurn(res, id, text);
   }
 
   // ---------- WebSocket ----------
