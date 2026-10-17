@@ -1,6 +1,8 @@
 // MINDClaw web client. A thin client of the gateway: HTTP + SSE. Never touches the provider/tools/kernel.
 // All dynamic text goes through textContent / createTextNode. No innerHTML anywhere.
 
+import { initVoice } from "/voice.js";
+
 const $ = (id) => document.getElementById(id);
 const els = {
   app: $("app"), sidebar: $("sidebar"), scrim: $("scrim"), list: $("session-list"), btnNew: $("btn-new"),
@@ -420,7 +422,8 @@ async function sendMessage(text) {
   if (!text) return;
   // Show the message immediately; opening a session can take several seconds while MIND boots.
   const startKey = tkey();
-  addItem(startKey, { kind: "user", text });
+  const userItem = addItem(startKey, { kind: "user", text });
+  voice.turnStart();
   const waiting = addItem(startKey, { kind: "notice", level: "info", text: "Thinking…" });
   state.busy.add(startKey); setBusyUi(); stick = true; toBottom(true);
   const dropWaiting = () => {
@@ -472,7 +475,15 @@ async function sendMessage(text) {
     saveTranscript(id);
     refreshSessions();
     if (!els.drawer.hidden) loadViolations(); else refreshViolCount();
+    if (id === state.currentId || id === tkey()) voice.turnDone(answerText(transcript(id), userItem));
+    else voice.turnDone("");
   }
+}
+
+// The assistant text of one turn: every assistant block after that turn's user message.
+function answerText(tr, userItem) {
+  const i = tr.items.indexOf(userItem);
+  return tr.items.slice(i < 0 ? 0 : i + 1).filter((x) => x.kind === "assistant").map((x) => x.text).join("\n\n");
 }
 
 // Keep the visible conversation across reloads (this browser tab only).
@@ -705,6 +716,18 @@ document.addEventListener("keydown", (e) => {
   if (state.busy.has(tkey())) { e.preventDefault(); abortTurn(); }
   else if (!els.drawer.hidden) toggleDrawer(false);
   else closeSidebar();
+});
+
+// ---------- voice (MIND Voice: mic, spoken answers, hands-free; billed to the user's MIND credits) ----------
+const voice = initVoice({
+  els: { mic: $("btn-mic"), speak: $("btn-speak"), convo: $("btn-convo"), dock: $("voice-dock"), status: $("voice-status"), stop: $("voice-stop"),
+         bars: [...document.querySelectorAll("#voice-dock .vbars i")], composer: els.composer, input: els.input },
+  authHeaders: () => (token ? { authorization: `Bearer ${token}` } : {}),
+  onUnauthorized: () => { if (state.hosted) location.replace("/"); else showTokenGate("That token was not accepted."); },
+  isBusy: () => state.busy.has(tkey()),
+  notify: (t) => notify(t),
+  creditsChanged: () => refreshPlan(),
+  bots: () => [...document.querySelectorAll(".hero-bot, .bot-dock m-bot")],
 });
 
 // ---------- boot ----------

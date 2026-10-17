@@ -77,6 +77,19 @@ Anyone can sign in with their own MIND account and Daebot then reads and writes 
 - OAuth: Daebot registers itself with MIND as a public PKCE client (RFC 7591, redirect `https://daebot.live/auth/mind/callback`), so no admin action is needed. To pin a client instead, set `MIND_OAUTH_CLIENT_ID` (and optionally `MIND_OAUTH_CLIENT_SECRET`).
 - Pasting a `mind_` API key is always available as the fallback; it is checked live against `GET /developer/v1/profile`.
 
+## MIND Voice (mic, spoken answers, hands-free)
+
+The web UI has a mic button (hold to talk, or tap to start and tap to stop), a speaker toggle that reads answers aloud, and a
+hands-free conversation button. The gateway exposes `POST /voice/stt` (raw audio body, `audio/webm|mp4|ogg|wav`, up to 10 MB) and
+`POST /voice/tts` (`{"text"}`, up to 3000 chars); both need the sign-in session cookie and forward to MIND's
+`/developer/v1/audio/transcriptions` and `/audio/speech` with the signed-in user's OWN MIND key (the owner access-code login uses
+`MIND_API_KEY`). MIND bills every call to that user's credits; Daebot adds no price and holds no voice key.
+
+- No new Daebot env var. MIND must have `MIND_LLM_PROXY_ENABLED` on (the same flag as the LLM proxy) and an ElevenLabs key.
+- Limits per user: 20 STT and 30 TTS calls a minute, 2 in flight. A user with no credits gets a clear message with the upgrade link.
+- If MIND answers 404/503 the UI says voice is not switched on and stops retrying until reload.
+- The CSP gained `media-src 'self' blob:` (spoken answers play from a blob URL); nothing else was loosened.
+
 ## Server-to-server agent API (MIND chat agent mode)
 
 `POST /api/agent/turn` lets MIND's backend run a Daebot turn for an end user. Hosted mode with user sign-in enabled (`DAEBOT_SECRET_KEY`) only.
