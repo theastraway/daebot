@@ -1,4 +1,4 @@
-// MINDClaw desktop shell (Electron main process). Thin: it starts the gateway as a child, waits for /health,
+// Daebot desktop shell (Electron main process). Thin: it starts the gateway as a child, waits for /health,
 // and shows the existing web UI. All decisions live in src/lib/* (unit-tested); this file is glue.
 import { app, BrowserWindow, Tray, Menu, globalShortcut, Notification, ipcMain, shell, nativeImage, nativeTheme, screen, session } from "electron";
 import { spawn, execFileSync } from "node:child_process";
@@ -7,8 +7,10 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ChildGateway, waitForHealth } from "./lib/child.mjs";
-import { buildSpawnPlan, findNode } from "./lib/launcher.mjs";
-import { loadConfig, saveKernelMode, configPath, statePath, loadState, writeJson, resolveBounds } from "./lib/config.mjs";
+import { buildSpawnPlan, findBundledBinary, findNode } from "./lib/launcher.mjs";
+import { clearKey, readConfigJson, readKey, resolveSignIn, saveKey, looksLikeMindKey } from "./lib/credentials.mjs";
+import { buildSignInPage } from "./lib/signin-page.mjs";
+import { loadConfig, saveKernelMode, configPath, statePath, loadState, writeJson, resolveBounds, desktopHome } from "./lib/config.mjs";
 import { isKernelMode } from "./lib/kernel.mjs";
 import { buildAppMenuTemplate, buildTrayTemplate } from "./lib/menu.mjs";
 import { buildLoadUrl, classifyUrl, originOf, redactUrl } from "./lib/allowlist.mjs";
@@ -17,7 +19,7 @@ import { ConfirmWatcher } from "./lib/watcher.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SMOKE = process.argv.includes("--mindclaw-smoke");
-const log = (...a) => process.stderr.write(`[mindclaw-desktop] ${a.join(" ")}\n`);
+const log = (...a) => process.stderr.write(`[daebot-desktop] ${a.join(" ")}\n`);
 
 // --- process-level hygiene (before ready) ---
 app.disableHardwareAcceleration(); // text UI: software rendering is plenty and drops the always-on GPU process (~70 MB)
@@ -34,6 +36,9 @@ let config = loadConfig(SMOKE ? join(app.getPath("userData"), "desktop.json") : 
 const agentRoot = app.isPackaged ? join(process.resourcesPath, "agent") : resolve(here, "..", "..");
 const entry = join(here, "child-entry.mjs");
 const smokeHome = SMOKE ? app.getPath("userData") : null;
+// The packaged app runs the bun-compiled binary from resources/bin; development falls back to node + child-entry.mjs.
+const bundledBinary = app.isPackaged && !SMOKE ? findBundledBinary({ resourcesPath: process.resourcesPath }) : null;
+let mindKey = null; // from the sign-in file; handed to the gateway child through its environment only, never logged
 
 let win = null;
 let tray = null;
@@ -46,6 +51,8 @@ const gateway = new ChildGateway({
   spawn,
   plan: () => buildSpawnPlan({
     agentRoot, entry,
+    binaryPath: bundledBinary,
+    mindKey: mindKey ?? undefined,
     kernelMode: config.kernelMode,
     nodePath: findNode(),
     electronPath: process.execPath,
@@ -76,7 +83,7 @@ function createWindow() {
     ...b,
     minWidth: 480, minHeight: 360,
     show: false,
-    title: "MINDClaw",
+    title: "Daebot",
     backgroundColor: nativeTheme.shouldUseDarkColors ? "#14161c" : "#f6f6f4",
     titleBarStyle: "hiddenInset",
     webPreferences: {
@@ -156,10 +163,10 @@ function newSession() {
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 function errorPage(message) {
   const dark = nativeTheme.shouldUseDarkColors;
-  const html = `<!doctype html><meta charset=utf-8><title>MINDClaw</title><style>
+  const html = `<!doctype html><meta charset=utf-8><title>Daebot</title><style>
   body{font:15px -apple-system,system-ui,sans-serif;margin:0;display:grid;place-items:center;height:100vh;background:${dark ? "#14161c" : "#f6f6f4"};color:${dark ? "#e8e8ea" : "#1c1c1e"}}
   main{max-width:520px;padding:32px}h1{font-size:20px;margin:0 0 8px}p{line-height:1.5;opacity:.8}code{font:13px ui-monospace,monospace}</style>
-  <main><h1>MINDClaw could not start its gateway</h1><p>${esc(message)}</p><p>Fix the issue, then choose <b>Kernel mode</b> from the menu bar item (any mode) or quit and reopen the app.</p></main>`;
+  <main><h1>Daebot could not start its gateway</h1><p>${esc(message)}</p><p>Fix the issue, then choose <b>Kernel mode</b> from the menu bar item (any mode) or quit and reopen the app.</p></main>`;
   return "data:text/html;charset=utf-8," + encodeURIComponent(html);
 }
 
@@ -240,6 +247,70 @@ ipcMain.on("desktop:notify", (e, payload) => {
   showNotification(p);
 });
 
+// ---------- sign-in (first run): one pasted MIND API key ----------
+const mindBaseUrl = () => (process.env.MIND_BASE_URL || readConfigJson(join(desktopHome(), "config.json")).mindBaseUrl || "https://m-i-n-d.ai/developer/v1").replace(/\/+$/, "");
+
+/** Asks MIND whether the key works. Resolves { ok } or { ok:false, error }; the key is never echoed in the error. */
+async function checkKey(key) {
+  if (!looksLikeMindKey(key)) return { ok: false, error: "That does not look like a MIND API key. It starts with mind_." };
+  try {
+    const r = await fetch(`${mindBaseUrl()}/profile`, { headers: { "X-API-Key": key.trim(), accept: "application/json" }, signal: AbortSignal.timeout(15_000) });
+    if (r.status === 401 || r.status === 403) return { ok: false, error: "MIND did not accept that key." };
+    if (!r.ok) return { ok: false, error: "MIND could not check that key right now. Try again in a moment." };
+    return { ok: true };
+  } catch {
+    return { ok: false, error: "Could not reach MIND. Check your connection and try again." };
+  }
+}
+
+/** Shows the sign-in window and resolves with the saved key, or null if the window was closed. */
+function promptForKey() {
+  return new Promise((resolve) => {
+    const w = new BrowserWindow({
+      width: 460, height: 420, resizable: false, minimizable: false, maximizable: false, show: false, title: "Sign in to Daebot",
+      backgroundColor: nativeTheme.shouldUseDarkColors ? "#0c0b0a" : "#fbf6ee",
+      webPreferences: { preload: join(here, "signin-preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true, spellcheck: false, partition: "daebot-signin" },
+    });
+    let done = false;
+    const finish = (v) => { if (done) return; done = true; ipcMain.removeHandler("daebot:signin"); if (!w.isDestroyed()) w.destroy(); resolve(v); };
+    ipcMain.handle("daebot:signin", async (e, key) => {
+      if (e.sender !== w.webContents || typeof key !== "string") return { ok: false, error: "Sign-in failed." };
+      const c = await checkKey(key);
+      if (!c.ok) return c;
+      try { saveKey(key); } catch { return { ok: false, error: "Could not save the key on this computer." }; }
+      setTimeout(() => finish(key.trim()), 400);
+      return { ok: true };
+    });
+    w.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    w.webContents.on("will-navigate", (e) => e.preventDefault());
+    w.on("closed", () => finish(null));
+    w.once("ready-to-show", () => { w.show(); w.focus(); });
+    void w.loadURL(buildSignInPage({ dark: nativeTheme.shouldUseDarkColors }));
+  });
+}
+
+/** Resolves the billing mode and, on first run, asks for the key. Returns false if the user closed the prompt. */
+async function ensureSignedIn() {
+  if (SMOKE) return true;
+  const r = resolveSignIn({ env: process.env, saved: readKey(), config: readConfigJson(join(desktopHome(), "config.json")) });
+  if (r.mode === "mind") { mindKey = r.key ?? null; return true; }
+  if (r.mode === "openrouter") { mindKey = null; return true; }
+  const k = await promptForKey();
+  mindKey = k;
+  return k !== null;
+}
+
+async function signOut() {
+  clearKey();
+  mindKey = null;
+  stopWatcher();
+  gatewayInfo = null;
+  await gateway.stop();
+  if (win && !win.isDestroyed()) win.hide();
+  if (!(await ensureSignedIn())) return app.quit();
+  showWindow();
+}
+
 // ---------- kernel mode ----------
 async function setKernelMode(mode) {
   if (!isKernelMode(mode) || mode === config.kernelMode) return refreshTray();
@@ -256,7 +327,7 @@ async function setKernelMode(mode) {
 }
 
 // ---------- tray + menus ----------
-const handlers = { toggle: toggleWindow, newSession, setKernelMode, quit: () => app.quit(), hideWindow };
+const handlers = { toggle: toggleWindow, newSession, setKernelMode, signOut, quit: () => app.quit(), hideWindow };
 
 function refreshTray() {
   if (!tray || tray.isDestroyed()) return;
@@ -270,7 +341,7 @@ function createTray() {
   const img = nativeImage.createFromPath(join(here, "assets", "trayTemplate.png"));
   img.setTemplateImage(true);
   tray = new Tray(img);
-  tray.setToolTip("MINDClaw");
+  tray.setToolTip("Daebot");
   tray.on("click", toggleWindow);
   refreshTray();
 }
@@ -373,6 +444,7 @@ app.whenReady().then(async () => {
     createTray();
     registerShortcut();
   }
+  if (!(await ensureSignedIn())) return app.quit();
   createWindow();
   const loading = loadUi();
   if (SMOKE) { await loading; if (gatewayInfo) await runSmoke(); }

@@ -51,4 +51,4 @@ const app = (x, y, s) => {
 const out = (rel, buf) => { const p = join(here, "..", rel); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, buf); console.log("wrote", rel, buf.length); };
 out("src/assets/trayTemplate.png", png(18, tray));
 out("src/assets/trayTemplate@2x.png", png(36, tray));
-out("build-resources/icon.png", png(1024, app));
+// The app icon is NOT generated here any more: build-resources/icon.* come from the approved mascot (scripts/make-brand-icons.mjs).

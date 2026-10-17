@@ -1,0 +1,64 @@
+{
+  "version": "0.2.0",
+  "releasedAt": null,
+  "platforms": {
+    "mac": {
+      "label": "macOS",
+      "detail": "Apple Silicon and Intel",
+      "files": [
+        {
+          "label": "Download for Mac",
+          "kind": "dmg",
+          "file": "Daebot-0.2.0-mac-universal.dmg",
+          "url": "",
+          "size": 0,
+          "sha256": ""
+        }
+      ]
+    },
+    "windows": {
+      "label": "Windows",
+      "detail": "Windows 10 and 11 (x64)",
+      "files": [
+        {
+          "label": "Download for Windows",
+          "kind": "exe",
+          "file": "Daebot-Setup-0.2.0-x64.exe",
+          "url": "",
+          "size": 0,
+          "sha256": ""
+        },
+        {
+          "label": "Windows on ARM (arm64)",
+          "kind": "exe",
+          "file": "Daebot-Setup-0.2.0-arm64.exe",
+          "url": "",
+          "size": 0,
+          "sha256": ""
+        }
+      ]
+    },
+    "linux": {
+      "label": "Linux",
+      "detail": "x64 AppImage or .deb package",
+      "files": [
+        {
+          "label": "Download for Linux",
+          "kind": "AppImage",
+          "file": "Daebot-0.2.0-linux-x86_64.AppImage",
+          "url": "",
+          "size": 0,
+          "sha256": ""
+        },
+        {
+          "label": "Debian and Ubuntu (.deb)",
+          "kind": "deb",
+          "file": "Daebot-0.2.0-linux-amd64.deb",
+          "url": "",
+          "size": 0,
+          "sha256": ""
+        }
+      ]
+    }
+  }
+}

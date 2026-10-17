@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { ChildGateway, parseReadyLine, waitForHealth } from "../src/lib/child.mjs";
-import { buildSpawnPlan, findNode } from "../src/lib/launcher.mjs";
+import { binaryName, buildSpawnPlan, findBundledBinary, findNode } from "../src/lib/launcher.mjs";
 
 class FakeChild extends EventEmitter {
   constructor() { super(); this.stdout = new EventEmitter(); this.stdout.setEncoding = () => {}; this.stderr = new EventEmitter(); this.stderr.setEncoding = () => {}; this.signals = []; this.exitOnTerm = true; this.pid = 4242; }
@@ -149,4 +149,38 @@ test("findNode order: MINDCLAW_NODE, PATH, well-known dirs, else null", () => {
   assert.equal(findNode({ env: { PATH: "/x:/bin" }, exists: has(["/bin/node"]) }), "/bin/node");
   assert.equal(findNode({ env: { PATH: "" }, exists: has(["/opt/homebrew/bin/node"]) }), "/opt/homebrew/bin/node");
   assert.equal(findNode({ env: { MINDCLAW_NODE: "/gone" }, exists: () => false }), null);
+});
+
+test("parseReadyLine understands the compiled binary's {mindclawGateway:{url,token}} line", () => {
+  const line = JSON.stringify({ mindclawGateway: { url: "http://127.0.0.1:50123", token: "t".repeat(64) } });
+  assert.deepEqual(parseReadyLine(line), { url: "http://127.0.0.1:50123", token: "t".repeat(64) });
+  assert.deepEqual(parseReadyLine(JSON.stringify({ mindclawGateway: { url: "http://127.0.0.1:1" } })), { url: "http://127.0.0.1:1", token: undefined });
+  assert.equal(parseReadyLine(JSON.stringify({ mindclawGateway: {} })), null);
+});
+
+test("buildSpawnPlan: a bundled binary wins, serves on port 0, carries the MIND key in env only", () => {
+  const p = buildSpawnPlan({ agentRoot: "/a", entry: "/e.mjs", kernelMode: "enforced", binaryPath: "/App/Resources/bin/daebot-darwin-arm64", nodePath: "/usr/bin/node", electronPath: "/E", baseEnv: { PATH: "/usr/bin" }, mindKey: "mind_TESTKEY_1234567890", home: "/Users/u" });
+  assert.equal(p.command, "/App/Resources/bin/daebot-darwin-arm64");
+  assert.deepEqual(p.args, ["serve", "--port", "0", "--host", "127.0.0.1"]);
+  assert.equal(p.cwd, "/Users/u");
+  assert.equal(p.env.DAEBOT_BILLING, "mind");
+  assert.equal(p.env.MIND_API_KEY, "mind_TESTKEY_1234567890");
+  assert.equal(p.env.MINDCLAW_PARENT_PIPE, "1");
+  assert.equal(p.env.MINDCLAW_KERNEL, "1");
+  assert.ok(!("ELECTRON_RUN_AS_NODE" in p.env));
+  assert.ok(!p.args.join(" ").includes("mind_"), "the key never goes in argv");
+  // the fake runtime (smoke) never uses the binary; no key -> no billing override
+  const f = buildSpawnPlan({ agentRoot: "/a", entry: "/e.mjs", kernelMode: "off", binaryPath: "/bin/x", nodePath: "/usr/bin/node", electronPath: "/E", baseEnv: {}, fake: true });
+  assert.equal(f.command, "/usr/bin/node");
+  assert.ok(!("DAEBOT_BILLING" in f.env) && !("MIND_API_KEY" in f.env));
+});
+
+test("findBundledBinary / binaryName match agent/scripts/build-bin.mjs names", () => {
+  assert.equal(binaryName("darwin", "arm64"), "daebot-darwin-arm64");
+  assert.equal(binaryName("win32", "x64"), "daebot-windows-x64.exe");
+  assert.equal(binaryName("linux", "x64"), "daebot-linux-x64");
+  const has = (set) => (p) => set.includes(p);
+  assert.equal(findBundledBinary({ resourcesPath: "/R", platform: "linux", arch: "x64", exists: has(["/R/bin/daebot-linux-x64"]) }), "/R/bin/daebot-linux-x64");
+  assert.equal(findBundledBinary({ resourcesPath: "/R", platform: "linux", arch: "x64", exists: () => false }), null);
+  assert.equal(findBundledBinary({ platform: "linux" }), null);
 });

@@ -45,7 +45,7 @@
       </details>
       <p class="err" id="login-err" role="alert" aria-live="polite" hidden></p>
     </div>
-    <p class="login-foot">Sessions are private to your account. Sign out from the sidebar when you are done.</p>
+    <p class="login-foot">Sessions are private to your account. Sign out from the sidebar when you are done. <a class="login-foot-link" href="/download/">Download the desktop app</a></p>
   </section>
 </main>
 <script type="module" src="/brand/mbot.js"></script>
