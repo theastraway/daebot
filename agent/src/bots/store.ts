@@ -41,7 +41,7 @@ export function botMindApi(client: MindClient): BotMindApi {
         if (f.status === 409) throw new BotError(409, "duplicate", `a bot named "${slug}" already exists`);
         if (f.status === 402 || f.payload?.error === "bot_limit") {
           const p = f.payload ?? {};
-          throw new BotError(402, "bot_limit", `Your plan allows ${p.limit ?? "a limited number of"} bots. Upgrade to add more.`, { limit: p.limit, tier: p.tier, upgradeUrl: p.upgrade_url });
+          throw new BotError(402, "bot_limit", `Your plan allows ${p.limit ?? "a limited number of"} bots. Upgrade to add more.`, { limit: p.limit, tier: p.tier, upgradeUrl: p.upgrade_url, upgrade_url: p.upgrade_url });
         }
         throw new BotError(502, "mind_error", `MIND could not create the bot (${(f.message ?? "error").slice(0, 160)})`);
       }
@@ -223,7 +223,7 @@ export class BotStore implements BotsApi {
     if (!b) throw new BotError(404, "not_found", "no such bot");
     if (typeof text !== "string") throw new BotError(400, "bad_instructions", "instructions must be text");
     const bytes = Buffer.byteLength(text, "utf8");
-    if (bytes > MAX_INSTRUCTIONS_BYTES) throw new BotError(413, "too_large", `DAEBOT.md is capped at ${MAX_INSTRUCTIONS_BYTES / 1024} KB (this is ${(bytes / 1024).toFixed(1)} KB)`);
+    if (bytes > MAX_INSTRUCTIONS_BYTES) throw new BotError(413, "instructions_too_long", `DAEBOT.md is capped at ${MAX_INSTRUCTIONS_BYTES / 1024} KB (this is ${(bytes / 1024).toFixed(1)} KB)`);
     const dir = join(this.root, id);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const file = join(dir, "DAEBOT.md");

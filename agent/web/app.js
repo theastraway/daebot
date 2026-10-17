@@ -662,11 +662,17 @@ function setOnline(on) {
   els.connDot.className = `dot ${on ? "on" : "off"}`;
   renderConn();
 }
+// DAEBOT_BOTS_ENABLED: when the gateway says bots are off, the Sessions|Bots toggle is hidden and the sidebar stays on Sessions.
+function applyBotsFlag(on) {
+  const seg = document.getElementById("seg");
+  if (seg) { seg.hidden = !on; seg.style.display = on ? "" : "none"; }
+  if (!on && typeof bots !== "undefined" && bots.view() === "bots") bots.setView("sessions", { silent: true });
+}
 async function ping() {
   try {
     const r = await fetch("/health", { cache: "no-store" });
     setOnline(r.ok);
-    if (r.ok) { const h = await r.json().catch(() => ({})); state.hosted = h.hosted === true; els.btnLogout.hidden = !state.hosted; if (h.model !== state.model) { state.model = h.model || ""; renderConn(); models.setHealth(typeof state.model === "string" ? state.model : state.model.id || state.model.name || ""); } if (state.hosted && !state.who) showWho(); }
+    if (r.ok) { const h = await r.json().catch(() => ({})); state.hosted = h.hosted === true; applyBotsFlag(h.bots === true); els.btnLogout.hidden = !state.hosted; if (h.model !== state.model) { state.model = h.model || ""; renderConn(); models.setHealth(typeof state.model === "string" ? state.model : state.model.id || state.model.name || ""); } if (state.hosted && !state.who) showWho(); }
   } catch { setOnline(false); }
 }
 

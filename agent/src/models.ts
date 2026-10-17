@@ -4,7 +4,7 @@
 import { createHash } from "node:crypto";
 import type { Config } from "./types.ts";
 
-export interface ModelRow { id: string; name: string; free: boolean; allowed: boolean }
+export interface ModelRow { id: string; name: string; free: boolean; allowed: boolean; price_hint?: string }
 export interface Catalog { models: ModelRow[]; source: "mind" | "config" }
 
 const TTL_MS = 5 * 60_000;
@@ -13,16 +13,16 @@ const MAX_ROWS = 300;
 export const isFreeModelId = (id: string): boolean => id.endsWith(":free") || id === "openrouter/free";
 
 export function createModelCatalog(o: { cfg: Config; fetchImpl?: typeof fetch; now?: () => number }) {
-  const cache = new Map<string, { at: number; rows: { id: string; name: string; free: boolean }[]; source: "mind" | "config" }>();
+  const cache = new Map<string, { at: number; rows: { id: string; name: string; free: boolean; price_hint?: string }[]; source: "mind" | "config" }>();
   const now = o.now ?? Date.now;
   const f = o.fetchImpl ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
 
-  function configRows(): { id: string; name: string; free: boolean }[] {
+  function configRows(): { id: string; name: string; free: boolean; price_hint?: string }[] {
     const ids = [...new Set([o.cfg.models.default, o.cfg.models.cheap, ...o.cfg.models.fallback, ...(o.cfg.freeModel ? [o.cfg.freeModel] : [])].filter(Boolean))];
     return ids.map((id) => ({ id, name: id, free: isFreeModelId(id) || id === o.cfg.freeModel }));
   }
 
-  async function fromMind(key: string): Promise<{ id: string; name: string; free: boolean }[] | undefined> {
+  async function fromMind(key: string): Promise<{ id: string; name: string; free: boolean; price_hint?: string }[] | undefined> {
     try {
       const res = await f(`${o.cfg.mindBaseUrl.replace(/\/+$/, "")}/profile/models`, { headers: { "X-API-Key": key, Accept: "application/json" }, signal: AbortSignal.timeout(8000) });
       if (!res.ok) return undefined;
@@ -31,7 +31,13 @@ export function createModelCatalog(o: { cfg: Config; fetchImpl?: typeof fetch; n
       const rows = list
         .filter((m) => m && typeof m.id === "string" && m.id)
         .slice(0, MAX_ROWS)
-        .map((m) => ({ id: String(m.id), name: String(m.name ?? m.id).slice(0, 120), free: isFreeModelId(String(m.id)) || String(m.tier ?? "").toLowerCase() === "free" }));
+        .map((m) => {
+          const free = isFreeModelId(String(m.id)) || String(m.tier ?? "").toLowerCase() === "free";
+          const i = Number(m.input_cost_per_million), o = Number(m.output_cost_per_million);
+          const money = (n: number) => `$${n >= 10 ? n.toFixed(0) : n.toFixed(2).replace(/\.?0+$/, "")}`;
+          const hint = !free && Number.isFinite(i) && Number.isFinite(o) && m.input_cost_per_million != null ? `${money(i)} / ${money(o)} per 1M` : undefined;
+          return { id: String(m.id), name: String(m.name ?? m.id).slice(0, 120), free, ...(hint ? { price_hint: hint } : {}) };
+        });
       return rows.length ? rows : undefined;
     } catch {
       return undefined;

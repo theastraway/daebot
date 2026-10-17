@@ -124,7 +124,7 @@ export function initBots(ctx) {
     bots: [], botsLoaded: false, botsError: "",
     selected: store.get("localStorage", SELECTED_KEY) || "",
     expanded: new Set(),
-    threads: [], threadsFor: "",
+    threads: [], threadsFor: "", cache: new Map(), loading: new Set(),
     drawerBot: "", baseline: "", drafts: new Map(), loadingInstr: false, drawerOpen: false,
     color: DEFAULT_COLOR, cardDirty: false, lastFocus: null,
   };
@@ -181,16 +181,19 @@ export function initBots(ctx) {
       st.botsError = /HTTP 404|not found/i.test(e.message) ? "Bots are not available on this gateway yet." : "Could not load your bots.";
     }
     if (st.selected && st.botsLoaded && !botById(st.selected)) { st.expanded.delete(st.selected); st.selected = ""; store.set("localStorage", SELECTED_KEY, ""); }
-    const want = st.view === "bots" ? st.selected : app.currentBot();
+    const want = app.currentBot() || (st.view === "bots" ? st.selected : "");
     if (want && botById(want)) await loadThreads(want, { quiet: true });
     renderList(); sync();
   }
 
-  async function loadThreads(id, { quiet } = {}) {
+  async function loadThreads(id, { quiet, cacheOnly } = {}) {
     try {
-      st.threads = (await json(`/sessions?bot=${encodeURIComponent(id)}`)).sessions || [];
+      const list = (await json(`/sessions?bot=${encodeURIComponent(id)}`)).sessions || [];
+      st.cache.set(id, list);
+      if (cacheOnly) { renderList(); return; }
+      st.threads = list;
       st.threadsFor = id;
-    } catch { if (st.threadsFor !== id) { st.threads = []; st.threadsFor = id; } }
+    } catch { if (cacheOnly) { if (!st.cache.has(id)) st.cache.set(id, []); return; } if (st.threadsFor !== id) { st.threads = []; st.threadsFor = id; } }
     if (!quiet) renderList();
   }
 
@@ -232,8 +235,11 @@ export function initBots(ctx) {
       nt.append(icon("i-plus"), h("span", "", `New thread with ${bot.name}`));
       nt.addEventListener("click", () => app.newThread(bot.id));
       sub.append(nt);
-      const mine = st.threadsFor === bot.id ? st.threads : [];
-      if (!mine.length) sub.append(h("div", "empty-side", st.threadsFor === bot.id ? "No threads yet." : "Loading threads…"));
+      // Every expanded bot keeps its own thread list (the last one loaded stays on screen while another bot is selected).
+      const cached = st.threadsFor === bot.id ? st.threads : st.cache.get(bot.id);
+      const mine = cached || [];
+      if (!cached && !st.loading.has(bot.id)) { st.loading.add(bot.id); loadThreads(bot.id, { cacheOnly: true, quiet: true }).finally(() => st.loading.delete(bot.id)); }
+      if (!mine.length) sub.append(h("div", "empty-side", cached ? "No threads yet." : "Loading threads…"));
       for (const s of mine) {
         const b = h("button", "sess"); b.type = "button";
         if (s.id === app.currentId()) b.setAttribute("aria-current", "true");

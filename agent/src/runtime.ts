@@ -12,6 +12,7 @@ import { createBotTalkTool } from "./bots/talk-tool.ts";
 import type { BotRecord, BotsContext, RosterEntry } from "./bots/types.ts";
 import { MAX_INSTRUCTIONS_BYTES } from "./bots/types.ts";
 import { createSettings, validModelId } from "./settings.ts";
+import { botsEnabled } from "./bots/flag.ts";
 import { BootCache } from "./mind/boot-cache.ts";
 import type { MindClientOpts } from "./mind/client.ts";
 import { createProvider } from "./provider/index.ts";
@@ -131,6 +132,8 @@ export interface RuntimeOverrides {
   credits?: MindCredits;
   /** Bots + per-user settings live under this dir; the bus ref is set by startGateway. Absent = no bots on this runtime. */
   bots?: BotsContext;
+  /** Feature flag (default: env DAEBOT_BOTS_ENABLED, read on every call). */
+  botsEnabled?: () => boolean;
 }
 
 export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Runtime {
@@ -164,12 +167,14 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     return c;
   };
   // A session's full tool set: shared builtins + MIND tools addressed by home + bot_talk. Hosted: shell and file tools do not exist at all.
+  const botsOn = (): boolean => !!botStore && (overrides.botsEnabled ? overrides.botsEnabled() : botsEnabled(overrides.env ?? process.env));
   const toolsFor = (home: string, selfBot: string | undefined): Tool[] => {
-    const talk = botStore && botsCtx ? [createBotTalkTool({ bus: botsCtx.bus, owner: ownerKey, selfBot })] : [];
+    const on = botsOn();
+    const talk = on && botStore && botsCtx ? [createBotTalkTool({ bus: botsCtx.bus, owner: ownerKey, selfBot })] : [];
     const every = [...builtinTools, ...createMindTools({
       home, clientFor: clientForMind, roster: () => botStore?.roster() ?? [],
       refresh: botStore ? async () => { await botStore.list(); } : undefined,
-    }, { user: hosted?.username }), ...talk];
+    }, { user: hosted?.username }).filter((t) => on || t.spec.name !== "mind_tenants"), ...talk];
     return hosted ? filterHostedTools(every) : every;
   };
   // One kernel per identity tier (each enforces its tier's tool classes on top of the shared gates).
@@ -227,6 +232,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       // A bot session runs INSIDE this runtime (this owner's MAIN key, provider and billing); only the home MIND, the
       // persona/instructions and the thread differ. The bot must belong to THIS owner.
       const botId = opts.botId ?? stored?.bot;
+      if (botId && !botsOn()) throw new Error("bots are not enabled");
       if (opts.botId && stored?.bot && stored.bot !== opts.botId) throw new Error("session belongs to a different bot");
       const botRec = botId ? botStore?.get(botId) : undefined;
       if (botId && !botRec) throw new Error("no such bot");
@@ -268,7 +274,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
             model: used ?? (mindBilled ? `${cfg.models.default} on paid MIND plans and ${cfg.freeModel} on the free MIND plan (Explorer)` : cfg.models.default),
             via: mindBilled ? "MIND" : undefined,
             bot: live && botId ? { slug: live.slug, instructions: botStore!.instructions(botId) } : undefined,
-            roster: botStore?.roster(),
+            roster: botsOn() ? botStore?.roster() : undefined,
           });
         },
         restore: stored ? { ...stored.state, messages: repairMessages(stored.state.messages), violations: stored.violations } : undefined,

@@ -1,4 +1,5 @@
 // End to end inside one process: a session calls bot_talk, the bus runs the bot's turn through the real SessionManager + runtime + loop.
+process.env.DAEBOT_BOTS_ENABLED = "1"; // the Bots feature flag (default off)
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";

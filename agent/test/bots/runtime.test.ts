@@ -1,4 +1,5 @@
 import { test } from "node:test";
+process.env.DAEBOT_BOTS_ENABLED = "1"; // the Bots feature flag (default off)
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync } from "node:fs";

@@ -1,4 +1,5 @@
 // REST for bots, models and bot-aware sessions: hosted (two users + the owner login) and local mode. Fake MIND on localhost only.
+process.env.DAEBOT_BOTS_ENABLED = "1"; // the Bots feature flag (default off)
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
@@ -125,7 +126,7 @@ test("bots REST errors: 401, bad slug, duplicate, plan limit 402 (with upgrade i
     for (const slug of ["Bad Slug", "main", "", "x".repeat(33)]) {
       const e = await r.call(alice, "POST", "/bots", slug === "" ? {} : { slug });
       assert.equal(e.status, 400, slug);
-      assert.equal(e.json.error, "bad_slug");
+      assert.equal(e.json.error, slug === "" ? "name_required" : "bad_slug");
     }
     assert.equal((await r.call(alice, "POST", "/bots", { slug: "ops" })).status, 201);
     const dup = await r.call(alice, "POST", "/bots", { slug: "ops" });
@@ -240,9 +241,10 @@ test("free plan: only free models are allowed; anything else is a 402 with the u
     assert.equal(bad.json.error, "model_not_in_plan");
     assert.match(bad.json.message, /free plan/);
     assert.equal(bad.json.upgradeUrl, "https://m-i-n-d.ai/#/billing");
+    assert.equal(bad.json.upgrade_url, "https://m-i-n-d.ai/#/billing");
     const ok = await r.call(alice, "POST", "/sessions", { surface: "web", model: "vendor/free-one:free" });
     assert.equal(ok.status, 200);
-    assert.equal((await r.call(alice, "PATCH", `/sessions/${ok.json.sessionId}`, { model: "vendor/small" })).status, 402);
+    assert.equal((await r.call(alice, "PATCH", `/sessions/${ok.json.sessionId}`, { model: "vendor/small" })).status, 403, "PATCH answers 403 for a locked model");
     assert.equal((await r.call(alice, "PUT", "/models/default", { model: "vendor/big" })).status, 402);
     assert.equal((await r.call(alice, "PUT", "/models/default", { model: "vendor/free-one:free" })).status, 200);
   } finally { await r.close(); }
@@ -286,4 +288,90 @@ test("local (non-hosted) mode: the owner principal works the same, bearer-token 
     assert.equal((await http(bare.url, "GET", "/bots", { headers: bearer(bare.token) })).status, 404);
     await bare.close();
   } finally { await gw.close(); await fake.close(); }
+});
+
+test("the web UI's REST shapes: name-only create (slug derived), instructions {text,updatedAt}, live/busy, price_hint, 402 upgrade_url", async () => {
+  const r = await rig();
+  try {
+    r.fake.models = [{ id: "vendor/big", name: "Big", tier: "premium", input_cost_per_million: 3, output_cost_per_million: 15 } as never, { id: "v/f:free", name: "F", tier: "free" }];
+    const alice = await r.login(r.keys.alice);
+    const a = await r.call(alice, "POST", "/bots", { name: "Quinn the Triager", purpose: "claims", instructions: "# Role\nTriage." });
+    assert.equal(a.status, 201, a.raw);
+    assert.equal(a.json.bot.slug, "quinn-the-triager");
+    const b = await r.call(alice, "POST", "/bots", { name: "Quinn the Triager" });
+    assert.equal(b.json.bot.slug, "quinn-the-triager-2", "a second bot with the same name gets a unique slug");
+    assert.equal((await r.call(alice, "POST", "/bots", { name: "  " })).json.error, "name_required");
+    const ins = await r.call(alice, "GET", `/bots/${a.json.bot.id}/instructions`);
+    assert.equal(ins.json.text, "# Role\nTriage.");
+    assert.equal(typeof ins.json.updatedAt, "number");
+    const put = await r.call(alice, "PUT", `/bots/${a.json.bot.id}/instructions`, { text: "é".repeat(4097) });
+    assert.equal(put.status, 413, "8 KB counted in UTF-8 bytes");
+    assert.equal(put.json.error, "instructions_too_long");
+    assert.equal((await r.call(alice, "PUT", `/bots/${a.json.bot.id}/instructions`, { text: "ok" })).status, 200);
+    const t = await r.call(alice, "POST", "/sessions", { surface: "web", bot: a.json.bot.id });
+    const rows = (await r.call(alice, "GET", "/bots")).json.bots;
+    assert.deepEqual(rows.map((x: any) => [x.slug, x.live, x.busy]), [["quinn-the-triager", true, false], ["quinn-the-triager-2", false, false]]);
+    for (const k of ["id", "slug", "name", "purpose", "color", "updatedAt"]) assert.ok(k in rows[0], k);
+    const m = await r.call(alice, "GET", "/models");
+    assert.equal(m.json.models.find((x: any) => x.id === "vendor/big").price_hint, "$3 / $15 per 1M");
+    assert.equal(m.json.models.find((x: any) => x.id === "v/f:free").price_hint, undefined);
+    r.fake.botLimit = 2;
+    const lim = await r.call(alice, "POST", "/bots", { name: "Third" });
+    assert.equal(lim.status, 402);
+    assert.deepEqual([lim.json.error, lim.json.limit, lim.json.tier, lim.json.upgrade_url], ["bot_limit", 2, "free", "https://m-i-n-d.ai/#/billing"]);
+    void t;
+  } finally { await r.close(); }
+});
+
+test("DAEBOT_BOTS_ENABLED off: /bots* is 404, bot sessions refused, bot_talk and mind_tenants not offered, health says bots:false; /models still works", async () => {
+  let on = true;
+  const prev = process.env.DAEBOT_BOTS_ENABLED;
+  const key = "mind_" + rnd();
+  const fake = await startFakeMind({ [key]: "pat" });
+  fake.models = MODELS;
+  const dir = mkdtempSync(join(tmpdir(), "bots-flag-"));
+  const provider = new FakeProvider([{ text: "ok" }]);
+  const cfg = baseCfg({ mindBaseUrl: fake.base, mindApiKey: key });
+  const bots = { dir, bus: {} };
+  const runtime = createRuntime(cfg, { provider, store: createFileStore(dir), bots, botsEnabled: () => on });
+  const st = tmpStatic();
+  const gw = await startGateway({ runtime, cfg, port: 0, staticDir: st.dir, tokenPath: join(dir, "tok"), bots, botsEnabled: () => on });
+  const a = bearer(gw.token);
+  try {
+    const health = async () => JSON.parse((await http(gw.url, "GET", "/health")).body).bots;
+    assert.equal(await health(), true);
+    const bot = JSON.parse((await http(gw.url, "POST", "/bots", { headers: a, body: { name: "Helper" } })).body).bot;
+    const toolNames = async () => {
+      const { sessionId } = JSON.parse((await http(gw.url, "POST", "/sessions", { headers: a, body: { surface: "web" } })).body);
+      await http(gw.url, "POST", `/sessions/${sessionId}/send`, { headers: a, body: { text: "hi" } });
+      return provider.requests.at(-1)!.tools.map((t) => t.name);
+    };
+    const onTools = await toolNames();
+    assert.ok(onTools.includes("bot_talk") && onTools.includes("mind_tenants"));
+
+    on = false;
+    assert.equal(await health(), false);
+    for (const [m, p, body] of [["GET", "/bots"], ["POST", "/bots", { name: "x" }], ["GET", `/bots/${bot.id}`], ["PUT", `/bots/${bot.id}/instructions`, { text: "x" }]] as [string, string, unknown?][]) {
+      assert.equal((await http(gw.url, m, p, { headers: a, body })).status, 404, `${m} ${p}`);
+    }
+    assert.equal((await http(gw.url, "POST", "/sessions", { headers: a, body: { surface: "web", bot: bot.id } })).status, 404);
+    const offTools = await toolNames();
+    assert.ok(!offTools.includes("bot_talk") && !offTools.includes("mind_tenants"));
+    assert.ok(offTools.includes("mind_query"), "the rest of the tools are untouched");
+    const models = await http(gw.url, "GET", "/models", { headers: a });
+    assert.equal(models.status, 200, "the model picker does not depend on the flag");
+    assert.ok(JSON.parse(models.body).models.length >= 3);
+    const sid = JSON.parse((await http(gw.url, "POST", "/sessions", { headers: a, body: { surface: "web", model: "vendor/big" } })).body).sessionId;
+    assert.equal((await http(gw.url, "PATCH", `/sessions/${sid}`, { headers: a, body: { model: "vendor/small" } })).status, 200);
+    on = true;
+    assert.equal((await http(gw.url, "GET", "/bots", { headers: a })).status, 200, "flipping it back on needs no restart");
+  } finally { process.env.DAEBOT_BOTS_ENABLED = prev; await gw.close(); await fake.close(); }
+});
+
+test("the flag defaults OFF when the env var is unset", async () => {
+  const { botsEnabled } = await import("../../src/bots/flag.ts");
+  assert.equal(botsEnabled({}), false);
+  assert.equal(botsEnabled({ DAEBOT_BOTS_ENABLED: "0" }), false);
+  assert.equal(botsEnabled({ DAEBOT_BOTS_ENABLED: "1" }), true);
+  assert.equal(botsEnabled({ DAEBOT_BOTS_ENABLED: "true" }), true);
 });

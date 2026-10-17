@@ -20,6 +20,7 @@ import { FREE_TIER, usageLeftPct } from "../provider/mind.ts";
 import { createBotBus } from "../bots/bus.ts";
 import { BotError } from "../bots/types.ts";
 import type { BotRecord, BotsContext } from "../bots/types.ts";
+import { botsEnabled } from "../bots/flag.ts";
 import { createModelCatalog } from "../models.ts";
 import { validModelId } from "../settings.ts";
 import { STATIC_CSP, resolveStatic, serveEmbedded, serveFile } from "./static.ts";
@@ -82,6 +83,8 @@ export interface GatewayOptions {
   agentApiPerMinute?: number;
   /** Bots: the late-bound bus holder shared with the runtimes. startGateway sets bus.current to the in-process bot bus. */
   bots?: BotsContext;
+  /** Feature flag override (default: env DAEBOT_BOTS_ENABLED, read per request). */
+  botsEnabled?: () => boolean;
   /** Tests: the fetch used for the model catalog. */
   fetchImpl?: typeof fetch;
 }
@@ -202,6 +205,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         }
       : undefined,
   });
+  const botsOn = (): boolean => (opts.botsEnabled ? opts.botsEnabled() : botsEnabled());
   // ---- Bots: the bus runs a recipient bot's turn in-process through this same SessionManager.
   if (opts.bots) opts.bots.bus.current = createBotBus({ manager, botsFor: (owner) => manager.runtimeOf(owner).bots });
   const catalog = createModelCatalog({ cfg: opts.cfg ?? ({ mindBaseUrl: "", models: { default: "", cheap: "", fallback: [] } } as unknown as Config), fetchImpl: opts.fetchImpl ?? opts.auth?.fetchImpl });
@@ -512,7 +516,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         return void res.end(method === "HEAD" ? undefined : "User-agent: *\nDisallow: /\n");
       }
       // Platform health probes may not carry our public Host; /health reveals nothing but liveness and which model answers.
-      if (path === "/health" && (method === "GET" || method === "HEAD")) return sendJson(res, 200, { ok: true, name: "mindclaw-gateway", hosted: true, ...modelInfo() });
+      if (path === "/health" && (method === "GET" || method === "HEAD")) return sendJson(res, 200, { ok: true, name: "mindclaw-gateway", hosted: true, bots: botsOn(), ...modelInfo() });
     }
 
     if (hosted && path === AGENT_TURN_PATH) return agentTurn(req, res);
@@ -554,7 +558,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
         const p = principalOf(req);
         if (!p) return sendJson(res, 401, { error: "unauthorized" });
-        const me: Record<string, unknown> = { username: p.owner ? "Owner" : p.username, owner: p.owner, tier: p.tier };
+        const me: Record<string, unknown> = { username: p.owner ? "Owner" : p.username, owner: p.owner, tier: p.tier, bots: botsOn() };
         // DAEBOT_BILLING=mind: the MIND plan and credits this principal's calls are billed to (`tier` stays Daebot's identity tier,
         // so the MIND plan id is `planTier`). ?fresh=1 (sent after a turn) re-reads
         // unless a response header already refreshed the number moments ago.
@@ -573,7 +577,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
 
     if (path === "/health") {
       if (method !== "GET" && method !== "HEAD") return sendJson(res, 405, { error: "method not allowed" });
-      return sendJson(res, 200, { ok: true, name: "mindclaw-gateway", sessions: manager.count(), ...modelInfo() });
+      return sendJson(res, 200, { ok: true, name: "mindclaw-gateway", sessions: manager.count(), bots: botsOn(), ...modelInfo() });
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
@@ -622,16 +626,28 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
 
   async function botsApi(req: IncomingMessage, res: ServerResponse, path: string, method: string, me: Principal): Promise<void> {
     const bots = manager.runtimeOf(me.id).bots;
-    if (!bots) return sendJson(res, 404, { error: "bots are not enabled on this deployment" });
+    if (!botsOn() || !bots) return sendJson(res, 404, { error: "bots are not enabled on this deployment" });
     try {
       if (path === "/bots") {
-        if (method === "GET") return sendJson(res, 200, { bots: (await bots.list()).map(botView) });
+        if (method === "GET") return sendJson(res, 200, { bots: (await bots.list()).map((b) => ({ ...botView(b), ...manager.botState(me.id, b.id) })) });
         if (method === "POST") {
           const b = await readJson(req);
-          const slug = optStr(b.slug, 64);
-          if (!slug) return sendJson(res, 400, { error: "bad_slug", message: "slug required" });
-          const rec = await bots.create({ slug, name: optStr(b.name, 120), purpose: optStr(b.purpose, 1000), color: optStr(b.color, 20) });
-          return sendJson(res, 201, { bot: botView(rec) });
+          // The web UI sends only a name: the slug is derived from it (made unique with a numeric suffix).
+          const name = optStr(b.name, 120);
+          let slug = optStr(b.slug, 64);
+          if (!slug) {
+            if (!name || !name.trim()) return sendJson(res, 400, { error: "name_required", message: "name required" });
+            const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 28) || "bot";
+            const taken = new Set((await bots.list()).map((x) => x.slug));
+            slug = base;
+            for (let i = 2; taken.has(slug) || slug === "main"; i++) slug = `${base}-${i}`;
+          }
+          const instr = b.instructions === undefined ? undefined : typeof b.instructions === "string" ? b.instructions : null;
+          if (instr === null) return sendJson(res, 400, { error: "bad_instructions", message: "instructions must be text" });
+          if (instr !== undefined && Buffer.byteLength(instr, "utf8") > 8 * 1024) return sendJson(res, 413, { error: "instructions_too_long", message: "DAEBOT.md is capped at 8 KB" });
+          const rec = await bots.create({ slug, name, purpose: optStr(b.purpose, 1000), color: optStr(b.color, 20) });
+          if (instr) bots.setInstructions(rec.id, instr);
+          return sendJson(res, 201, { bot: { ...botView(rec), live: false, busy: false } });
         }
         return sendJson(res, 405, { error: "method not allowed" });
       }
@@ -642,12 +658,13 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       const rec = bots.get(id);
       if (!rec) return sendJson(res, 404, { error: "not_found", message: "no such bot" });
       if (m[2] === "instructions") {
-        if (method === "GET") return sendJson(res, 200, { instructions: bots.instructions(id) });
+        if (method === "GET") { const t = bots.instructions(id); return sendJson(res, 200, { text: t, instructions: t, updatedAt: rec.updatedAt }); }
         if (method === "PUT") {
           const b = await readJson(req);
-          if (typeof b.instructions !== "string") return sendJson(res, 400, { error: "bad_instructions", message: "instructions must be text" });
-          bots.setInstructions(id, b.instructions);
-          return sendJson(res, 200, { ok: true });
+          const t = typeof b.text === "string" ? b.text : b.instructions;
+          if (typeof t !== "string") return sendJson(res, 400, { error: "bad_instructions", message: "text must be a string" });
+          bots.setInstructions(id, t); // counted in UTF-8 bytes (8 KB)
+          return sendJson(res, 200, { ok: true, updatedAt: bots.get(id)?.updatedAt ?? Date.now() });
         }
         return sendJson(res, 405, { error: "method not allowed" });
       }
@@ -690,7 +707,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     const cat = await catalog.list(billingKeyOf(p), plan.free);
     const row = cat.models.find((m) => m.id === model);
     if (!row) return { status: 400, body: { error: "unknown_model", message: "that model is not in your model list (GET /models)" } };
-    if (!row.allowed) return { status: 402, body: { error: "model_not_in_plan", message: "That model is not on the free plan. Pick a free model or upgrade.", upgradeUrl: plan.upgradeUrl } };
+    if (!row.allowed) return { status: 402, body: { error: "model_not_in_plan", message: "That model is not on the free plan. Pick a free model or upgrade.", upgradeUrl: plan.upgradeUrl, upgrade_url: plan.upgradeUrl } };
     return undefined;
   }
 
@@ -754,6 +771,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         const b = await readJson(req);
         const model = optStr(b.model, 130);
         if (model) { const bad = await modelProblem(me, model); if (bad) return sendJson(res, bad.status, bad.body); }
+        if (b.bot && !botsOn()) return sendJson(res, 404, { error: "bots are not enabled on this deployment" });
         let ls;
         try {
           ls = await manager.open({
@@ -765,7 +783,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
             model: model || undefined,
           });
         } catch (e) {
-          if (e instanceof Error && e.message === "no such bot") return sendJson(res, 404, { error: "no such bot" });
+          if (e instanceof Error && (e.message === "no such bot" || e.message === "bots are not enabled")) return sendJson(res, 404, { error: "no such bot" });
           if (e instanceof Error && e.message === "session belongs to a different bot") return sendJson(res, 409, { error: e.message });
           throw e;
         }
@@ -800,7 +818,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       const b = await readJson(req);
       const model = b.model === null ? null : optStr(b.model, 130);
       if (model === undefined) return sendJson(res, 400, { error: "model required (or null for the default)" });
-      if (model) { const bad = await modelProblem(me, model); if (bad) return sendJson(res, bad.status, bad.body); }
+      if (model) { const bad = await modelProblem(me, model); if (bad) return sendJson(res, bad.status === 402 ? 403 : bad.status, bad.body); }
       let target = ls;
       if (!target) {
         if (!manager.runtimeOf(me.id).history?.(id)) return sendJson(res, 404, { error: "no such session" });

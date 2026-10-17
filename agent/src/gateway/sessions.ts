@@ -185,6 +185,13 @@ export class SessionManager {
     }
   }
 
+  /** Whether any live thread of the bot exists / is mid-turn. */
+  botState(owner: string, botId: string): { live: boolean; busy: boolean } {
+    let live = false, busy = false;
+    for (const ls of this.live.values()) if (ls.owner === owner && ls.bot === botId) { live = true; busy = busy || ls.busy; }
+    return { live, busy };
+  }
+
   /** Closes every live session of one bot (the bot was deleted). */
   async closeBotSessions(owner: string, botId: string): Promise<void> {
     for (const ls of [...this.live.values()]) if (ls.owner === owner && ls.bot === botId) await this.close(ls.id, "bot deleted");
