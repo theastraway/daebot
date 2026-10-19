@@ -130,7 +130,7 @@ export function createBotBus(o: BotBusOptions): BotBus & { _stats(): { chains: n
       const onCaller = () => ac.abort();
       if (req.signal) { if (req.signal.aborted) ac.abort(); else req.signal.addEventListener("abort", onCaller, { once: true }); }
       const timer = setTimeout(() => { timedOut = true; ac.abort(); }, timeoutMs);
-      timer.unref?.();
+      // Deliberately NOT unref'd: while a recipient turn is pending, this timer is what settles the race. Unref'd, an otherwise idle event loop (CI) drains with the promise pending. The finally below always clears it.
       let final = "";
       try {
         const text =

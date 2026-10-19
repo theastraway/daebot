@@ -55,7 +55,7 @@ test("releases.json: three platforms, https URLs on download.m-i-n-d.ai, hash + 
     for (const f of p.files) {
       assert.ok(f.file.includes(m.version));
       if (f.url === "") continue; // "Coming soon"
-      assert.equal(f.url, `https://download.m-i-n-d.ai/daebot/${m.version}/${f.file}`);
+      assert.equal(f.url, `https://download.m-i-n-d.ai/download/daebot/${f.file}`);
       assert.match(f.sha256, /^[0-9a-f]{64}$/);
       assert.ok(f.size > 0);
     }
@@ -137,9 +137,10 @@ test("release-manifest fills size, sha256 and the public URL only for files that
   const out = fillManifest(base, "9.9.9", dir);
   assert.equal(out.version, "9.9.9");
   const dmg = out.platforms.mac.files[0];
-  assert.equal(dmg.url, "https://download.m-i-n-d.ai/daebot/9.9.9/Daebot-9.9.9-mac-universal.dmg");
+  assert.equal(dmg.url, "https://download.m-i-n-d.ai/download/daebot/Daebot-9.9.9-mac-universal.dmg");
   assert.equal(dmg.size, 8);
   assert.match(dmg.sha256, /^[0-9a-f]{64}$/);
   assert.equal(out.platforms.windows.files[0].url, "");
-  assert.equal(base.platforms.mac.files[0].url, ""); // input not mutated
+  assert.equal(base.version === "9.9.9", false); // input not mutated
+  assert.notEqual(base.platforms.mac.files[0].file, dmg.file);
 });
