@@ -1,6 +1,6 @@
 {
   "version": "0.2.0",
-  "releasedAt": null,
+  "releasedAt": "2026-10-19T17:37:03Z",
   "platforms": {
     "mac": {
       "label": "macOS",
@@ -10,9 +10,9 @@
           "label": "Download for Mac",
           "kind": "dmg",
           "file": "Daebot-0.2.0-mac-universal.dmg",
-          "url": "",
-          "size": 0,
-          "sha256": ""
+          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-0.2.0-mac-universal.dmg",
+          "size": 280237267,
+          "sha256": "05aa27e87751129936e6220825ab214b53a45d0c8af5ee9dd5defcbf32092045"
         }
       ]
     },
