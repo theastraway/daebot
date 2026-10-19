@@ -2,7 +2,7 @@
 // Fills web/download/releases.json from a folder of built installers (size, sha256, public URL) for one version.
 //   node scripts/release-manifest.mjs <artifactsDir> <version> [--base https://download.m-i-n-d.ai/daebot]
 // Files are matched by the names the electron-builder config produces. A file that is not in the folder keeps an empty
-// url, so its button stays on "Coming soon". Upload the files to <base>/<version>/ yourself; this script only reads them.
+// url, so its button stays on "Coming soon". Upload the files to <base>/ yourself; this script only reads them.
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const MANIFEST = join(root, "web", "download", "releases.json");
-const DEFAULT_BASE = "https://download.m-i-n-d.ai/daebot";
+const DEFAULT_BASE = "https://download.m-i-n-d.ai/download/daebot";
 
 export function expectedFiles(version) {
   return {
@@ -31,7 +31,7 @@ export function fillManifest(manifest, version, dir, base = DEFAULT_BASE) {
       if (existsSync(p)) {
         f.size = statSync(p).size;
         f.sha256 = createHash("sha256").update(readFileSync(p)).digest("hex");
-        f.url = `${base.replace(/\/+$/, "")}/${version}/${f.file}`;
+        f.url = `${base.replace(/\/+$/, "")}/${f.file}`;
       } else {
         f.size = 0; f.sha256 = ""; f.url = "";
       }
