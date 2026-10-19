@@ -50,10 +50,12 @@ jobs:
           npm install --no-audit --no-fund
           npm test
 
-  windows:
+  # bun's cross-compile download for bun-windows-arm64 fails to extract on a Windows runner ("Failed to extract executable"),
+  # while it works from Linux/macOS hosts. So both Windows gateway binaries are compiled here and handed to the windows job.
+  win-bin:
     needs: verify
-    runs-on: windows-latest
-    timeout-minutes: 40
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: agent/desktop
@@ -68,6 +70,30 @@ jobs:
       - run: npm install --no-audit --no-fund
       - name: Compile the gateway binaries (x64, arm64)
         run: node scripts/stage-bin.mjs win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daebot-win-bin
+          path: agent/desktop/build/bin/daebot-windows-*.exe
+          if-no-files-found: error
+          retention-days: 1
+
+  windows:
+    needs: [verify, win-bin]
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: agent/desktop
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install --no-audit --no-fund
+      - uses: actions/download-artifact@v5
+        with:
+          name: daebot-win-bin
+          path: agent/desktop/build/bin
       - name: electron-builder --win (unsigned)
         run: npx electron-builder --config electron-builder.config.mjs --win --x64 --arm64 --publish never
       - name: Check the installers carry the bundled gateway
