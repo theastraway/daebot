@@ -65,7 +65,7 @@ export class ChildGateway extends EventEmitter {
         if (err) { this._forget(child); this._killQuietly(child); reject(err); } else resolve(val);
       };
       const timer = setTimeout(() => finish(new Error("gateway did not report ready in time")), this.readyTimeoutMs);
-      timer.unref?.();
+      // Not unref'd: while start() is pending this timer is what settles it; unref'd, an idle event loop drains with the promise pending. finish() always clears it.
       child.stdout?.setEncoding?.("utf8");
       child.stdout?.on("data", (chunk) => {
         buf += chunk;
@@ -107,7 +107,7 @@ export class ChildGateway extends EventEmitter {
       let done = false;
       const end = () => { if (done) return; done = true; clearTimeout(grace); this._forget(child); resolve(); };
       const grace = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* gone */ } end(); }, this.killGraceMs);
-      grace.unref?.();
+      // Not unref'd: the SIGKILL escalation must be able to fire. end() always clears it.
       child.once("exit", end);
       try { child.kill("SIGTERM"); } catch { end(); }
     });
