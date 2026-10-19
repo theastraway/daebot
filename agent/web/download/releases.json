@@ -24,17 +24,17 @@
           "label": "Download for Windows",
           "kind": "exe",
           "file": "Daebot-Setup-0.2.0-x64.exe",
-          "url": "",
-          "size": 0,
-          "sha256": ""
+          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-Setup-0.2.0-x64.exe",
+          "size": 141937684,
+          "sha256": "cf1dd6a11387443cb463e5ed3e4f3dca226f574096b2b7ad6538fe4e41136cb1"
         },
         {
           "label": "Windows on ARM (arm64)",
           "kind": "exe",
           "file": "Daebot-Setup-0.2.0-arm64.exe",
-          "url": "",
-          "size": 0,
-          "sha256": ""
+          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-Setup-0.2.0-arm64.exe",
+          "size": 135026306,
+          "sha256": "0a5bcdfc5d285c11f4768fd46784c2fc7622ad54ea8ef4c8e904ef4e46da1e6b"
         }
       ]
     },
@@ -46,17 +46,17 @@
           "label": "Download for Linux",
           "kind": "AppImage",
           "file": "Daebot-0.2.0-linux-x86_64.AppImage",
-          "url": "",
-          "size": 0,
-          "sha256": ""
+          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-0.2.0-linux-x86_64.AppImage",
+          "size": 167480398,
+          "sha256": "bd1ebe11564675d7a4a1abf92d5bae028210d10619f60ca9117d3576ceb0efba"
         },
         {
           "label": "Debian and Ubuntu (.deb)",
           "kind": "deb",
           "file": "Daebot-0.2.0-linux-amd64.deb",
-          "url": "",
-          "size": 0,
-          "sha256": ""
+          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-0.2.0-linux-amd64.deb",
+          "size": 130540228,
+          "sha256": "911ed91ed3fb57546565e8f3f07a8806aa7166041d211a863daf447cbe53e6d0"
         }
       ]
     }
