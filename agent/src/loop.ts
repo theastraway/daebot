@@ -48,6 +48,16 @@ export interface SessionDeps {
   learn?: LearnHooks;
 }
 
+/** Plain-words reply used when the model ends a turn with no text. A refused tool call must never leave the user with a blank reply. */
+export function emptyReplyFallback(blocked: { tool: string; gate: string }[]): string {
+  if (blocked.length === 0) return "I did not produce a reply to that. Please send it again.";
+  const tools = [...new Set(blocked.map((b) => b.tool))].join(", ");
+  const owner = blocked.some((b) => b.gate === "owner");
+  return owner
+    ? `I could not save that to MIND (${tools}): the ownership check did not pass, so nothing was written. Everything else in this chat is unchanged. Tell me whose material this is and I will try again.`
+    : `I could not finish that step (${tools}): a safety check refused it, so nothing was changed. Tell me how you would like to proceed.`;
+}
+
 const isAbort = (e: unknown, signal?: AbortSignal) => signal?.aborted === true || (e as Error)?.name === "AbortError";
 
 export function createAgentSession(deps: SessionDeps): AgentSession {
@@ -107,6 +117,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
   }
 
   const enforced = () => !state.shadow;
+  let blockedThisTurn: { tool: string; gate: string }[] = [];
   let turnOrigin: "user" | "bot" = "user";
 
   async function* runTurn(userMessage: string, signal?: AbortSignal, origin: "user" | "bot" = "user"): AsyncGenerator<AgentEvent> {
@@ -154,6 +165,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     let regenerations = 0;
     let confirmed = false;
     let failed = false;
+    blockedThisTurn = [];
 
     try {
       for (let round = 0; round < cfg.maxToolRoundsPerTurn; round++) {
@@ -269,6 +281,12 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
       }
     }
 
+    // A turn that ended with no text (e.g. the model went silent after a gate refused one write) still answers the user.
+    if (!failed && !confirmed && !(finalText ?? "").trim()) {
+      finalText = emptyReplyFallback(blockedThisTurn);
+      yield { type: "text", delta: finalText };
+    }
+
     if (finalText && !confirmed) messages.push({ role: "assistant", content: finalText });
 
     // ---- post_turn
@@ -342,7 +360,8 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
       yield { type: "gate", verdict: v, enforced: enforced() };
       if (enforced()) {
         if (v.action === "block") {
-          messages.push(toolMsg(call, `blocked by ${v.gate}: ${v.reason}`));
+          blockedThisTurn.push({ tool: tool.spec.name, gate: v.gate });
+          messages.push(toolMsg(call, `blocked by ${v.gate}: ${v.reason} Only this one call was refused. Fix it and retry, or tell the user in plain words what was not done; never end the turn without a reply.`));
           return "ok";
         }
         if (v.action === "needs-confirmation") {
