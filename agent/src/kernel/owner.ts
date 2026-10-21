@@ -9,7 +9,9 @@ export function isOwnerTool(name: string): boolean {
 }
 const READ_ACTIONS = new Set(["list", "get", "search", "query", "read", "find", "show", "view", "tree", "describe"]);
 
-const FAIL = "owner check failed: state '<material> belongs to A; the user asked about B; A == B' and stop if A differs from B";
+// No angle-bracket template here: a model can parrot a literal template back as its own owner_check, so the wording uses a filled-in example.
+export const OWNER_FAIL = "owner check failed: this write was refused because owner_check did not show the same owner on both sides. Fill owner_check with real names, for example 'the call notes belong to Acme; the user asked about Acme; Acme == Acme', or, if the owner differs from what the user asked about, do not write and tell the user in plain words.";
+const FAIL = OWNER_FAIL;
 
 // Words that do not identify an entity ("Astra AI (ours)" == "the Astra AI").
 const FILLER = new Set(["the", "our", "ours", "inc", "llc", "ltd", "corp", "co", "company"]);

@@ -43,7 +43,7 @@ test("every write tool requires owner_check in its schema; reads do not", () => 
     if (t.class === "write") {
       assert.ok(params.required.includes("owner_check"), t.spec.name);
       assert.equal(params.properties.owner_check.type, "string");
-      assert.match(params.properties.owner_check.description, /A == B/);
+      assert.match(params.properties.owner_check.description, /==/);
     } else {
       assert.ok(!params.properties.owner_check, t.spec.name);
     }

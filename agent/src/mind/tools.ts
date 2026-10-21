@@ -41,7 +41,7 @@ export class Semaphore {
 const isResolver = (x: MindClient | TenantResolver): x is TenantResolver => typeof (x as TenantResolver).clientFor === "function";
 
 function ownerCheckDesc(user: string): string {
-  return `State: '<material> belongs to <entity A>; ${user} asked about <entity B>; A == B'. If A differs from B, stop.`;
+  return `Name who owns the material and who ${user} asked about, then confirm they match. Example, filled in with real names: 'the call notes belong to Acme; ${user} asked about Acme; Acme == Acme'. If the two differ, do not write; tell ${user} in plain words.`;
 }
 
 const MIND_PROP = {
@@ -61,7 +61,7 @@ function fail(msg: string): ToolResult {
 function ownerProblem(args: Record<string, unknown>, user: string): string | undefined {
   const v = args.owner_check;
   if (typeof v !== "string" || !v.includes("==")) {
-    return `owner_check required: state '<material> belongs to <A>; ${user} asked about <B>; A == B' before any MIND write.`;
+    return `owner_check required: before a MIND write, fill owner_check with the real owner of the material and who ${user} asked about, for example 'the call notes belong to Acme; ${user} asked about Acme; Acme == Acme'. Retry with real names, or tell ${user} why you cannot write.`;
   }
   return undefined;
 }
