@@ -46,6 +46,8 @@ export interface HubOptions {
   credits?: MindCredits;
   /** Bots + settings dir and the late-bound bot bus (shared with the gateway). */
   bots?: BotsContext;
+  /** MCP servers users connect from the web UI. */
+  mcpConnect?: import("../mcpconnect/service.ts").McpConnectService;
 }
 
 interface UserSlot { runtime: Runtime; key: string; refreshing?: Promise<boolean> }
@@ -96,6 +98,7 @@ export function createRuntimeHub(o: HubOptions): { runtimeFor(p: Principal): Run
       store: o.sessionStore,
       bootCache: o.bootCache,
       bots: o.bots,
+      mcpConnect: o.mcpConnect,
       owner: p.id,
       hosted: {
         dailyUsdCap: o.globalCap.capUsd,

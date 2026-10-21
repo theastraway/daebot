@@ -43,6 +43,7 @@ export function createAuthContext(o: {
   /** DAEBOT_BILLING=mind: shared tier + credits cache. */
   credits?: MindCredits;
   bots?: import("../bots/types.ts").BotsContext;
+  mcpConnect?: import("../mcpconnect/service.ts").McpConnectService;
 }): AuthContext {
   const env = o.env ?? process.env;
   // ONE data dir: DATA_DIR (shared with saved sessions); the encrypted user store lives under DATA_DIR/users.
@@ -53,7 +54,7 @@ export function createAuthContext(o: {
     : undefined;
   const hub = createRuntimeHub({
     baseCfg: o.cfg, ownerRuntime: o.ownerRuntime, store, oauth, globalCap: o.globalCap,
-    userCapUsd: parseUserCap(env.MINDCLAW_USER_DAILY_USD_CAP), fetchImpl: o.fetchImpl, provider: o.provider, now: o.now, sessionStore: o.sessionStore, bootCache: o.bootCache, credits: o.credits, bots: o.bots,
+    userCapUsd: parseUserCap(env.MINDCLAW_USER_DAILY_USD_CAP), fetchImpl: o.fetchImpl, provider: o.provider, now: o.now, sessionStore: o.sessionStore, bootCache: o.bootCache, credits: o.credits, bots: o.bots, mcpConnect: o.mcpConnect,
   });
   return {
     store, oauth, allowedUsers: parseList(env.DAEBOT_ALLOWED_USERS),

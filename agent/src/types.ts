@@ -58,7 +58,7 @@ export interface Tool {
   run(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult>;
 }
 
-export interface ToolContext { cwd: string; signal?: AbortSignal; sessionId: string }
+export interface ToolContext { cwd: string; signal?: AbortSignal; sessionId: string; /** "bot" when the turn was started by a peer bot, not the human. */ origin?: "user" | "bot" }
 
 // One executed tool call this turn, with a kernel-assigned short id used in receipts.
 export interface CallRecord {
