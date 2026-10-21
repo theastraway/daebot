@@ -691,6 +691,18 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
         return sendJson(res, 200, { servers: mcp.list(me.id), pending: mcp.pending(me.id), limits: mcp.limits() });
       }
+      // The MIND App Store connectors for the Apps card (MIND's list, fetched server-side). Listing reaches no third party.
+      if (path === "/mcp/catalog") {
+        if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+        const items = await mcp.catalogItems(me.id);
+        return sendJson(res, 200, { items, counts: { official: items.filter((i) => i.publisher === "official").length, community: items.filter((i) => i.publisher === "community").length } });
+      }
+      // Connect on a connector: creates the same pending request a model's proposal would. The URL is looked up here by id; the body never carries one.
+      if (path === "/mcp/catalog/connect") {
+        if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+        const b = await readJson(req);
+        return sendJson(res, 200, { pending: await mcp.proposeFromCatalog(me.id, optStr(b.id, 80) ?? "") });
+      }
       let m = /^\/mcp\/pending\/([A-Za-z0-9_-]{1,40})\/(approve|deny)$/.exec(path);
       if (m) {
         if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });

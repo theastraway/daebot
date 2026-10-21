@@ -138,6 +138,8 @@ async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promis
   const bots = { dir: dataDir(), bus: {} };
   // Connected MCP servers: sealed per-user store under DATA_DIR/mcp. Only hosted deployments (cookie logins) expose it.
   let mcpConnect: import("./mcpconnect/service.ts").McpConnectService | undefined;
+  // The App Store list is fetched with the signed-in user's OWN MIND key. `auth` is built after the service, so the lookup is late-bound.
+  const catalogKey: { of: (uid: string) => string | undefined } = { of: (uid) => (uid === "owner" ? cfg.mindApiKey || undefined : undefined) };
   if (hostedMode) {
     const { McpStore } = await import("./mcpconnect/store.ts");
     const { McpConnectService } = await import("./mcpconnect/service.ts");
@@ -145,7 +147,7 @@ async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promis
     const { join } = await import("node:path");
     try {
       const store = new McpStore({ dir: join(dataDir(), "mcp"), secretKey: process.env.DAEBOT_SECRET_KEY });
-      mcpConnect = new McpConnectService({ store, catalog: createMindCatalog({ baseUrl: cfg.mindBaseUrl, keyFor: (uid) => (uid === "owner" ? cfg.mindApiKey : undefined) }) });
+      mcpConnect = new McpConnectService({ store, catalog: createMindCatalog({ baseUrl: cfg.mindBaseUrl, keyFor: (uid) => catalogKey.of(uid) }) });
     } catch (e) { process.stderr.write(`${e instanceof HostedConfigError ? e.message : "invalid MCP connect configuration"}\n`); return 1; }
   }
   const runtime = createRuntime(cfg, { mcpConnect, hosted: hostedRt ? { ...hostedRt, sharedCap: globalCap, exempt: true, username: process.env.DAEBOT_OWNER_USERNAME?.trim() || "anthonyjconti" } : undefined, store: sessionStore, credits, bots });
@@ -154,6 +156,8 @@ async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promis
     try {
       const { createAuthContext } = await import("./auth/index.ts");
       auth = createAuthContext({ cfg, hosted, ownerRuntime: runtime, globalCap, sessionStore, bootCache, credits, bots, mcpConnect });
+      const a = auth;
+      catalogKey.of = (uid) => a.billingKey({ id: uid, username: "", tier: "admin", owner: uid === "owner" }); // only id + owner pick the key
       if (auth.store.unreadable) process.stderr.write(`hosted: ${auth.store.unreadable} stored user record(s) could not be decrypted (wrong DAEBOT_SECRET_KEY or tampered); those users must sign in again.\n`);
     } catch (e) {
       process.stderr.write(`${e instanceof HostedConfigError ? e.message : "invalid sign-in configuration"}\n`);

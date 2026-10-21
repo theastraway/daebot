@@ -12,7 +12,7 @@ export function authLabel(p) {
   return p.oauth ? "Sign in (OAuth) or paste an API key" : "Needs an API key";
 }
 
-export function initMcp({ json, api, h, icon, notify, mount, section, openApps }) {
+export function initMcp({ json, api, h, icon, notify, mount, section, openApps, suspendApps, resumeApps }) {
   const side = mount;           // the sidebar section element
   let servers = [], pending = [], limits = null, enabled = false;
   const shown = new Set();      // pending ids that already have a card in the thread
@@ -51,7 +51,7 @@ export function initMcp({ json, api, h, icon, notify, mount, section, openApps }
     const pub = h("dd", ""); pub.append(h("span", `mcp-pub ${p.publisher}`, publisherLabel(p.publisher))); facts.append(h("dt", "", "Publisher"), pub);
     fact("Sign-in", authLabel(p));
     card.append(facts);
-    if (p.reason) card.append(h("p", "mcp-reason", `Daebot says: ${p.reason}`));
+    if (p.reason) card.append(h("p", "mcp-reason", p.source === "catalog" ? `MIND App Store: ${p.reason}` : `Daebot says: ${p.reason}`));
     if (p.publisher === "unknown") card.append(h("p", "mcp-warn", "Daebot could not verify who runs this server. Connect it only if you trust it. Nothing it returns is treated as an instruction."));
 
     const allowBoxes = [];
@@ -135,7 +135,7 @@ export function initMcp({ json, api, h, icon, notify, mount, section, openApps }
   }
 
   function serverRow(s) {
-    const wrap = h("div", "mcp-srv" + (s.enabled ? "" : " off"));
+    const wrap = h("div", "mcp-srv" + (s.enabled ? "" : " off")); wrap.dataset.srv = s.id;
     const top = h("div", "mcp-row");
     const label = h("div", "mcp-lab"); label.append(h("span", "mcp-host", s.name), h("span", "mcp-sub", `${s.host} · ${s.tools.length} tools${s.truncated ? " (capped)" : ""}`));
     const tog = h("button", "btn-quiet sm", s.enabled ? "On" : "Off"); tog.type = "button"; tog.setAttribute("aria-pressed", String(s.enabled));
@@ -165,7 +165,10 @@ export function initMcp({ json, api, h, icon, notify, mount, section, openApps }
 
   function openModal(p) {
     const ov = h("div", "gate-token modal mcp-overlay"); ov.setAttribute("role", "dialog"); ov.setAttribute("aria-modal", "true");
-    const close = () => ov.remove();
+    // If the Apps card is open, it steps aside while this card is up (and comes back, refreshed, when this one closes).
+    const hidApps = suspendApps ? suspendApps() : false;
+    let closed = false;
+    const close = () => { if (closed) return; closed = true; ov.remove(); if (hidApps && resumeApps) resumeApps(); };
     const card = buildCard(p, () => setTimeout(close, 1200));
     const x = h("button", "btn-quiet", "Close"); x.type = "button"; x.addEventListener("click", close);
     const box = h("div", "token-card mcp-modal"); box.append(card, x); ov.append(box);
@@ -183,6 +186,16 @@ export function initMcp({ json, api, h, icon, notify, mount, section, openApps }
       return fresh;
     },
     buildCard,
+    /** Show the consent card for a pending request (from the Apps card's Connectors list). */
+    review: openModal,
+    /** Bring a connected server's controls into view in the Apps card. */
+    manage(id) {
+      const row = side.querySelector(`[data-srv="${CSS.escape(String(id))}"]`);
+      if (!row) return;
+      const det = row.querySelector("details"); if (det) det.open = true;
+      row.scrollIntoView({ block: "center", behavior: "smooth" });
+      const t = row.querySelector("button"); if (t) t.focus({ preventScroll: true });
+    },
     enabled: () => enabled,
     /** Back from an OAuth sign-in (?mcp=connected|failed). */
     returned(q) { if (q) notify(q === "connected" ? "MCP server connected." : "The MCP sign-in did not finish."); },
