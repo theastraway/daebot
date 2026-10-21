@@ -28,6 +28,8 @@ import { EMBEDDED_FILES } from "../embedded.generated.ts";
 import { hasEmbeddedSite } from "../embedded.ts";
 import { acceptWebSocket } from "./ws.ts";
 import { createVoiceHandler } from "./voice.ts";
+import { createAppsHandler } from "./apps.ts";
+import type { AppsOptions } from "./apps.ts";
 import type { VoiceOptions } from "./voice.ts";
 import type { WsConnection } from "./ws.ts";
 
@@ -79,6 +81,8 @@ export interface GatewayOptions {
   sessionStore?: { meta?(id: string): { owner?: string } | undefined };
   /** MIND Voice (/voice/stt, /voice/tts). Defaults from cfg + auth; pass to override (tests). */
   voice?: Partial<VoiceOptions>;
+  /** Apps card (/apps/integrations): MIND integrations proxied with the signed-in user's own key. Defaults from cfg + auth; pass to override (tests). */
+  apps?: Partial<AppsOptions>;
   /** POST /api/agent/turn per-user limit (turns per minute). Default DAEBOT_AGENT_API_RPM or 30. */
   agentApiPerMinute?: number;
   /** Bots: the late-bound bus holder shared with the runtimes. startGateway sets bus.current to the in-process bot bus. */
@@ -218,6 +222,16 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         fetchImpl: opts.voice?.fetchImpl ?? opts.auth?.fetchImpl,
         now: opts.voice?.now,
         onUsed: opts.voice?.onUsed ?? ((key) => { try { auth?.credits?.get(key, true).catch(() => {}); } catch { /* best effort */ } }),
+      })
+    : undefined;
+  // ---- Apps: the user's MIND integrations, always with THEIR key (owner login: a plain sign-in-with-MIND answer).
+  const appsBase = opts.apps?.baseUrl ?? opts.cfg?.mindBaseUrl;
+  const apps = appsBase
+    ? createAppsHandler({
+        baseUrl: appsBase,
+        keyFor: opts.apps?.keyFor ?? ((p) => (p.owner ? undefined : auth?.billingKey(p))),
+        returnTo: opts.apps?.returnTo ?? (process.env.DAEBOT_PUBLIC_URL?.trim() || (hosted?.allowedHosts?.[0] && hosted.allowedHosts[0] !== "localhost" ? `https://${hosted.allowedHosts[0]}` : undefined)),
+        fetchImpl: opts.apps?.fetchImpl ?? opts.auth?.fetchImpl,
       })
     : undefined;
   const turnLimiter = new TurnRateLimiter({ max: opts.agentApiPerMinute ?? (Number(process.env.DAEBOT_AGENT_API_RPM) || 30) });
@@ -585,7 +599,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path.startsWith("/hooks/") || path.startsWith("/voice/") || path === "/ws";
+    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path === "/ws";
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -791,6 +805,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
 
     const me = who(req);
     if (path.startsWith("/voice/")) return voice ? voice(req, res, path, _query, me) : sendJson(res, 404, { error: "voice is not available" });
+    if (path.startsWith("/apps/")) return apps ? apps(req, res, path, me) : sendJson(res, 404, { error: "apps are not available" });
     if (path === "/bots" || path.startsWith("/bots/")) return botsApi(req, res, path, method, me);
     if (path === "/models" || path.startsWith("/models/")) return modelsApi(req, res, path, method, me);
     if (path === "/sessions") {

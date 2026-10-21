@@ -29,6 +29,10 @@ export interface FakeMind {
   botsDown?: boolean;
   /** GET /profile/models (MIND's model list); undefined = the route answers the generic {ok:true} */
   models?: { id: string; name: string; tier?: string }[];
+  /** MIND integrations by username -> provider -> connected account label (GET/POST /developer/v1/integrations) */
+  integrations: Map<string, Map<string, string>>;
+  /** when set, /integrations answers this HTTP status */
+  integrationsStatus?: number;
   newKey(username: string): string;
   close(): Promise<void>;
 }
@@ -45,7 +49,7 @@ const json = (res: ServerResponse, status: number, v: unknown, extra: Record<str
 export async function startFakeMind(initial: Record<string, string> = {}): Promise<FakeMind> {
   const m: FakeMind = {
     url: "", base: "", seen: [], keys: new Map(Object.entries(initial)), registered: [], consentUser: "", codes: new Map(), refreshTokens: new Map(),
-    bots: new Map(),
+    bots: new Map(), integrations: new Map(),
     newKey(username) { const k = "mind_" + randomBytes(24).toString("base64url"); m.keys.set(k, username); return k; },
     close: () => new Promise((r) => { server.close(() => r()); server.closeAllConnections(); }),
   };
@@ -139,6 +143,17 @@ export async function startFakeMind(initial: Record<string, string> = {}): Promi
         if (rest === "/context") return json(res, 200, { sections: [{ section: "soul", items: [{ text: `MIND of ${username} / bot ${botHdr}` }] }] });
         if (rest === "/query") return json(res, 200, { response: `bot ${botHdr} of ${username} says hello` });
         return json(res, 200, { ok: true, bot: botHdr });
+      }
+      if (rest === "/integrations" || rest.startsWith("/integrations/")) {
+        if (m.integrationsStatus) return json(res, m.integrationsStatus, { detail: "x" });
+        const mine = m.integrations.get(username) ?? m.integrations.set(username, new Map()).get(username)!;
+        if (rest === "/integrations") {
+          const P = [["google", "Google", "oauth", true], ["microsoft", "Microsoft 365", "oauth", true], ["apple", "Apple Calendar", "credentials", true], ["dropbox", "Dropbox", "oauth", true], ["github", "GitHub", "oauth", false]] as const;
+          return json(res, 200, { integrations_enabled: true, providers: P.map(([provider, display_name, auth, configured]) => ({ provider, display_name, blurb: `Sync ${display_name}.`, auth, configured, connected: mine.has(provider), status: mine.has(provider) ? "connected" : null, account_label: mine.get(provider) ?? null, needs_reauth: false, reconnect_required: false, secret_field: "must-not-leak" })) });
+        }
+        const [, , prov, act] = rest.split("/");
+        if (act === "connect") return prov === "apple" ? json(res, 200, { auth_type: "credentials" }) : json(res, 200, { auth_type: "oauth", auth_url: `https://accounts.example.test/${prov}?state=${username}.${encodeURIComponent(String(parsed?.return_to ?? ""))}` });
+        if (act === "disconnect") { mine.delete(prov); return json(res, 200, { status: "disconnected" }); }
       }
       if (rest === "/audio/transcriptions" || rest === "/audio/speech") {
         if (m.audioStatus) return json(res, m.audioStatus, m.audioStatus === 402 ? { error: "insufficient_credits", message: "Not enough MIND credits for voice.", upgrade_url: "https://m-i-n-d.ai/#/billing" } : { detail: "x" });

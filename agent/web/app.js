@@ -4,6 +4,7 @@
 import { initVoice } from "/voice.js";
 import { initBots, generalSessions, peerLabel } from "/bots.js";
 import { initModels } from "/models.js";
+import { initApps } from "/apps.js";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -792,6 +793,10 @@ const bots = initBots({
     botDeleted: (id) => { if (state.curBot === id) newSession(); refreshSessions(); },
   },
 });
+
+// Apps card: the sidebar's Apps button opens MIND integrations (and any section other modules add with apps.addSection).
+const apps = initApps({ api, signOut: () => els.btnLogout.click() });
+$("btn-apps").addEventListener("click", closeSidebar); // phones: the drawer steps aside for the card
 
 // ---------- boot ----------
 async function boot() {
