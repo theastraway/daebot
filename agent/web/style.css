@@ -399,6 +399,17 @@ button.model-badge[aria-expanded="true"] { box-shadow: 0 0 0 1px rgba(255,255,25
 .app-actions { flex: none; }
 .app-btn { min-width: 104px; padding: 7px 12px; font-size: 13.5px; }
 .app-btn:disabled { opacity: .45; cursor: default; }
+.apps-card { max-height: 92dvh; overflow: auto; }
+.apps-sec[hidden] { display: none; }
+.apps-search { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; }
+.apps-search .fld { flex: 1; min-width: 0; box-sizing: border-box; font: 14px var(--sans); padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--bg); color: var(--ink); }
+.apps-count { flex: none; font-size: 12px; color: var(--ink-3); }
+.apps-sec[data-sec="connectors"] .apps-body { max-height: min(46dvh, 420px); overflow: auto; }
+.app-tags { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 3px; }
+.app-tag { font-size: 11px; line-height: 1.5; padding: 0 8px; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--ink-3); text-transform: capitalize; }
+.app-tag.is-ok { color: var(--ok); border-color: var(--ok); }
+.app-tag.is-warn { color: var(--warn); border-color: var(--warn); }
+.app-actions { display: flex; gap: 8px; }
 .app-confirm { padding: 0 14px 12px; }
 .app-confirm .confirm-inline { margin: 0; }
 .app-confirm p { margin: 0 0 10px; padding: 10px 12px; border-radius: 10px; background: var(--accent-soft); font-size: 13.5px; color: var(--ink); }

@@ -91,23 +91,33 @@ export interface PendingView {
   id: string; url: string; host: string; publisher: Publisher;
   authRequired: boolean; oauth: boolean; key: boolean;
   tools: ToolView[] | null; toolsTruncated: boolean;
-  suggestedName: string; reason?: string; defaultAllow: string[]; createdAt: number; expiresAt: number;
+  suggestedName: string; reason?: string; source?: "catalog"; defaultAllow: string[]; createdAt: number; expiresAt: number;
 }
 
 interface Pending {
   id: string; uid: string; url: string; host: string; publisher: Publisher;
   authRequired: boolean; discovery?: Discovery; oauthOk: boolean;
   tools: ToolInfo[] | null; toolsTruncated: boolean;
-  suggestedName: string; reason?: string; createdAt: number; expiresAt: number;
+  suggestedName: string; reason?: string; source?: "catalog"; createdAt: number; expiresAt: number;
 }
 interface Flow {
   uid: string; pendingId: string; state: string; verifier: string; redirectUri: string; discovery: Discovery;
   clientId: string; clientSecret?: string; allow: string[]; name?: string; expiresAt: number;
 }
 
-export interface CatalogEntry { name: string; url: string; official: boolean; description?: string }
+export type CatalogAuth = "none" | "oauth" | "key" | "oauth_or_key" | "unknown";
+/** One MIND App Store remote MCP connector. `official` comes only from MIND's own tier field for the entry, never from the server. */
+export interface CatalogEntry { name: string; url: string; official: boolean; description?: string; id?: string; category?: string; auth?: CatalogAuth }
+/** What the Apps card shows for one connector (no URL query, no secrets). `connected`/`serverId`/`pendingId` are this user's own state. */
+export interface CatalogItemView {
+  id: string; name: string; blurb: string; category: string; publisher: "official" | "community"; auth: CatalogAuth; host: string;
+  connected: boolean; serverId?: string; pendingId?: string;
+}
 
 // ---------------------------------------------------------------- helpers
+
+/** Ids MIND gives connectors ("mcp:notion"). Anything else is not listed, so the id round-trips untouched. */
+export const CATALOG_ID = /^[A-Za-z0-9_:.-]{1,60}$/;
 
 export function suggestName(host: string): string {
   const labels = host.toLowerCase().replace(/^\[|\]$/g, "").split(".").filter(Boolean);
@@ -240,6 +250,39 @@ export class McpConnectService {
     try { return ((await this.catalogFn?.(uid)) ?? []).slice(0, 40); } catch { return []; }
   }
 
+  /** The whole App Store remote-MCP list for the Apps card, each row marked with this user's own connected / waiting state.
+   *  An entry whose URL would not pass the same checks a proposal gets (https, no credentials, no query) is not listed at all. */
+  async catalogItems(uid: string): Promise<CatalogItemView[]> {
+    let entries: CatalogEntry[] = [];
+    try { entries = ((await this.catalogFn?.(uid)) ?? []).slice(0, 300); } catch { /* fail soft */ }
+    const have = new Map(this.store.list(uid).map((s) => [s.url, s.id]));
+    const waiting = new Map([...this.pendingMap(uid).values()].map((p) => [p.url, p.id]));
+    const out: CatalogItemView[] = [];
+    for (const e of entries) {
+      const id = e.id || e.name;
+      if (!CATALOG_ID.test(id)) continue;
+      let u: URL;
+      try { u = normalizeUrl(e.url); } catch { continue; }
+      const url = u.toString();
+      out.push({
+        id, name: cleanLine(e.name, 60), blurb: cleanLine(e.description ?? "", 200), category: cleanLine(e.category ?? "", 30),
+        publisher: e.official ? "official" : "community", auth: e.auth ?? "unknown", host: u.host,
+        connected: have.has(url), serverId: have.get(url), pendingId: waiting.get(url),
+      });
+    }
+    return out;
+  }
+
+  /** A click on Connect in the Apps card. The URL comes from MIND's list on the server, looked up by id: the browser never supplies it.
+   *  From here it is the very same proposal a model would make (probe, SSRF guard, caps, rate limit), ending in the same consent card. */
+  async proposeFromCatalog(uid: string, id: string): Promise<PendingView> {
+    this.requireEnabled();
+    const entries = (await this.catalogFn?.(uid).catch(() => [] as CatalogEntry[])) ?? [];
+    const hit = CATALOG_ID.test(id) ? entries.find((e) => (e.id || e.name) === id) : undefined;
+    if (!hit) throw new McpConnectError("That connector is not in the MIND App Store list any more. Refresh the Apps card.", 404);
+    return this.propose(uid, { url: hit.url, reason: hit.description, source: "catalog", nameHint: (hit.id || hit.name).replace(/^mcp:/, "") });
+  }
+
   // ---- probe: initialize + tools/list, nothing else
 
   private async probe(url: string, bearer?: string): Promise<{ authRequired: false; tools: ToolInfo[]; truncated: boolean } | { authRequired: true; challenge?: string }> {
@@ -266,7 +309,7 @@ export class McpConnectService {
 
   // ---- propose (the only thing a model can do)
 
-  async propose(uid: string, a: { url: string; reason?: string }, origin: "user" | "bot" = "user"): Promise<PendingView> {
+  async propose(uid: string, a: { url: string; reason?: string; source?: "catalog"; nameHint?: string }, origin: "user" | "bot" = "user"): Promise<PendingView> {
     this.requireEnabled();
     if (origin === "bot") throw new McpConnectError("A message from another bot cannot ask to connect a server. Only the user can.", 403);
     const now = this.now();
@@ -299,8 +342,8 @@ export class McpConnectService {
       publisher: await this.publisherOf(uid, host, urlStr),
       authRequired: probe.authRequired, discovery, oauthOk,
       tools: probe.authRequired ? null : probe.tools, toolsTruncated: !probe.authRequired && probe.truncated,
-      suggestedName: this.uniqueName(uid, suggestName(u.hostname)),
-      reason: a.reason ? cleanLine(a.reason, 200) : undefined,
+      suggestedName: this.uniqueName(uid, (a.nameHint && slugify(a.nameHint)) || suggestName(u.hostname)),
+      reason: a.reason ? cleanLine(a.reason, 200) : undefined, source: a.source,
       createdAt: now, expiresAt: now + PENDING_TTL_MS,
     };
     mine.set(p.id, p);
@@ -320,7 +363,7 @@ export class McpConnectService {
     const tools = p.tools ? this.toToolViews(fake, p.tools) : null;
     return {
       id: p.id, url: p.url, host: p.host, publisher: p.publisher, authRequired: p.authRequired, oauth: p.oauthOk, key: p.authRequired,
-      tools, toolsTruncated: p.toolsTruncated, suggestedName: p.suggestedName, reason: p.reason,
+      tools, toolsTruncated: p.toolsTruncated, suggestedName: p.suggestedName, reason: p.reason, source: p.source,
       defaultAllow: (tools ?? []).filter((t) => t.readOnly && !t.destructive).map((t) => t.name),
       createdAt: p.createdAt, expiresAt: p.expiresAt,
     };

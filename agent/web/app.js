@@ -6,6 +6,7 @@ import { initBots, generalSessions, peerLabel } from "/bots.js";
 import { initModels } from "/models.js";
 import { initApps } from "/apps.js";
 import { initMcp } from "/mcp.js";
+import { initConnectors } from "/connectors.js";
 import { transcriptBehind } from "/sync.js";
 
 const $ = (id) => document.getElementById(id);
@@ -832,13 +833,16 @@ const bots = initBots({
 const apps = initApps({ api, signOut: () => els.btnLogout.click() });
 $("btn-apps").addEventListener("click", closeSidebar); // phones: the drawer steps aside for the card
 // "Connected MCP servers" is a section of the Apps card (hidden when the deployment has the feature off).
+// "Connectors" (the MIND App Store's MCP servers) is registered first so it sits above the connected-servers list.
+let mcp; // assigned just below; the Connectors section only uses it after the user clicks
+initConnectors({ apps, json, getMcp: () => mcp });
 const mcpSec = h("section", "apps-sec"); mcpSec.dataset.sec = "mcp"; mcpSec.hidden = true;
 const mcpHead = h("h3", "", "Connected MCP servers"); mcpHead.id = "apps-h-mcp";
 const mcpBody = h("div", "apps-body mcp-panel"); mcpBody.setAttribute("role", "group"); mcpBody.setAttribute("aria-labelledby", "mcpHead");
 mcpBody.setAttribute("aria-labelledby", "apps-h-mcp");
 mcpSec.append(mcpHead, h("p", "apps-note", "Daebot can find a server and ask to connect it. Only your click connects it."), mcpBody);
 $("apps-sections").append(mcpSec);
-const mcp = initMcp({ json, api, h, icon, notify, mount: mcpBody, section: mcpSec, openApps: () => $("btn-apps").click() });
+mcp = initMcp({ json, api, h, icon, notify, mount: mcpBody, section: mcpSec, openApps: () => $("btn-apps").click(), suspendApps: () => apps.suspend(), resumeApps: () => apps.resume() });
 $("btn-apps").addEventListener("click", () => mcp.load());
 { const q = new URL(location.href).searchParams.get("mcp"); if (q) { mcp.returned(q); history.replaceState(null, "", location.pathname); } }
 
