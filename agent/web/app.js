@@ -6,6 +6,7 @@ import { initBots, generalSessions, peerLabel } from "/bots.js";
 import { initModels } from "/models.js";
 import { initApps } from "/apps.js";
 import { initMcp } from "/mcp.js";
+import { transcriptBehind } from "/sync.js";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -334,6 +335,34 @@ async function loadHistory(id) {
   } catch { /* no saved history: the session starts empty */ }
 }
 
+// Pull in turns that happened outside this tab (a MINDbots reply run through /api/agent/turn, another device).
+// Only the open conversation, only while it is idle here and the tab is visible; the server history is the truth.
+let syncing = false;
+async function syncCurrent() {
+  const id = state.currentId;
+  if (!id || syncing || document.hidden || state.busy.has(id) || !state.online) return;
+  syncing = true;
+  try {
+    const { events } = await json(`/sessions/${encodeURIComponent(id)}/history`);
+    if (id !== state.currentId || state.busy.has(id) || !Array.isArray(events)) return;
+    const tr = transcript(id);
+    const localUsers = tr.items.filter((x) => x.kind === "user").length;
+    const { behind, dones } = transcriptBehind({ events, localUsers, lastDones: tr.syncDones });
+    tr.syncDones = dones;
+    if (!behind) return;
+    const r = itemsFromHistory(events);
+    const top = els.scroll.scrollTop, pinned = stick;
+    tr.items.length = 0; tr.items.push(...r.items);
+    tr.usage = r.usage; if (r.model) tr.model = r.model;
+    renderThread();
+    if (!pinned) els.scroll.scrollTop = top;
+    saveTranscript(id);
+  } catch { /* offline or no saved history yet: try again on the next tick */ }
+  finally { syncing = false; }
+}
+setInterval(syncCurrent, 4000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) syncCurrent(); });
+
 function addItem(sessionId, it) {
   const tr = transcript(sessionId);
   tr.items.push(it);
@@ -507,6 +536,7 @@ async function sendMessage(text) {
     dropWaiting();
     if (asst) { asst.streaming = false; if (asst.node) updateAssistant(asst.node, asst); }
     state.busy.delete(id); setBusyUi();
+    transcript(id).syncDones = undefined; // this tab just ran the turn itself: re-baseline instead of re-rendering it
     saveTranscript(id);
     refreshSessions();
     if (!els.drawer.hidden) loadViolations(); else refreshViolCount();
