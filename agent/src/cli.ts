@@ -112,7 +112,7 @@ function argValue(argv: string[], name: string): string | undefined {
 }
 
 async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promise<number> {
-  let mod: { startGateway?: (o: { runtime: Runtime; cfg?: Config; port?: number; host?: string; hosted?: HostedOptions; auth?: AuthContext; sessionStore?: unknown; bots?: { dir: string; bus: { current?: unknown } } }) => Promise<{ url: string; token: string; close?: () => Promise<void> }> };
+  let mod: { startGateway?: (o: { runtime: Runtime; cfg?: Config; port?: number; host?: string; hosted?: HostedOptions; auth?: AuthContext; sessionStore?: unknown; bots?: { dir: string; bus: { current?: unknown } }; mcpConnect?: unknown }) => Promise<{ url: string; token: string; close?: () => Promise<void> }> };
   try { mod = (await import("./gateway/index.ts")) as typeof mod; } catch { process.stdout.write("gateway not built yet\n"); return 1; }
   if (!mod.startGateway) { process.stdout.write("gateway not built yet\n"); return 1; }
   const hostedMode = isHostedEnv(process.env, argv);
@@ -136,12 +136,24 @@ async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promis
   const credits = cfg.billing === "mind" ? new (await import("./provider/mind.ts")).MindCredits({ mindBaseUrl: cfg.mindBaseUrl }) : undefined;
   // Bots: one data dir + one late-bound bus shared by the owner runtime, every user runtime and the gateway (which sets bus.current).
   const bots = { dir: dataDir(), bus: {} };
-  const runtime = createRuntime(cfg, { hosted: hostedRt ? { ...hostedRt, sharedCap: globalCap, exempt: true, username: process.env.DAEBOT_OWNER_USERNAME?.trim() || "anthonyjconti" } : undefined, store: sessionStore, credits, bots });
+  // Connected MCP servers: sealed per-user store under DATA_DIR/mcp. Only hosted deployments (cookie logins) expose it.
+  let mcpConnect: import("./mcpconnect/service.ts").McpConnectService | undefined;
+  if (hostedMode) {
+    const { McpStore } = await import("./mcpconnect/store.ts");
+    const { McpConnectService } = await import("./mcpconnect/service.ts");
+    const { createMindCatalog } = await import("./mcpconnect/catalog.ts");
+    const { join } = await import("node:path");
+    try {
+      const store = new McpStore({ dir: join(dataDir(), "mcp"), secretKey: process.env.DAEBOT_SECRET_KEY });
+      mcpConnect = new McpConnectService({ store, catalog: createMindCatalog({ baseUrl: cfg.mindBaseUrl, keyFor: (uid) => (uid === "owner" ? cfg.mindApiKey : undefined) }) });
+    } catch (e) { process.stderr.write(`${e instanceof HostedConfigError ? e.message : "invalid MCP connect configuration"}\n`); return 1; }
+  }
+  const runtime = createRuntime(cfg, { mcpConnect, hosted: hostedRt ? { ...hostedRt, sharedCap: globalCap, exempt: true, username: process.env.DAEBOT_OWNER_USERNAME?.trim() || "anthonyjconti" } : undefined, store: sessionStore, credits, bots });
   let auth: AuthContext | undefined;
   if (hosted && globalCap) {
     try {
       const { createAuthContext } = await import("./auth/index.ts");
-      auth = createAuthContext({ cfg, hosted, ownerRuntime: runtime, globalCap, sessionStore, bootCache, credits, bots });
+      auth = createAuthContext({ cfg, hosted, ownerRuntime: runtime, globalCap, sessionStore, bootCache, credits, bots, mcpConnect });
       if (auth.store.unreadable) process.stderr.write(`hosted: ${auth.store.unreadable} stored user record(s) could not be decrypted (wrong DAEBOT_SECRET_KEY or tampered); those users must sign in again.\n`);
     } catch (e) {
       process.stderr.write(`${e instanceof HostedConfigError ? e.message : "invalid sign-in configuration"}\n`);
@@ -152,7 +164,7 @@ async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promis
   const host = argValue(argv, "--host");
   if (hosted && !process.env.MINDCLAW_MODEL) process.stderr.write(`hosted: MINDCLAW_MODEL is not set, using the built-in default (${cfg.models.default}). Set MINDCLAW_MODEL to choose the deployed model.\n`);
   let gw: { url: string; token: string; close?: () => Promise<void> };
-  try { gw = await mod.startGateway({ runtime, cfg, port, host, hosted, auth, sessionStore, bots }); } catch (e) {
+  try { gw = await mod.startGateway({ runtime, cfg, port, host, hosted, auth, sessionStore, bots, mcpConnect }); } catch (e) {
     process.stderr.write(`gateway failed to start: ${String((e as Error)?.message ?? e).split("\n")[0]}\n`);
     return 1;
   }

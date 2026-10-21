@@ -46,6 +46,8 @@ export interface SessionDeps {
   restore?: SessionState & { violations?: Violation[] };
   /** Optional learning layer (src/learn). Absent = the loop behaves exactly as before. */
   learn?: LearnHooks;
+  /** Tools that can appear or change between turns (e.g. MCP servers the user connected mid-chat). Re-read every round; a name already in `tools` is never shadowed. */
+  dynamicTools?: () => Tool[];
 }
 
 /** Plain-words reply used when the model ends a turn with no text. A refused tool call must never leave the user with a blank reply. */
@@ -63,6 +65,16 @@ const isAbort = (e: unknown, signal?: AbortSignal) => signal?.aborted === true |
 export function createAgentSession(deps: SessionDeps): AgentSession {
   const { id, surface, provider, kernel, tools, sync, cfg, cwd } = deps;
   const byName = new Map(tools.map((t) => [t.spec.name, t]));
+  const staticNames = new Set(byName.keys());
+  // Dynamic tools (connected MCP servers) are re-read each round; the static set always wins a name clash.
+  let liveTools: Tool[] = tools;
+  function refreshDynamic(): void {
+    if (!deps.dynamicTools) return;
+    const extra = safe(deps.dynamicTools, [] as Tool[]).filter((t) => !staticNames.has(t.spec.name));
+    for (const n of [...byName.keys()]) if (!staticNames.has(n)) byName.delete(n);
+    for (const t of extra) byName.set(t.spec.name, t);
+    liveTools = extra.length ? [...tools, ...extra] : tools;
+  }
 
   const state: TurnState = {
     sessionId: id,
@@ -173,7 +185,8 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
 
         yield* maybeCompact(signal);
 
-        const offered = safe(() => kernel.allowedTools(state, tools), tools);
+        refreshDynamic();
+        const offered = safe(() => kernel.allowedTools(state, liveTools), liveTools);
         const specs = offered.map((t) => t.spec);
 
         // ---- provider call. Text streams to the client as it arrives; if pre_answer then withholds the draft,
@@ -399,7 +412,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
   let currentSignal: AbortSignal | undefined;
   async function execute(tool: Tool, args: Record<string, unknown>): Promise<ToolResult> {
     try {
-      const r = await tool.run(args, { cwd, signal: currentSignal, sessionId: id });
+      const r = await tool.run(args, { cwd, signal: currentSignal, sessionId: id, origin: turnOrigin });
       return r && typeof r.output === "string" ? r : { ok: false, output: "tool returned an invalid result" };
     } catch (e) {
       return { ok: false, output: `${tool.spec.name}: ${String((e as Error)?.message ?? e).split("\n")[0].slice(0, 300)}` };

@@ -16,6 +16,12 @@ export interface McpServerConfig {
 }
 
 export class McpError extends Error {}
+/** A non-2xx HTTP reply. `status` and the WWW-Authenticate header let a caller start OAuth discovery; the message never carries a body. */
+export class McpHttpStatusError extends McpError {
+  status: number;
+  wwwAuthenticate?: string;
+  constructor(message: string, status: number, wwwAuthenticate?: string) { super(message); this.status = status; this.wwwAuthenticate = wwwAuthenticate; }
+}
 
 interface RpcMessage { jsonrpc?: string; id?: number | string | null; result?: any; error?: { code?: number; message?: string }; method?: string }
 
@@ -74,6 +80,7 @@ export class McpHttpClient {
   readonly name: string;
   private url: string;
   private headers: Record<string, string>;
+  private headersFn?: () => Record<string, string>;
   private fetchImpl: typeof fetch;
   private timeoutMs: number;
   private sessionId: string | undefined;
@@ -81,10 +88,11 @@ export class McpHttpClient {
   private nextId = 1;
   private ready: Promise<void> | undefined;
 
-  constructor(cfg: McpServerConfig, o: { fetchImpl?: typeof fetch; timeoutMs?: number } = {}) {
+  constructor(cfg: McpServerConfig, o: { fetchImpl?: typeof fetch; timeoutMs?: number; /** Live auth headers (token refresh); merged over cfg.headers on every request. */ headers?: () => Record<string, string> } = {}) {
     this.name = cfg.name;
     this.url = cfg.url;
     this.headers = cfg.headers ?? {};
+    this.headersFn = o.headers;
     this.fetchImpl = o.fetchImpl ?? fetch;
     this.timeoutMs = o.timeoutMs ?? 30_000;
   }
@@ -92,6 +100,7 @@ export class McpHttpClient {
   private async post(body: unknown, expectId?: number, isInit = false): Promise<RpcMessage | undefined> {
     const headers: Record<string, string> = {
       ...this.headers,
+      ...(this.headersFn ? this.headersFn() : {}),
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
     };
@@ -100,9 +109,9 @@ export class McpHttpClient {
     const res = await this.fetchImpl(this.url, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(this.timeoutMs) });
     const sid = res.headers.get("mcp-session-id");
     if (sid) this.sessionId = sid;
-    if (expectId === undefined) { await res.text().catch(() => ""); if (!res.ok) throw new McpError(`${this.name}: HTTP ${res.status}`); return undefined; }
+    if (expectId === undefined) { await res.text().catch(() => ""); if (!res.ok) throw new McpHttpStatusError(`${this.name}: HTTP ${res.status}`, res.status, res.headers.get("www-authenticate") ?? undefined); return undefined; }
     if (res.status === 404 && this.sessionId) { this.sessionId = undefined; this.ready = undefined; throw new McpError("session expired"); }
-    if (!res.ok) { await res.text().catch(() => ""); throw new McpError(`${this.name}: HTTP ${res.status}`); }
+    if (!res.ok) { await res.text().catch(() => ""); throw new McpHttpStatusError(`${this.name}: HTTP ${res.status}`, res.status, res.headers.get("www-authenticate") ?? undefined); }
     const text = await res.text();
     const ctype = res.headers.get("content-type") ?? "";
     let msgs: RpcMessage[];

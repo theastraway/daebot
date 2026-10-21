@@ -5,6 +5,7 @@ import { initVoice } from "/voice.js";
 import { initBots, generalSessions, peerLabel } from "/bots.js";
 import { initModels } from "/models.js";
 import { initApps } from "/apps.js";
+import { initMcp } from "/mcp.js";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -201,6 +202,7 @@ function buildItem(it, tr) {
     case "tool": node = buildTool(it); break;
     case "gate": node = buildGate(it); break;
     case "confirm": node = buildConfirm(it); break;
+    case "mcp": node = mcp.buildCard(it.pending, () => { it.done = true; }); if (it.done) node.classList.add("done"); break;
     default: // a billing notice carries an upgrade link; anything else stays plain text
       node = h("div", `notice ${it.level === "warn" ? "warn" : ""}`, /https?:\/\//.test(it.text) ? undefined : it.text);
       if (/https?:\/\//.test(it.text)) inline(node, it.text);
@@ -568,6 +570,8 @@ function onEvent(id, ev, asst, toolByReceipt) {
     case "toolEnd": {
       const it = toolByReceipt.get(ev.receiptId);
       if (it) { it.status = ev.ok ? "ok" : "fail"; it.preview = ev.preview; if (it.parts) refreshTool(it); }
+      // Daebot proposed an MCP server: put the consent card in the thread (only the card's Connect button can connect it).
+      if (ev.tool === "mcp_connect" && ev.ok) mcp.newPending().then((ps) => { for (const p of ps) addItem(id, { kind: "mcp", pending: p }); }).catch(() => {});
       return asst;
     }
     case "gate":
@@ -797,6 +801,16 @@ const bots = initBots({
 // Apps card: the sidebar's Apps button opens MIND integrations (and any section other modules add with apps.addSection).
 const apps = initApps({ api, signOut: () => els.btnLogout.click() });
 $("btn-apps").addEventListener("click", closeSidebar); // phones: the drawer steps aside for the card
+// "Connected MCP servers" is a section of the Apps card (hidden when the deployment has the feature off).
+const mcpSec = h("section", "apps-sec"); mcpSec.dataset.sec = "mcp"; mcpSec.hidden = true;
+const mcpHead = h("h3", "", "Connected MCP servers"); mcpHead.id = "apps-h-mcp";
+const mcpBody = h("div", "apps-body mcp-panel"); mcpBody.setAttribute("role", "group"); mcpBody.setAttribute("aria-labelledby", "mcpHead");
+mcpBody.setAttribute("aria-labelledby", "apps-h-mcp");
+mcpSec.append(mcpHead, h("p", "apps-note", "Daebot can find a server and ask to connect it. Only your click connects it."), mcpBody);
+$("apps-sections").append(mcpSec);
+const mcp = initMcp({ json, api, h, icon, notify, mount: mcpBody, section: mcpSec, openApps: () => $("btn-apps").click() });
+$("btn-apps").addEventListener("click", () => mcp.load());
+{ const q = new URL(location.href).searchParams.get("mcp"); if (q) { mcp.returned(q); history.replaceState(null, "", location.pathname); } }
 
 // ---------- boot ----------
 async function boot() {
@@ -806,6 +820,7 @@ async function boot() {
   // Prewarming a session boots MIND, so it only ever runs for a signed-in user (hosted: the session cookie must be valid).
   if (state.hosted && !(await showWho())) return location.replace("/");
   await refreshSessions();
+  mcp.load();
   let last = null;
   try { last = sessionStorage.getItem("daebot:current"); } catch { /* none */ }
   let known = last && state.sessions.find((s) => s.id === last); // live, or saved on the server (survives restarts)

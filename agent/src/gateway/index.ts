@@ -22,6 +22,9 @@ import { BotError, safeUpgradeUrl } from "../bots/types.ts";
 import type { BotRecord, BotsContext } from "../bots/types.ts";
 import { botsEnabled } from "../bots/flag.ts";
 import { createModelCatalog } from "../models.ts";
+import { McpConnectError } from "../mcpconnect/service.ts";
+import type { McpConnectService } from "../mcpconnect/service.ts";
+import { createHmac } from "node:crypto";
 import { validModelId } from "../settings.ts";
 import { STATIC_CSP, resolveStatic, serveEmbedded, serveFile } from "./static.ts";
 import { EMBEDDED_FILES } from "../embedded.generated.ts";
@@ -91,6 +94,8 @@ export interface GatewayOptions {
   botsEnabled?: () => boolean;
   /** Tests: the fetch used for the model catalog. */
   fetchImpl?: typeof fetch;
+  /** Connected MCP servers (consent card routes under /mcp/*). Absent = the feature is not offered here. */
+  mcpConnect?: McpConnectService;
 }
 
 export const HOSTED_COOKIE = "mc_session";
@@ -210,6 +215,9 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       : undefined,
   });
   const botsOn = (): boolean => (opts.botsEnabled ? opts.botsEnabled() : botsEnabled());
+  const mcp = opts.mcpConnect;
+  const mcpOn = (): boolean => !!mcp?.enabled();
+  const mcpField = (): { mcp?: boolean } => (mcp ? { mcp: mcpOn() } : {}); // only reported where the feature is wired in
   // ---- Bots: the bus runs a recipient bot's turn in-process through this same SessionManager.
   if (opts.bots) opts.bots.bus.current = createBotBus({ manager, botsFor: (owner) => manager.runtimeOf(owner).bots, tierOf: (owner) => (owner === OWNER.id ? OWNER.tier : auth?.store.principal(owner)?.tier) });
   const catalog = createModelCatalog({ cfg: opts.cfg ?? ({ mindBaseUrl: "", models: { default: "", cheap: "", fallback: [] } } as unknown as Config), fetchImpl: opts.fetchImpl ?? opts.auth?.fetchImpl });
@@ -534,7 +542,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         return void res.end(method === "HEAD" ? undefined : "User-agent: *\nDisallow: /\n");
       }
       // Platform health probes may not carry our public Host; /health reveals nothing but liveness and which model answers.
-      if (path === "/health" && (method === "GET" || method === "HEAD")) return sendJson(res, 200, { ok: true, name: "mindclaw-gateway", hosted: true, bots: botsOn(), ...modelInfo() });
+      if (path === "/health" && (method === "GET" || method === "HEAD")) return sendJson(res, 200, { ok: true, name: "mindclaw-gateway", hosted: true, bots: botsOn(), ...mcpField(), ...modelInfo() });
     }
 
     if (hosted && path === AGENT_TURN_PATH) return agentTurn(req, res);
@@ -576,7 +584,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
         const p = principalOf(req);
         if (!p) return sendJson(res, 401, { error: "unauthorized" });
-        const me: Record<string, unknown> = { username: p.owner ? "Owner" : p.username, owner: p.owner, tier: p.tier, bots: botsOn() };
+        const me: Record<string, unknown> = { username: p.owner ? "Owner" : p.username, owner: p.owner, tier: p.tier, bots: botsOn(), ...mcpField() };
         // DAEBOT_BILLING=mind: the MIND plan and credits this principal's calls are billed to (`tier` stays Daebot's identity tier,
         // so the MIND plan id is `planTier`). ?fresh=1 (sent after a turn) re-reads
         // unless a response header already refreshed the number moments ago.
@@ -595,11 +603,18 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
 
     if (path === "/health") {
       if (method !== "GET" && method !== "HEAD") return sendJson(res, 405, { error: "method not allowed" });
-      return sendJson(res, 200, { ok: true, name: "mindclaw-gateway", sessions: manager.count(), bots: botsOn(), ...modelInfo() });
+      return sendJson(res, 200, { ok: true, name: "mindclaw-gateway", sessions: manager.count(), bots: botsOn(), ...mcpField(), ...modelInfo() });
+    }
+
+    // The MCP server's sign-in page sends the browser back here: a cross-site navigation, so the Strict session cookie is NOT sent.
+    // The user is identified by the short-lived Lax cookie set when they pressed Connect on the card.
+    if (path === "/mcp/oauth/callback") {
+      if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+      return mcpOauthCallback(req, res, query);
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path === "/ws";
+    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/ws";
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -632,6 +647,79 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
     if (file) return serveFile(file, res, method === "HEAD", extra);
     if (!serveEmbedded(staticPath, res, method === "HEAD", extra, embeddedFiles)) return sendJson(res, 404, { error: "not found" });
+  }
+
+  // ---------- connected MCP servers: consent card routes. Cookie-authenticated, same origin rules as everything else.
+  // Nothing here is reachable by a model: approving needs the signed-in user's browser session.
+  const MCP_COOKIE = "mc_mcpo";
+  const mcpMac = (uid: string, state: string): string => createHmac("sha256", token).update(`mcp-oauth:${uid}:${state}`).digest("base64url");
+  const mcpCookieAttrs = (maxAge: number): string => `HttpOnly; Secure; SameSite=Lax; Path=/mcp/oauth; Max-Age=${maxAge}`;
+  function mcpRedirectUri(req: IncomingMessage): string {
+    const pub = (process.env.DAEBOT_PUBLIC_URL ?? "").trim().replace(/\/+$/, "");
+    if (hosted) return `${pub || `https://${[...allowedHosts][0]}`}/mcp/oauth/callback`;
+    return `http://${hostnameOf(String(req.headers.host ?? "127.0.0.1"))}${(/:(\d+)$/.exec(String(req.headers.host ?? "")) ?? [])[0] ?? ""}/mcp/oauth/callback`;
+  }
+  function mcpFail(res: ServerResponse, e: unknown): void {
+    if (e instanceof McpConnectError) return sendJson(res, e.status, { error: e.message });
+    throw e;
+  }
+  const mcpDonePage = (msg: string, ok: boolean): string =>
+    `<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/?mcp=${ok ? "connected" : "failed"}"><title>${ok ? "Connected" : "Not connected"}</title><p>${msg}</p><a href="/">Continue</a>`;
+
+  async function mcpOauthCallback(req: IncomingMessage, res: ServerResponse, query: URLSearchParams): Promise<void> {
+    if (!mcp || !mcp.enabled()) return sendJson(res, 404, { error: "not found" });
+    const state = query.get("state") ?? "";
+    const raw = parseCookies(req.headers["cookie"])[MCP_COOKIE] ?? "";
+    const parts = raw.split(".");
+    const clear = `${MCP_COOKIE}=; ${mcpCookieAttrs(0)}`;
+    const page = (msg: string, ok: boolean, status = 200) => { res.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "set-cookie": clear }); res.end(mcpDonePage(msg, ok)); };
+    // uid.state.mac: must be the browser that pressed Connect, for this very state (blocks login-CSRF / code injection).
+    if (parts.length !== 3 || !state || parts[1] !== state || !safeEqual(parts[2], mcpMac(parts[0], state))) return page("That sign-in did not come from this browser. Start again from the card.", false, 400);
+    if (query.get("error")) return page("The sign-in was cancelled.", false);
+    try {
+      await mcp.completeOAuth(parts[0], state, query.get("code") ?? "");
+      return page("Connected. Returning to Daebot.", true);
+    } catch (e) {
+      return page(e instanceof McpConnectError ? e.message.replace(/[<>&"]/g, "") : "The sign-in did not complete.", false);
+    }
+  }
+
+  async function mcpApi(req: IncomingMessage, res: ServerResponse, path: string, method: string, me: Principal): Promise<void> {
+    if (!mcp || !mcpOn()) return sendJson(res, 404, { error: "connecting MCP servers is not enabled on this deployment" });
+    try {
+      if (path === "/mcp/servers") {
+        if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+        return sendJson(res, 200, { servers: mcp.list(me.id), pending: mcp.pending(me.id), limits: mcp.limits() });
+      }
+      let m = /^\/mcp\/pending\/([A-Za-z0-9_-]{1,40})\/(approve|deny)$/.exec(path);
+      if (m) {
+        if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+        if (m[2] === "deny") return sendJson(res, 200, { ok: mcp.deny(me.id, m[1]) });
+        const b = await readJson(req);
+        const mode = b.mode === "none" || b.mode === "key" || b.mode === "oauth" ? b.mode : undefined;
+        const allow = Array.isArray(b.allow) ? b.allow.filter((x): x is string => typeof x === "string").slice(0, 500) : undefined;
+        const r = await mcp.approve(me.id, m[1], { mode, apiKey: optStr(b.apiKey, 5000), allow, name: optStr(b.name, 40), redirectUri: mcpRedirectUri(req) });
+        if (r.status === "authorize") {
+          res.setHeader("set-cookie", `${MCP_COOKIE}=${me.id}.${r.state}.${mcpMac(me.id, r.state)}; ${mcpCookieAttrs(600)}`);
+          return sendJson(res, 200, { status: "authorize", url: r.url });
+        }
+        return sendJson(res, 200, r);
+      }
+      m = /^\/mcp\/servers\/([A-Za-z0-9_-]{1,40})(?:\/(refresh))?$/.exec(path);
+      if (m) {
+        if (m[2] === "refresh") {
+          if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+          return sendJson(res, 200, { server: await mcp.refreshTools(me.id, m[1]) });
+        }
+        if (method === "DELETE") return sendJson(res, 200, { ok: mcp.remove(me.id, m[1]) });
+        if (method === "PATCH") {
+          const b = await readJson(req);
+          return sendJson(res, 200, { server: mcp.update(me.id, m[1], { enabled: typeof b.enabled === "boolean" ? b.enabled : undefined, allow: Array.isArray(b.allow) ? (b.allow as unknown[]).filter((x): x is string => typeof x === "string") : undefined }) });
+        }
+        return sendJson(res, 405, { error: "method not allowed" });
+      }
+      return sendJson(res, 404, { error: "not found" });
+    } catch (e) { return mcpFail(res, e); }
   }
 
   // ---------- bots + models REST (same cookie auth and origin rules as /sessions; one owner's bots are invisible to everyone else) ----------
@@ -807,6 +895,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (path.startsWith("/voice/")) return voice ? voice(req, res, path, _query, me) : sendJson(res, 404, { error: "voice is not available" });
     if (path.startsWith("/apps/")) return apps ? apps(req, res, path, me) : sendJson(res, 404, { error: "apps are not available" });
     if (path === "/bots" || path.startsWith("/bots/")) return botsApi(req, res, path, method, me);
+    if (path.startsWith("/mcp/")) return mcpApi(req, res, path, method, me);
     if (path === "/models" || path.startsWith("/models/")) return modelsApi(req, res, path, method, me);
     if (path === "/sessions") {
       if (method === "GET") return sendJson(res, 200, { sessions: manager.list(me.id, { bot: optStr(_query.get("bot") ?? undefined, 80) || undefined }) });
