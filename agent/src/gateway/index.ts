@@ -37,6 +37,7 @@ import type { VoiceOptions } from "./voice.ts";
 import type { WsConnection } from "./ws.ts";
 import { handleAdmin, isAdminPath } from "./admin.ts";
 import { AdminLedger } from "./mistakes.ts";
+import { AngerLedger } from "./anger.ts";
 import { MindFeed } from "./mind-feed.ts";
 import { createMindClient } from "../mind/client.ts";
 import { dataDir } from "../persist.ts";
@@ -250,6 +251,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       })
     : undefined;
   let adminLedger: AdminLedger | undefined;
+  let angerLedger: AngerLedger | undefined;
+  const anger = (): AngerLedger => (angerLedger ??= new AngerLedger(opts.adminLog?.dir ?? dataDir()));
   const ledger = (): AdminLedger => (adminLedger ??= new AdminLedger(opts.adminLog?.dir ?? dataDir()));
   // The ledger feeds Daebot's own MIND (the server's owner key = Anthony's MIND, never a client tenant) in the same request as each write.
   const feedClient = opts.adminLog?.mindClient !== undefined ? opts.adminLog.mindClient : opts.cfg?.mindApiKey ? createMindClient(opts.cfg) : null;
@@ -580,6 +583,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (isAdminPath(path)) {
       return void (await handleAdmin({
         get ledger() { return ledger(); },
+        get anger() { return anger(); },
         feed: mindFeed,
         logKey: opts.adminLog?.logKey ?? (() => process.env.DAEBOT_MISTAKE_LOG_KEY?.trim() || undefined),
         isAdmin: (r) => (hosted ? principalOf(r)?.tier === "admin" : authorized(r, query, false)),
