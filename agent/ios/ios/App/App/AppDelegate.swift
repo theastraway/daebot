@@ -133,20 +133,33 @@ class DaebotViewController: CAPBridgeViewController {
         let cfg = super.webViewConfiguration(for: instanceConfiguration)
         cfg.allowsInlineMediaPlayback = true
         cfg.mediaTypesRequiringUserActionForPlayback = []
-        let auth = DaebotAuthHandler(anchorView: nil)
-        authHandler = auth
-        cfg.userContentController.addScriptMessageHandler(auth, contentWorld: .page, name: "daebotAuth")
         return cfg
     }
 
-    override func capacitorDidLoad() {
-        super.capacitorDidLoad()
-        guard let wv = webView else { return }
-        authHandler?.anchorView = wv
+    private var configured = false
+
+    /// Idempotent: runs from capacitorDidLoad and again from viewDidLoad (before the first page load) in case `webView` is not set yet.
+    private func configureWebView() {
+        guard !configured, let wv = webView else { return }
+        configured = true
+        // Capacitor swaps in its own WKUserContentController after webViewConfiguration(for:), so the handler goes on the live one.
+        let auth = DaebotAuthHandler(anchorView: wv)
+        authHandler = auth
+        wv.configuration.userContentController.addScriptMessageHandler(auth, contentWorld: .page, name: "daebotAuth")
         let proxy = DaebotUIDelegate(inner: wv.uiDelegate)
         uiProxy = proxy // WKWebView holds uiDelegate weakly
         wv.uiDelegate = proxy
         wv.scrollView.contentInsetAdjustmentBehavior = .never
         wv.scrollView.bounces = false
+    }
+
+    override func capacitorDidLoad() {
+        super.capacitorDidLoad()
+        configureWebView()
+    }
+
+    override func viewDidLoad() {
+        configureWebView()
+        super.viewDidLoad()
     }
 }
