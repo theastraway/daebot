@@ -75,25 +75,27 @@ final class DaebotUIDelegate: NSObject, WKUIDelegate {
 
 // MARK: - Sign-in: ASWebAuthenticationSession that returns to the app
 
-/// JS: `Capacitor.Plugins.DaebotAuth.start({ url })` opens the system auth sheet and resolves `{ url }` with the
-/// `daebot://auth/callback?...` the server finished on. Only Daebot's own https sign-in start URL is accepted, so a page
-/// cannot use this to open an arbitrary site in the auth sheet. The sheet shares no state with the WebView; the page trades
-/// the one-time code in that URL for its session over HTTPS.
-@objc(DaebotAuthPlugin)
-public class DaebotAuthPlugin: CAPPlugin, CAPBridgedPlugin, ASWebAuthenticationPresentationContextProviding {
-    public let identifier = "DaebotAuthPlugin"
-    public let jsName = "DaebotAuth"
-    public let pluginMethods: [CAPPluginMethod] = [
-        CAPPluginMethod(name: "start", returnType: CAPPluginReturnPromise)
-    ]
+/// JS: `await window.webkit.messageHandlers.daebotAuth.postMessage({ url })` opens the system auth sheet and resolves the
+/// `daebot://auth/callback?...` URL the server finished on (rejects "CANCELLED" if the user closes the sheet). Plain WebKit, so it
+/// does not depend on Capacitor discovering a plugin for a remote page. Only a message from a daebot.live page for Daebot's own
+/// https sign-in start URL is honoured, so no other page can use it to open arbitrary sites. The sheet shares no state with the
+/// WebView; the page trades the one-time code in the returned URL for its session over HTTPS.
+final class DaebotAuthHandler: NSObject, WKScriptMessageHandlerWithReply, ASWebAuthenticationPresentationContextProviding {
+    weak var anchorView: UIView?
     private var session: ASWebAuthenticationSession?
+    init(anchorView: UIView?) { self.anchorView = anchorView }
 
-    @objc func start(_ call: CAPPluginCall) {
-        guard let raw = call.getString("url"), let url = URL(string: raw),
+    func userContentController(_ userContentController: WKUserContentController,
+                               didReceive message: WKScriptMessage,
+                               replyHandler: @escaping (Any?, String?) -> Void) {
+        let origin = message.frameInfo.securityOrigin
+        let originHost = origin.host.lowercased()
+        guard origin.protocol == "https", originHost == "daebot.live" || originHost.hasSuffix(".daebot.live"),
+              let body = message.body as? [String: Any], let raw = body["url"] as? String, let url = URL(string: raw),
               url.scheme == "https", let host = url.host?.lowercased(),
               host == "daebot.live" || host.hasSuffix(".daebot.live"),
               url.path == "/auth/mind/start" else {
-            call.reject("Not a Daebot sign-in URL", "BAD_URL")
+            replyHandler(nil, "BAD_URL")
             return
         }
         DispatchQueue.main.async {
@@ -101,11 +103,11 @@ public class DaebotAuthPlugin: CAPPlugin, CAPBridgedPlugin, ASWebAuthenticationP
             let s = ASWebAuthenticationSession(url: url, callbackURLScheme: "daebot") { [weak self] callback, error in
                 self?.session = nil
                 if let callback = callback {
-                    call.resolve(["url": callback.absoluteString])
+                    replyHandler(callback.absoluteString, nil)
                 } else if let e = error as? ASWebAuthenticationSessionError, e.code == .canceledLogin {
-                    call.reject("Sign-in cancelled", "CANCELLED")
+                    replyHandler(nil, "CANCELLED")
                 } else {
-                    call.reject(error?.localizedDescription ?? "Sign-in failed", "FAILED")
+                    replyHandler(nil, error?.localizedDescription ?? "FAILED")
                 }
             }
             s.presentationContextProvider = self
@@ -113,30 +115,34 @@ public class DaebotAuthPlugin: CAPPlugin, CAPBridgedPlugin, ASWebAuthenticationP
             self.session = s
             if !s.start() {
                 self.session = nil
-                call.reject("Could not open the sign-in sheet", "FAILED")
+                replyHandler(nil, "FAILED")
             }
         }
     }
 
-    public func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        return self.bridge?.viewController?.view.window ?? ASPresentationAnchor()
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        return anchorView?.window ?? ASPresentationAnchor()
     }
 }
 
 class DaebotViewController: CAPBridgeViewController {
     private var uiProxy: DaebotUIDelegate?
+    private var authHandler: DaebotAuthHandler?
 
     override func webViewConfiguration(for instanceConfiguration: InstanceConfiguration) -> WKWebViewConfiguration {
         let cfg = super.webViewConfiguration(for: instanceConfiguration)
         cfg.allowsInlineMediaPlayback = true
         cfg.mediaTypesRequiringUserActionForPlayback = []
+        let auth = DaebotAuthHandler(anchorView: nil)
+        authHandler = auth
+        cfg.userContentController.addScriptMessageHandler(auth, contentWorld: .page, name: "daebotAuth")
         return cfg
     }
 
     override func capacitorDidLoad() {
         super.capacitorDidLoad()
-        bridge?.registerPluginInstance(DaebotAuthPlugin())
         guard let wv = webView else { return }
+        authHandler?.anchorView = wv
         let proxy = DaebotUIDelegate(inner: wv.uiDelegate)
         uiProxy = proxy // WKWebView holds uiDelegate weakly
         wv.uiDelegate = proxy

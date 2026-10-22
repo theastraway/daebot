@@ -39,10 +39,10 @@ function rateLimited(res) {
 }
 
 // Daebot iOS app: the WebView cannot finish a sign-in that leaves for Google (it would break out to Safari and never return).
-// Instead the native DaebotAuth plugin runs it in ASWebAuthenticationSession, which ends at daebot://auth/callback?code=...;
+// Instead the native app runs it in ASWebAuthenticationSession (WebKit message handler "daebotAuth"), which ends at daebot://auth/callback?code=...;
 // the one-time code is then traded over HTTPS for the session cookie inside this WebView. A PKCE-style verifier stays in memory here.
 const nativeAuth = () => {
-  try { const C = window.Capacitor; return C && C.isNativePlatform && C.isNativePlatform() ? C.Plugins && C.Plugins.DaebotAuth : undefined; } catch { return undefined; }
+  try { const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.daebotAuth; return h ? { start: (o) => h.postMessage(o).then((url) => ({ url })) } : undefined; } catch { return undefined; }
 };
 const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
@@ -55,7 +55,7 @@ async function appSignIn(plugin) {
     const startUrl = `${location.origin}/auth/mind/start?app=ios&cc=${challenge}`;
     let back;
     try { back = (await plugin.start({ url: startUrl })).url; }
-    catch (e) { if (e && (e.code === "CANCELLED" || /cancel/i.test(String(e.message)))) return; throw e; }
+    catch (e) { if (/cancel/i.test(String((e && e.message) || e))) return; throw e; }
     const q = new URL(back).searchParams;
     if (q.get("error")) return fail(REASONS[q.get("error")] || "Sign-in did not complete. Try again.");
     const code = q.get("code");
