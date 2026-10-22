@@ -35,6 +35,9 @@ import { createAppsHandler } from "./apps.ts";
 import type { AppsOptions } from "./apps.ts";
 import type { VoiceOptions } from "./voice.ts";
 import type { WsConnection } from "./ws.ts";
+import { handleAdmin, isAdminPath } from "./admin.ts";
+import { AdminLedger } from "./mistakes.ts";
+import { dataDir } from "../persist.ts";
 
 // ---------- inbound webhooks (channel adapters register here) ----------
 export interface WebhookRequest {
@@ -96,6 +99,8 @@ export interface GatewayOptions {
   fetchImpl?: typeof fetch;
   /** Connected MCP servers (consent card routes under /mcp/*). Absent = the feature is not offered here. */
   mcpConnect?: McpConnectService;
+  /** Admin ledgers (/admin/mistakes, /admin/kpis, /api/admin/*). dir defaults to DATA_DIR; logKey to env DAEBOT_MISTAKE_LOG_KEY (read per request). */
+  adminLog?: { dir?: string; logKey?: () => string | undefined };
 }
 
 export const HOSTED_COOKIE = "mc_session";
@@ -242,6 +247,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         fetchImpl: opts.apps?.fetchImpl ?? opts.auth?.fetchImpl,
       })
     : undefined;
+  let adminLedger: AdminLedger | undefined;
+  const ledger = (): AdminLedger => (adminLedger ??= new AdminLedger(opts.adminLog?.dir ?? dataDir()));
   const turnLimiter = new TurnRateLimiter({ max: opts.agentApiPerMinute ?? (Number(process.env.DAEBOT_AGENT_API_RPM) || 30) });
   const keyIdentities = new KeyIdentityCache();
   const wsWho = new WeakMap<WsConnection, Principal>();
@@ -562,6 +569,15 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         }
         return sendJson(res, 400, { error: "https required" });
       }
+    }
+
+    if (isAdminPath(path)) {
+      return void (await handleAdmin({
+        get ledger() { return ledger(); },
+        logKey: opts.adminLog?.logKey ?? (() => process.env.DAEBOT_MISTAKE_LOG_KEY?.trim() || undefined),
+        isAdmin: (r) => (hosted ? principalOf(r)?.tier === "admin" : authorized(r, query, false)),
+        signedIn: (r) => authorized(r, query, false),
+      }, req, res, path, query));
     }
 
     if (hosted && !openHook) {
