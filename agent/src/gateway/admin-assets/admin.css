@@ -69,3 +69,10 @@ tr.stale td { background:var(--accent-soft); }
 .st { font-size:12px; padding:1px 8px; border-radius:99px; background:var(--surface-2); white-space:nowrap; }
 .st-done-verified { background:var(--ok-soft); color:var(--ok); } .st-failed, .st-abandoned { background:var(--accent-soft); color:var(--accent); } .st-open { background:var(--warn-soft); color:var(--warn); }
 @media (max-width:640px) { .type-h { grid-template-columns:60px minmax(0,1fr); } .type-h .meta { grid-column:1 / -1; flex-direction:row; align-items:center; justify-content:space-between; } .big { font-size:34px; } .stat.wide { grid-column:auto; } }
+
+.h3 { margin:18px 0 8px; font-size:15px; }
+.row.ex { align-items:flex-start; }
+.chip.lab { margin:0; flex:none; min-width:84px; text-align:center; font-weight:600; }
+.lab-instruction, .lab-answer { background:var(--ok-soft, var(--surface-2)); color:var(--ok); }
+.lab-anger, .lab-mixed, .lab-chaser { background:var(--accent-soft); color:var(--accent); border-color:transparent; }
+.row.ex .meta { align-items:flex-end; max-width:220px; white-space:normal; text-align:right; }

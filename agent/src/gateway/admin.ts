@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqual } from "./auth.ts";
 import { AdminLedger } from "./mistakes.ts";
+import type { AngerLedger } from "./anger.ts";
 import type { MindFeed } from "./mind-feed.ts";
 
 export const LOG_KEY_HEADER = "x-daebot-log-key";
@@ -36,6 +37,8 @@ function readBody(req: IncomingMessage, max = 8 << 20): Promise<string> {
 
 export interface AdminOptions {
   ledger: AdminLedger;
+  /** Anthony-message KPI (anger.ts), fed by ~/.claude/scripts/daebot-anger-kpi.sh. */
+  anger?: AngerLedger;
   /** Writes every change into Daebot's MIND knowledge graph in the same request. Absent = ledger only. */
   feed?: MindFeed;
   /** The secret for writes (DAEBOT_MISTAKE_LOG_KEY), read per request so setting it on Render needs no code change. */
@@ -81,13 +84,15 @@ export async function handleAdmin(o: AdminOptions, req: IncomingMessage, res: Se
 
   // ---- API. Reads: log key or admin session. Writes: log key only (a browser session can never alter the ledger).
   const isMistakes = path === "/api/admin/mistakes", isTasks = path === "/api/admin/tasks";
+  const isAnger = path === "/api/admin/anger";
   const isSnap = path === "/api/admin/kpis/snapshot", isBackfill = path === "/api/admin/mind/backfill";
   const delOcc = /^\/api\/admin\/mistakes\/occurrence\/([\w-]{1,80})$/.exec(path), delTask = /^\/api\/admin\/tasks\/([\w-]{1,80})$/.exec(path);
-  if (!isMistakes && !isTasks && !delOcc && !delTask && !isSnap && !isBackfill) { json(res, 404, { error: "not found" }); return true; }
+  if (!isMistakes && !isTasks && !isAnger && !delOcc && !delTask && !isSnap && !isBackfill) { json(res, 404, { error: "not found" }); return true; }
   if (method === "GET") {
     if (!keyOk && !o.isAdmin(req)) { json(res, keyOk || !secret ? 401 : 401, { error: "unauthorized" }); return true; }
     if (isMistakes) { json(res, 200, o.ledger.mistakeView(query)); return true; }
     if (isTasks) { json(res, 200, o.ledger.taskView(query)); return true; }
+    if (isAnger) { if (!o.anger) { json(res, 503, { error: "anger ledger not configured" }); return true; } json(res, 200, o.anger.view()); return true; }
     if (isSnap) { json(res, 200, { ok: true, kpis: o.ledger.kpiSnapshot() }); return true; }
     json(res, 405, { error: "method not allowed" }); return true;
   }
@@ -104,6 +109,7 @@ export async function handleAdmin(o: AdminOptions, req: IncomingMessage, res: Se
     let b: any;
     try { b = JSON.parse((await readBody(req)) || "{}"); } catch (e: any) { if (e?.status === 413) { json(res, 413, { error: "body too large" }); return true; } json(res, 400, { error: "invalid JSON" }); return true; }
     if (!b || typeof b !== "object") { json(res, 400, { error: "object body required" }); return true; }
+    if (isAnger) { if (!o.anger) { json(res, 503, { error: "anger ledger not configured" }); return true; } json(res, 200, { ok: true, ...o.anger.ingest(b) }); return true; }
     if (isSnap) { const r = o.feed ? await o.feed.snapshot() : { day: "", id: undefined }; json(res, 200, { ok: true, mind_document_id: r.id ?? null, day: r.day, kpis: o.ledger.kpiSnapshot() }); return true; }
     if (isBackfill) {
       if (!o.feed) { json(res, 503, { error: "MIND feed is not configured (no MIND_API_KEY)" }); return true; }

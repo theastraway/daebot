@@ -121,17 +121,60 @@
     var rl = sv("text", { x: W - pr + 6, y: pt + 4, class: "ax" }); rl.textContent = maxP.toFixed(1); s.appendChild(rl);
     return s;
   }
+
+  /* ---------------- Anthony's messages: productive vs correcting/chasing ---------------- */
+  function angerChart(trend) {
+    var W = 640, H = 170, pl = 34, pr = 10, pt = 10, pb = 24, n = trend.length, bw = (W - pl - pr) / n;
+    var s = sv("svg", { viewBox: "0 0 " + W + " " + H, class: "chart", role: "img", "aria-label": "Daily share of Anthony's messages that were productive" });
+    for (var g = 0; g <= 4; g++) { var y = pt + (H - pt - pb) * g / 4; s.appendChild(sv("line", { x1: pl, x2: W - pr, y1: y, y2: y, class: "grid" })); var tx = sv("text", { x: pl - 6, y: y + 4, class: "ax", "text-anchor": "end" }); tx.textContent = (100 - g * 25) + "%"; s.appendChild(tx); }
+    var pts = [];
+    trend.forEach(function (r, i) {
+      var x = pl + i * bw + bw * 0.15, w = bw * 0.7, ch = H - pt - pb;
+      var tip = sv("title", {}); tip.textContent = r.day + ": " + (r.pct === null ? "no messages" : Math.round(r.pct * 100) + "% productive, " + r.productive + " of " + r.total + " messages, " + r.chasers + " chasers, " + r.angry + " angry");
+      var grp = sv("g", {}, tip);
+      if (r.pct !== null) { var hv = r.pct * ch; grp.appendChild(sv("rect", { x: x, y: H - pb - hv, width: w, height: Math.max(hv, 1), class: "b-ok", rx: 2 })); if (r.pct < 1) grp.appendChild(sv("rect", { x: x, y: pt, width: w, height: ch - hv, class: "b-bad", rx: 2 })); pts.push([x + w / 2, H - pb - hv]); }
+      s.appendChild(grp);
+      if (i % 5 === 0 || i === n - 1) { var lx = sv("text", { x: x + w / 2, y: H - 7, class: "ax", "text-anchor": "middle" }); lx.textContent = r.day.slice(5); s.appendChild(lx); }
+    });
+    if (pts.length > 1) s.appendChild(sv("polyline", { points: pts.map(function (p) { return p.join(","); }).join(" "), class: "line" }));
+    return s;
+  }
+  function angerCard(a) {
+    var hd = a.headline;
+    function cls(p) { return p === null ? "" : p >= 0.8 ? "good" : "bad"; }
+    function t(w, label) { return h("div", { class: "tile " + cls(w.pct) }, h("span", { class: "n" }, pct(w.pct)), h("span", { class: "l" }, label), h("span", { class: "s" }, w.productive + " of " + w.total + " messages productive")); }
+    var card = h("section", { class: "card", id: "anger" }, h("h2", null, "Anthony's messages: not spent correcting or chasing Dae"),
+      h("p", { class: "sub" }, "Share of Anthony's messages that were an instruction or an answer. Chasers (status, go, where is it, did you), repeats, anger and mixed messages all count against it. Higher is better."));
+    card.appendChild(h("div", { class: "tiles" }, t(hd.today, "today"), t(hd.d7, "last 7 days"), t(hd.d30, "last 30 days"),
+      h("div", { class: "tile " + (hd.d7.chasers ? "bad" : "good") }, h("span", { class: "n" }, hd.d7.chasers), h("span", { class: "l" }, "chasers, last 7 days"), h("span", { class: "s" }, hd.d7.repeats + " repeats of an earlier ask; " + hd.d30.chasers + " in 30 days")),
+      h("div", { class: "tile " + (hd.today.chasers ? "bad" : "good") }, h("span", { class: "n" }, hd.today.chasers), h("span", { class: "l" }, "chasers today"), h("span", { class: "s" }, hd.today.counts.anger + " angry, " + hd.today.counts.mixed + " mixed today"))));
+    card.appendChild(h("p", { class: "sub" }, "Daily trend, last 30 days. Green is productive, red is correcting or chasing. Line follows the productive share."));
+    card.appendChild(angerChart(a.trend));
+    card.appendChild(h("h3", { class: "h3" }, "Per session (last 30 days)"));
+    var rows = a.sessions.map(function (x) {
+      return h("tr", null, h("td", { class: "tt" }, x.title), h("td", null, nice(x.last)), h("td", { class: "num" }, x.total), h("td", { class: "num" }, pct(x.pct)), h("td", { class: "num" }, x.chasers), h("td", { class: "num" }, x.repeats), h("td", { class: "num" }, x.anger), h("td", { class: "num" }, x.mixed));
+    });
+    card.appendChild(h("div", { class: "scroll" }, h("table", null, h("thead", null, h("tr", null, ["Session", "Last message", "Messages", "Productive", "Chasers", "Repeats", "Anger", "Mixed"].map(function (c) { return h("th", null, c); }))), h("tbody", null, rows))));
+    if (!a.sessions.length) card.appendChild(h("p", { class: "empty" }, "No messages uploaded yet."));
+    card.appendChild(h("h3", { class: "h3" }, "20 labeled examples (so the classifier can be audited)"));
+    a.examples.forEach(function (e) {
+      card.appendChild(h("div", { class: "row ex" }, h("span", { class: "chip lab lab-" + e.label }, e.label), h("span", { class: "rt" }, e.text || "(empty)", e.repeat ? h("span", { class: "chip bad" }, "repeat") : null), h("span", { class: "meta" }, nice(e.ts), h("span", null, e.session + (e.reasons.length ? " | " + e.reasons.join(", ") : "")))));
+    });
+    card.appendChild(h("p", { class: "foot" }, a.method + " Updated " + (a.updated_at ? new Date(a.updated_at).toLocaleString("en-US", { timeZone: "America/New_York" }) + " ET" : "never") + "; " + a.stored + " messages stored."));
+    return card;
+  }
   function kpis() {
-    var state = { status: "", product: "", q: "" }, data = null, timer = null;
+    var state = { status: "", product: "", q: "" }, data = null, anger = null, timer = null;
     var body = h("div", null);
     function load() {
       var p = new URLSearchParams(); if (state.status) p.set("status", state.status); if (state.product) p.set("product", state.product); if (state.q) p.set("q", state.q);
-      api("/api/admin/tasks?" + p.toString()).then(function (d) { data = d; render(); }).catch(fail);
+      Promise.all([api("/api/admin/tasks?" + p.toString()), api("/api/admin/anger").catch(function () { return null; })]).then(function (r) { data = r[0]; anger = r[1]; render(); }).catch(fail);
     }
     function tile(n, l, cls, sub) { return h("div", { class: "tile " + (cls || "") }, h("span", { class: "n" }, n), h("span", { class: "l" }, l), sub ? h("span", { class: "s" }, sub) : null); }
     function render() {
       var k = data.kpis, focus = document.activeElement && document.activeElement.id;
       body.textContent = "";
+      if (anger) body.appendChild(angerCard(anger));
       body.appendChild(h("div", { class: "tiles" },
         tile(k.verified_today, "verified today"), tile(k.verified_week, "verified, last 7 days"), tile(k.verified_all, "verified, all time"),
         tile(pct(k.success_rate), "success rate", "", k.verified_all + " of " + k.closed + " closed tasks"),
