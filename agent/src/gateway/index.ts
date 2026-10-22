@@ -14,6 +14,7 @@ import { OWNER } from "../auth/users.ts";
 import type { Principal } from "../auth/users.ts";
 import type { AuthContext } from "../auth/tenancy.ts";
 import { MindAuthError, whoami } from "../auth/mind-auth.ts";
+import { AppHandoff, appRedirect, isValidChallenge } from "../auth/app-handoff.ts";
 import { AGENT_SURFACE_RE, AGENT_TURN_PATH, KeyIdentityCache, TurnRateLimiter } from "./agent-api.ts";
 import { userIdFor } from "../auth/users.ts";
 import { FREE_TIER, usageLeftPct } from "../provider/mind.ts";
@@ -410,16 +411,50 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     res.end();
   }
 
-  async function oauthStart(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  // The native app starts sign-in with ?app=ios&cc=<challenge> inside ASWebAuthenticationSession; the callback then ends at daebot://auth/callback.
+  const appHandoff = new AppHandoff();
+
+  /** Ends an app-started flow: the auth sheet must navigate to the app's custom scheme to close. */
+  function appReturn(res: ServerResponse, params: { code?: string; error?: string }): void {
+    res.writeHead(302, { location: appRedirect(params), "cache-control": "no-store", "set-cookie": `${OAUTH_COOKIE}=; ${oauthCookieAttrs(0)}` });
+    res.end();
+  }
+
+  // POST /auth/app/exchange {code, verifier}: the app trades its one-time code for the session cookie inside the WebView.
+  async function appExchange(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!auth?.store.enabled) return sendJson(res, 404, { error: "not enabled" });
+    const ip = clientIp(req);
+    const wait = limiter.retryAfter(ip);
+    if (wait > 0) {
+      res.setHeader("retry-after", String(wait));
+      return sendJson(res, 429, { error: "too many attempts; try again later" });
+    }
+    const b = await readJson(req);
+    const uid = appHandoff.redeem(b.code, b.verifier);
+    const user = uid ? auth.store.principal(uid) : undefined;
+    if (!uid || !user) {
+      limiter.fail(ip);
+      return sendJson(res, 401, { error: "That sign-in expired. Start again." });
+    }
+    limiter.success(ip);
+    res.setHeader("set-cookie", userCookie(uid));
+    return sendJson(res, 200, { ok: true });
+  }
+
+  async function oauthStart(req: IncomingMessage, res: ServerResponse, query: URLSearchParams): Promise<void> {
     if (!auth?.store.enabled || !auth.oauth) return loginRedirect(res, "oauth_off");
     const ip = clientIp(req);
     if (limiter.retryAfter(ip) > 0) return loginRedirect(res, "slow");
+    const fromApp = query.get("app") === "ios";
+    const cc = query.get("cc");
+    if (fromApp && !isValidChallenge(cc)) return appReturn(res, { error: "bad_request" });
     try {
       const { url, state } = await auth.oauth.start();
+      if (fromApp) appHandoff.beginFlow(state, cc as string);
       res.writeHead(302, { location: url, "cache-control": "no-store", "set-cookie": `${OAUTH_COOKIE}=${state}; ${oauthCookieAttrs(600)}` });
       return void res.end();
     } catch {
-      return loginRedirect(res, "oauth_down");
+      return fromApp ? appReturn(res, { error: "oauth_down" }) : loginRedirect(res, "oauth_down");
     }
   }
 
@@ -431,20 +466,24 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     const bound = parseCookies(req.headers["cookie"])[OAUTH_COOKIE] ?? "";
     // The state must be the one this browser was given at /auth/mind/start (blocks login-CSRF / code injection).
     if (!state || !bound || !safeEqual(state, bound)) { limiter.fail(ip); return loginRedirect(res, "state"); }
-    if (query.get("error")) return loginRedirect(res, query.get("error") === "access_denied" ? "denied" : "oauth");
+    const appCc = appHandoff.takeFlow(state); // set only when the native app started this flow
+    const fail = (code: string) => (appCc ? appReturn(res, { error: code }) : loginRedirect(res, code));
+    if (query.get("error")) return fail(query.get("error") === "access_denied" ? "denied" : "oauth");
     try {
       const t = await auth.oauth.finish(query.get("code") ?? "", state);
       const name = (await whoami(auth.mindBaseUrl, t.accessToken, auth.fetchImpl)).username;
-      if (!mayUse(name)) return loginRedirect(res, "notallowed");
+      if (!mayUse(name)) return fail("notallowed");
       const user = auth.store.upsert(name, { kind: "oauth", accessToken: t.accessToken, refreshToken: t.refreshToken, clientId: t.clientId });
       auth.evict(user.id);
+      // App flow: no cookie here (this is the auth sheet, not the WebView). Hand back a one-time code the app exchanges over HTTPS.
+      if (appCc) return appReturn(res, { code: appHandoff.mintCode(user.id, appCc) });
       // A 200 page that navigates itself (not a 302): the next request is then same-site, so the Strict session cookie is sent.
       const body = '<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/"><title>Signed in</title><a href="/">Continue</a>';
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "set-cookie": [userCookie(user.id), `${OAUTH_COOKIE}=; ${oauthCookieAttrs(0)}`] });
       return void res.end(body);
     } catch {
       limiter.fail(ip);
-      return loginRedirect(res, "oauth");
+      return fail("oauth");
     }
   }
 
@@ -603,7 +642,10 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         return keyLogin(req, res);
       } else if (path === "/auth/mind/start") {
         if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-        return oauthStart(req, res);
+        return oauthStart(req, res, query);
+      } else if (path === "/auth/app/exchange") {
+        if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+        return appExchange(req, res);
       } else if (path === "/auth/mind/callback") {
         if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
         return oauthCallback(req, res, query);

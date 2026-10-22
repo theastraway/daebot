@@ -10,6 +10,7 @@ import { createAuthContext } from "../../src/auth/index.ts";
 import { SealError, deriveDataKey, open, seal } from "../../src/auth/crypto.ts";
 import { UserStore, userIdFor } from "../../src/auth/users.ts";
 import { MindAuthError, whoami } from "../../src/auth/mind-auth.ts";
+import { APP_CALLBACK, AppHandoff, appRedirect, challengeOf, isAppCallback } from "../../src/auth/app-handoff.ts";
 import { createRuntime } from "../../src/runtime.ts";
 import { createFileStore } from "../../src/persist.ts";
 import { BootCache } from "../../src/mind/boot-cache.ts";
@@ -303,6 +304,110 @@ test("MIND OAuth: user denies, and a bad code, both come back to the login page 
     const badCode = await http(r.gw.url, "GET", `/auth/mind/callback?code=nope&state=${st2}`, { headers: { ...H, cookie: b2 } });
     assert.match(String(badCode.headers.location), /e=oauth/);
     assert.equal(badCode.headers["set-cookie"] === undefined || !String(badCode.headers["set-cookie"]).includes("mc_session=u_"), true);
+  } finally { await r.close(); }
+});
+
+// ---------- native app handoff (daebot://auth/callback) ----------
+test("app handoff: callback is one exact constant; codes are single use, expire, and need the verifier", () => {
+  assert.equal(APP_CALLBACK, "daebot://auth/callback");
+  assert.ok(isAppCallback("daebot://auth/callback"));
+  for (const bad of ["daebot://auth/callback/", "daebot://auth/callback?x=1", "daebot://evil", "https://daebot.live/", "daebot://auth", "", null, undefined, "DAEBOT://auth/callback"]) assert.ok(!isAppCallback(bad as any), String(bad));
+  assert.equal(appRedirect({ code: "c1" }), "daebot://auth/callback?code=c1");
+  assert.equal(appRedirect({ error: "denied" }), "daebot://auth/callback?error=denied");
+  let t = 1_000;
+  const h = new AppHandoff(() => t);
+  const verifier = randomBytes(48).toString("base64url");
+  const cc = challengeOf(verifier);
+  const code = h.mintCode("u_one", cc);
+  assert.equal(h.redeem(code, randomBytes(48).toString("base64url")), undefined, "wrong verifier");
+  assert.equal(h.redeem(code, verifier), undefined, "a failed try burns the code");
+  const c2 = h.mintCode("u_one", cc);
+  assert.equal(h.redeem(c2, verifier), "u_one");
+  assert.equal(h.redeem(c2, verifier), undefined, "single use");
+  const c3 = h.mintCode("u_one", cc);
+  t += 61_000;
+  assert.equal(h.redeem(c3, verifier), undefined, "expired after 60s");
+  assert.equal(h.redeem(undefined, verifier), undefined);
+  h.beginFlow("st", cc);
+  assert.equal(h.takeFlow("st"), cc);
+  assert.equal(h.takeFlow("st"), undefined, "flow is single use");
+});
+
+test("app sign-in: OAuth started by the app ends at daebot://auth/callback with a one-time code, exchanged over HTTPS for the session", async () => {
+  const r = await rig();
+  try {
+    r.fake.consentUser = "alice";
+    const verifier = randomBytes(48).toString("base64url");
+    const cc = challengeOf(verifier);
+    // a bad / missing challenge never starts an app flow
+    const bad = await http(r.gw.url, "GET", "/auth/mind/start?app=ios&cc=short", { headers: H });
+    assert.equal(bad.headers.location, "daebot://auth/callback?error=bad_request");
+
+    const start = await http(r.gw.url, "GET", `/auth/mind/start?app=ios&cc=${cc}`, { headers: H });
+    assert.equal(start.status, 302);
+    const loc = new URL(String(start.headers.location));
+    assert.equal(loc.pathname, "/oauth/mcp/authorize");
+    assert.equal(loc.searchParams.get("redirect_uri"), "https://daebot.live/auth/mind/callback", "MIND still redirects to the https callback");
+    const bound = String(([] as string[]).concat(start.headers["set-cookie"] as string[])[0]).split(";")[0];
+    const consent = await fetch(loc, { redirect: "manual" });
+    const cb = new URL(consent.headers.get("location")!);
+    const cbPath = cb.pathname + cb.search;
+
+    const done = await http(r.gw.url, "GET", cbPath, { headers: { ...H, cookie: bound } });
+    assert.equal(done.status, 302);
+    const back = new URL(String(done.headers.location));
+    assert.equal(String(done.headers.location).split("?")[0], "daebot://auth/callback");
+    assert.ok(!([] as string[]).concat(done.headers["set-cookie"] as string[]).some((c) => c.startsWith("mc_session=")), "no session cookie in the auth sheet");
+    const code = back.searchParams.get("code")!;
+    assert.ok(code.length >= 40);
+    assert.ok(!String(done.headers.location).includes("mind_"), "no key or token in the URL");
+
+    // wrong verifier fails and burns the code; right one works once
+    const wrong = await http(r.gw.url, "POST", "/auth/app/exchange", { headers: H, body: { code, verifier: randomBytes(48).toString("base64url") } });
+    assert.equal(wrong.status, 401);
+    const again = await http(r.gw.url, "POST", "/auth/app/exchange", { headers: H, body: { code, verifier } });
+    assert.equal(again.status, 401, "burned by the failed try");
+
+    // full second pass, correct verifier
+    const s2 = await http(r.gw.url, "GET", `/auth/mind/start?app=ios&cc=${cc}`, { headers: H });
+    const b2 = String(([] as string[]).concat(s2.headers["set-cookie"] as string[])[0]).split(";")[0];
+    const c2 = await fetch(new URL(String(s2.headers.location)), { redirect: "manual" });
+    const cb2 = new URL(c2.headers.get("location")!);
+    const d2 = await http(r.gw.url, "GET", cb2.pathname + cb2.search, { headers: { ...H, cookie: b2 } });
+    const code2 = new URL(String(d2.headers.location)).searchParams.get("code")!;
+    const ex = await http(r.gw.url, "POST", "/auth/app/exchange", { headers: H, body: { code: code2, verifier } });
+    assert.equal(ex.status, 200, ex.body);
+    const cookie = cookieOf(ex);
+    const me = JSON.parse((await http(r.gw.url, "GET", "/auth/me", { headers: { ...H, cookie } })).body);
+    assert.equal(me.username, "alice");
+    const replay = await http(r.gw.url, "POST", "/auth/app/exchange", { headers: H, body: { code: code2, verifier } });
+    assert.equal(replay.status, 401, "single use");
+  } finally { await r.close(); }
+});
+
+test("app sign-in: denial and a cookie-less callback come back to the app / login, never a session", async () => {
+  const r = await rig();
+  try {
+    const cc = challengeOf(randomBytes(48).toString("base64url"));
+    const start = await http(r.gw.url, "GET", `/auth/mind/start?app=ios&cc=${cc}`, { headers: H });
+    const state = new URL(String(start.headers.location)).searchParams.get("state")!;
+    const bound = String(([] as string[]).concat(start.headers["set-cookie"] as string[])[0]).split(";")[0];
+    const nocookie = await http(r.gw.url, "GET", `/auth/mind/callback?code=x&state=${state}`, { headers: H });
+    assert.match(String(nocookie.headers.location), /^\/login\?e=state/);
+    const denied = await http(r.gw.url, "GET", `/auth/mind/callback?error=access_denied&state=${state}`, { headers: { ...H, cookie: bound } });
+    assert.equal(denied.headers.location, "daebot://auth/callback?error=denied");
+    // exchange with a made-up code is refused
+    const ex = await http(r.gw.url, "POST", "/auth/app/exchange", { headers: H, body: { code: rnd(), verifier: randomBytes(48).toString("base64url") } });
+    assert.equal(ex.status, 401);
+    // the normal (non-app) flow still sets the cookie directly
+    r.fake.consentUser = "alice";
+    const plain = await http(r.gw.url, "GET", "/auth/mind/start", { headers: H });
+    const pb = String(([] as string[]).concat(plain.headers["set-cookie"] as string[])[0]).split(";")[0];
+    const pc = await fetch(new URL(String(plain.headers.location)), { redirect: "manual" });
+    const pcb = new URL(pc.headers.get("location")!);
+    const pd = await http(r.gw.url, "GET", pcb.pathname + pcb.search, { headers: { ...H, cookie: pb } });
+    assert.equal(pd.status, 200);
+    assert.ok(cookieOf(pd).startsWith("mc_session="));
   } finally { await r.close(); }
 });
 
