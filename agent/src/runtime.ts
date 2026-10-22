@@ -6,6 +6,8 @@ import type { Tier } from "./kernel/index.ts";
 import { tierAllows } from "./kernel/tier.ts";
 import { createAgentSession } from "./loop.ts";
 import { createLearning, resolveLearnConfig } from "./learn/index.ts";
+import { mistakeBrief } from "./gateway/mistakes.ts";
+import { dataDir } from "./persist.ts";
 import { bootMind, createMindClient, createMindTools, createSessionSync } from "./mind/index.ts";
 import { BotStore, botMindApi } from "./bots/store.ts";
 import { createBotTalkTool } from "./bots/talk-tool.ts";
@@ -150,6 +152,8 @@ export interface RuntimeOverrides {
   /** Session persistence (DATA_DIR). Absent = sessions live in memory only, as before. */
   store?: SessionStore;
   bootCache?: BootCache;
+  /** Where the admin Mistake Log file lives (default DATA_DIR); tests point it at a temp dir. */
+  mistakeDir?: string;
   /** Principal that owns this runtime's sessions ("owner" by default; a MIND user id for per-user runtimes). Scopes the store. */
   owner?: string;
   /** Remote MCP servers (default: parsed from MINDCLAW_MCP_SERVERS). */
@@ -290,7 +294,10 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       try { boot = await bootCache.get(botRec ? `${cfg.mindApiKey}|bot:${botRec.slug}` : cfg.mindApiKey, () => bootMind(clientForMind(home))); } catch (e) { boot = { ok: false, context: "", error: String((e as Error)?.message ?? e) }; }
       try { await sync.open({ title, sourceKey, externalId: id }); } catch { /* sync is best effort */ }
 
-      const bootContext = boot.ok ? boot.context : "";
+      // Admin sessions also carry Daebot's own top repeat failures (counts + prevention rules) from the Mistake Log,
+      // read fresh each session (not cached with the MIND boot). Public, staff and bot sessions never see it.
+      const brief = tier === "admin" && !botRec ? mistakeBrief(overrides.mistakeDir ?? dataDir()) : "";
+      const bootContext = [boot.ok ? boot.context : "", brief].filter(Boolean).join("\n\n");
       // Learning (src/learn): admin-tier sessions only. Public/staff identities neither read nor write lessons,
       // so nothing from the owner's private MIND can reach them and nothing they say can reach it.
       const learn = learnCfg.enabled && tier === "admin" && !botRec // bots never learn

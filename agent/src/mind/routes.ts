@@ -73,6 +73,8 @@ export function routeFor(toolIn: string, args: Record<string, unknown>): Route {
       return { method: "POST", path: "/query", body: clean(args) };
     case "remember": {
       const type = String(args.type ?? "entry");
+      // Removing something this client wrote itself (the admin ledger feed replaces its own documents). Never the public feed.
+      if (action === "delete") return { method: "DELETE", path: `${type === "document" ? "/documents" : "/entries"}/${need(args, "item_id", tool, action)}` };
       if (type === "feed_post" || type === "thought") return { method: "POST", path: "/thoughts", body: { content: args.content } };
       const body = clean(args, ["type"]);
       return { method: "POST", path: type === "document" ? "/documents" : "/entries", body };

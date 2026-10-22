@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqual } from "./auth.ts";
 import { AdminLedger } from "./mistakes.ts";
+import type { MindFeed } from "./mind-feed.ts";
 
 export const LOG_KEY_HEADER = "x-daebot-log-key";
 const PAGES: Record<string, string> = { "/admin/mistakes": "mistakes", "/admin/kpis": "kpis" };
@@ -35,6 +36,8 @@ function readBody(req: IncomingMessage, max = 8 << 20): Promise<string> {
 
 export interface AdminOptions {
   ledger: AdminLedger;
+  /** Writes every change into Daebot's MIND knowledge graph in the same request. Absent = ledger only. */
+  feed?: MindFeed;
   /** The secret for writes (DAEBOT_MISTAKE_LOG_KEY), read per request so setting it on Render needs no code change. */
   logKey: () => string | undefined;
   /** True when the request carries an admin session (cookie) or, locally, the gateway token. */
@@ -78,32 +81,48 @@ export async function handleAdmin(o: AdminOptions, req: IncomingMessage, res: Se
 
   // ---- API. Reads: log key or admin session. Writes: log key only (a browser session can never alter the ledger).
   const isMistakes = path === "/api/admin/mistakes", isTasks = path === "/api/admin/tasks";
+  const isSnap = path === "/api/admin/kpis/snapshot", isBackfill = path === "/api/admin/mind/backfill";
   const delOcc = /^\/api\/admin\/mistakes\/occurrence\/([\w-]{1,80})$/.exec(path), delTask = /^\/api\/admin\/tasks\/([\w-]{1,80})$/.exec(path);
-  if (!isMistakes && !isTasks && !delOcc && !delTask) { json(res, 404, { error: "not found" }); return true; }
+  if (!isMistakes && !isTasks && !delOcc && !delTask && !isSnap && !isBackfill) { json(res, 404, { error: "not found" }); return true; }
   if (method === "GET") {
     if (!keyOk && !o.isAdmin(req)) { json(res, keyOk || !secret ? 401 : 401, { error: "unauthorized" }); return true; }
     if (isMistakes) { json(res, 200, o.ledger.mistakeView(query)); return true; }
     if (isTasks) { json(res, 200, o.ledger.taskView(query)); return true; }
+    if (isSnap) { json(res, 200, { ok: true, kpis: o.ledger.kpiSnapshot() }); return true; }
     json(res, 405, { error: "method not allowed" }); return true;
   }
   if (!secret) { json(res, 503, { error: "DAEBOT_MISTAKE_LOG_KEY is not set on the server" }); return true; }
   if (!keyOk) { json(res, 401, { error: "unauthorized" }); return true; }
   try {
     if (method === "DELETE") {
-      const ok = delOcc ? o.ledger.deleteOccurrence(delOcc[1]) : delTask ? o.ledger.deleteTask(delTask[1]) : false;
+      let ok = false;
+      if (delOcc) { const d = o.ledger.deleteOccurrence(delOcc[1]); ok = !!d; if (d) await o.feed?.onOccurrenceDeleted(d); }
+      else if (delTask) ok = o.ledger.deleteTask(delTask[1]);
       json(res, ok ? 200 : 404, ok ? { ok: true } : { error: "not found" }); return true;
     }
     if (method !== "POST") { json(res, 405, { error: "method not allowed" }); return true; }
     let b: any;
     try { b = JSON.parse((await readBody(req)) || "{}"); } catch (e: any) { if (e?.status === 413) { json(res, 413, { error: "body too large" }); return true; } json(res, 400, { error: "invalid JSON" }); return true; }
     if (!b || typeof b !== "object") { json(res, 400, { error: "object body required" }); return true; }
+    if (isSnap) { const r = o.feed ? await o.feed.snapshot() : { day: "", id: undefined }; json(res, 200, { ok: true, mind_document_id: r.id ?? null, day: r.day, kpis: o.ledger.kpiSnapshot() }); return true; }
+    if (isBackfill) {
+      if (!o.feed) { json(res, 503, { error: "MIND feed is not configured (no MIND_API_KEY)" }); return true; }
+      json(res, 200, { ok: true, ...(await o.feed.backfill()) }); return true;
+    }
     if (isMistakes) {
+      // A batch is a seed/import: types are fed to MIND by /api/admin/mind/backfill (one document per type), never one insert per occurrence.
       if (Array.isArray(b.batch)) { json(res, 200, { ok: true, ...o.ledger.logMistakeBatch(b.batch) }); return true; }
-      json(res, 200, { ok: true, ...o.ledger.logMistake(b) }); return true;
+      const r = o.ledger.logMistake(b);
+      let mind = false;
+      if (o.feed && !r.duplicate) { await o.feed.onMistake(r); mind = !!o.ledger.mindId("types", r.type_id); }
+      const { occurrence: _o, ...out } = r;
+      json(res, 200, { ok: true, ...out, ...(o.feed ? { mind_synced: mind } : {}) }); return true;
     }
     if (isTasks) {
       if (Array.isArray(b.batch)) { json(res, 200, { ok: true, ...o.ledger.upsertTaskBatch(b.batch) }); return true; }
-      json(res, 200, { ok: true, ...o.ledger.upsertTask(b) }); return true;
+      const r = o.ledger.upsertTask(b);
+      if (o.feed && r.changed && r.task) await o.feed.onTask(r.changed === "opened" ? "Opened" : "Closed", r.task);
+      json(res, 200, { ok: true, id: r.id, created: r.created, ...(r.changed ? { changed: r.changed } : {}) }); return true;
     }
     json(res, 404, { error: "not found" }); return true;
   } catch (e: any) { json(res, 400, { error: String(e?.message ?? e).slice(0, 200) }); return true; }
