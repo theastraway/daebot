@@ -20,13 +20,17 @@ export interface MistakeType { id: string; name: string; definition: string; pre
 export interface Occurrence {
   id: string; type_id: string; when: string; agent: string; product: string; what: string; quote: string; impact: string; fix: string;
   links: string[]; source: string; source_key?: string; estimated?: boolean;
+  /** Id of this occurrence's "Lesson - Failure - <type>" entry in MIND (set by the MIND feed; used to remove it with the occurrence). */
+  mind_id?: string;
 }
 export interface Task {
   id: string; title: string; product: string; requested_at: string; requester: string; status: TaskStatus;
   completed_at: string | null; verified_on: string; prompts_to_satisfaction: number; repeats: number; anger_flag: boolean;
   mistake_ids: string[]; estimated: boolean; source_key?: string; session_id?: string; updated_at: string;
 }
-interface Shape { v: 1; types: Record<string, MistakeType>; occurrences: Occurrence[]; tasks: Task[] }
+/** MIND ids of the documents the feed keeps current: one per mistake type, one per KPI day. */
+export interface MindMeta { types: Record<string, string>; snaps: Record<string, string> }
+interface Shape { v: 1; types: Record<string, MistakeType>; occurrences: Occurrence[]; tasks: Task[]; mind?: MindMeta }
 
 const s = (v: unknown, max: number): string => (typeof v === "string" ? v.trim().slice(0, max) : "");
 const slug = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
@@ -68,7 +72,7 @@ export class AdminLedger {
     this.now = now;
     this.path = join(dir, "admin", "mistake-log.json");
     if (existsSync(this.path)) {
-      try { const p = JSON.parse(readFileSync(this.path, "utf8")); if (p?.v === 1) this.d = { v: 1, types: p.types ?? {}, occurrences: p.occurrences ?? [], tasks: p.tasks ?? [] }; }
+      try { const p = JSON.parse(readFileSync(this.path, "utf8")); if (p?.v === 1) this.d = { v: 1, types: p.types ?? {}, occurrences: p.occurrences ?? [], tasks: p.tasks ?? [], mind: p.mind }; }
       catch { throw new Error("admin/mistake-log.json is unreadable; refusing to start (move it aside to reset)."); }
     }
   }
@@ -85,7 +89,7 @@ export class AdminLedger {
     return Object.values(this.d.types).find((t) => normName(t.name) === n);
   }
   /** Logs one mistake. A `what`-less call only creates or edits the type. Returns what happened. */
-  logMistake(b: any): { type_id: string; type: string; occurrence_id?: string; created_type: boolean; duplicate?: boolean; count: number } {
+  logMistake(b: any): { type_id: string; type: string; occurrence_id?: string; created_type: boolean; duplicate?: boolean; count: number; occurrence?: Occurrence } {
     const name = s(b?.type ?? b?.type_name, 80);
     if (!name) throw new Error("type is required");
     let created = false;
@@ -114,7 +118,7 @@ export class AdminLedger {
     if (sk) o.source_key = sk;
     this.d.occurrences.push(o);
     this.save();
-    return { type_id: t.id, type: t.name, occurrence_id: o.id, created_type: created, count: count() };
+    return { type_id: t.id, type: t.name, occurrence_id: o.id, created_type: created, count: count(), occurrence: o };
   }
   logMistakeBatch(items: unknown[]): { added: number; duplicates: number; types: number } {
     let added = 0, dups = 0; const before = Object.keys(this.d.types).length;
@@ -125,15 +129,42 @@ export class AdminLedger {
     this.save();
     return { added, duplicates: dups, types: Object.keys(this.d.types).length - before };
   }
-  deleteOccurrence(id: string): boolean {
+  deleteOccurrence(id: string): { removed: Occurrence; type_id: string; type_removed: boolean } | undefined {
     const i = this.d.occurrences.findIndex((o) => o.id === id);
-    if (i < 0) return false;
+    if (i < 0) return undefined;
     const [o] = this.d.occurrences.splice(i, 1);
     // a type born from a test occurrence goes away with its last occurrence only when it has no definition
     const t = this.d.types[o.type_id];
-    if (t && !t.definition && !t.prevention && !this.d.occurrences.some((x) => x.type_id === t.id)) delete this.d.types[t.id];
+    let gone = false;
+    if (t && !t.definition && !t.prevention && !this.d.occurrences.some((x) => x.type_id === t.id)) { delete this.d.types[t.id]; gone = true; }
     this.save();
-    return true;
+    return { removed: o, type_id: o.type_id, type_removed: gone };
+  }
+
+  // ---------- MIND feed support (the feed itself lives in mind-feed.ts)
+  mindId(kind: "types" | "snaps", key: string): string | undefined { return this.d.mind?.[kind]?.[key]; }
+  setMindId(kind: "types" | "snaps", key: string, id: string | undefined): void {
+    const m = (this.d.mind ??= { types: {}, snaps: {} });
+    if (id) m[kind][key] = id; else delete m[kind][key];
+    this.save();
+  }
+  setOccurrenceMindId(occId: string, id: string): void {
+    const o = this.d.occurrences.find((x) => x.id === occId);
+    if (o) { o.mind_id = id; this.save(); }
+  }
+  typeIds(): string[] { return Object.keys(this.d.types); }
+  /** Everything a "Daebot Mistake - <type>" document says: definition, prevention, count, last seen, the last 10 occurrences. */
+  typeSummary(id: string) {
+    const t = this.d.types[id];
+    if (!t) return undefined;
+    const os = this.d.occurrences.filter((o) => o.type_id === id).sort((a, b) => Date.parse(b.when) - Date.parse(a.when));
+    return { id: t.id, name: t.name, definition: t.definition, prevention: t.prevention, count: os.length, last_seen: os.length ? os[0].when : null, recent: os.slice(0, 10) };
+  }
+  /** The numbers of a "Daebot KPIs - <day>" document. */
+  kpiSnapshot() {
+    const v = this.taskView(new URLSearchParams());
+    const reasks = this.d.tasks.reduce((n, t) => n + t.repeats, 0);
+    return { day: etDay(this.now()), ...v.kpis, reasks, mistakes_total: this.d.occurrences.length, mistake_types: Object.keys(this.d.types).length };
   }
   deleteTask(id: string): boolean {
     const i = this.d.tasks.findIndex((t) => t.id === id);
@@ -180,11 +211,12 @@ export class AdminLedger {
   }
 
   // ---------- tasks
-  upsertTask(b: any): { id: string; created: boolean } {
+  upsertTask(b: any): { id: string; created: boolean; changed?: "opened" | "closed"; task?: Task } {
     const now = this.now();
     const id = s(b?.id, 60), sk = s(b?.source_key, 200);
     let t = (id && this.d.tasks.find((x) => x.id === id)) || (sk ? this.d.tasks.find((x) => x.source_key === sk) : undefined) || undefined;
     const created = !t;
+    const prevStatus = t?.status;
     if (!t) {
       const title = s(b?.title, 300);
       if (!title) throw new Error("title is required to open a task");
@@ -216,7 +248,8 @@ export class AdminLedger {
     if (s(b.session_id, 80)) t.session_id = s(b.session_id, 80);
     t.updated_at = new Date(now).toISOString();
     this.save();
-    return { id: t.id, created };
+    const changed = created ? (t.status === "open" ? "opened" : "closed") : prevStatus === "open" && t.status !== "open" ? "closed" : prevStatus !== "open" && t.status === "open" ? "opened" : undefined;
+    return { id: t.id, created, changed, task: t };
   }
   upsertTaskBatch(items: unknown[]): { created: number; updated: number } {
     let c = 0, u = 0;
@@ -271,4 +304,33 @@ export class AdminLedger {
       products: [...new Set(tasks.map((t) => t.product))].sort(), tasks: rows,
     };
   }
+}
+
+// ---------- Daebot's own mistakes, loaded into its context
+/** Reads the ledger file directly (read-only, no lock needed: writes are atomic renames). Never throws. */
+export function readTopMistakes(dir: string, n = 10): { name: string; count: number; prevention: string; last_seen: string | null }[] {
+  try {
+    const path = join(dir, "admin", "mistake-log.json");
+    if (!existsSync(path)) return [];
+    const p = JSON.parse(readFileSync(path, "utf8"));
+    if (p?.v !== 1) return [];
+    const types: Record<string, MistakeType> = p.types ?? {};
+    const occ: Occurrence[] = p.occurrences ?? [];
+    const by = new Map<string, { n: number; last: number }>();
+    for (const o of occ) { const r = by.get(o.type_id) ?? { n: 0, last: 0 }; r.n++; r.last = Math.max(r.last, Date.parse(o.when) || 0); by.set(o.type_id, r); }
+    return Object.values(types)
+      .map((t) => ({ name: t.name, count: by.get(t.id)?.n ?? 0, prevention: t.prevention, last: by.get(t.id)?.last ?? 0 }))
+      .filter((t) => t.count > 0)
+      .sort((a, b) => b.count - a.count || b.last - a.last || a.name.localeCompare(b.name))
+      .slice(0, n)
+      .map((t) => ({ name: t.name, count: t.count, prevention: t.prevention, last_seen: t.last ? new Date(t.last).toISOString() : null }));
+  } catch { return []; }
+}
+
+/** The block added to an admin session's boot context: its own top repeat failures with counts and prevention rules. */
+export function mistakeBrief(dir: string, n = 10): string {
+  const top = readTopMistakes(dir, n);
+  if (!top.length) return "";
+  const lines = top.map((t, i) => `${i + 1}. ${t.name} (${t.count}x${t.last_seen ? `, last ${t.last_seen.slice(0, 10)}` : ""})${t.prevention ? ` - RULE: ${t.prevention.replace(/\s+/g, " ").slice(0, 220)}` : ""}`);
+  return `## My own repeat failures (Daebot Mistake log, top ${top.length} by count)\nThese are mistakes I have already made many times. Check each before I act and before I say done.\n${lines.join("\n")}`;
 }

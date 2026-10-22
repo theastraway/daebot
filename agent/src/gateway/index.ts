@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { existsSync } from "node:fs";
 import type { AddressInfo } from "node:net";
-import type { AgentEvent, AgentSession, ClientFrame, Config, Runtime, ServerFrame } from "../types.ts";
+import type { AgentEvent, AgentSession, ClientFrame, Config, MindClient, Runtime, ServerFrame } from "../types.ts";
 import { COOKIE_NAME, hostnameOf, isLocalHost, isLocalOrigin, loadOrCreateToken, parseCookies, presentedToken, safeEqual } from "./auth.ts";
 import { HostedConfigError, LoginLimiter, MIN_TOKEN_LEN, SESSION_TTL_MS, issueSession, parseSession } from "../hosted.ts";
 import type { HostedOptions } from "../hosted.ts";
@@ -37,6 +37,8 @@ import type { VoiceOptions } from "./voice.ts";
 import type { WsConnection } from "./ws.ts";
 import { handleAdmin, isAdminPath } from "./admin.ts";
 import { AdminLedger } from "./mistakes.ts";
+import { MindFeed } from "./mind-feed.ts";
+import { createMindClient } from "../mind/client.ts";
 import { dataDir } from "../persist.ts";
 
 // ---------- inbound webhooks (channel adapters register here) ----------
@@ -100,7 +102,7 @@ export interface GatewayOptions {
   /** Connected MCP servers (consent card routes under /mcp/*). Absent = the feature is not offered here. */
   mcpConnect?: McpConnectService;
   /** Admin ledgers (/admin/mistakes, /admin/kpis, /api/admin/*). dir defaults to DATA_DIR; logKey to env DAEBOT_MISTAKE_LOG_KEY (read per request). */
-  adminLog?: { dir?: string; logKey?: () => string | undefined };
+  adminLog?: { dir?: string; logKey?: () => string | undefined; mindClient?: Pick<MindClient, "remember" | "call"> | null };
 }
 
 export const HOSTED_COOKIE = "mc_session";
@@ -249,6 +251,10 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     : undefined;
   let adminLedger: AdminLedger | undefined;
   const ledger = (): AdminLedger => (adminLedger ??= new AdminLedger(opts.adminLog?.dir ?? dataDir()));
+  // The ledger feeds Daebot's own MIND (the server's owner key = Anthony's MIND, never a client tenant) in the same request as each write.
+  const feedClient = opts.adminLog?.mindClient !== undefined ? opts.adminLog.mindClient : opts.cfg?.mindApiKey ? createMindClient(opts.cfg) : null;
+  const mindFeed = feedClient ? new MindFeed(feedClient, ledger) : undefined;
+  if (mindFeed && hosted && !opts.adminLog?.mindClient) mindFeed.start();
   const turnLimiter = new TurnRateLimiter({ max: opts.agentApiPerMinute ?? (Number(process.env.DAEBOT_AGENT_API_RPM) || 30) });
   const keyIdentities = new KeyIdentityCache();
   const wsWho = new WeakMap<WsConnection, Principal>();
@@ -574,6 +580,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (isAdminPath(path)) {
       return void (await handleAdmin({
         get ledger() { return ledger(); },
+        feed: mindFeed,
         logKey: opts.adminLog?.logKey ?? (() => process.env.DAEBOT_MISTAKE_LOG_KEY?.trim() || undefined),
         isAdmin: (r) => (hosted ? principalOf(r)?.tier === "admin" : authorized(r, query, false)),
         signedIn: (r) => authorized(r, query, false),
@@ -1129,6 +1136,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     },
     async close() {
       clearInterval(pinger);
+      mindFeed?.stop();
       for (const c of wsConns) c.close(1001, "server shutting down");
       await manager.closeAll();
       await new Promise<void>((resolve) => {
