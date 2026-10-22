@@ -17,6 +17,7 @@ const REASONS = {
   state: "That sign-in could not be verified. Start again.",
   oauth: "MIND could not complete the sign-in. Try again or use an API key.",
   oauth_down: "Could not reach MIND to start sign-in. Try again or use an API key.",
+  bad_request: "Sign-in could not start. Try again.",
   oauth_off: "Sign in with MIND is not available. Use an API key.",
   notallowed: "That MIND account is not enabled for Daebot.",
   slow: "Too many attempts. Try again in a few minutes.",
@@ -36,6 +37,46 @@ function rateLimited(res) {
   const wait = Number(res.headers.get("retry-after")) || 0;
   return `Too many attempts. Try again in ${wait > 90 ? Math.ceil(wait / 60) + " minutes" : "a moment"}.`;
 }
+
+// Daebot iOS app: the WebView cannot finish a sign-in that leaves for Google (it would break out to Safari and never return).
+// Instead the native DaebotAuth plugin runs it in ASWebAuthenticationSession, which ends at daebot://auth/callback?code=...;
+// the one-time code is then traded over HTTPS for the session cookie inside this WebView. A PKCE-style verifier stays in memory here.
+const nativeAuth = () => {
+  try { const C = window.Capacitor; return C && C.isNativePlatform && C.isNativePlatform() ? C.Plugins && C.Plugins.DaebotAuth : undefined; } catch { return undefined; }
+};
+const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+async function appSignIn(plugin) {
+  err.hidden = true;
+  oauthLink.setAttribute("aria-busy", "true");
+  try {
+    const verifier = b64url(crypto.getRandomValues(new Uint8Array(48)));
+    const challenge = b64url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
+    const startUrl = `${location.origin}/auth/mind/start?app=ios&cc=${challenge}`;
+    let back;
+    try { back = (await plugin.start({ url: startUrl })).url; }
+    catch (e) { if (e && (e.code === "CANCELLED" || /cancel/i.test(String(e.message)))) return; throw e; }
+    const q = new URL(back).searchParams;
+    if (q.get("error")) return fail(REASONS[q.get("error")] || "Sign-in did not complete. Try again.");
+    const code = q.get("code");
+    if (!code) return fail("Sign-in did not complete. Try again.");
+    const res = await post("/auth/app/exchange", { code, verifier });
+    if (res.ok) { location.replace("/"); return; }
+    if (res.status === 429) return fail(rateLimited(res));
+    fail("That sign-in expired. Start again.");
+  } catch {
+    fail("Sign-in did not complete. Try again.");
+  } finally {
+    oauthLink.removeAttribute("aria-busy");
+  }
+}
+
+oauthLink.addEventListener("click", (e) => {
+  const plugin = nativeAuth();
+  if (!plugin) return; // a normal browser: the plain link works
+  e.preventDefault();
+  appSignIn(plugin);
+});
 
 // Which methods this deployment offers.
 (async () => {
