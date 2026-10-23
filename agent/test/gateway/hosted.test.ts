@@ -170,7 +170,7 @@ test("hosted Host allowlist: accepts listed hosts, rejects others and spoofed X-
     // /health stays reachable for platform probes and says nothing else
     const h = await http(gw.url, "GET", "/health", { headers: { host: "10.0.0.5" } });
     assert.equal(h.status, 200);
-    assert.deepEqual(JSON.parse(h.body), { ok: true, name: "mindclaw-gateway", hosted: true, bots: false });
+    assert.deepEqual(JSON.parse(h.body), { ok: true, name: "mindclaw-gateway", hosted: true, build: "dev", bots: false });
   } finally { await gw.close(); }
 });
 
