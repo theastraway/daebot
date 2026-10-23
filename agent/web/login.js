@@ -19,6 +19,7 @@ const REASONS = {
   oauth: "MIND could not complete the sign-in. Try again or use an API key.",
   oauth_down: "Could not reach MIND to start sign-in. Try again or use an API key.",
   bad_request: "Sign-in could not start. Try again.",
+  expired: "That sign-in took too long. Start again.",
   oauth_off: "Sign in with MIND is not available. Use an API key.",
   notallowed: "That MIND account is not enabled for Daebot.",
   slow: "Too many attempts. Try again in a few minutes.",
