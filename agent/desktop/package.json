@@ -1,6 +1,6 @@
 {
   "name": "daebot-desktop",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Daebot desktop app: menu bar item, global shortcut, native window around the Daebot gateway and web UI.",
   "license": "MIT",
@@ -18,8 +18,9 @@
     "stage:bin": "node scripts/stage-bin.mjs host",
     "pack": "node scripts/stage-bin.mjs host && electron-builder --config electron-builder.config.mjs --dir",
     "dist:mac": "node scripts/stage-bin.mjs mac && electron-builder --config electron-builder.config.mjs --mac --universal --publish never",
-    "dist:win": "node scripts/stage-bin.mjs win && electron-builder --config electron-builder.config.mjs --win --x64 --arm64 --publish never",
-    "dist:linux": "node scripts/stage-bin.mjs linux && electron-builder --config electron-builder.config.mjs --linux --x64 --publish never"
+    "dist:win": "node scripts/stage-bin.mjs win && electron-builder --config electron-builder.config.mjs --win --x64 --publish never && DAEBOT_FEED_CHANNEL=latest-arm64 electron-builder --config electron-builder.config.mjs --win --arm64 --publish never",
+    "dist:linux": "node scripts/stage-bin.mjs linux && electron-builder --config electron-builder.config.mjs --linux --x64 --publish never",
+    "verify:feed": "node scripts/verify-feed.cjs"
   },
   "devDependencies": {
     "electron": "43.7.7",
@@ -27,5 +28,8 @@
     "@electron/notarize": "^2.5.0"
   },
   "homepage": "https://daebot.live",
-  "desktopName": "daebot.desktop"
+  "desktopName": "daebot.desktop",
+  "dependencies": {
+    "electron-updater": "6.8.9"
+  }
 }
