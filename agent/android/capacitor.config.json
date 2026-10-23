@@ -1,0 +1,20 @@
+{
+  "appId": "live.daebot.app",
+  "appName": "Daebot",
+  "webDir": "www",
+  "backgroundColor": "#0c0b0a",
+  "server": {
+    "url": "https://daebot.live",
+    "cleartext": false,
+    "allowNavigation": [
+      "daebot.live",
+      "*.daebot.live",
+      "m-i-n-d.ai",
+      "*.m-i-n-d.ai"
+    ]
+  },
+  "android": {
+    "backgroundColor": "#0c0b0a",
+    "allowMixedContent": false
+  }
+}
