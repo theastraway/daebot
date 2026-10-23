@@ -28,6 +28,7 @@
       <p class="login-sub" id="login-sub">Sign in to continue.</p>
       <div class="login-group" id="mind-sign" hidden>
         <a class="btn-primary login-btn login-link" id="mind-oauth" href="/auth/mind/start" hidden>Sign in with MIND</a>
+        <button class="btn-quiet login-btn login-alt" id="mind-switch" type="button" hidden>Use a different MIND account</button>
         <form id="key-form" autocomplete="off" novalidate>
           <label class="login-label" for="mind-key">Use a MIND API key</label>
           <input id="mind-key" name="mind-key" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="mind_...">

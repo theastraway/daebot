@@ -9,6 +9,7 @@ const keyInput = document.getElementById("mind-key");
 const keyBtn = document.getElementById("key-btn");
 const mindBox = document.getElementById("mind-sign");
 const oauthLink = document.getElementById("mind-oauth");
+const switchBtn = document.getElementById("mind-switch");
 const ownerBox = document.getElementById("owner-box");
 const sub = document.getElementById("login-sub");
 
@@ -46,7 +47,9 @@ const nativeAuth = () => {
 };
 const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
-async function appSignIn(plugin) {
+// `fresh` = account switch: the sheet runs in a private (ephemeral) browser session, so MIND cannot silently reuse the previous account
+// and always shows its own sign-in page, still inside the sheet.
+async function appSignIn(plugin, fresh = false) {
   err.hidden = true;
   oauthLink.setAttribute("aria-busy", "true");
   try {
@@ -54,7 +57,7 @@ async function appSignIn(plugin) {
     const challenge = b64url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
     const startUrl = `${location.origin}/auth/mind/start?app=ios&cc=${challenge}`;
     let back;
-    try { back = (await plugin.start({ url: startUrl })).url; }
+    try { back = (await plugin.start(fresh ? { url: startUrl, ephemeral: true } : { url: startUrl })).url; }
     catch (e) { if (/cancel/i.test(String((e && e.message) || e))) return; throw e; }
     const q = new URL(back).searchParams;
     if (q.get("error")) return fail(REASONS[q.get("error")] || "Sign-in did not complete. Try again.");
@@ -78,6 +81,11 @@ oauthLink.addEventListener("click", (e) => {
   appSignIn(plugin);
 });
 
+// Only the native app can run the sheet, so only it gets the account-switch control.
+if (nativeAuth()) {
+  switchBtn.addEventListener("click", () => appSignIn(nativeAuth(), true));
+}
+
 // Which methods this deployment offers.
 (async () => {
   let m = { owner: true, key: false, oauth: false };
@@ -85,6 +93,7 @@ oauthLink.addEventListener("click", (e) => {
   if (m.key || m.oauth) {
     mindBox.hidden = false;
     oauthLink.hidden = !m.oauth;
+    switchBtn.hidden = !(m.oauth && nativeAuth());
     keyForm.hidden = !m.key;
     sub.textContent = "Sign in with your MIND account.";
   } else {

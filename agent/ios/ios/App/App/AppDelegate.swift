@@ -111,7 +111,9 @@ final class DaebotAuthHandler: NSObject, WKScriptMessageHandlerWithReply, ASWebA
                 }
             }
             s.presentationContextProvider = self
-            s.prefersEphemeralWebBrowserSession = false
+            // Normal sign-in shares the browser session (already signed in to MIND = one tap). An explicit account switch
+            // asks for a private session so the previous MIND account cannot be reused and MIND shows its sign-in page.
+            s.prefersEphemeralWebBrowserSession = (body["ephemeral"] as? Bool) == true
             self.session = s
             if !s.start() {
                 self.session = nil
