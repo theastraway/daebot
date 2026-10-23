@@ -60,5 +60,38 @@
         }
       ]
     }
+  },
+  "mobile": {
+    "ios": {
+      "label": "iPhone",
+      "detail": "iOS 15 or later, via TestFlight",
+      "files": [
+        {
+          "label": "Get Daebot for iPhone",
+          "kind": "testflight",
+          "action": "Open in TestFlight",
+          "version": "1.0.0 (build 4)",
+          "file": "",
+          "url": "https://beta.itunes.apple.com/v1/app/6825909495",
+          "size": 0,
+          "sha256": ""
+        }
+      ]
+    },
+    "android": {
+      "label": "Android",
+      "detail": "Android 7 or later, installs and updates itself",
+      "files": [
+        {
+          "label": "Download for Android",
+          "kind": "apk",
+          "version": "1.0.0",
+          "file": "Daebot-1.0.0.apk",
+          "url": "https://daebot.live/download/Daebot.apk",
+          "size": 3226357,
+          "sha256": "40567abdf412e438ea914296ca4020717b87dd421702616428989c6efbb8aa89"
+        }
+      ]
+    }
   }
 }
