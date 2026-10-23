@@ -215,7 +215,14 @@ export async function main(argv: string[]): Promise<number> {
     return runHeadless(prompt, cfg);
   }
   if (cmd === "chat") return chat(cfg, flags.has("--plain"));
-  if (cmd === "serve") return serve(cfg, argv);
+  if (cmd === "serve") {
+    // Public website widget (PUBLIC_WIDGET_MODE=true only). With the env unset this branch never runs and serve() is unchanged.
+    if (/^(1|true)$/i.test((process.env.PUBLIC_WIDGET_MODE ?? "").trim())) {
+      const w = await import("./widget/index.ts");
+      return w.serveWidget(process.env, argValue(argv, "--port") ? Number(argValue(argv, "--port")) : undefined);
+    }
+    return serve(cfg, argv);
+  }
   process.stderr.write(`unknown command "${cmd}". Use: chat | run "<prompt>" | serve [--port N] [--host H] [--hosted] [--shadow] [--plain] [--version]\n`);
   return 1;
 }

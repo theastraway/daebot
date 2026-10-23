@@ -100,3 +100,27 @@ hands-free conversation button. The gateway exposes `POST /voice/stt` (raw audio
 - Errors (JSON): 400 bad body, 401 missing/invalid key, 403 host/Origin/not allowed/not your session, 409 session busy, 429 rate limited (Retry-After), 502 MIND unreachable.
 - Browser-safe by construction: any `Origin` header is refused (server callers send none); the Host allowlist and https rules still apply. Bad keys count against the per-IP login limiter.
 - Rate limit: `DAEBOT_AGENT_API_RPM` turns per user per minute (default 30).
+
+## Public website widget (PUBLIC_WIDGET_MODE)
+
+A separate Render web service built from this same repo serves "Daebot for Astra AI" on theastraway.com. With `PUBLIC_WIDGET_MODE` unset (daebot.live) none of this runs: no route, prompt, tool or auth path changes.
+
+- **Service:** Node web service, root directory `agent`, build `npm install --omit=dev --no-audit --no-fund`, start `node src/cli.ts serve`, health check `/health`, `NODE_VERSION=24`. No disk (sessions live in memory only; nothing is written).
+- **Do not** set `MINDCLAW_HOSTED`, `GATEWAY_TOKEN` or `DAEBOT_SECRET_KEY` on it: it has no login and no users.
+- **Embed:** `<script src="https://<widget-host>/widget.js" async></script>` on theastraway.com.
+- **Routes:** `GET /health`, `GET /widget.js`, `GET /widget` (iframe chat page), `GET /brand/daebot-avatar.png`, `POST /api/widget/turn` (SSE). Everything else is 404.
+
+| Key | Secret | Meaning |
+|---|---|---|
+| `PUBLIC_WIDGET_MODE` | no | `true` turns widget mode on |
+| `WIDGET_MIND_API_KEY` | yes | MIND key of the ONE tenant every visitor turn reads (read-only `mind_query` only). Required. |
+| `OPENROUTER_API_KEY` | yes | LLM key (same variable the agent already reads). Required. |
+| `WIDGET_MODEL` | no | model id; default is `MINDCLAW_MODEL`, else the built-in default |
+| `WIDGET_PERSONA_NAME` | no | default `Daebot` |
+| `WIDGET_ALLOWED_ORIGINS` | no | CORS and iframe-embedding allowlist, default `https://theastraway.com,https://www.theastraway.com` |
+| `WIDGET_RATE_LIMIT_MAX` / `WIDGET_RATE_LIMIT_WINDOW_MIN` | no | per-IP messages per window, default 20 per 10 min |
+| `WIDGET_DAILY_USD_CAP` | no | daily LLM spend cap (UTC day, in memory), default 5 |
+| `MIND_BASE_URL` | no | defaults to `https://m-i-n-d.ai/developer/v1` |
+| `PORT` | auto | set by Render |
+
+Limits: 2,000 characters per message, 12 turns of history per session, sessions expire after 30 minutes idle. Tools are an in-code allowlist (`WIDGET_TOOL_ALLOWLIST` in `src/widget/index.ts`): only `mind_query`.
