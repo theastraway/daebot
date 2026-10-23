@@ -4,11 +4,12 @@ const hasDom = typeof document !== "undefined";
 const list = hasDom ? document.getElementById("dl-list") : null;
 const meta = hasDom ? document.getElementById("dl-meta") : null;
 const sub = hasDom ? document.getElementById("dl-sub") : null;
-const ORDER = ["mac", "windows", "linux"];
+const ORDER = ["mac", "windows", "linux", "ios", "android"];
 
 export function detectOS(nav = navigator) {
   const s = `${nav.userAgentData?.platform ?? ""} ${nav.platform ?? ""} ${nav.userAgent ?? ""}`.toLowerCase();
-  if (/iphone|ipad|ipod|android/.test(s)) return null;
+  if (/iphone|ipad|ipod/.test(s)) return "ios";
+  if (/android/.test(s)) return "android";
   if (s.includes("win")) return "windows";
   if (s.includes("mac")) return "mac";
   if (s.includes("linux") || s.includes("x11") || s.includes("cros")) return "linux";
@@ -40,9 +41,9 @@ function el(tag, cls, text) {
 function button(p, f, primary) {
   const href = safeUrl(f.url);
   const a = el(href ? "a" : "div", `dl-btn${primary ? " is-primary" : ""}${href ? "" : " is-soon"}`);
-  if (href) { a.href = href; a.rel = "noopener"; a.setAttribute("download", ""); }
+  if (href) { a.href = href; a.rel = "noopener"; if (f.kind !== "testflight") a.setAttribute("download", ""); }
   else a.setAttribute("aria-disabled", "true");
-  a.append(el("span", "dl-name", p.label), el("span", "dl-state", href ? "Download" : "Coming soon"));
+  a.append(el("span", "dl-name", p.label), el("span", "dl-state", href ? (f.action || "Download") : "Coming soon"));
   const size = formatSize(f.size);
   a.append(el("span", "dl-detail", [p.detail, href ? size : ""].filter(Boolean).join(" · ")));
   return a;
@@ -50,6 +51,8 @@ function button(p, f, primary) {
 
 function render(manifest, os) {
   list.replaceChildren();
+  // Desktop builds share one version (platforms); the phone apps ship on their own store/feed cadence (mobile).
+  manifest = { ...manifest, platforms: { ...manifest.platforms, ...manifest.mobile } };
   const names = ORDER.filter((k) => manifest.platforms?.[k]);
   if (os && names.includes(os)) { names.splice(names.indexOf(os), 1); names.unshift(os); }
   for (const key of names) {
@@ -67,7 +70,7 @@ function render(manifest, os) {
   }
   const first = os && manifest.platforms?.[os]?.files?.[0];
   if (first && safeUrl(first.url)) {
-    const bits = [`Version ${manifest.version}`];
+    const bits = [`Version ${first.version || manifest.version}`];
     if (first.sha256) bits.push(`SHA-256 ${first.sha256}`);
     meta.textContent = bits.join(" · ");
     meta.hidden = false;
@@ -85,7 +88,7 @@ async function main() {
     return;
   }
   const os = detectOS();
-  if (!os) sub.textContent = "Daebot runs on Mac, Windows and Linux. Open this page on your computer to get it.";
+  if (!os) sub.textContent = "Daebot runs on Mac, Windows, Linux, iPhone and Android.";
   render(manifest, os);
 }
 

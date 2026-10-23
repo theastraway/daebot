@@ -62,13 +62,23 @@ test("releases.json: three platforms, https URLs on download.m-i-n-d.ai, hash + 
   }
 });
 
+test("releases.json mobile: iPhone opens TestFlight, Android is the stable daebot.live APK link", () => {
+  const m = JSON.parse(readFileSync(join(WEB, "download", "releases.json"), "utf8"));
+  const ios = m.mobile.ios.files[0], and = m.mobile.android.files[0];
+  assert.match(ios.url, /^https:\/\/beta\.itunes\.apple\.com\//);
+  assert.equal(and.url, "https://daebot.live/download/Daebot.apk");
+  assert.match(and.sha256, /^[0-9a-f]{64}$/);
+  assert.ok(and.size > 1e6);
+});
+
 test("download.js helpers: OS detection and URL safety", async () => {
   // @ts-ignore plain JS module without a declaration file
   const js = await import("../../web/download/download.js");
   assert.equal(js.detectOS({ platform: "MacIntel", userAgent: "Mozilla/5.0 (Macintosh)" }), "mac");
   assert.equal(js.detectOS({ platform: "Win32", userAgent: "Windows NT 10" }), "windows");
   assert.equal(js.detectOS({ platform: "Linux x86_64", userAgent: "X11; Linux" }), "linux");
-  assert.equal(js.detectOS({ platform: "iPhone", userAgent: "iPhone; CPU like Mac OS X" }), null);
+  assert.equal(js.detectOS({ platform: "iPhone", userAgent: "iPhone; CPU like Mac OS X" }), "ios");
+  assert.equal(js.detectOS({ platform: "Linux armv8l", userAgent: "Mozilla/5.0 (Linux; Android 14)" }), "android");
   assert.equal(js.safeUrl("https://download.m-i-n-d.ai/daebot/1/a.dmg"), "https://download.m-i-n-d.ai/daebot/1/a.dmg");
   assert.equal(js.safeUrl("javascript:alert(1)"), null);
   assert.equal(js.safeUrl("http://evil.example/a.exe"), null);
