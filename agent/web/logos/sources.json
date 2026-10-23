@@ -1,0 +1,266 @@
+{
+ "note": "Each file was downloaded once from the vendor's own site (favicon, apple-touch-icon or brand SVG) and is served same-origin. PNGs were converted/resized to max 128px with sips. Never fetched at runtime.",
+ "fetched": "2026-10-23",
+ "logos": {
+  "airtable": {
+   "file": "airtable.png",
+   "name": "Airtable",
+   "source": "https://www.airtable.com/favicon.ico"
+  },
+  "apple": {
+   "file": "apple.png",
+   "name": "Apple Calendar",
+   "source": "https://www.apple.com/favicon.ico"
+  },
+  "asana": {
+   "file": "asana.png",
+   "name": "Asana",
+   "source": "https://asana.com/favicon.ico"
+  },
+  "atlassian": {
+   "file": "atlassian.png",
+   "name": "Atlassian Rovo (Jira and Confluence)",
+   "source": "https://www.atlassian.com/apple-touch-icon.png"
+  },
+  "aws": {
+   "file": "aws.png",
+   "name": "AWS",
+   "source": "https://a0.awsstatic.com/libra-css/images/site/touch-icon-ipad-144-smile.png"
+  },
+  "box": {
+   "file": "box.png",
+   "name": "Box",
+   "source": "https://www.box.com/apple-touch-icon.png?tnbutl"
+  },
+  "calendly": {
+   "file": "calendly.svg",
+   "name": "Calendly",
+   "source": "https://calendly.com/media/favicon/icon.svg"
+  },
+  "clickup": {
+   "file": "clickup.png",
+   "name": "ClickUp",
+   "source": "https://clickup.com/favicons/apple-touch-icon.png"
+  },
+  "cloudflare": {
+   "file": "cloudflare.png",
+   "name": "Cloudflare",
+   "source": "https://www.cloudflare.com/favicon.ico"
+  },
+  "datadog": {
+   "file": "datadog.png",
+   "name": "Datadog",
+   "source": "https://www.datadoghq.com/favicon.ico"
+  },
+  "digitalocean": {
+   "file": "digitalocean.png",
+   "name": "DigitalOcean",
+   "source": "https://www.digitalocean.com/_do-www-marketing/d499c6c6/_next/static/media/apple-touch-icon.9537f22a.png"
+  },
+  "dropbox": {
+   "file": "dropbox.png",
+   "name": "Dropbox",
+   "source": "https://cfl.dropboxstatic.com/static/metaserver/static/images/favicon.ico"
+  },
+  "evernote": {
+   "file": "evernote.png",
+   "name": "Evernote",
+   "source": "https://evernote.com/images/evernote-logo-ios.png"
+  },
+  "figma": {
+   "file": "figma.png",
+   "name": "Figma",
+   "source": "https://static.figma.com/app/icon/2/touch-180.png"
+  },
+  "fireflies": {
+   "file": "fireflies.png",
+   "name": "Fireflies.ai",
+   "source": "https://fireflies.ai/apple-icon.png?81a7679a0c7e6094"
+  },
+  "github": {
+   "file": "github.png",
+   "name": "GitHub",
+   "source": "https://github.com/apple-touch-icon.png"
+  },
+  "gitlab": {
+   "file": "gitlab.png",
+   "name": "GitLab",
+   "source": "https://about.gitlab.com/images/ico/favicon-192x192.png"
+  },
+  "gong": {
+   "file": "gong.png",
+   "name": "Gong",
+   "source": "https://www.gong.io/marketing-assets/apple-touch-icon.png"
+  },
+  "google": {
+   "file": "google.png",
+   "name": "Google",
+   "source": "https://www.gstatic.com/images/branding/searchlogo/ico/favicon.ico"
+  },
+  "heroku": {
+   "file": "heroku.png",
+   "name": "Heroku",
+   "source": "https://www.heroku.com/wp-content/uploads/2025/01/apple-touch-icon-180x180-1.png?w=180"
+  },
+  "hubspot": {
+   "file": "hubspot.png",
+   "name": "HubSpot",
+   "source": "https://www.hubspot.com/hubfs/HubSpot_Logos/HubSpot-Inversed-Favicon.png"
+  },
+  "huggingface": {
+   "file": "huggingface.png",
+   "name": "Hugging Face",
+   "source": "https://huggingface.co/favicon.ico"
+  },
+  "intercom": {
+   "file": "intercom.png",
+   "name": "Intercom",
+   "source": "https://www.intercom.com/intercom-marketing-site/favicons/favicon.ico"
+  },
+  "klaviyo": {
+   "file": "klaviyo.png",
+   "name": "Klaviyo",
+   "source": "https://www.klaviyo.com/icons/icon-512x512.png"
+  },
+  "linear": {
+   "file": "linear.svg",
+   "name": "Linear",
+   "source": "https://linear.app/static/favicon.svg?v=2"
+  },
+  "make": {
+   "file": "make.png",
+   "name": "Make",
+   "source": "https://cdn.prod.website-files.com/6a294495bc84130c6dd0c4fd/6a7b9441756d01907cfc9bc0_favicon-32x32.png"
+  },
+  "meta-ads": {
+   "file": "meta-ads.png",
+   "name": "Meta Ads",
+   "source": "https://www.facebook.com/images/fb_icon_325x325.png"
+  },
+  "microsoft": {
+   "file": "microsoft.png",
+   "name": "Microsoft 365",
+   "source": "https://www.microsoft.com/apple-touch-icon.png"
+  },
+  "miro": {
+   "file": "miro.png",
+   "name": "Miro",
+   "source": "https://framerusercontent.com/images/6FBG66PBxjV2QFaDfIdUi5mi9A.png"
+  },
+  "monday": {
+   "file": "monday.png",
+   "name": "monday.com",
+   "source": "https://cdn.prod.website-files.com/656da6fea306219773d04208/65af6bd6e742d497b5f23f69_645898132bbaac20f1963919_256x256.png"
+  },
+  "mongodb": {
+   "file": "mongodb.png",
+   "name": "MongoDB Atlas",
+   "source": "https://www.mongodb.com/assets/images/global/favicon.ico"
+  },
+  "neon": {
+   "file": "neon.png",
+   "name": "Neon",
+   "source": "https://neon.com/apple-touch-icon.png"
+  },
+  "netlify": {
+   "file": "netlify.png",
+   "name": "Netlify",
+   "source": "https://www.netlify.com/favicon/apple-touch-icon.png"
+  },
+  "notion": {
+   "file": "notion.png",
+   "name": "Notion",
+   "source": "https://www.notion.com/front-static/logo-ios.png"
+  },
+  "otter": {
+   "file": "otter.png",
+   "name": "Otter.ai",
+   "source": "https://cdn.prod.website-files.com/618e9316785b3582a5178502/618e943a80919a98b5e9bf69_apple-icon.png"
+  },
+  "pagerduty": {
+   "file": "pagerduty.svg",
+   "name": "PagerDuty",
+   "source": "https://www.pagerduty.com/favicon/prod/icon.svg"
+  },
+  "paypal": {
+   "file": "paypal.png",
+   "name": "PayPal",
+   "source": "https://www.paypalobjects.com/marketing/web/icons/monogram/pp258.png"
+  },
+  "posthog": {
+   "file": "posthog.png",
+   "name": "PostHog",
+   "source": "https://posthog.com/icons/icon-512x512.png?v=6e5ac8d4a5b381b5caa29396fbf7c955"
+  },
+  "render": {
+   "file": "render.svg",
+   "name": "Render",
+   "source": "https://render.com/icon.svg?icon.00d01gt742wgb.svg?dpl=5477db7cf6"
+  },
+  "salesforce": {
+   "file": "salesforce.png",
+   "name": "Salesforce",
+   "source": "https://www.salesforce.com/c2/public/app/favicon.ico"
+  },
+  "sentry": {
+   "file": "sentry.png",
+   "name": "Sentry",
+   "source": "https://sentry.io/favicon.ico"
+  },
+  "slack": {
+   "file": "slack.png",
+   "name": "Slack",
+   "source": "https://slack.com/favicon.ico"
+  },
+  "square": {
+   "file": "square.png",
+   "name": "Square",
+   "source": "https://squareup.com/apple-touch-icon.png"
+  },
+  "stripe": {
+   "file": "stripe.png",
+   "name": "Stripe",
+   "source": "https://images.stripeassets.com/fzn2n1nzq965/4vVgZi0ZMoEzOhkcv7EVwK/8cce6fdcf2733b2ec8e99548908847ed/favicon.png?w=180&h=180"
+  },
+  "supabase": {
+   "file": "supabase.png",
+   "name": "Supabase",
+   "source": "https://supabase.com/favicon/apple-icon-180x180.png"
+  },
+  "todoist": {
+   "file": "todoist.png",
+   "name": "Todoist",
+   "source": "https://todoist.com/apple-touch-icon.png"
+  },
+  "trello": {
+   "file": "trello.png",
+   "name": "Trello",
+   "source": "https://www.trello.com/favicon.ico"
+  },
+  "vercel": {
+   "file": "vercel.png",
+   "name": "Vercel",
+   "source": "https://assets.vercel.com/image/upload/q_auto/front/favicon/vercel/apple-touch-icon-256x256.png"
+  },
+  "webflow": {
+   "file": "webflow.png",
+   "name": "Webflow",
+   "source": "https://cdn.prod.website-files.com/686294e263eb7e215bd232f7/686d53d0446d4237b2f38c5f_webclip.png"
+  },
+  "wix": {
+   "file": "wix.png",
+   "name": "Wix",
+   "source": "https://www.wix.com/favicon.ico"
+  },
+  "zapier": {
+   "file": "zapier.png",
+   "name": "Zapier",
+   "source": "https://zapier.com/favicon.ico"
+  },
+  "zoom": {
+   "file": "zoom.png",
+   "name": "Zoom",
+   "source": "https://zoom.us/apple-touch-icon.png"
+  }
+ }
+}

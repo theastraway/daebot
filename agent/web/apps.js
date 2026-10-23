@@ -4,7 +4,7 @@
 //
 // Reusable pieces (the MCP builder uses these, nothing else needs to change):
 //   renderEntries(body, entries, handlers)   ONE render function for any list of apps. An entry is
-//       { id, name, blurb?, provider?, connected, needsReconnect?, account?, unavailable?, note? }
+//       { id, name, blurb?, logo?, connected, needsReconnect?, account? }   (logo = the key of a file in /logos/, see apps-icons.js)
 //       and handlers are { onConnect(entry, ctl), onDisconnect(entry, ctl), confirmText?(entry) } where ctl = { busy(bool), say(text) }.
 //   api.addSection({ id, title, note?, search?, load: async () => entries | { entries, message?, signIn?, hidden? }, handlers })
 //       registers a section; it loads when the card opens and after the user comes back to the tab. `search` (a placeholder
@@ -16,7 +16,6 @@ import { markFor } from "/apps-icons.js";
 
 /** What the status line says for one entry. */
 export function statusOf(e) {
-  if (e.unavailable) return { text: e.note || "Not available yet", tone: "off" };
   if (e.waiting && !e.connected) return { text: "Waiting for your approval", tone: "warn" };
   if (e.connected && e.needsReconnect) return { text: "Needs reconnect", tone: "warn" };
   if (e.connected) return { text: e.account ? `Connected · ${e.account}` : "Connected", tone: "ok" };
@@ -27,9 +26,9 @@ const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls)
 
 function logoFor(e) {
   const box = el("span", "app-logo");
-  const mark = e.provider ? markFor(e.provider) : null;
-  if (mark) box.append(mark);
-  else { box.classList.add("letter"); box.textContent = (/[\p{L}\p{N}]/u.exec(String(e.name || "")) || ["?"])[0].toUpperCase(); }
+  const letter = () => { box.replaceChildren(); box.classList.remove("img"); box.classList.add("letter"); box.textContent = (/[\p{L}\p{N}]/u.exec(String(e.name || "")) || ["?"])[0].toUpperCase(); };
+  const mark = markFor(e.logo, letter);
+  if (mark) { box.classList.add("img"); box.append(mark); } else letter();
   box.setAttribute("aria-hidden", "true");
   return box;
 }
@@ -54,8 +53,7 @@ export function renderEntries(body, entries, handlers = {}) {
     const actions = el("div", "app-actions");
     const btn = el("button", e.connected && !e.needsReconnect ? "btn-quiet app-btn" : "btn-primary app-btn");
     btn.type = "button";
-    btn.textContent = e.unavailable ? "Unavailable" : e.connected ? (e.needsReconnect ? "Reconnect" : (e.removeLabel || "Disconnect")) : e.waiting ? "Review" : "Connect";
-    btn.disabled = !!e.unavailable;
+    btn.textContent = e.connected ? (e.needsReconnect ? "Reconnect" : (e.removeLabel || "Disconnect")) : e.waiting ? "Review" : "Connect";
     btn.setAttribute("aria-label", `${btn.textContent} ${e.name}`);
     if (e.connected && !e.needsReconnect && handlers.onManage) {
       const manage = el("button", "btn-quiet app-btn", "Manage"); manage.type = "button";
@@ -67,7 +65,7 @@ export function renderEntries(body, entries, handlers = {}) {
     row.append(logoFor(e), main, actions);
     const confirm = el("div", "app-confirm"); confirm.hidden = true;
     const ctl = {
-      busy(on) { btn.disabled = on || !!e.unavailable; if (on) { btn.dataset.label = btn.textContent; btn.textContent = "Working…"; } else if (btn.dataset.label) { btn.textContent = btn.dataset.label; delete btn.dataset.label; } },
+      busy(on) { btn.disabled = on; if (on) { btn.dataset.label = btn.textContent; btn.textContent = "Working…"; } else if (btn.dataset.label) { btn.textContent = btn.dataset.label; delete btn.dataset.label; } },
       say(text, tone) { sub.textContent = text; sub.className = `app-state is-${tone || "warn"}`; },
     };
     btn.addEventListener("click", () => {
@@ -223,9 +221,11 @@ export function initApps(ctx) {
 
   // ---- Section 1: MIND integrations ----
   const toEntry = (p) => ({
-    id: p.provider, provider: p.provider, name: p.name, blurb: p.blurb, connected: p.connected, needsReconnect: p.needsReconnect,
-    account: p.account, auth: p.auth, unavailable: !p.connected && p.auth === "oauth" && !p.configured, note: "Not set up at MIND yet",
+    id: p.provider, provider: p.provider, logo: p.provider, name: p.name, blurb: p.blurb, connected: p.connected, needsReconnect: p.needsReconnect,
+    account: p.account, auth: p.auth,
   });
+  // An app this user cannot connect right now (MIND has not set it up) is not listed at all. A connected one always is.
+  const connectable = (p) => p.connected || p.configured !== false;
   async function openWindow(url, pre) {
     if (pre && !pre.closed) { pre.location.href = url; return; }
     const w = window.open(url, "_blank");
@@ -236,8 +236,8 @@ export function initApps(ctx) {
     async load() {
       const r = await json("/apps/integrations");
       if (r.signedIn === false) return { signIn: true, message: r.message };
-      if (r.enabled === false) return { entries: [], message: "Integrations are turned off on this MIND server." };
-      return { entries: (r.providers || []).map(toEntry) };
+      if (r.enabled === false) return { entries: [], hidden: true };
+      return { entries: (r.providers || []).filter(connectable).map(toEntry) };
     },
     handlers: {
       async onConnect(e, ctl) {

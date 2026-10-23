@@ -107,7 +107,9 @@ interface Flow {
 
 export type CatalogAuth = "none" | "oauth" | "key" | "oauth_or_key" | "unknown";
 /** One MIND App Store remote MCP connector. `official` comes only from MIND's own tier field for the entry, never from the server. */
-export interface CatalogEntry { name: string; url: string; official: boolean; description?: string; id?: string; category?: string; auth?: CatalogAuth }
+export interface CatalogEntry { name: string; url: string; official: boolean; description?: string; id?: string; category?: string; auth?: CatalogAuth;
+  /** MIND marks this connector as not connectable right now. The Apps card does not list it (unless this user already has it connected). */
+  unavailable?: boolean }
 /** What the Apps card shows for one connector (no URL query, no secrets). `connected`/`serverId`/`pendingId` are this user's own state. */
 export interface CatalogItemView {
   id: string; name: string; blurb: string; category: string; publisher: "official" | "community"; auth: CatalogAuth; host: string;
@@ -264,6 +266,7 @@ export class McpConnectService {
       let u: URL;
       try { u = normalizeUrl(e.url); } catch { continue; }
       const url = u.toString();
+      if (e.unavailable && !have.has(url)) continue; // not connectable right now: not listed, never a greyed row. A connected one always shows.
       out.push({
         id, name: cleanLine(e.name, 60), blurb: cleanLine(e.description ?? "", 200), category: cleanLine(e.category ?? "", 30),
         publisher: e.official ? "official" : "community", auth: e.auth ?? "unknown", host: u.host,

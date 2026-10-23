@@ -12,7 +12,7 @@ export function entryOf(it) {
   tags.push({ text: it.publisher === "official" ? "Official" : "Community", tone: it.publisher === "official" ? "ok" : "warn" });
   if (AUTH_TEXT[it.auth]) tags.push({ text: AUTH_TEXT[it.auth] });
   return {
-    id: it.id, name: it.name, blurb: it.blurb, tags, connected: !!it.connected, serverId: it.serverId, waiting: !!it.pendingId,
+    id: it.id, logo: String(it.id || "").replace(/^mcp:/, ""), name: it.name, blurb: it.blurb, tags, connected: !!it.connected, serverId: it.serverId, waiting: !!it.pendingId,
     removeLabel: "Remove",
   };
 }

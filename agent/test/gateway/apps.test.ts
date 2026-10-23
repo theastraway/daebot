@@ -160,5 +160,27 @@ test("web wiring: Apps button at the bottom of the sidebar, the card, brand mark
   assert.doesNotMatch(web("apps.js"), /fetch\(/, "apps.js goes through the app's own api helper");
   assert.match(web("apps.js"), /\/apps\/integrations/);
   const icons = web("apps-icons.js");
-  for (const k of ["google", "microsoft", "dropbox", "github"]) assert.match(icons, new RegExp(`\\n  ${k}: \\{ viewBox`), k);
+  assert.doesNotMatch(web("apps.js").replace(/^\s*\/\/.*$/gm, ""), /Unavailable|unavailable/, "no greyed Unavailable rows: an app that cannot connect is not listed");
+  assert.doesNotMatch(icons, /https?:\/\/[^\s"']+\.(png|svg|ico)/i, "logos are same-origin files, never fetched from a vendor or CDN at runtime");
 });
+
+test("logos: every mapped file ships, every shipped file is mapped, each has a recorded vendor source; the live apps all have one", async () => {
+  const { readdirSync, existsSync } = await import("node:fs");
+  const dir = join(import.meta.dirname, "..", "..", "web", "logos");
+  // @ts-ignore the browser module is plain JS with no declaration file
+  const { LOGO_EXT, logoSrc } = await import("../../web/apps-icons.js") as any;
+  const src = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")).logos;
+  for (const [k, ext] of Object.entries(LOGO_EXT)) {
+    assert.ok(existsSync(join(dir, `${k}.${ext}`)), `${k}.${ext} is missing`);
+    assert.match(src[k]?.source ?? "", /^https:\/\//, `${k}: source recorded`);
+    assert.equal(logoSrc(k), `/logos/${k}.${ext}`);
+  }
+  const files = readdirSync(dir).filter((f) => f !== "sources.json").sort();
+  assert.deepEqual(files, Object.entries(LOGO_EXT).map(([k, e]) => `${k}.${e}`).sort());
+  assert.equal(logoSrc("../x"), null);
+  assert.equal(logoSrc("constructor"), null);
+  // the 49 MCP connectors and 5 integrations MIND lists on 2026-10-23
+  const live = "notion linear stripe sentry asana hubspot slack cloudflare atlassian render vercel github intercom square figma datadog pagerduty webflow supabase neon clickup box monday salesforce calendly gong fireflies otter airtable todoist evernote zoom aws digitalocean gitlab posthog zapier make paypal meta-ads miro dropbox wix klaviyo huggingface netlify heroku mongodb trello google microsoft apple".split(" ");
+  for (const k of live) assert.ok(logoSrc(k), `${k} has an official logo file`);
+});
+

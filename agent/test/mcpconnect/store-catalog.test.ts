@@ -269,3 +269,26 @@ test("web: Connect sends an id and never an address; no innerHTML anywhere in th
   assert.match(web("apps.js"), /function suspend\(\)[^}]*q\.card\.hidden = true/);
   assert.match(web("app.js"), /initConnectors\(/);
 });
+
+test("unavailable connectors: MIND's own status words mark a row, the Apps card does not list it, a connected one still shows", async () => {
+  const row = (id: string, extra: Record<string, unknown>) => ({ id: `mcp:${id}`, name: id, tier: "official", kind: "remote_mcp", connect: { auth: "oauth2.1", mcp_url: `https://${id}.test/mcp` }, ...extra });
+  const rows = parseCatalog({ items: [
+    row("ok", { status: { state: "available" } }), row("unk", { status: { state: "unknown" } }), row("bare", {}),
+    row("soon", { status: { state: "coming_soon" } }), row("off", { status: { state: "Unavailable" } }), row("flag", { enabled: false }), row("cfg", { configured: false }),
+  ] });
+  assert.deepEqual(rows.filter((r) => r.unavailable).map((r) => r.id), ["mcp:soon", "mcp:off", "mcp:flag", "mcp:cfg"]);
+  assert.deepEqual(rows.filter((r) => !r.unavailable).map((r) => r.id), ["mcp:ok", "mcp:unk", "mcp:bare"]);
+  const { svc } = svcWith(undefined, rows);
+  assert.deepEqual((await svc.catalogItems("u1")).map((i) => i.id), ["mcp:ok", "mcp:unk", "mcp:bare"]);
+  // already connected by this user: it still shows after MIND marks it unavailable
+  const m = await mock();
+  try {
+    const live: CatalogEntry[] = parseCatalog(LIVE);
+    const { svc: s2 } = svcWith(m.net, live);
+    const p = await s2.proposeFromCatalog("u1", "mcp:acme");
+    await s2.approve("u1", p.id, { mode: "none", redirectUri: "https://daebot.live/mcp/oauth/callback" });
+    live.find((e) => e.id === "mcp:acme")!.unavailable = true;
+    live.find((e) => e.id === "mcp:notion")!.unavailable = true;
+    assert.deepEqual((await s2.catalogItems("u1")).map((i) => [i.id, i.connected]), [["mcp:sentry", false], ["mcp:acme", true]], "notion is hidden, the connected acme stays");
+  } finally { await m.close(); }
+});

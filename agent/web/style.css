@@ -394,7 +394,8 @@ button.model-badge[aria-expanded="true"] { box-shadow: 0 0 0 1px rgba(255,255,25
 .app-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; min-width: 0; }
 .app-row + .app-row, .app-confirm + .app-row { border-top: 1px solid var(--line); }
 .app-logo { display: grid; place-items: center; width: 36px; height: 36px; flex: none; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); }
-.app-logo .app-mark { width: 20px; height: 20px; color: var(--ink); }
+.app-logo .app-mark { width: 24px; height: 24px; object-fit: contain; display: block; }
+.app-logo.img { background: #fff; border-color: rgba(0, 0, 0, .12); } /* official marks are drawn for a light ground: a white tile keeps every one legible in dark mode too */
 .app-logo.letter { font: 650 15px var(--display); color: var(--ink-2); }
 .app-main { flex: 1; min-width: 0; }
 .app-name { font-weight: 600; font-size: 14.5px; }
