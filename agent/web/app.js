@@ -2,6 +2,7 @@
 // All dynamic text goes through textContent / createTextNode. No innerHTML anywhere.
 
 import { initVoice } from "/voice.js";
+import { initUpdates } from "/updates.js";
 import { initBots, generalSessions, peerLabel } from "/bots.js";
 import { initModels } from "/models.js";
 import { initApps } from "/apps.js";
@@ -873,3 +874,5 @@ els.btnLogout.addEventListener("click", async () => {
   try { await fetch("/logout", { method: "POST", credentials: "same-origin" }); } catch { /* leaving anyway */ }
   location.replace("/");
 });
+
+initUpdates();

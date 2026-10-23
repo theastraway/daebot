@@ -32,6 +32,7 @@ import { EMBEDDED_FILES } from "../embedded.generated.ts";
 import { hasEmbeddedSite } from "../embedded.ts";
 import { acceptWebSocket } from "./ws.ts";
 import { createVoiceHandler } from "./voice.ts";
+import { buildId, handleAppFeed } from "./appfeed.ts";
 import { createAppsHandler } from "./apps.ts";
 import type { AppsOptions } from "./apps.ts";
 import type { VoiceOptions } from "./voice.ts";
@@ -113,7 +114,7 @@ export const OAUTH_COOKIE = "mc_oauth";
 // The download page (daebot.live/download) is public: it only links to release files hosted elsewhere.
 const HOSTED_PUBLIC_STATIC = new Set([
   "/login.html", "/login.js", "/login.css", "/style.css", "/favicon.svg", "/brand/mbot.js", "/brand/daebot-head.webp",
-  "/download", "/download/", "/download/index.html", "/download/download.js", "/download/download.css", "/download/releases.json",
+  "/download", "/download/", "/download/index.html", "/download/download.js", "/download/download.css", "/download/releases.json", "/download/ios-latest.json",
 ]);
 const HSTS = "max-age=31536000; includeSubDomains";
 
@@ -596,8 +597,9 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         res.writeHead(200, { "content-type": "text/plain; charset=utf-8", "cache-control": "public, max-age=3600" });
         return void res.end(method === "HEAD" ? undefined : "User-agent: *\nDisallow: /\n");
       }
+      if (await handleAppFeed(path, method, res)) return;
       // Platform health probes may not carry our public Host; /health reveals nothing but liveness and which model answers.
-      if (path === "/health" && (method === "GET" || method === "HEAD")) return sendJson(res, 200, { ok: true, name: "mindclaw-gateway", hosted: true, bots: botsOn(), ...mcpField(), ...modelInfo() });
+      if (path === "/health" && (method === "GET" || method === "HEAD")) return sendJson(res, 200, { ok: true, name: "mindclaw-gateway", hosted: true, build: buildId(), bots: botsOn(), ...mcpField(), ...modelInfo() });
     }
 
     if (hosted && path === AGENT_TURN_PATH) return agentTurn(req, res);
@@ -672,7 +674,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
 
     if (path === "/health") {
       if (method !== "GET" && method !== "HEAD") return sendJson(res, 405, { error: "method not allowed" });
-      return sendJson(res, 200, { ok: true, name: "mindclaw-gateway", sessions: manager.count(), bots: botsOn(), ...mcpField(), ...modelInfo() });
+      return sendJson(res, 200, { ok: true, name: "mindclaw-gateway", sessions: manager.count(), build: buildId(), bots: botsOn(), ...mcpField(), ...modelInfo() });
     }
 
     // The MCP server's sign-in page sends the browser back here: a cross-site navigation, so the Strict session cookie is NOT sent.
