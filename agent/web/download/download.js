@@ -71,7 +71,6 @@ function render(manifest, os) {
   const first = os && manifest.platforms?.[os]?.files?.[0];
   if (first && safeUrl(first.url)) {
     const bits = [`Version ${first.version || manifest.version}`];
-    if (first.sha256) bits.push(`SHA-256 ${first.sha256}`);
     meta.textContent = bits.join(" · ");
     meta.hidden = false;
   }
