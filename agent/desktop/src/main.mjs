@@ -1,6 +1,7 @@
 // Daebot desktop shell (Electron main process). Thin: it starts the gateway as a child, waits for /health,
 // and shows the existing web UI. All decisions live in src/lib/* (unit-tested); this file is glue.
-import { app, BrowserWindow, Tray, Menu, globalShortcut, Notification, ipcMain, shell, nativeImage, nativeTheme, screen, session } from "electron";
+import { app, BrowserWindow, Tray, Menu, globalShortcut, Notification, ipcMain, shell, nativeImage, nativeTheme, screen, session, dialog } from "electron";
+import { createRequire } from "node:module";
 import { spawn, execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,6 +17,7 @@ import { buildAppMenuTemplate, buildTrayTemplate } from "./lib/menu.mjs";
 import { buildLoadUrl, classifyUrl, originOf, redactUrl } from "./lib/allowlist.mjs";
 import { buildConfirmNotification, createRateLimiter, shouldNotify, validateNotifyPayload } from "./lib/notify.mjs";
 import { ConfirmWatcher } from "./lib/watcher.mjs";
+import { createUpdater } from "./lib/updater.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SMOKE = process.argv.includes("--mindclaw-smoke");
@@ -329,11 +331,34 @@ async function setKernelMode(mode) {
 // ---------- tray + menus ----------
 const handlers = { toggle: toggleWindow, newSession, setKernelMode, signOut, quit: () => app.quit(), hideWindow };
 
+// Auto-update (electron-updater, generic feed; see lib/updater.mjs). Off in --mindclaw-smoke and in unpackaged runs.
+const updater = createUpdater({
+  loadAutoUpdater: () => createRequire(import.meta.url)("electron-updater").autoUpdater, // CJS; loaded only when updates are on
+  dialog, platform: process.platform, arch: process.arch, version: app.getVersion(), env: process.env,
+  isPackaged: app.isPackaged, smoke: SMOKE,
+  log,
+  // quitAndInstall must not be blocked by the hide-on-close window or the before-quit handler: flag the quit, stop the gateway
+  // ourselves, and the window "close" / "before-quit" guards then step aside.
+  prepareForInstall: async () => {
+    quitting = true;
+    stopWatcher();
+    saveBounds();
+    await Promise.race([gateway.stop(), new Promise((r) => setTimeout(r, 5000))]);
+  },
+  onInstallAborted: () => { quitting = false; void loadUi(); },
+  onChange: () => { refreshTray(); applyAppMenu(); },
+});
+
+function applyAppMenu() {
+  if (SMOKE) return;
+  Menu.setApplicationMenu(Menu.buildFromTemplate(buildAppMenuTemplate({ handlers, isMac: process.platform === "darwin", update: updater.menuItem() })));
+}
+
 function refreshTray() {
   if (!tray || tray.isDestroyed()) return;
   tray.setContextMenu(Menu.buildFromTemplate(buildTrayTemplate({
     windowVisible: !!win && !win.isDestroyed() && win.isVisible(),
-    kernelMode: config.kernelMode, shortcut: config.shortcut, handlers,
+    kernelMode: config.kernelMode, shortcut: config.shortcut, handlers, update: updater.menuItem(),
   })));
 }
 
@@ -365,14 +390,18 @@ gateway.on("crashed", async ({ code, signal }) => {
 app.on("second-instance", showWindow);
 app.on("activate", showWindow);
 app.on("window-all-closed", () => {}); // menu bar app: keep running
-app.on("will-quit", () => globalShortcut.unregisterAll());
+app.on("will-quit", () => { updater.stop(); globalShortcut.unregisterAll(); });
 app.on("before-quit", (e) => {
   if (quitting) return;
   quitting = true;
   e.preventDefault();
   stopWatcher();
   saveBounds();
-  Promise.race([gateway.stop(), new Promise((r) => setTimeout(r, 5000))]).finally(() => app.exit(0));
+  // A downloaded update is applied on the way out (electron-updater's quit hook may not run after app.exit).
+  Promise.race([gateway.stop(), new Promise((r) => setTimeout(r, 5000))]).finally(() => {
+    if (updater.installOnQuit()) setTimeout(() => app.exit(0), 15_000).unref?.();
+    else app.exit(0);
+  });
 });
 for (const sig of ["SIGTERM", "SIGINT"]) process.on(sig, () => app.quit());
 
@@ -440,12 +469,13 @@ app.whenReady().then(async () => {
   ses.setPermissionRequestHandler((_w, _p, cb) => cb(false));
   ses.setPermissionCheckHandler(() => false);
   if (!SMOKE) {
-    Menu.setApplicationMenu(Menu.buildFromTemplate(buildAppMenuTemplate({ handlers, isMac: process.platform === "darwin" })));
+    applyAppMenu();
     createTray();
     registerShortcut();
   }
   if (!(await ensureSignedIn())) return app.quit();
   createWindow();
   const loading = loadUi();
+  void updater.start().catch((e) => log("updater did not start:", String(e?.message ?? e)));
   if (SMOKE) { await loading; if (gatewayInfo) await runSmoke(); }
 });

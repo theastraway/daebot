@@ -9,6 +9,10 @@ export default {
   copyright: "Copyright © 2026 Astra AI",
   directories: { output: "dist", buildResources: "build-resources" },
   files: ["src/**/*", "package.json"],
+  // Auto-update feed (electron-updater, generic provider): the installers and the latest*.yml files live in this one folder.
+  // Windows on ARM is built with DAEBOT_FEED_CHANNEL=latest-arm64 (-> latest-arm64.yml) so it does not collide with the x64 latest.yml;
+  // the app picks its channel by process.arch (src/lib/updater.mjs). Mac -> latest-mac.yml (zip + dmg), Linux -> latest-linux.yml.
+  publish: [{ provider: "generic", url: "https://download.m-i-n-d.ai/download/daebot/", channel: process.env.DAEBOT_FEED_CHANNEL || "latest" }],
   asar: false,
   // The gateway is a bun-compiled binary that embeds the web UI (scripts/stage-bin.mjs puts it in build/bin).
   // Each platform ships only its own binaries: both Mac arches (a universal app runs on either), the matching one on Windows/Linux.

@@ -1,7 +1,7 @@
 // Menu templates (plain data; main.mjs feeds them to Menu.buildFromTemplate). Handlers are injected so this is testable.
 import { KERNEL_MODES } from "./kernel.mjs";
 
-export function buildTrayTemplate({ windowVisible, kernelMode, shortcut, handlers }) {
+export function buildTrayTemplate({ windowVisible, kernelMode, shortcut, handlers, update = null }) {
   return [
     { label: windowVisible ? "Hide Daebot" : "Show Daebot", accelerator: shortcut || undefined, registerAccelerator: false, click: handlers.toggle },
     { label: "New Session", click: handlers.newSession },
@@ -13,14 +13,15 @@ export function buildTrayTemplate({ windowVisible, kernelMode, shortcut, handler
       })),
     },
     { type: "separator" },
+    ...(update ? [update, { type: "separator" }] : []),
     { label: "Sign out of MIND", click: handlers.signOut },
     { label: "Quit Daebot", accelerator: "CmdOrCtrl+Q", click: handlers.quit },
   ];
 }
 
-export function buildAppMenuTemplate({ handlers, isMac = true, name = "Daebot" }) {
+export function buildAppMenuTemplate({ handlers, isMac = true, name = "Daebot", update = null }) {
   const app = isMac
-    ? [{ label: name, submenu: [{ role: "about" }, { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, { label: `Quit ${name}`, accelerator: "CmdOrCtrl+Q", click: handlers.quit }] }]
+    ? [{ label: name, submenu: [{ role: "about" }, ...(update ? [update] : []), { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, { label: `Quit ${name}`, accelerator: "CmdOrCtrl+Q", click: handlers.quit }] }]
     : [];
   return [
     ...app,
