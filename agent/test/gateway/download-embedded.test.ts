@@ -53,7 +53,7 @@ test("releases.json: three platforms, https URLs on download.m-i-n-d.ai, hash + 
   for (const p of Object.values<any>(m.platforms)) {
     assert.ok(p.files.length >= 1);
     for (const f of p.files) {
-      assert.ok(f.file.includes(m.version));
+      assert.ok(f.file.includes(f.version || m.version)); // a platform may ship ahead of the shared version
       if (f.url === "") continue; // "Coming soon"
       assert.equal(f.url, `https://download.m-i-n-d.ai/download/daebot/${f.file}`);
       assert.match(f.sha256, /^[0-9a-f]{64}$/);
