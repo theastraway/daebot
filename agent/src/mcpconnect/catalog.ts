@@ -9,6 +9,16 @@ function authOf(v: unknown): CatalogAuth {
   return oauth && key ? "oauth_or_key" : oauth ? "oauth" : key ? "key" : "unknown";
 }
 
+/** MIND's own words for "this cannot be connected right now" (status.state, or a flag on the row). Anything else, including MIND's "unknown", is shown. */
+const UNAVAILABLE_STATES = new Set(["unavailable", "not_available", "coming_soon", "soon", "planned", "disabled", "offline", "down", "not_configured", "unconfigured", "unsupported", "deprecated", "hidden"]);
+
+function unavailableRow(o: Record<string, unknown> | null): boolean {
+  if (!o) return false;
+  const st = o.status && typeof o.status === "object" ? (o.status as Record<string, unknown>) : {};
+  const state = String(typeof o.status === "string" ? o.status : st.state ?? "").toLowerCase().replace(/[\s-]+/g, "_");
+  return UNAVAILABLE_STATES.has(state) || o.enabled === false || o.available === false || st.available === false || o.coming_soon === true || o.configured === false;
+}
+
 export function parseCatalog(body: unknown): CatalogEntry[] {
   const rows: unknown[] = Array.isArray(body) ? body : Array.isArray((body as any)?.connectors) ? (body as any).connectors : Array.isArray((body as any)?.items) ? (body as any).items : [];
   const out: CatalogEntry[] = [];
@@ -29,6 +39,7 @@ export function parseCatalog(body: unknown): CatalogEntry[] {
       id: typeof o?.id === "string" ? o.id.slice(0, 60) : undefined,
       category: typeof o?.category === "string" ? o.category.slice(0, 30) : undefined,
       auth: authOf(conn.auth),
+      ...(unavailableRow(o) ? { unavailable: true } : {}),
     });
   }
   return out;
