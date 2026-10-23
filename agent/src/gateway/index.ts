@@ -110,6 +110,8 @@ export interface GatewayOptions {
 
 export const HOSTED_COOKIE = "mc_session";
 export const OAUTH_COOKIE = "mc_oauth";
+// Marks that THIS auth sheet was started by the native app, so a callback that arrives after the in-memory flow expired still ends at daebot:// (with an error) instead of stranding the sheet on a web page.
+export const OAUTH_APP_COOKIE = "mc_oauth_app";
 // Reachable without a session in hosted mode (the login page and what it needs to render).
 // The download page (daebot.live/download) is public: it only links to release files hosted elsewhere.
 const HOSTED_PUBLIC_STATIC = new Set([
@@ -408,7 +410,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   }
 
   function loginRedirect(res: ServerResponse, code: string): void {
-    res.writeHead(302, { location: `/login?e=${code}`, "cache-control": "no-store", "set-cookie": `${OAUTH_COOKIE}=; ${oauthCookieAttrs(0)}` });
+    res.writeHead(302, { location: `/login?e=${code}`, "cache-control": "no-store", "set-cookie": [`${OAUTH_COOKIE}=; ${oauthCookieAttrs(0)}`, `${OAUTH_APP_COOKIE}=; ${oauthCookieAttrs(0)}`] });
     res.end();
   }
 
@@ -417,7 +419,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
 
   /** Ends an app-started flow: the auth sheet must navigate to the app's custom scheme to close. */
   function appReturn(res: ServerResponse, params: { code?: string; error?: string }): void {
-    res.writeHead(302, { location: appRedirect(params), "cache-control": "no-store", "set-cookie": `${OAUTH_COOKIE}=; ${oauthCookieAttrs(0)}` });
+    res.writeHead(302, { location: appRedirect(params), "cache-control": "no-store", "set-cookie": [`${OAUTH_COOKIE}=; ${oauthCookieAttrs(0)}`, `${OAUTH_APP_COOKIE}=; ${oauthCookieAttrs(0)}`] });
     res.end();
   }
 
@@ -452,7 +454,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     try {
       const { url, state } = await auth.oauth.start();
       if (fromApp) appHandoff.beginFlow(state, cc as string);
-      res.writeHead(302, { location: url, "cache-control": "no-store", "set-cookie": `${OAUTH_COOKIE}=${state}; ${oauthCookieAttrs(600)}` });
+      res.writeHead(302, { location: url, "cache-control": "no-store", "set-cookie": fromApp ? [`${OAUTH_COOKIE}=${state}; ${oauthCookieAttrs(600)}`, `${OAUTH_APP_COOKIE}=1; ${oauthCookieAttrs(600)}`] : `${OAUTH_COOKIE}=${state}; ${oauthCookieAttrs(600)}` });
       return void res.end();
     } catch {
       return fromApp ? appReturn(res, { error: "oauth_down" }) : loginRedirect(res, "oauth_down");
@@ -468,7 +470,10 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     // The state must be the one this browser was given at /auth/mind/start (blocks login-CSRF / code injection).
     if (!state || !bound || !safeEqual(state, bound)) { limiter.fail(ip); return loginRedirect(res, "state"); }
     const appCc = appHandoff.takeFlow(state); // set only when the native app started this flow
-    const fail = (code: string) => (appCc ? appReturn(res, { error: code }) : loginRedirect(res, code));
+    const appSheet = appCc !== undefined || parseCookies(req.headers["cookie"])[OAUTH_APP_COOKIE] === "1";
+    // The app started this sheet but the flow has expired (a slow sign-in): close the sheet with an error rather than stranding it on a web page.
+    if (appSheet && appCc === undefined) return appReturn(res, { error: "expired" });
+    const fail = (code: string) => (appSheet ? appReturn(res, { error: code }) : loginRedirect(res, code));
     if (query.get("error")) return fail(query.get("error") === "access_denied" ? "denied" : "oauth");
     try {
       const t = await auth.oauth.finish(query.get("code") ?? "", state);
@@ -480,7 +485,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       if (appCc) return appReturn(res, { code: appHandoff.mintCode(user.id, appCc) });
       // A 200 page that navigates itself (not a 302): the next request is then same-site, so the Strict session cookie is sent.
       const body = '<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/"><title>Signed in</title><a href="/">Continue</a>';
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "set-cookie": [userCookie(user.id), `${OAUTH_COOKIE}=; ${oauthCookieAttrs(0)}`] });
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "set-cookie": [userCookie(user.id), `${OAUTH_COOKIE}=; ${oauthCookieAttrs(0)}`, `${OAUTH_APP_COOKIE}=; ${oauthCookieAttrs(0)}`] });
       return void res.end(body);
     } catch {
       limiter.fail(ip);

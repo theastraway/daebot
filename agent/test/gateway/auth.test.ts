@@ -385,6 +385,29 @@ test("app sign-in: OAuth started by the app ends at daebot://auth/callback with 
   } finally { await r.close(); }
 });
 
+test("app sign-in: a callback that outlives the in-memory flow still closes the auth sheet at daebot:// (error=expired), never a web page", async () => {
+  const r = await rig();
+  try {
+    r.fake.consentUser = "alice";
+    const cc = challengeOf(randomBytes(48).toString("base64url"));
+    const start = await http(r.gw.url, "GET", `/auth/mind/start?app=ios&cc=${cc}`, { headers: H });
+    const cookies = ([] as string[]).concat(start.headers["set-cookie"] as string[]).map((c) => c.split(";")[0]);
+    assert.ok(cookies.some((c) => c === "mc_oauth_app=1"), "app flows mark their sheet");
+    const consent = await fetch(new URL(String(start.headers.location)), { redirect: "manual" });
+    const cb = new URL(consent.headers.get("location")!);
+    const path = cb.pathname + cb.search;
+    // first arrival consumes the flow; the same sheet arriving again looks exactly like an expired flow
+    const first = await http(r.gw.url, "GET", path, { headers: { ...H, cookie: cookies.join("; ") } });
+    assert.match(String(first.headers.location), /^daebot:\/\/auth\/callback\?code=/);
+    const late = await http(r.gw.url, "GET", path, { headers: { ...H, cookie: cookies.join("; ") } });
+    assert.equal(late.headers.location, "daebot://auth/callback?error=expired");
+    assert.ok(!([] as string[]).concat(late.headers["set-cookie"] as string[]).some((c) => c.startsWith("mc_session=")), "no session cookie");
+    // a plain browser sign-in (no app marker) is untouched
+    const web = await http(r.gw.url, "GET", "/auth/mind/start", { headers: H });
+    assert.ok(!([] as string[]).concat(web.headers["set-cookie"] as string[]).some((c) => c.startsWith("mc_oauth_app")), "web flows carry no app marker");
+  } finally { await r.close(); }
+});
+
 test("app sign-in: denial and a cookie-less callback come back to the app / login, never a session", async () => {
   const r = await rig();
   try {
