@@ -1,6 +1,6 @@
 {
-  "version": "0.2.0",
-  "releasedAt": "2026-10-19T17:37:03Z",
+  "version": "0.3.0",
+  "releasedAt": "2026-10-23T20:06:00Z",
   "platforms": {
     "mac": {
       "label": "macOS",
@@ -24,18 +24,20 @@
         {
           "label": "Download for Windows",
           "kind": "exe",
-          "file": "Daebot-Setup-0.2.0-x64.exe",
-          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-Setup-0.2.0-x64.exe",
-          "size": 141937684,
-          "sha256": "cf1dd6a11387443cb463e5ed3e4f3dca226f574096b2b7ad6538fe4e41136cb1"
+          "file": "Daebot-Setup-0.3.0-x64.exe",
+          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-Setup-0.3.0-x64.exe",
+          "size": 142911920,
+          "sha256": "cfb2557e07948ce99875d69a968f882dec477fb296782f9b71b5bf90d7c9ecfc",
+          "version": "0.3.0"
         },
         {
           "label": "Windows on ARM (arm64)",
           "kind": "exe",
-          "file": "Daebot-Setup-0.2.0-arm64.exe",
-          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-Setup-0.2.0-arm64.exe",
-          "size": 135026306,
-          "sha256": "0a5bcdfc5d285c11f4768fd46784c2fc7622ad54ea8ef4c8e904ef4e46da1e6b"
+          "file": "Daebot-Setup-0.3.0-arm64.exe",
+          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-Setup-0.3.0-arm64.exe",
+          "size": 135998476,
+          "sha256": "b4dad7a26e042769ca11cabf646dd7705e0822c5b52888b16c0394e6b1f59c28",
+          "version": "0.3.0"
         }
       ]
     },
@@ -46,18 +48,20 @@
         {
           "label": "Download for Linux",
           "kind": "AppImage",
-          "file": "Daebot-0.2.0-linux-x86_64.AppImage",
-          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-0.2.0-linux-x86_64.AppImage",
-          "size": 167480398,
-          "sha256": "bd1ebe11564675d7a4a1abf92d5bae028210d10619f60ca9117d3576ceb0efba"
+          "file": "Daebot-0.3.0-linux-x86_64.AppImage",
+          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-0.3.0-linux-x86_64.AppImage",
+          "size": 168509474,
+          "sha256": "a9516ce425f5596a4fc0b6920683b5fe02de080dec6b4c8b30450e568ffa0a9c",
+          "version": "0.3.0"
         },
         {
           "label": "Debian and Ubuntu (.deb)",
           "kind": "deb",
-          "file": "Daebot-0.2.0-linux-amd64.deb",
-          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-0.2.0-linux-amd64.deb",
-          "size": 130540228,
-          "sha256": "911ed91ed3fb57546565e8f3f07a8806aa7166041d211a863daf447cbe53e6d0"
+          "file": "Daebot-0.3.0-linux-amd64.deb",
+          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-0.3.0-linux-amd64.deb",
+          "size": 132075580,
+          "sha256": "83864e5b0f2f3f7519799eb0d52d5e6314d9364f2a7f01a81f22019ef94a7335",
+          "version": "0.3.0"
         }
       ]
     }
