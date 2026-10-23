@@ -22,15 +22,76 @@ export function prettyModel(id, name) {
   return pretty + (free ? " (free)" : "");
 }
 
+// Provider grouping, mirroring the MIND app's picker (frontend/src/lib/llmProviders.ts): raw provider strings are
+// canonicalised, groups follow a curated order, and anything unlisted goes last, alphabetically.
+export const PROVIDER_ORDER = ["Auto", "OpenAI", "Anthropic", "Google", "xAI", "DeepSeek", "MiniMax", "Z.ai", "Qwen", "Meta", "Perplexity"];
+const PROVIDER_CANONICAL = {
+  openai: "OpenAI", anthropic: "Anthropic", google: "Google", googlegemini: "Google", gemini: "Google", xai: "xAI", grok: "xAI",
+  meta: "Meta", metallama: "Meta", llama: "Meta", deepseek: "DeepSeek", minimax: "MiniMax", zai: "Z.ai", perplexity: "Perplexity",
+  qwen: "Qwen", alibaba: "Qwen", mistral: "Mistral", mistralai: "Mistral", nvidia: "NVIDIA", openrouter: "Auto", moonshotai: "Moonshot AI",
+  cohere: "Cohere", amazon: "Amazon", microsoft: "Microsoft", ai21: "AI21", nousresearch: "Nous Research", thudm: "Z.ai", zhipu: "Z.ai",
+};
+export const OTHER_GROUP = "Other";
+
+/** A messy provider string -> its display name ("meta-llama" -> "Meta", "z-ai" -> "Z.ai"). */
+export function canonicalProvider(raw) {
+  const key = String(raw || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (!key) return OTHER_GROUP;
+  if (PROVIDER_CANONICAL[key]) return PROVIDER_CANONICAL[key];
+  return String(raw).trim().split(/\s+/).map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(" ");
+}
+
+/** The LLM company behind a model: the "Provider: Model" name prefix when the server gives one, else the id prefix
+ *  ("meta-llama/llama-4-scout" -> Meta). A name prefix wins because it is what the user reads. */
+export function providerOf(id, name) {
+  if (typeof name === "string") {
+    const c = name.indexOf(":");
+    if (c > 0 && c <= 30) return canonicalProvider(name.slice(0, c));
+  }
+  if (typeof id === "string") {
+    const slash = id.indexOf("/");
+    if (slash > 0) return canonicalProvider(id.slice(0, slash));
+  }
+  return OTHER_GROUP;
+}
+
+/** The row's name with its "Provider: " prefix dropped, since the group header already says it. */
+export function shortName(name, provider) {
+  if (typeof name !== "string") return "";
+  const c = name.indexOf(":");
+  if (c > 0 && c <= 30 && canonicalProvider(name.slice(0, c)) === provider) return name.slice(c + 1).trim() || name;
+  return name;
+}
+
+/** Group normalised rows by LLM company: curated order first, the rest alphabetical, "Other" last. Row order inside a
+ *  group is kept (open models first, locked last, as normalizeModels left them). */
+export function groupModels(rows) {
+  const buckets = new Map();
+  for (const r of rows) {
+    const p = r.provider || OTHER_GROUP;
+    if (!buckets.has(p)) buckets.set(p, []);
+    buckets.get(p).push(r);
+  }
+  const names = [...buckets.keys()];
+  const ordered = [
+    ...PROVIDER_ORDER.filter((p) => buckets.has(p)),
+    ...names.filter((p) => !PROVIDER_ORDER.includes(p) && p !== OTHER_GROUP).sort((a, b) => a.localeCompare(b)),
+    ...(buckets.has(OTHER_GROUP) ? [OTHER_GROUP] : []),
+  ];
+  return ordered.map((provider) => ({ provider, models: buckets.get(provider) }));
+}
+
 /** Normalise the GET /models payload. Drops malformed rows; keeps the server's order but lists locked models last. */
 export function normalizeModels(payload) {
   const raw = payload && Array.isArray(payload.models) ? payload.models : [];
   const rows = [];
   for (const m of raw) {
     if (!m || typeof m.id !== "string" || !m.id) continue;
+    const name = prettyModel(m.id, m.name);
     rows.push({
       id: m.id,
-      name: prettyModel(m.id, m.name),
+      name,
+      provider: providerOf(m.id, name),
       free: m.free === true,
       allowed: m.allowed !== false,
       priceHint: typeof m.price_hint === "string" ? m.price_hint : "",
@@ -58,7 +119,7 @@ export function initModels({ json, store, notify, icon, getSessionId, onPicked }
   const btn = $("model-badge"), menu = $("model-menu"), nameEl = $("mb-name"), viaEl = $("mb-via");
   if (!btn || !menu || !nameEl) return null;
 
-  const st = { rows: [], def: "", loaded: false, failed: false, served: "", health: "", chosen: new Map(), open: false };
+  const st = { rows: [], def: "", loaded: false, failed: false, served: "", health: "", chosen: new Map(), open: false, expanded: new Set() };
   const stored = () => store.get("localStorage", MODEL_KEY) || "";
   const rowOf = (id) => st.rows.find((r) => r.id === id);
   const labelOf = (id) => { const r = rowOf(id); return r ? r.name : prettyModel(id); };
@@ -102,26 +163,55 @@ export function initModels({ json, store, notify, icon, getSessionId, onPicked }
     const cur = currentId();
     const def = stored() || st.def;
     const list = document.createElement("div"); list.className = "mm-list"; list.setAttribute("role", "none");
-    for (const r of st.rows) {
-      const b = document.createElement("button");
-      b.type = "button"; b.className = "mm-item"; b.setAttribute("role", "menuitemradio"); b.dataset.model = r.id;
-      b.setAttribute("aria-checked", String(r.id === cur));
-      if (!r.allowed) { b.setAttribute("aria-disabled", "true"); b.classList.add("locked"); }
-      const main = document.createElement("span"); main.className = "mm-main";
-      const nm = document.createElement("span"); nm.className = "mm-name"; nm.textContent = r.name;
-      const sub = document.createElement("span"); sub.className = "mm-sub";
-      const bits = [];
-      if (!r.allowed) bits.push(LOCKED_NOTE);
-      else { if (r.free) bits.push("Free"); if (r.priceHint) bits.push(r.priceHint); if (r.id === def) bits.push("Default"); }
-      sub.textContent = bits.join(" · ");
-      main.append(nm); if (bits.length) main.append(sub);
-      b.append(main);
-      const tail = document.createElement("span"); tail.className = "mm-tail";
-      if (!r.allowed) tail.append(icon("i-lock"));
-      else if (r.id === cur) tail.append(icon("i-check"));
-      b.append(tail);
-      b.addEventListener("click", () => { if (r.allowed) choose(r); });
-      list.append(b);
+    const groups = groupModels(st.rows);
+    for (const g of groups) {
+      // The group holding the chosen model stays open (the active model is always visible); a lone group is always open.
+      const hasCur = g.models.some((r) => r.id === cur);
+      const pinned = hasCur || groups.length === 1;
+      const open = pinned || st.expanded.has(g.provider);
+      const gh = document.createElement("button");
+      gh.type = "button"; gh.className = "mm-group"; gh.dataset.provider = g.provider;
+      gh.setAttribute("aria-expanded", String(open));
+      if (pinned) gh.dataset.pinned = "1";
+      const gname = document.createElement("span"); gname.className = "mm-gname"; gname.textContent = g.provider;
+      if (!open) {
+        const gcount = document.createElement("span"); gcount.className = "mm-gcount"; gcount.textContent = String(g.models.length);
+        gname.append(gcount);
+      }
+      gh.append(gname);
+      if (!pinned) gh.append(icon(open ? "i-minus" : "i-plus"));
+      gh.addEventListener("click", () => {
+        if (pinned) return;
+        if (st.expanded.has(g.provider)) st.expanded.delete(g.provider); else st.expanded.add(g.provider);
+        const top = list.scrollTop;
+        render();
+        const l2 = menu.querySelector(".mm-list"); if (l2) l2.scrollTop = top;
+        const again = [...menu.querySelectorAll(".mm-group")].find((el) => el.dataset.provider === g.provider);
+        if (again) again.focus();
+      });
+      list.append(gh);
+      if (!open) continue;
+      for (const r of g.models) {
+        const b = document.createElement("button");
+        b.type = "button"; b.className = "mm-item"; b.setAttribute("role", "menuitemradio"); b.dataset.model = r.id;
+        b.setAttribute("aria-checked", String(r.id === cur));
+        if (!r.allowed) { b.setAttribute("aria-disabled", "true"); b.classList.add("locked"); }
+        const main = document.createElement("span"); main.className = "mm-main";
+        const nm = document.createElement("span"); nm.className = "mm-name"; nm.textContent = shortName(r.name, g.provider);
+        const sub = document.createElement("span"); sub.className = "mm-sub";
+        const bits = [];
+        if (!r.allowed) bits.push(LOCKED_NOTE);
+        else { if (r.free) bits.push("Free"); if (r.priceHint) bits.push(r.priceHint); if (r.id === def) bits.push("Default"); }
+        sub.textContent = bits.join(" \u00b7 ");
+        main.append(nm); if (bits.length) main.append(sub);
+        b.append(main);
+        const tail = document.createElement("span"); tail.className = "mm-tail";
+        if (!r.allowed) tail.append(icon("i-lock"));
+        else if (r.id === cur) tail.append(icon("i-check"));
+        b.append(tail);
+        b.addEventListener("click", () => { if (r.allowed) choose(r); });
+        list.append(b);
+      }
     }
     menu.append(list);
     const foot = document.createElement("div"); foot.className = "mm-foot";
@@ -166,7 +256,7 @@ export function initModels({ json, store, notify, icon, getSessionId, onPicked }
   btn.addEventListener("click", () => setOpen(!st.open));
   document.addEventListener("pointerdown", (e) => { if (st.open && !menu.contains(e.target) && !btn.contains(e.target)) setOpen(false); });
   menu.addEventListener("keydown", (e) => {
-    const items = [...menu.querySelectorAll(".mm-item")];
+    const items = [...menu.querySelectorAll(".mm-group, .mm-item")];
     const i = items.indexOf(document.activeElement);
     if (e.key === "ArrowDown") { e.preventDefault(); items[(i + 1) % items.length]?.focus(); }
     else if (e.key === "ArrowUp") { e.preventDefault(); items[(i - 1 + items.length) % items.length]?.focus(); }

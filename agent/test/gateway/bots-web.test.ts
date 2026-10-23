@@ -105,6 +105,38 @@ test("normalizeModels: drops bad rows, defaults allowed to true, lists locked mo
   assert.equal(models.LOCKED_NOTE, "Plus and up");
 });
 
+test("providerOf/shortName/groupModels: groups by LLM company from the name prefix or the id prefix, curated order, Other last", () => {
+  assert.equal(models.providerOf("meta-llama/llama-4-scout", "Meta: Llama 4 Scout"), "Meta");
+  assert.equal(models.providerOf("qwen/qwen3.8-flash", "Qwen: Qwen3.8 Flash"), "Qwen");
+  assert.equal(models.providerOf("meta-llama/llama-4-scout", "Llama 4 Scout"), "Meta");
+  assert.equal(models.providerOf("z-ai/glm-5", "GLM 5"), "Z.ai");
+  assert.equal(models.providerOf("steady-1", "Steady 1"), "Other");
+  assert.equal(models.shortName("Meta: Llama 4 Scout", "Meta"), "Llama 4 Scout");
+  assert.equal(models.shortName("Meta: Llama 4 Scout", "Qwen"), "Meta: Llama 4 Scout");
+  const n = models.normalizeModels({ models: [
+    { id: "perplexity/sonar", name: "Perplexity: Sonar" },
+    { id: "zzz/x", name: "Zed: X" },
+    { id: "steady-1" },
+    { id: "meta-llama/a", name: "Meta: A", allowed: false },
+    { id: "openai/gpt", name: "OpenAI: GPT" },
+    { id: "meta-llama/b", name: "Meta: B" },
+    { id: "anthropic/c", name: "Anthropic: C" },
+  ] });
+  const g = models.groupModels(n.rows);
+  assert.deepEqual(g.map((x: any) => x.provider), ["OpenAI", "Anthropic", "Meta", "Perplexity", "Zed", "Other"]);
+  assert.deepEqual(g[2].models.map((r: any) => r.id), ["meta-llama/b", "meta-llama/a"]);
+});
+
+test("model picker: groups collapse with a count, the group holding the chosen model stays open, no innerHTML", () => {
+  const src = code("models.js");
+  assert.match(src, /aria-expanded/);
+  assert.match(src, /mm-group/);
+  assert.match(src, /mm-gcount/);
+  assert.match(src, /Applies to this session\./);
+  assert.doesNotMatch(src, /innerHTML|insertAdjacentHTML|eval\(|new Function|document\.write/);
+  assert.match(web("index.html"), /id="i-minus"/);
+});
+
 test("badgeModel: a pending choice, then the model that answered, then the default, then the gateway's", () => {
   assert.equal(models.badgeModel({ served: "s", chosen: "c", def: "d", health: "h" }), "c");
   assert.equal(models.badgeModel({ served: "s", def: "d", health: "h" }), "s");
