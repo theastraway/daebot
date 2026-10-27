@@ -346,8 +346,9 @@ async function syncCurrent() {
   if (!id || syncing || document.hidden || state.busy.has(id) || !state.online) return;
   syncing = true;
   try {
-    const { events } = await json(`/sessions/${encodeURIComponent(id)}/history`);
+    const { events, run } = await json(`/sessions/${encodeURIComponent(id)}/history`);
     if (id !== state.currentId || state.busy.has(id) || !Array.isArray(events)) return;
+    if (run && run.status === "running") { void attachRun(id, events); return; } // a reply is still being written on the server
     const tr = transcript(id);
     const localUsers = tr.items.filter((x) => x.kind === "user").length;
     const { behind, dones } = transcriptBehind({ events, localUsers, lastDones: tr.syncDones });
@@ -458,6 +459,7 @@ async function selectSession(s) {
   await refreshSessions();
   renderThread();
   if (!els.drawer.hidden) loadViolations();
+  syncCurrent();
 }
 function newSession() {
   closeSidebar();
@@ -501,6 +503,85 @@ async function ensureSession() {
   return opening;
 }
 
+// ---------- server-owned runs: stream, re-attach, resume ----------
+// A turn keeps running on the server when this connection drops (app closed, phone locked, tab closed, another session opened).
+// readStream feeds one SSE response into ctx; pumpRun re-attaches with ?after=<last seq> until the run reports done.
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+async function readStream(res, ctx) {
+  const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf("\n\n")) !== -1) {
+      const chunk = buf.slice(0, idx); buf = buf.slice(idx + 2);
+      const lines = chunk.split("\n");
+      const data = lines.filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trimStart()).join("\n");
+      if (!data) continue;
+      let ev; try { ev = JSON.parse(data); } catch { continue; }
+      const idl = lines.find((l) => l.startsWith("id:"));
+      if (idl) { const n = Number(idl.slice(3)); if (n > ctx.seq) ctx.seq = n; }
+      if (ev.type === "done") ctx.sawDone = true;
+      ctx.handle(ev);
+    }
+  }
+}
+async function pumpRun(id, ctx, res) {
+  let tries = 0;
+  for (;;) {
+    try { await readStream(res, ctx); tries = 0; } catch (e) { if (e && e.message === "unauthorized") throw e; }
+    if (ctx.sawDone) return;
+    for (;;) { // dropped before the run finished: it is still going on the server, so take it up again from where we stopped
+      if (++tries > 30) throw new Error("Lost connection to the gateway.");
+      await sleepMs(Math.min(500 * tries, 4000));
+      try {
+        const r = await api(`/sessions/${encodeURIComponent(id)}/events?after=${ctx.seq}`);
+        if (r.status === 404) { ctx.lost = true; return; }
+        if (r.ok) { res = r; setOnline(true); break; }
+      } catch (e) { if (e && e.message === "unauthorized") throw e; setOnline(false); }
+    }
+  }
+}
+// Replace the visible transcript with the server's saved one (the truth after a restart or a lost run).
+async function resyncFromServer(id) {
+  try {
+    const { events } = await json(`/sessions/${encodeURIComponent(id)}/history`);
+    if (!Array.isArray(events)) return;
+    const tr = transcript(id), r = itemsFromHistory(events);
+    tr.items.length = 0; tr.items.push(...r.items); tr.usage = r.usage; if (r.model) tr.model = r.model;
+    if (id === tkey()) renderThread();
+  } catch { /* offline: the next sync tick retries */ }
+}
+// Pick up a turn that is running on the server but not driven by this tab (reload, app reopened, another device).
+const attached = new Set();
+async function attachRun(id, baseEvents) {
+  if (attached.has(id) || state.busy.has(id)) return;
+  attached.add(id); state.busy.add(id);
+  const tr = transcript(id), r = itemsFromHistory(baseEvents);
+  tr.items.length = 0; tr.items.push(...r.items); tr.usage = r.usage; if (r.model) tr.model = r.model;
+  if (id === tkey()) renderThread();
+  setBusyUi();
+  const ctx = {
+    seq: 0, sawDone: false, lost: false, asst: null, tools: new Map(),
+    handle(ev) {
+      if (ev.type === "user") { addItem(id, { kind: "user", text: ev.text }); return; }
+      ctx.asst = onEvent(id, ev, ctx.asst, ctx.tools);
+    },
+  };
+  try {
+    const res = await api(`/sessions/${encodeURIComponent(id)}/events?after=0`);
+    if (res.ok) await pumpRun(id, ctx, res); else ctx.lost = true;
+  } catch (e) { if (!e || e.message !== "unauthorized") ctx.lost = true; }
+  finally {
+    if (ctx.asst) { ctx.asst.streaming = false; if (ctx.asst.node) updateAssistant(ctx.asst.node, ctx.asst); }
+    if (ctx.lost || !ctx.sawDone) await resyncFromServer(id);
+    state.busy.delete(id); attached.delete(id); setBusyUi(); markInflight(id, false);
+    transcript(id).syncDones = undefined;
+    saveTranscript(id); refreshSessions();
+  }
+}
+
 async function sendMessage(text) {
   text = text.trim();
   if (!text) return;
@@ -523,39 +604,34 @@ async function sendMessage(text) {
     return notify(`Could not start a session: ${e.message}`);
   }
   if (startKey !== id) { state.busy.delete(startKey); state.busy.add(id); }
+  markInflight(id, true); // a reload or reopen mid-reply lands back on this chat and picks the reply up
   refreshSessions();
   const tr = transcript(id);
   const meta = metaById(id);
   if (meta && (!meta.title || meta.title === "New session")) meta.title = text.slice(0, 60);
-  let asst = null;
   let first = true;
-  const toolByReceipt = new Map();
+  const ctx = {
+    seq: 0, sawDone: false, lost: false, asst: null, tools: new Map(),
+    handle(ev) {
+      if (first && ev.type !== "usage") { first = false; dropWaiting(); }
+      ctx.asst = onEvent(id, ev, ctx.asst, ctx.tools);
+    },
+  };
   try {
     const res = await api(`/sessions/${encodeURIComponent(id)}/send`, { method: "POST", body: JSON.stringify({ text }) });
     if (res.status === 409) throw new Error("This session is busy with another turn.");
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
-    const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
     setOnline(true);
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf("\n\n")) !== -1) {
-        const chunk = buf.slice(0, idx); buf = buf.slice(idx + 2);
-        const data = chunk.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trimStart()).join("\n");
-        if (!data) continue;
-        let ev; try { ev = JSON.parse(data); } catch { continue; }
-        if (first && ev.type !== "usage") { first = false; dropWaiting(); }
-        asst = onEvent(id, ev, asst, toolByReceipt);
-      }
-    }
+    // The turn runs on the server and keeps going if this connection drops; pumpRun re-attaches from the last event seen.
+    await pumpRun(id, ctx, res);
   } catch (e) {
     if (e.message !== "unauthorized") { notify(e.message === "Failed to fetch" ? "Lost connection to the gateway." : e.message); if (e.message === "Failed to fetch") setOnline(false); }
   } finally {
     dropWaiting();
+    const asst = ctx.asst;
     if (asst) { asst.streaming = false; if (asst.node) updateAssistant(asst.node, asst); }
-    state.busy.delete(id); setBusyUi();
+    state.busy.delete(id); setBusyUi(); markInflight(id, false);
+    if (ctx.lost) await resyncFromServer(id); // the run is gone from the server (restart): show what it saved, including the interrupted note
     transcript(id).syncDones = undefined; // this tab just ran the turn itself: re-baseline instead of re-rendering it
     saveTranscript(id);
     refreshSessions();
@@ -563,6 +639,19 @@ async function sendMessage(text) {
     if (id === state.currentId || id === tkey()) voice.turnDone(answerText(transcript(id), userItem));
     else voice.turnDone("");
   }
+}
+
+// Remember which chat has a reply being written (tab: sessionStorage; app/browser closed: localStorage), so reopening lands on it.
+function markInflight(id, on) {
+  try {
+    if (on) {
+      sessionStorage.setItem("daebot:current", id); sessionStorage.setItem("daebot:bot", state.curBot || "");
+      localStorage.setItem("daebot:inflight", JSON.stringify({ id, bot: state.curBot || "" }));
+    } else {
+      const cur = JSON.parse(localStorage.getItem("daebot:inflight") || "null");
+      if (cur && cur.id === id) localStorage.removeItem("daebot:inflight");
+    }
+  } catch { /* storage unavailable */ }
 }
 
 // The assistant text of one turn: every assistant block after that turn's user message.
@@ -877,6 +966,7 @@ async function boot() {
   mcp.load();
   let last = null;
   try { last = sessionStorage.getItem("daebot:current"); } catch { /* none */ }
+  if (!last) { try { const f = JSON.parse(localStorage.getItem("daebot:inflight") || "null"); if (f && f.id) { last = f.id; sessionStorage.setItem("daebot:bot", f.bot || ""); } } catch { /* none */ } }
   let known = last && state.sessions.find((s) => s.id === last); // live, or saved on the server (survives restarts)
   let lastBot = ""; try { lastBot = sessionStorage.getItem("daebot:bot") || ""; } catch { /* none */ }
   if (!known && last && lastBot) { // a bot thread may not be in the plain list
@@ -885,6 +975,7 @@ async function boot() {
   if (known && known.live && restoreTranscript(last)) { state.currentId = last; state.curBot = known.bot || ""; await bots.ensureLoaded(); renderSessions(); renderThread(); }
   else if (known) { await selectSession(known); } // resumes and replays the saved transcript
   else if (!state.currentId) { ensureSession().then(() => { renderSessions(); renderHeader(); }).catch(() => { /* first send retries */ }); }
+  syncCurrent(); // a reply still running on the server is picked up and keeps streaming
 }
 boot();
 setInterval(ping, 10000);

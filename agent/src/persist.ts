@@ -8,6 +8,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { HistoryEvent, Message, SessionState, Violation } from "./types.ts";
 
+export interface RunMark { id: string; status: "running" | "done" | "error" | "interrupted"; startedAt: number; updatedAt: number }
+
 export interface StoredSession {
   v: 1;
   id: string;
@@ -22,6 +24,8 @@ export interface StoredSession {
   peer?: string;
   /** Model this session runs on (absent = the default). */
   model?: string;
+  /** The latest turn. "running" on disk with no live owner process = the server died mid-turn (shown as interrupted). */
+  run?: RunMark;
   createdAt: number;
   updatedAt: number;
   state: SessionState;

@@ -143,3 +143,28 @@ test("runtime: the second session for the same MIND key skips mind_context", asy
   await rt.openSession({ surface: "web" });
   assert.equal(ctxCalls, first, "no further MIND context call within the TTL");
 });
+
+test("a turn cut off by a server restart is saved as running, then shown as interrupted (never a silent loss)", async () => {
+  const dir = tmp();
+  const rt1 = createRuntime(baseCfg(), { provider: new FakeProvider([{ text: "a long answer" }]), fetchImpl: mindOk, store: createFileStore(dir) });
+  const s1 = await rt1.openSession({ surface: "web", title: "New session" });
+  const it = s1.send("write the long report")[Symbol.asyncIterator]();
+  await it.next(); // the turn is in flight; the process "dies" here (the generator is never finished)
+  await new Promise((r) => setTimeout(r, 50));
+  const onDisk = JSON.parse(readFileSync(join(dir, "sessions", `${s1.id}.json`), "utf8"));
+  assert.equal(onDisk.run.status, "running");
+  assert.deepEqual(onDisk.history[0], { type: "user", text: "write the long report" }, "the user message is on disk before the model answers");
+
+  const rt2 = createRuntime(baseCfg(), { provider: new FakeProvider([{ text: "second try" }]), fetchImpl: mindOk, store: createFileStore(dir) });
+  const hist = rt2.history!(s1.id)!;
+  const last = hist[hist.length - 1];
+  assert.equal(last.type, "notice");
+  assert.match((last as { text: string }).text, /Interrupted/);
+  // opening it again marks the run interrupted on disk and a retry works without repeating the dead turn in context
+  const s2 = await rt2.openSession({ surface: "web", resumeId: s1.id });
+  await collect(s2.send("write the long report"));
+  await new Promise((r) => setTimeout(r, 50));
+  const after = JSON.parse(readFileSync(join(dir, "sessions", `${s1.id}.json`), "utf8"));
+  assert.equal(after.run.status, "done");
+  assert.equal(after.state.messages.filter((m: { role: string }) => m.role === "user").length, 1);
+});
