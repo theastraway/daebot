@@ -471,3 +471,20 @@ button.model-badge[aria-expanded="true"] { box-shadow: 0 0 0 1px rgba(255,255,25
 .update-banner[hidden] { display: none; }
 .update-banner .ub-action { appearance: none; border: 0; cursor: pointer; padding: 7px 14px; border-radius: 10px; background: #f3efe8; color: #0c0b0a; font: inherit; font-weight: 600; text-decoration: none; white-space: nowrap; }
 .update-banner .ub-dismiss { appearance: none; border: 0; background: transparent; color: inherit; opacity: .6; font-size: 20px; line-height: 1; cursor: pointer; padding: 2px 6px; }
+
+/* delete + update controls (manage.js) */
+.sess-row, .bot-head { position: relative; display: block; }
+.bot-head { display: flex; align-items: center; }
+.bot-head .bot-item { flex: 1 1 auto; min-width: 0; }
+.row-del { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 8px; background: var(--surface); color: var(--ink-3); opacity: 0; cursor: pointer; }
+.row-del .ic { width: 16px; height: 16px; }
+.sess-row:hover .row-del, .bot-head:hover .row-del, .row-del:focus-visible, .sess-row:focus-within .row-del, .bot-head:focus-within .row-del { opacity: 1; }
+.row-del:hover { color: var(--accent); background: var(--accent-soft); }
+@media (hover: none) { .row-del { opacity: .75; } }
+.sess-row .sess { padding-right: 38px; }
+.bot-head .bot-item { padding-right: 38px; }
+.bot-upd { position: absolute; right: 38px; top: 50%; transform: translateY(-50%); font: 600 11px var(--sans, inherit); padding: 3px 8px; border-radius: 999px; border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent); cursor: pointer; }
+.bot-upd:hover { background: var(--accent); color: #fff; }
+.ver-line { margin: 0; font-weight: 550; font-size: 14px; color: var(--ink); }
+.ver-notes { margin: 0; padding-left: 18px; font-size: 13px; color: var(--ink-2); display: grid; gap: 4px; }
+.ver-notes:empty { display: none; }

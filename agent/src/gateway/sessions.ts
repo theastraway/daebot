@@ -205,6 +205,15 @@ export class SessionManager {
     for (const ls of [...this.live.values()]) if (ls.owner === owner && (ls.bot === botId || ls.peer === botId)) await this.close(ls.id, "bot deleted");
   }
 
+  /** Permanently deletes one session of an owner (live and/or saved). false = unknown id. The caller has already passed access(). */
+  async deleteSession(id: string, owner: string): Promise<boolean> {
+    const ls = this.live.get(id);
+    if (ls && ls.owner !== owner) throw new ForbiddenError("forbidden");
+    if (ls) await this.close(id, "deleted");
+    const rt = this.runtimeFor ? this.runtimeFor(owner) : this.runtime;
+    return (await rt.deleteSession?.(id)) === true || !!ls;
+  }
+
   /** Changes the model the NEXT turn of a live session runs on. */
   setModel(id: string, model: string | undefined): boolean {
     const ls = this.live.get(id);

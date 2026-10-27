@@ -30,6 +30,7 @@
   <symbol id="i-chev" viewBox="0 0 20 20"><path d="M7.5 5l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-minus" viewBox="0 0 20 20"><path d="M4 10h12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
   <symbol id="i-check" viewBox="0 0 20 20"><path d="M4.5 10.5l3.5 3.5 7.5-8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 20 20"><path d="M4 6h12M8 6V4.5h4V6M6 6l.7 9.5h6.6L14 6M8.5 9v4M11.5 9v4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-x" viewBox="0 0 20 20"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
   <symbol id="i-chev-down" viewBox="0 0 20 20"><path d="M5 7.5l5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-lock" viewBox="0 0 20 20"><rect x="4.5" y="9" width="11" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M7 9V6.5a3 3 0 016 0V9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
@@ -137,12 +138,16 @@
         <div class="swatches" id="bd-colors" role="radiogroup" aria-labelledby="bd-colors-label"></div>
         <div class="row"><button class="btn-primary" id="bd-save" type="button" disabled>Save details</button><span class="inline-state" id="bd-state" role="status" aria-live="polite"></span></div>
       </section>
+      <section class="dsec" id="bd-version">
+        <h3>Version</h3>
+        <p class="drawer-fine" id="bd-ver-current"></p>
+        <p class="ver-line" id="bd-ver-text" role="status" aria-live="polite"></p>
+        <ul class="ver-notes" id="bd-ver-notes"></ul>
+        <div class="row"><button class="btn-primary" id="bd-update" type="button" hidden>Update</button></div>
+        <p class="drawer-fine">Updating keeps this bot's instructions, threads and memory.</p>
+      </section>
       <section class="dsec danger">
         <button class="btn-danger" id="bd-delete" type="button">Delete bot</button>
-        <div class="confirm-inline" id="bd-confirm" hidden>
-          <p id="bd-confirm-text"></p>
-          <div class="row"><button class="btn-danger solid" id="bd-delete-yes" type="button">Delete forever</button><button class="btn-quiet" id="bd-delete-no" type="button">Keep it</button></div>
-        </div>
       </section>
     </div>
   </aside>

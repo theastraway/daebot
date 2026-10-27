@@ -197,6 +197,8 @@ export interface Runtime {
   sessionInfo?(id: string): { bot?: string; peer?: string; model?: string } | undefined;
   /** Deletes every saved session of a deleted bot: its own threads and the DM threads where it is the peer or the recipient. */
   purgeBotSessions?(botId: string): Promise<number>;
+  /** Permanently deletes one saved or live session of this owner (its transcript and state). false = no such session. */
+  deleteSession?(id: string): Promise<boolean>;
   /** The owner's per-user settings (default model). */
   settings?: { get(): { defaultModel?: string }; set(patch: { defaultModel?: string | null }): void };
   // Visible transcript of a live or persisted session (replayed after a resume or restart). Undefined = unknown id.

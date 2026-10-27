@@ -6,6 +6,7 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { MindClient } from "../types.ts";
+import { LATEST_BOT_VERSION } from "./versions.ts";
 import { BotError, MAX_INSTRUCTIONS_BYTES, SLUG_RE, safeUpgradeUrl } from "./types.ts";
 import type { BotRecord, BotsApi, RosterEntry } from "./types.ts";
 
@@ -167,7 +168,7 @@ export class BotStore implements BotsApi {
         if (have.has(r.slug) || !SLUG_RE.test(r.slug) || r.slug === "main") continue;
         const id = this.newId();
         const t = this.now();
-        this.bots[id] = { id, slug: r.slug, name: clip(r.label, 80) || r.slug, purpose: "", color: PALETTE[this.colorIndex(r.slug)], createdAt: t, updatedAt: t };
+        this.bots[id] = { id, slug: r.slug, name: clip(r.label, 80) || r.slug, purpose: "", color: PALETTE[this.colorIndex(r.slug)], createdAt: t, updatedAt: t, version: 1 };
         changed = true;
       }
       if (remote.length === 0 && have.size > 0) return this.snapshot(); // an empty answer is never proof that every bot is gone
@@ -221,7 +222,7 @@ export class BotStore implements BotsApi {
     if (raced) return raced;
     const id = this.newId();
     const t = this.now();
-    const rec: BotRecord = { id, slug, name, purpose, color, createdAt: t, updatedAt: t };
+    const rec: BotRecord = { id, slug, name, purpose, color, createdAt: t, updatedAt: t, version: LATEST_BOT_VERSION };
     this.bots[id] = rec;
     try { this.save(); } catch (e) {
       delete this.bots[id];
@@ -244,6 +245,15 @@ export class BotStore implements BotsApi {
       if (typeof patch.color !== "string" || !COLOR_RE.test(patch.color.trim())) throw new BotError(400, "bad_color", "color must look like #1a2b3c");
       b.color = patch.color.trim().toLowerCase();
     }
+    b.updatedAt = this.now();
+    this.save();
+    return { ...b };
+  }
+
+  upgrade(id: string): BotRecord {
+    const b = ID_RE.test(id) ? this.bots[id] : undefined;
+    if (!b) throw new BotError(404, "not_found", "no such bot");
+    b.version = LATEST_BOT_VERSION;
     b.updatedAt = this.now();
     this.save();
     return { ...b };
