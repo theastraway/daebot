@@ -9,6 +9,8 @@ export interface BotRecord {
   color: string;
   createdAt: number;
   updatedAt: number;
+  /** Definition version installed (absent = 1). See versions.ts. */
+  version?: number;
 }
 
 /** One line of the roster shown to the model (sessions and bots alike). */
@@ -38,6 +40,8 @@ export interface BotsApi {
   create(a: { slug: string; name?: string; purpose?: string; color?: string }): Promise<BotRecord>;
   update(id: string, patch: { name?: string; purpose?: string; color?: string }): BotRecord;
   remove(id: string): Promise<void>;
+  /** Moves a bot to the latest definition. Keeps its DAEBOT.md, threads and MIND data. */
+  upgrade(id: string): BotRecord;
   instructions(id: string): string;
   setInstructions(id: string, text: string): void;
   roster(): RosterEntry[];

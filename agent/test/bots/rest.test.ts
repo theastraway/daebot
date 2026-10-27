@@ -375,3 +375,58 @@ test("the flag defaults OFF when the env var is unset", async () => {
   assert.equal(botsEnabled({ DAEBOT_BOTS_ENABLED: "1" }), true);
   assert.equal(botsEnabled({ DAEBOT_BOTS_ENABLED: "true" }), true);
 });
+
+test("delete a session (purge): removes it and its saved transcript for the owner only; another user gets 403; unknown id 404; works after the live session is gone", async () => {
+  const r = await rig();
+  try {
+    const alice = await r.login(r.keys.alice);
+    const bob = await r.login(r.keys.bob);
+    const mk = async (title: string) => {
+      const s = await r.call(alice, "POST", "/sessions", { surface: "web", title });
+      const send = await http(r.gw.url, "POST", `/sessions/${s.json.sessionId}/send`, { headers: alice, body: { text: "hello " + title } });
+      assert.equal(send.status, 200);
+      return s.json.sessionId as string;
+    };
+    const a = await mk("keep me"), b = await mk("delete me");
+    assert.deepEqual((await r.call(alice, "GET", "/sessions")).json.sessions.map((s: any) => s.id).sort(), [a, b].sort());
+    // another user: forbidden, and nothing is deleted
+    assert.equal((await r.call(bob, "DELETE", `/sessions/${b}?purge=1`)).status, 403);
+    assert.ok((await r.call(alice, "GET", `/sessions/${b}/history`)).json.events.length > 0);
+    // the owner deletes it (live session)
+    const d = await r.call(alice, "DELETE", `/sessions/${b}?purge=1`);
+    assert.equal(d.status, 200, d.raw);
+    assert.deepEqual((await r.call(alice, "GET", "/sessions")).json.sessions.map((s: any) => s.id), [a]);
+    assert.equal((await r.call(alice, "GET", `/sessions/${b}/history`)).status, 404, "the transcript is gone, not just hidden");
+    assert.equal((await r.call(alice, "DELETE", `/sessions/${b}?purge=1`)).status, 404, "deleting twice is a clean 404");
+    assert.equal((await r.call(alice, "DELETE", `/sessions/nope-123?purge=1`)).status, 404);
+    // a saved (not live) session can be deleted too
+    await r.call(alice, "DELETE", `/sessions/${a}`); // plain DELETE only closes the live session
+    assert.equal((await r.call(alice, "GET", "/sessions")).json.sessions.length, 1, "closing keeps the saved transcript");
+    assert.equal((await r.call(bob, "DELETE", `/sessions/${a}?purge=1`)).status, 403);
+    assert.equal((await r.call(alice, "DELETE", `/sessions/${a}?purge=1`)).status, 200);
+    assert.deepEqual((await r.call(alice, "GET", "/sessions")).json.sessions, []);
+  } finally { await r.close(); }
+});
+
+test("bot update + delete over REST: a new bot is on the latest; POST /bots/:id/update is idempotent and keeps DAEBOT.md; other users get 404; delete removes the bot MIND", async () => {
+  const r = await rig();
+  try {
+    const alice = await r.login(r.keys.alice);
+    const bob = await r.login(r.keys.bob);
+    const bot = (await r.call(alice, "POST", "/bots", { slug: "ops", name: "Ops", instructions: "my own rules" })).json.bot;
+    assert.equal(bot.updateAvailable, false);
+    assert.equal(bot.version, bot.latestVersion);
+    const up = await r.call(alice, "POST", `/bots/${bot.id}/update`);
+    assert.equal(up.status, 200, up.raw);
+    assert.equal(up.json.bot.updateAvailable, false);
+    assert.equal((await r.call(alice, "GET", `/bots/${bot.id}/instructions`)).json.instructions, "my own rules", "the owner's DAEBOT.md is untouched");
+    assert.equal((await r.call(alice, "GET", "/bots")).json.bots[0].latestVersion, bot.latestVersion);
+    assert.equal((await r.call(bob, "POST", `/bots/${bot.id}/update`)).status, 404);
+    assert.equal((await r.call(alice, "GET", `/bots/${bot.id}/update`)).status, 405);
+    // delete: MIND is asked to delete the bot workspace (its data), the bot is gone from the list
+    assert.ok(r.fake.bots.get("alice")!.has("ops"));
+    assert.equal((await r.call(alice, "DELETE", `/bots/${bot.id}`)).status, 200);
+    assert.ok(!r.fake.bots.get("alice")!.has("ops"), "the bot MIND was deleted");
+    assert.deepEqual((await r.call(alice, "GET", "/bots")).json.bots, []);
+  } finally { await r.close(); }
+});

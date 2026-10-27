@@ -158,7 +158,7 @@ test("web wiring: every id bots.js and models.js look up exists in index.html", 
     for (const id of ids) assert.match(html, new RegExp(`id="${id}"`), `${f} needs #${id}`);
   }
   for (const id of ["tab-sessions", "tab-bots", "side-label", "bot-list", "btn-instr", "instr-drawer", "instr-text", "instr-count", "instr-save", "instr-revert",
-    "bd-name", "bd-purpose", "bd-colors", "bd-delete", "bd-delete-yes", "bot-new", "bn-name", "bn-purpose", "bn-instr", "bn-create", "model-badge", "model-menu", "model-wrap", "top-badge", "i-lock", "i-sliders", "i-chev-down"]) {
+    "bd-name", "bd-purpose", "bd-colors", "bd-delete", "bd-update", "bd-ver-text", "bd-ver-notes", "bd-ver-current", "i-trash", "bot-new", "bn-name", "bn-purpose", "bn-instr", "bn-create", "model-badge", "model-menu", "model-wrap", "top-badge", "i-lock", "i-sliders", "i-chev-down"]) {
     assert.match(html, new RegExp(`id="${id}"`), id);
   }
   // the segmented control is two real buttons with aria-pressed

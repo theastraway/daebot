@@ -9,6 +9,7 @@ import { initApps } from "/apps.js";
 import { initMcp } from "/mcp.js";
 import { initConnectors } from "/connectors.js";
 import { transcriptBehind } from "/sync.js";
+import { confirmDialog, deleteControl, sessionDeleteText } from "/manage.js";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -411,8 +412,25 @@ function renderSessions() {
     if (s.live) { m.append(h("span", "", "·"), h("span", "live", s.busy ? "working" : "live")); }
     b.append(h("span", "sess-t", s.title || "Untitled"), m);
     b.addEventListener("click", () => selectSession(s));
-    els.list.append(b);
+    const row = h("div", "sess-row");
+    row.append(b, deleteControl(row, icon, `Delete session ${s.title || "Untitled"}`, () => deleteSession(s)));
+    els.list.append(row);
   }
+}
+// Delete a session for good: confirm (naming it), the server removes it and its messages, the list updates; if it was open, land on a new session.
+async function deleteSession(s) {
+  const t = sessionDeleteText(s.title);
+  if (!(await confirmDialog(t))) return;
+  try {
+    const res = await api(`/sessions/${encodeURIComponent(s.id)}?purge=1`, { method: "DELETE" });
+    if (!res.ok && res.status !== 404) throw new Error(`HTTP ${res.status}`);
+  } catch (e) { if (e.message !== "unauthorized") notify(`Could not delete the session: ${e.message}`); return; }
+  state.transcripts.delete(s.id);
+  try { sessionStorage.removeItem(`daebot:t:${s.id}`); } catch { /* none */ }
+  const wasOpen = state.currentId === s.id;
+  state.sessions = state.sessions.filter((x) => x.id !== s.id);
+  if (wasOpen) { newSession(); }
+  await refreshSessions();
 }
 // View-aware: the Sessions view lists plain sessions; the Bots view also refreshes the bots and the selected bot's threads.
 // A bot thread can be open while the Sessions view shows, so its bot is kept fresh too.
@@ -827,6 +845,7 @@ const bots = initBots({
     closeViolations: () => { if (!els.drawer.hidden) toggleDrawer(false); },
     botChanged: () => renderHeader(),
     botDeleted: (id) => { if (state.curBot === id) newSession(); refreshSessions(); },
+    threadDeleted: (s) => deleteSession(s),
   },
 });
 

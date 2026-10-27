@@ -7,6 +7,8 @@
 // DOM is built with createElement + textContent only; there is no innerHTML. All requests are same-origin, through the app's
 // api()/json() helpers. The pure helpers are exported (and unit tested); everything that touches `document` lives in initBots().
 
+import { confirmDialog, deleteControl, botDeleteText, updateText } from "./manage.js";
+
 export const VIEW_KEY = "mc_view";
 export const SELECTED_KEY = "mc_bot";
 export const MAX_INSTRUCTION_BYTES = 8 * 1024;
@@ -113,13 +115,14 @@ export function initBots(ctx) {
     drawer: $("instr-drawer"), drawerTitle: $("instr-title"), drawerClose: $("instr-close"),
     text: $("instr-text"), count: $("instr-count"), stateEl: $("instr-state"), save: $("instr-save"), revert: $("instr-revert"),
     name: $("bd-name"), purpose: $("bd-purpose"), colors: $("bd-colors"), saveDetails: $("bd-save"), detailsState: $("bd-state"),
-    del: $("bd-delete"), delConfirm: $("bd-confirm"), delText: $("bd-confirm-text"), delYes: $("bd-delete-yes"), delNo: $("bd-delete-no"),
+    del: $("bd-delete"), verText: $("bd-ver-text"), verCurrent: $("bd-ver-current"), verNotes: $("bd-ver-notes"), verBtn: $("bd-update"),
     card: $("bot-new"), cardForm: $("bot-new-form"), bnName: $("bn-name"), bnPurpose: $("bn-purpose"), bnInstr: $("bn-instr"),
     bnErr: $("bn-err"), bnCreate: $("bn-create"), bnCancel: $("bn-cancel"),
   };
   if (!el.tabBots || !el.botList) return null;
 
   const st = {
+    updating: new Set(), updated: new Map(),
     view: store.get("localStorage", VIEW_KEY) === "bots" ? "bots" : "sessions",
     bots: [], botsLoaded: false, botsError: "",
     selected: store.get("localStorage", SELECTED_KEY) || "",
@@ -228,7 +231,16 @@ export function initBots(ctx) {
     dot.setAttribute("role", "img"); dot.setAttribute("aria-label", DOT_LABEL[ds]); dot.title = DOT_LABEL[ds];
     item.append(badge(bot), text, dot);
     item.addEventListener("click", () => selectBot(bot));
-    row.append(item);
+    const head = h("div", "bot-head");
+    head.append(item);
+    if (bot.updateAvailable) {
+      const up = h("button", "bot-upd", "Update"); up.type = "button"; up.title = updateText(bot.version, bot.latestVersion).available;
+      up.setAttribute("aria-label", `Update ${bot.name}: ${updateText(bot.version, bot.latestVersion).available}`);
+      up.addEventListener("click", (e) => { e.stopPropagation(); updateBot(bot.id); });
+      head.append(up);
+    }
+    head.append(deleteControl(head, icon, `Delete bot ${bot.name}`, () => deleteBot(bot.id)));
+    row.append(head);
     if (open) {
       const sub = h("div", "bot-threads");
       const nt = h("button", "bot-newthread"); nt.type = "button";
@@ -251,7 +263,9 @@ export function initBots(ctx) {
         if (s.live) { m.append(h("span", "", "·"), h("span", "live", s.busy ? "working" : "live")); }
         b.append(h("span", "sess-t", s.title || "Untitled"), m);
         b.addEventListener("click", () => app.openThread({ ...s, bot: s.bot || bot.id }));
-        sub.append(b);
+        const tr = h("div", "sess-row");
+        tr.append(b, deleteControl(tr, icon, `Delete thread ${s.title || "Untitled"}`, () => app.threadDeleted({ ...s, bot: s.bot || bot.id })));
+        sub.append(tr);
       }
       row.append(sub);
     }
@@ -384,7 +398,7 @@ export function initBots(ctx) {
     paintColors();
     el.detailsState.textContent = "";
     el.saveDetails.disabled = true;
-    resetDelete();
+    paintVersion(bot);
   }
   function paintColors() {
     el.colors.replaceChildren();
@@ -416,7 +430,6 @@ export function initBots(ctx) {
   el.name.addEventListener("input", detailsChanged);
   el.purpose.addEventListener("input", detailsChanged);
 
-  function resetDelete() { el.delConfirm.hidden = true; el.del.hidden = false; }
 
   async function openDrawer() {
     const id = activeBotId();
@@ -448,7 +461,6 @@ export function initBots(ctx) {
     st.drawerOpen = false;
     el.drawer.hidden = true;
     el.btnInstr.setAttribute("aria-expanded", "false");
-    resetDelete();
     if (!el.btnInstr.hidden) el.btnInstr.focus();
   }
   el.btnInstr.addEventListener("click", () => (st.drawerOpen ? closeDrawer() : openDrawer()));
@@ -494,28 +506,51 @@ export function initBots(ctx) {
     } catch (e) { if (e.message !== "unauthorized") { el.detailsState.textContent = "Could not save. Try again."; el.saveDetails.disabled = false; } }
   });
 
-  // two-step delete, in the page (never window.confirm)
-  el.del.addEventListener("click", () => {
-    const bot = botById(st.drawerBot);
-    el.delText.textContent = `Delete ${bot ? bot.name : "this bot"}? Its instructions and threads go with it. This cannot be undone.`;
-    el.del.hidden = true; el.delConfirm.hidden = false; el.delNo.focus();
-  });
-  el.delNo.addEventListener("click", () => { resetDelete(); el.del.focus(); });
-  el.delYes.addEventListener("click", async () => {
-    const id = st.drawerBot;
-    el.delYes.disabled = true;
+  // delete: a confirm dialog in the page (never window.confirm) that says exactly what goes; the same path serves the list and the drawer
+  async function deleteBot(id) {
+    const bot = botById(id);
+    if (!bot) return;
+    const threads = (st.cache.get(id) || (st.threadsFor === id ? st.threads : null) || []).length;
+    if (!(await confirmDialog(botDeleteText(bot.name, threads)))) return;
     try {
       const res = await api(`/bots/${encodeURIComponent(id)}`, { method: "DELETE" });
-      if (!res.ok && res.status !== 404) { el.delText.textContent = "Could not delete the bot. Try again."; el.delYes.disabled = false; return; }
-      el.delYes.disabled = false;
-      st.bots = st.bots.filter((b) => b.id !== id); st.drafts.delete(id); st.expanded.delete(id);
-      if (st.selected === id) { st.selected = ""; store.set("localStorage", SELECTED_KEY, ""); }
-      st.threads = []; st.threadsFor = "";
-      closeDrawer();
-      app.botDeleted(id);
-      renderList(); sync();
-    } catch (e) { el.delYes.disabled = false; if (e.message !== "unauthorized") el.delText.textContent = "Could not delete the bot. Try again."; }
-  });
+      if (!res.ok && res.status !== 404) { notify("Could not delete the bot. Try again."); return; }
+    } catch (e) { if (e.message !== "unauthorized") notify("Could not delete the bot. Try again."); return; }
+    st.bots = st.bots.filter((x) => x.id !== id); st.drafts.delete(id); st.expanded.delete(id); st.cache.delete(id);
+    if (st.selected === id) { st.selected = ""; store.set("localStorage", SELECTED_KEY, ""); }
+    st.threads = []; st.threadsFor = "";
+    closeDrawer();
+    app.botDeleted(id);
+    renderList(); sync();
+  }
+  el.del.addEventListener("click", () => deleteBot(st.drawerBot));
+
+  // update: one tap moves the bot to the latest definition. Its instructions, threads and MIND memory are kept.
+  async function updateBot(id) {
+    const bot = botById(id);
+    if (!bot || st.updating.has(id)) return;
+    st.updating.add(id); paintVersion(bot);
+    try {
+      const res = await api(`/bots/${encodeURIComponent(id)}/update`, { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.bot) throw new Error("update failed");
+      Object.assign(bot, body.bot, { id });
+      st.updated.set(id, updateText(body.from, bot.latestVersion).done);
+    } catch (e) { if (e.message !== "unauthorized") st.updated.set(id, "Could not update. Try again."); }
+    st.updating.delete(id);
+    renderList(); paintVersion(bot);
+  }
+  function paintVersion(bot) {
+    if (!el.verText || !bot) return;
+    const t = updateText(bot.version, bot.latestVersion), busy = st.updating.has(bot.id), msg = st.updated.get(bot.id);
+    el.verText.textContent = busy ? "Updating…" : msg ? `${msg}. Instructions, threads and memory kept.` : bot.updateAvailable ? t.available : t.upToDate;
+    el.verCurrent.textContent = t.current;
+    el.verNotes.replaceChildren(...((bot.updateAvailable && !msg ? bot.updateNotes || [] : []).map((n) => h("li", "", n))));
+    el.verBtn.hidden = !bot.updateAvailable || !!msg;
+    el.verBtn.disabled = busy;
+    el.verBtn.textContent = `Update to v${bot.latestVersion}`;
+  }
+  el.verBtn && el.verBtn.addEventListener("click", () => updateBot(st.drawerBot));
 
   // ---------------------------------------------------------------- go
   setView(st.view, { silent: true });

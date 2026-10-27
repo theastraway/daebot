@@ -22,6 +22,7 @@ import { createBotBus } from "../bots/bus.ts";
 import { BotError, safeUpgradeUrl } from "../bots/types.ts";
 import type { BotRecord, BotsContext } from "../bots/types.ts";
 import { botsEnabled } from "../bots/flag.ts";
+import { versionInfo } from "../bots/versions.ts";
 import { createModelCatalog } from "../models.ts";
 import { McpConnectError } from "../mcpconnect/service.ts";
 import type { McpConnectService } from "../mcpconnect/service.ts";
@@ -811,7 +812,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   }
 
   // ---------- bots + models REST (same cookie auth and origin rules as /sessions; one owner's bots are invisible to everyone else) ----------
-  const botView = (b: BotRecord) => ({ id: b.id, slug: b.slug, name: b.name, purpose: b.purpose, color: b.color, createdAt: b.createdAt, updatedAt: b.updatedAt });
+  const botView = (b: BotRecord) => ({ id: b.id, slug: b.slug, name: b.name, purpose: b.purpose, color: b.color, createdAt: b.createdAt, updatedAt: b.updatedAt, ...versionInfo(b) });
 
   function botFail(res: ServerResponse, e: unknown): void {
     if (e instanceof BotError) return sendJson(res, e.status, { error: e.code, message: e.message, ...(e.extra ?? {}) });
@@ -845,7 +846,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         }
         return sendJson(res, 405, { error: "method not allowed" });
       }
-      const m = /^\/bots\/([^/]+)(?:\/(instructions))?$/.exec(path);
+      const m = /^\/bots\/([^/]+)(?:\/(instructions|update))?$/.exec(path);
       if (!m) return sendJson(res, 404, { error: "not found" });
       let id: string;
       try { id = decodeURIComponent(m[1]); } catch { return sendJson(res, 400, { error: "bad bot id" }); }
@@ -861,6 +862,12 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
           return sendJson(res, 200, { ok: true, updatedAt: bots.get(id)?.updatedAt ?? Date.now() });
         }
         return sendJson(res, 405, { error: "method not allowed" });
+      }
+      if (m[2] === "update") {
+        if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+        const from = versionInfo(rec).version;
+        const up = bots.upgrade(id); // DAEBOT.md, threads and the bot's MIND are untouched
+        return sendJson(res, 200, { ok: true, from, bot: botView(up) });
       }
       if (method === "PATCH") {
         const b = await readJson(req);
@@ -1050,6 +1057,12 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
 
     if (!action) {
       if (method !== "DELETE") return sendJson(res, 405, { error: "method not allowed" });
+      if (_query.get("purge") === "1") {
+        // Delete for good: the live session (if any) closes, its saved transcript is removed. Ownership was checked above (403 for another owner's id).
+        const gone = await manager.deleteSession(id, me.id);
+        subscribers.delete(id);
+        return gone ? sendJson(res, 200, { ok: true, deleted: true }) : sendJson(res, 404, { error: "no such session" });
+      }
       if (!ls) return sendJson(res, 404, { error: "no such session" });
       await manager.close(id);
       subscribers.delete(id);

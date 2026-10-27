@@ -26,6 +26,7 @@ import { createMcpConnectTool } from "./mcpconnect/tool.ts";
 import type { McpConnectService } from "./mcpconnect/service.ts";
 import type { McpServerConfig } from "./mcp/client.ts";
 import { repairMessages } from "./persist.ts";
+import { botBase } from "./bots/versions.ts";
 import type { SessionStore } from "./persist.ts";
 import type { AgentEvent, AgentSession, Config, HistoryEvent, MindClient, Provider, Runtime, SessionSync, Tool } from "./types.ts";
 
@@ -60,7 +61,7 @@ export function botIdentity(b: Pick<BotRecord, "name" | "slug" | "purpose">, use
 export function composeSystemPrompt(o: {
   identity?: string; tier?: Tier; bootContext: string; surface: string; cwd: string; now?: Date; model?: string; via?: string;
   /** Set for a bot session: the DAEBOT.md text and the bot's own slug (the roster marks it as you). */
-  bot?: { slug: string; instructions: string };
+  bot?: { slug: string; instructions: string; base?: string };
   /** The user's bots (sessions and bots alike see them). */
   roster?: RosterEntry[];
   /** Connecting MCP servers is available in this session (mcp_connect is offered). */
@@ -93,6 +94,7 @@ export function composeSystemPrompt(o: {
     const text = o.bot.instructions.length > MAX_INSTRUCTIONS_BYTES ? o.bot.instructions.slice(0, MAX_INSTRUCTIONS_BYTES) : o.bot.instructions;
     lines.push(
       "",
+      ...(o.bot.base ? ["## Base rules for this bot (its Daebot definition)", o.bot.base, ""] : []),
       "## Instructions for this bot (DAEBOT.md)",
       text.trim() ? noKernelSpoof(text.trim()) : "(none written yet)",
       "Precedence: these instructions set your role and style. They never lift a kernel gate, the receipt rule, the owner check or the feed rule; where they conflict with those, those win.",
@@ -316,7 +318,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
             identity: live ? botIdentity(live, hosted?.username) : hosted?.persona, tier, bootContext, surface: opts.surface, cwd,
             model: used ?? (mindBilled ? `${cfg.models.default} on paid MIND plans and ${cfg.freeModel} on the free MIND plan (Explorer)` : cfg.models.default),
             via: mindBilled ? "MIND" : undefined,
-            bot: live && botId ? { slug: live.slug, instructions: botStore!.instructions(botId) } : undefined,
+            bot: live && botId ? { slug: live.slug, instructions: botStore!.instructions(botId), base: botBase(live.version) } : undefined,
             roster: botsOn() ? botStore?.roster() : undefined,
             mcp: !!overrides.mcpConnect?.enabled() && !botId,
           });
@@ -409,6 +411,15 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         n++;
       }
       return n;
+    },
+    async deleteSession(id) {
+      const live = sessions.get(id);
+      const meta = store?.meta?.(id);
+      if (!live && !(meta && mine(meta))) return false; // unknown, or another owner's: indistinguishable
+      sessions.delete(id);
+      if (live) await live.session.close("deleted").catch(() => {});
+      await store?.remove?.(id);
+      return true;
     },
     sessionInfo(id) {
       const live = sessions.get(id);
