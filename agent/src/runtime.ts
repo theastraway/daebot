@@ -27,12 +27,18 @@ import type { McpConnectService } from "./mcpconnect/service.ts";
 import type { McpServerConfig } from "./mcp/client.ts";
 import { repairMessages } from "./persist.ts";
 import { botBase } from "./bots/versions.ts";
-import type { SessionStore } from "./persist.ts";
-import type { AgentEvent, AgentSession, Config, HistoryEvent, MindClient, Provider, Runtime, SessionSync, Tool } from "./types.ts";
+import type { RunMark, SessionStore } from "./persist.ts";
+import type { AgentEvent, AgentSession, Config, HistoryEvent, Message, MindClient, Provider, Runtime, SessionSync, Tool } from "./types.ts";
 
 const noSync: SessionSync = { async open() {}, async append() {}, async pendingReplies() { return []; }, async close() {} };
 
 /** Same sanitising as MINDCLAW_LEARN_USER, so a MIND username is a safe doc-name part. */
+/** Drops the unanswered last turn (the user message and everything after it) so a retry does not repeat it in the model's context. */
+function dropOpenTurn(messages: Message[]): Message[] {
+  for (let i = messages.length - 1; i >= 0; i--) if (messages[i].role === "user") return messages.slice(0, i);
+  return messages;
+}
+
 function learnUserName(u: string): string {
   return u.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "") || "user";
 }
@@ -122,7 +128,10 @@ export function composeSystemPrompt(o: {
   return lines.join("\n");
 }
 
-interface Entry { session: AgentSession; surface: string; title: string; updatedAt: number; tier: Tier; recorder: HistoryRecorder; createdAt: number; bot?: string; peer?: string; model?: string }
+interface Entry { session: AgentSession; surface: string; title: string; updatedAt: number; tier: Tier; recorder: HistoryRecorder; createdAt: number; bot?: string; peer?: string; model?: string; run?: RunMark }
+
+export const INTERRUPTED_TEXT = "Interrupted: the server restarted while this reply was being written. Your message is saved above; send it again to retry.";
+const interruptedNotice = (): AgentEvent => ({ type: "notice", level: "warn", text: INTERRUPTED_TEXT });
 
 const DEFAULT_TITLE = /^(New session|Daebot .+ session)$/;
 
@@ -246,7 +255,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     void store.save({
       v: 1, id, surface: e.surface, title: e.title, tier: e.tier, owner: ownerId, createdAt: e.createdAt, updatedAt: e.updatedAt,
       state: st, violations: e.session.violations(), history: e.recorder.events(),
-      ...(e.bot ? { bot: e.bot } : {}), ...(e.peer ? { peer: e.peer } : {}), ...(e.model ? { model: e.model } : {}),
+      ...(e.bot ? { bot: e.bot } : {}), ...(e.peer ? { peer: e.peer } : {}), ...(e.model ? { model: e.model } : {}), ...(e.run ? { run: { ...e.run } } : {}),
     }).catch((err) => process.stderr.write(`persist: could not save a session (${String((err as Error)?.message ?? err).split("\n")[0].slice(0, 120)})\n`));
   }
 
@@ -305,6 +314,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       const learn = learnCfg.enabled && tier === "admin" && !botRec // bots never learn
         ? createLearning({ client, provider, cfg, learn: hosted?.username ? { ...learnCfg, user: learnUserName(hosted.username) } : learnCfg, tier, onCost: (usd) => costCap?.add(usd) })
         : undefined;
+      const wasInterrupted = stored?.run?.status === "running"; // a process died with this turn in flight
       const inner = createAgentSession({
         id, surface: opts.surface, provider, kernel: kernelFor(tier), tools, sync, cfg, cwd, bootContext, learn,
         // Servers the user connects mid-chat appear on the next round, without reopening the session. A tier only ever sees the classes it may run.
@@ -323,7 +333,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
             mcp: !!overrides.mcpConnect?.enabled() && !botId,
           });
         },
-        restore: stored ? { ...stored.state, messages: repairMessages(stored.state.messages), violations: stored.violations } : undefined,
+        restore: stored ? { ...stored.state, messages: repairMessages(wasInterrupted ? dropOpenTurn(stored.state.messages) : stored.state.messages), violations: stored.violations } : undefined,
       });
 
       const entry: Entry = {
@@ -331,6 +341,10 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         recorder: new HistoryRecorder(stored?.history), createdAt: stored?.createdAt ?? Date.now(),
         bot: botRec?.id, peer, model: explicitModel,
       };
+      if (wasInterrupted && stored) {
+        entry.recorder.push(interruptedNotice());
+        entry.run = { ...stored.run!, status: "interrupted", updatedAt: Date.now() };
+      } else if (stored?.run) entry.run = stored.run;
       const startNotices: AgentEvent[] = boot.ok ? [] : [{
         type: "notice", level: "warn",
         text: `MIND boot failed (${(boot.error ?? "unreachable").split("\n")[0].slice(0, 160)}); running unbooted, MIND tools are gated until mind_context succeeds.`,
@@ -354,10 +368,15 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
           }
           if (DEFAULT_TITLE.test(entry.title) && !entry.recorder.events().some((h) => h.type === "user")) entry.title = msg.trim().slice(0, 60) || entry.title;
           entry.recorder.user(msg);
+          const run: RunMark = entry.run = { id: randomUUID(), status: "running", startedAt: Date.now(), updatedAt: Date.now() };
+          persist(id); // the message and the "running" mark reach the disk before the model is called
+          let lastCheckpoint = Date.now();
+          try {
           while (startNotices.length) { const n = startNotices.shift()!; entry.recorder.push(n); yield n; }
           for await (const ev of inner.send(msg, o)) {
             entry.recorder.push(ev);
-            if (ev.type === "done") { entry.updatedAt = Date.now(); persist(id); }
+            if (ev.type === "done") { entry.updatedAt = Date.now(); run.status = "done"; run.updatedAt = Date.now(); persist(id); }
+            else if (Date.now() - lastCheckpoint > 1500) { lastCheckpoint = Date.now(); run.updatedAt = lastCheckpoint; persist(id); } // partial reply survives a crash
             if (ev.type === "usage" && (costCap || userCap)) {
               // totalCostUsd is cumulative for the session: add only the delta (fall back to the per-call cost).
               const delta = ev.totalCostUsd >= lastTotal ? ev.totalCostUsd - lastTotal : ev.usage.costUsd;
@@ -369,6 +388,9 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
             yield ev;
           }
           entry.updatedAt = Date.now();
+          } finally {
+            if (run.status === "running") { run.status = "error"; run.updatedAt = Date.now(); persist(id); }
+          }
         },
         violations: () => inner.violations(),
         exportState: () => inner.exportState!(),
@@ -431,7 +453,9 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       const live = sessions.get(id);
       if (live) return live.recorder.events();
       const rec = store?.load(id);
-      return mine(rec) ? rec?.history : undefined;
+      if (!mine(rec) || !rec) return undefined;
+      // Saved mid-turn by a process that is gone (this one has no live session for it): say so instead of showing a cut-off reply.
+      return rec.run?.status === "running" ? [...rec.history, interruptedNotice()] : rec.history;
     },
   };
 }

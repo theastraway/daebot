@@ -9,6 +9,8 @@ import type { AgentEvent, AgentSession, ClientFrame, Config, MindClient, Runtime
 import { COOKIE_NAME, hostnameOf, isLocalHost, isLocalOrigin, loadOrCreateToken, parseCookies, presentedToken, safeEqual } from "./auth.ts";
 import { HostedConfigError, LoginLimiter, MIN_TOKEN_LEN, SESSION_TTL_MS, issueSession, parseSession } from "../hosted.ts";
 import type { HostedOptions } from "../hosted.ts";
+import { RunRegistry } from "./runs.ts";
+import type { Run } from "./runs.ts";
 import { BusyError, ForbiddenError, NotFoundError, SessionManager } from "./sessions.ts";
 import { OWNER } from "../auth/users.ts";
 import type { Principal } from "../auth/users.ts";
@@ -267,8 +269,9 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   const keyIdentities = new KeyIdentityCache();
   const wsWho = new WeakMap<WsConnection, Principal>();
   const subscribers = new Map<string, Set<WsConnection>>(); // sessionId -> ws conns
+  const runs = new RunRegistry(); // server-owned turns: they outlive the request that started them
   const wsConns = new Set<WsConnection>();
-  const SESSION_ROUTE = /^\/sessions\/([^/]+)(?:\/(send|abort|violations|history))?$/;
+  const SESSION_ROUTE = /^\/sessions\/([^/]+)(?:\/(send|abort|violations|history|events))?$/;
   // Which LLM answers (shown in the UI). Absent when the gateway was started without a Config (tests, fakes).
   const modelInfo = (): { model?: string; provider?: string } => (opts.cfg ? { model: opts.cfg.models.default, provider: opts.cfg.billing === "mind" ? "MIND" : "openrouter" } : {});
 
@@ -554,36 +557,66 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     return streamTurn(res, ls.id, text, { "x-daebot-session": ls.id }, { type: "session", sessionId: ls.id }, principal);
   }
 
-  // One SSE turn: shared by POST /sessions/:id/send and POST /api/agent/turn.
-  async function streamTurn(res: ServerResponse, id: string, text: string, extraHeaders: Record<string, string> = {}, first?: Record<string, unknown>, me?: Principal): Promise<void> {
-    res.writeHead(200, {
+  // One turn, shared by POST /sessions/:id/send and POST /api/agent/turn. The turn is a server-owned run: it is started here
+  // but does NOT belong to this response. If the client goes away (app closed, tab closed, phone locked, another session
+  // opened) the run keeps going and is persisted; GET /sessions/:id/events re-attaches. Only POST .../abort stops it.
+  function sseHeaders(extra: Record<string, string> = {}): Record<string, string> {
+    return {
       "content-type": "text/event-stream; charset=utf-8",
       "cache-control": "no-store, no-transform",
       connection: "keep-alive",
       "x-accel-buffering": "no",
       ...BASE_HEADERS,
-      ...extraHeaders,
-    });
+      ...extra,
+    };
+  }
+
+  /** Streams a run's events to one response from `after` (exclusive); ends when the run ends. Closing the response never stops the run. */
+  function attachRun(res: ServerResponse, run: Run, after: number, first?: Record<string, unknown>, withUser = false): void {
     res.write(": open\n\n");
     if (first) res.write(`data: ${JSON.stringify(first)}\n\n`);
-    if (me) {
-      const note = await enforceModel(me, id).catch(() => undefined);
-      if (note) res.write(`data: ${JSON.stringify({ type: "notice", level: "warn", text: note })}\n\n`);
-    }
-    const ac = new AbortController();
-    res.on("close", () => {
-      if (!res.writableEnded) ac.abort(); // client went away mid-turn
-    });
-    try {
-      await manager.turn(id, text, (ev) => {
-        if (!res.writableEnded && !res.destroyed) res.write(`data: ${JSON.stringify(ev)}\n\n`);
-        broadcast(id, ev);
-      }, ac.signal);
-    } catch (err) {
-      const msg = err instanceof BusyError || err instanceof NotFoundError ? err.message : "internal error";
-      if (!res.writableEnded) res.write(`data: ${JSON.stringify({ type: "notice", level: "warn", text: msg })}\n\n`);
-    }
-    if (!res.writableEnded) res.end();
+    if (withUser && after === 0) res.write(`id: 0\ndata: ${JSON.stringify({ type: "user", text: run.userText })}\n\n`);
+    const send = (seq: number, ev: unknown) => { if (!res.writableEnded && !res.destroyed) res.write(`id: ${seq}\ndata: ${JSON.stringify(ev)}\n\n`); };
+    let last = after;
+    for (const e of run.events) if (e.seq > after) { send(e.seq, e.ev); last = e.seq; }
+    if (run.status === "done") return void res.end();
+    const hb = setInterval(() => { if (!res.writableEnded && !res.destroyed) res.write(": ping\n\n"); }, 15_000);
+    hb.unref();
+    const onEv = (e: { seq: number; ev: unknown }) => {
+      if (e.seq === -1) return cleanup(true); // run ended
+      if (e.seq > last) { last = e.seq; send(e.seq, e.ev); }
+    };
+    const cleanup = (end: boolean) => {
+      clearInterval(hb);
+      run.listeners.delete(onEv);
+      if (end && !res.writableEnded) res.end();
+    };
+    run.listeners.add(onEv);
+    res.on("close", () => cleanup(false)); // the client left: the run does not
+  }
+
+  async function streamTurn(res: ServerResponse, id: string, text: string, extraHeaders: Record<string, string> = {}, first?: Record<string, unknown>, me?: Principal): Promise<void> {
+    res.writeHead(200, sseHeaders(extraHeaders));
+    const run = runs.start(id, text);
+    // The run is detached from this request: it publishes into the run feed, the WebSocket subscribers and (via the runtime) the disk.
+    void (async () => {
+      try {
+        if (me) {
+          const note = await enforceModel(me, id).catch(() => undefined);
+          if (note) run.publish({ type: "notice", level: "warn", text: note });
+        }
+        await manager.turn(id, text, (ev) => {
+          run.publish(ev);
+          broadcast(id, ev);
+        });
+      } catch (err) {
+        const msg = err instanceof BusyError || err instanceof NotFoundError ? err.message : "internal error";
+        run.publish({ type: "notice", level: "warn", text: msg });
+      } finally {
+        run.finish();
+      }
+    })();
+    attachRun(res, run, 0, first);
   }
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -1038,7 +1071,24 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
       const events = manager.runtimeOf(me.id).history?.(id);
       if (!events) return sendJson(res, 404, { error: "no such session" });
+      // A turn still running on the server: hand back the transcript up to (not including) that turn plus a pointer to it,
+      // so the client rebuilds the running turn from GET .../events (replay + live) and nothing is drawn twice.
+      const run = runs.active(id);
+      if (run) {
+        let cut = events.length;
+        for (let i = events.length - 1; i >= 0; i--) if (events[i].type === "user") { cut = i; break; }
+        return sendJson(res, 200, { events: events.slice(0, cut), run: { id: run.id, status: "running", startedAt: run.startedAt } });
+      }
       return sendJson(res, 200, { events });
+    }
+    if (action === "events") {
+      // Re-attach to the latest run of this session: replays what the client missed (?after=<seq>, or Last-Event-ID) and streams the rest.
+      if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+      const run = runs.get(id);
+      if (!run || !ls) return sendJson(res, 404, { error: "no run" });
+      const after = Math.max(0, Number(_query.get("after") ?? headerOne(req, "last-event-id") ?? 0) || 0);
+      res.writeHead(200, sseHeaders());
+      return attachRun(res, run, after, undefined, true);
     }
 
     if (!action && method === "PATCH") {
