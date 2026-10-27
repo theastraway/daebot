@@ -480,7 +480,7 @@ button.model-badge[aria-expanded="true"] { box-shadow: 0 0 0 1px rgba(255,255,25
 .row-del .ic { width: 16px; height: 16px; }
 .sess-row:hover .row-del, .bot-head:hover .row-del, .row-del:focus-visible, .sess-row:focus-within .row-del, .bot-head:focus-within .row-del { opacity: 1; }
 .row-del:hover { color: var(--accent); background: var(--accent-soft); }
-@media (hover: none) { .row-del { opacity: .75; } }
+@media (hover: none), (max-width: 900px) { .row-del { opacity: .75; } }
 .sess-row .sess { padding-right: 38px; }
 .bot-head .bot-item { padding-right: 38px; }
 .bot-upd { position: absolute; right: 38px; top: 50%; transform: translateY(-50%); font: 600 11px var(--sans, inherit); padding: 3px 8px; border-radius: 999px; border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent); cursor: pointer; }
