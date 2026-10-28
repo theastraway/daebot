@@ -64,6 +64,10 @@
 	</array>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Daebot uses the microphone when you hold the mic button to talk.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Daebot reads and adds events in your calendar when you ask it to.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Daebot reads and adds events in your calendar when you ask it to.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>UIStatusBarStyle</key>

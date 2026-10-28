@@ -130,6 +130,7 @@ final class DaebotAuthHandler: NSObject, WKScriptMessageHandlerWithReply, ASWebA
 class DaebotViewController: CAPBridgeViewController {
     private var uiProxy: DaebotUIDelegate?
     private var authHandler: DaebotAuthHandler?
+    private var calendarHandler: DaebotCalendarHandler?
 
     override func webViewConfiguration(for instanceConfiguration: InstanceConfiguration) -> WKWebViewConfiguration {
         let cfg = super.webViewConfiguration(for: instanceConfiguration)
@@ -148,6 +149,10 @@ class DaebotViewController: CAPBridgeViewController {
         let auth = DaebotAuthHandler(anchorView: wv)
         authHandler = auth
         wv.configuration.userContentController.addScriptMessageHandler(auth, contentWorld: .page, name: "daebotAuth")
+        // Calendar: EventKit behind a message handler that serves only the main frame of daebot.live pages (see DaebotCalendar.swift).
+        let calendar = DaebotCalendarHandler()
+        calendarHandler = calendar
+        wv.configuration.userContentController.addScriptMessageHandler(calendar, contentWorld: .page, name: DaebotCalendarHandler.handlerName)
         let proxy = DaebotUIDelegate(inner: wv.uiDelegate)
         uiProxy = proxy // WKWebView holds uiDelegate weakly
         wv.uiDelegate = proxy
@@ -164,4 +169,11 @@ class DaebotViewController: CAPBridgeViewController {
         configureWebView()
         super.viewDidLoad()
     }
+
+    #if DEBUG
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        runCalendarSelfTestIfRequested() // Debug builds only, and only with the -daebotCalendarSelfTest launch argument
+    }
+    #endif
 }
