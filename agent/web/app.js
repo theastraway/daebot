@@ -416,19 +416,32 @@ function renderHeader() {
   setBusyUi();
   chatMode?.render();
 }
-// Messages sent while Dae is working wait here (per chat) and go out one by one as each turn ends. Shown above the composer
-// with a remove button; kept in sessionStorage so a reload does not drop them.
+// Messages sent while Dae is working wait here (per chat) until the user picks one: Send now (stops the running turn first),
+// Copy, or remove. Nothing sends itself. Kept in sessionStorage so a reload does not drop them.
 var QKEY = "daebot.queue";
 var queue = (() => { try { return JSON.parse(sessionStorage.getItem(QKEY) || "{}") || {}; } catch { return {}; } })();
 function saveQueue() { try { sessionStorage.setItem(QKEY, JSON.stringify(queue)); } catch { /* private mode */ } }
 function queueFor(key) { if (!queue) queue = {}; return queue[key]; }
 function enqueue(key, text) { (queue[key] ||= []).push(text.trim()); saveQueue(); renderQueue(); }
-function drainQueue() {
+// Send one queued message now. If Dae is still working, stop that turn first, then send it the moment the turn ends.
+var queueSendWanted = null;
+async function sendQueued(i) {
   const key = tkey(), q = queueFor(key);
-  if (!q || !q.length || state.busy.has(key)) return renderQueue();
-  const next = q.shift(); if (!q.length) delete queue[key];
+  if (!q || !q[i]) return;
+  const text = q.splice(i, 1)[0];
+  if (!q.length) delete queue[key];
   saveQueue(); renderQueue();
-  sendMessage(next);
+  if (!state.busy.has(key)) return sendMessage(text);
+  queueSendWanted = { key, text };
+  await abortTurn();
+  const t0 = Date.now();
+  const wait = () => {
+    if (!queueSendWanted || queueSendWanted.key !== key) return;
+    if (!state.busy.has(key)) { const w = queueSendWanted; queueSendWanted = null; sendMessage(w.text); return; }
+    if (Date.now() - t0 > 15000) { enqueue(key, queueSendWanted.text); queueSendWanted = null; notify("Dae did not stop in time; the message is back in the queue."); return; }
+    setTimeout(wait, 150);
+  };
+  wait();
 }
 function renderQueue() {
   let box = document.getElementById("queue");
@@ -438,10 +451,15 @@ function renderQueue() {
   box.hidden = !q.length;
   q.forEach((t, i) => {
     const row = h("div", "queue-item");
-    row.append(h("span", "queue-tag", i === 0 ? "Next" : `Queued ${i + 1}`), h("span", "queue-text", t));
+    row.append(h("span", "queue-tag", `Queued ${i + 1}`), h("span", "queue-text", t));
+    const send = h("button", "btn-quiet queue-btn", "Send now"); send.type = "button";
+    send.title = state.busy.has(tkey()) ? "Stop what Dae is doing and send this now" : "Send this message";
+    send.onclick = () => { sendQueued(i); };
+    const copy = h("button", "btn-quiet queue-btn", "Copy"); copy.type = "button"; copy.title = "Copy this message";
+    copy.onclick = async () => { try { await navigator.clipboard.writeText(t); copy.textContent = "Copied"; setTimeout(() => { copy.textContent = "Copy"; }, 1200); } catch { els.input.value = t; grow(); els.input.focus(); } };
     const x = h("button", "btn-quiet queue-x", "×"); x.type = "button"; x.title = "Remove from queue"; x.setAttribute("aria-label", "Remove queued message");
     x.onclick = () => { q.splice(i, 1); if (!q.length) delete queue[tkey()]; saveQueue(); renderQueue(); };
-    row.append(x); box.append(row);
+    row.append(send, copy, x); box.append(row);
   });
 }
 function setBusyUi() {
@@ -449,7 +467,6 @@ function setBusyUi() {
   els.btnSend.hidden = false; els.btnStop.hidden = !busy; // Send stays: while busy it queues
   els.btnSend.setAttribute("aria-label", busy ? "Queue message" : "Send"); els.btnSend.title = busy ? "Queue: sends when Dae finishes" : "Send";
   renderQueue();
-  if (!busy && queueFor(tkey())?.length) setTimeout(drainQueue, 0); // came back to a chat with messages waiting
   workingSignal(state.busy.size > 0);
 }
 
@@ -657,7 +674,7 @@ async function attachRun(id, baseEvents) {
     if (ctx.asst) { ctx.asst.streaming = false; if (ctx.asst.node) updateAssistant(ctx.asst.node, ctx.asst); }
     if (ctx.lost || !ctx.sawDone) await resyncFromServer(id);
     state.busy.delete(id); attached.delete(id); setBusyUi(); markInflight(id, false);
-    setTimeout(drainQueue, 0);
+    renderQueue();
     transcript(id).syncDones = undefined;
     saveTranscript(id); refreshSessions();
   }
@@ -713,7 +730,7 @@ async function sendMessage(text) {
     const asst = ctx.asst;
     if (asst) { asst.streaming = false; if (asst.node) updateAssistant(asst.node, asst); }
     state.busy.delete(id); setBusyUi(); markInflight(id, false);
-    setTimeout(drainQueue, 0); // a message typed while this turn ran goes next
+    renderQueue(); // queued messages wait for the user: Send now or Copy on each
     if (ctx.lost) await resyncFromServer(id); // the run is gone from the server (restart): show what it saved, including the interrupted note
     transcript(id).syncDones = undefined; // this tab just ran the turn itself: re-baseline instead of re-rendering it
     saveTranscript(id);
