@@ -13,6 +13,7 @@ import { RunRegistry } from "./runs.ts";
 import type { Run } from "./runs.ts";
 import { BusyError, ForbiddenError, NotFoundError, SessionManager } from "./sessions.ts";
 import { OWNER } from "../auth/users.ts";
+import { caelumToBot } from "./caelum.ts";
 import type { Principal } from "../auth/users.ts";
 import type { AuthContext } from "../auth/tenancy.ts";
 import { MindAuthError, whoami } from "../auth/mind-auth.ts";
@@ -725,7 +726,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/ws";
+    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/account" || path === "/ws";
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -785,6 +786,13 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     const clear = `${MCP_COOKIE}=; ${mcpCookieAttrs(0)}`;
     const page = (msg: string, ok: boolean, status = 200) => { res.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "set-cookie": clear }); res.end(mcpDonePage(msg, ok)); };
     // uid.state.mac: must be the browser that pressed Connect, for this very state (blocks login-CSRF / code injection).
+    // Desktop/CLI (no hosted logins): the connector's sign-in page opens in the system browser, which never had the app's cookie.
+    // The only user is the owner, and completeOAuth still requires this exact single-use state from a flow the owner started.
+    if (!hosted && !raw && state) {
+      if (query.get("error")) return page("The sign-in was cancelled.", false);
+      try { await mcp.completeOAuth(OWNER.id, state, query.get("code") ?? ""); return page("Connected. Return to the Daebot app.", true); }
+      catch (e) { return page(e instanceof McpConnectError ? e.message.replace(/[<>&"]/g, "") : "The sign-in did not complete.", false); }
+    }
     if (parts.length !== 3 || !state || parts[1] !== state || !safeEqual(parts[2], mcpMac(parts[0], state))) return page("That sign-in did not come from this browser. Start again from the card.", false, 400);
     if (query.get("error")) return page("The sign-in was cancelled.", false);
     try {
@@ -793,6 +801,45 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     } catch (e) {
       return page(e instanceof McpConnectError ? e.message.replace(/[<>&"]/g, "") : "The sign-in did not complete.", false);
     }
+  }
+
+  // ---------- account (desktop/CLI): which MIND account this app is signed in as. Hosted uses /auth/me instead.
+  let accountCache: { at: number; body: Record<string, unknown> } | undefined;
+  async function accountApi(res: ServerResponse, method: string): Promise<void> {
+    if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+    if (hosted) return sendJson(res, 404, { error: "use /auth/me" });
+    const key = opts.cfg?.mindApiKey;
+    if (!key) return sendJson(res, 200, { signedIn: false });
+    if (accountCache && Date.now() - accountCache.at < 5 * 60_000) return sendJson(res, 200, accountCache.body);
+    try {
+      const r = await fetch(`${(opts.cfg?.mindBaseUrl ?? "https://m-i-n-d.ai/developer/v1").replace(/\/+$/, "")}/profile`, { headers: { "X-API-Key": key, Accept: "application/json" }, signal: AbortSignal.timeout(10_000) });
+      if (r.status === 401 || r.status === 403) return sendJson(res, 200, { signedIn: false, error: "MIND did not accept the saved sign-in." });
+      const j: any = await r.json().catch(() => ({}));
+      const username = typeof j?.username === "string" ? j.username.slice(0, 80) : "";
+      const body = { signedIn: !!username, username, name: typeof j?.display_name === "string" ? j.display_name.slice(0, 80) : "" };
+      if (username) accountCache = { at: Date.now(), body };
+      return sendJson(res, 200, body);
+    } catch { return sendJson(res, 502, { error: "Could not reach MIND." }); }
+  }
+
+  // ---------- Ask Caelum: MIND's agent builder turns a plain-words brief into a bot (name, purpose, instructions).
+  // Calls MIND's /api/agentbuilder/intake with the caller's own MIND key; nothing is saved until the user presses Create.
+  async function caelumApi(req: IncomingMessage, res: ServerResponse, method: string, me: Principal): Promise<void> {
+    if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+    if (!botsOn()) return sendJson(res, 404, { error: "not found" });
+    const key = auth ? (auth.billingKey(me) ?? (me.owner ? opts.cfg?.mindApiKey : undefined)) : opts.cfg?.mindApiKey;
+    if (!key) return sendJson(res, 401, { error: "Sign in with MIND to ask Caelum." });
+    const b = await readJson(req);
+    const brief = optStr(b.brief, 4000)?.trim() ?? "";
+    if (brief.length < 8) return sendJson(res, 400, { error: "Tell Caelum what the bot should do (a sentence or two)." });
+    let origin = "https://www.m-i-n-d.ai";
+    try { const o = new URL(opts.cfg?.mindBaseUrl ?? origin).origin; origin = o === "https://m-i-n-d.ai" ? "https://www.m-i-n-d.ai" : o; } catch { /* default */ }
+    try {
+      const r = await fetch(`${origin}/api/agentbuilder/intake`, { method: "POST", headers: { "X-API-Key": key, "content-type": "application/json", Accept: "application/json" }, body: JSON.stringify({ brief }), signal: AbortSignal.timeout(120_000) });
+      const j: any = await r.json().catch(() => ({}));
+      if (!r.ok || !j?.spec) return sendJson(res, 502, { error: r.status === 401 || r.status === 403 ? "MIND did not accept your sign-in for Caelum." : "Caelum could not draft that bot. Try rewording it." });
+      return sendJson(res, 200, caelumToBot(j.spec));
+    } catch { return sendJson(res, 504, { error: "Caelum took too long. Try again." }); }
   }
 
   async function mcpApi(req: IncomingMessage, res: ServerResponse, path: string, method: string, me: Principal): Promise<void> {
@@ -1023,6 +1070,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     const me = who(req);
     if (path.startsWith("/voice/")) return voice ? voice(req, res, path, _query, me) : sendJson(res, 404, { error: "voice is not available" });
     if (path.startsWith("/apps/")) return apps ? apps(req, res, path, me) : sendJson(res, 404, { error: "apps are not available" });
+    if (path === "/account") return accountApi(res, method);
+    if (path === "/bots/caelum") return caelumApi(req, res, method, me);
     if (path === "/bots" || path.startsWith("/bots/")) return botsApi(req, res, path, method, me);
     if (path.startsWith("/mcp/")) return mcpApi(req, res, path, method, me);
     if (path === "/models" || path.startsWith("/models/")) return modelsApi(req, res, path, method, me);

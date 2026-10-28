@@ -157,6 +157,11 @@
   <form class="token-card bot-card" id="bot-new-form" role="dialog" aria-modal="true" aria-labelledby="bot-new-title" autocomplete="off">
     <h2 id="bot-new-title">New bot</h2>
     <p>A bot is a Daebot with its own job and its own instructions.</p>
+    <div class="caelum" id="bn-caelum">
+      <label class="fld-label" for="bn-brief">Ask Caelum</label>
+      <textarea class="fld-area" id="bn-brief" rows="3" maxlength="4000" placeholder="Describe the bot in plain words. Caelum fills in the rest."></textarea>
+      <div class="row"><button class="btn-quiet" id="bn-ask" type="button">Ask Caelum</button><span class="fine" id="bn-ask-state" role="status" aria-live="polite"></span></div>
+    </div>
     <label class="fld-label" for="bn-name">Name</label>
     <input class="fld" id="bn-name" type="text" maxlength="40" placeholder="Quinn" required>
     <label class="fld-label" for="bn-purpose">Purpose</label>

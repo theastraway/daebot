@@ -243,6 +243,11 @@ function showNotification({ title, body }) {
   n.show();
 }
 
+ipcMain.on("desktop:signout", (e) => {
+  if (classifyUrl(e.senderFrame?.url ?? "", gatewayInfo?.origin) !== "internal") return; // only our own UI
+  void signOut();
+});
+
 ipcMain.on("desktop:notify", (e, payload) => {
   if (classifyUrl(e.senderFrame?.url ?? "", gatewayInfo?.origin) !== "internal") return; // only our own UI
   const p = validateNotifyPayload(payload);
