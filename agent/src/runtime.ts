@@ -16,6 +16,9 @@ import { MAX_INSTRUCTIONS_BYTES } from "./bots/types.ts";
 import { createSettings, validModelId } from "./settings.ts";
 import { botsEnabled } from "./bots/flag.ts";
 import { BootCache } from "./mind/boot-cache.ts";
+import { ConnectedApps, connectedAppsLines } from "./mind/connected.ts";
+import type { ServerLite } from "./mind/connected.ts";
+import { createAppTools } from "./mind/apps-tools.ts";
 import type { MindClientOpts } from "./mind/client.ts";
 import { createProvider } from "./provider/index.ts";
 import { FREE_TIER, MindCredits } from "./provider/mind.ts";
@@ -96,6 +99,8 @@ export function composeSystemPrompt(o: {
   photos?: boolean;
   /** Apple Calendar: true = the client of THIS turn has the device bridge (iPhone or Mac app), false = it does not, undefined = no such section (bot sessions). */
   appleCalendar?: boolean;
+  /** The "## Connected apps" section (see mind/connected.ts), already composed. Empty/absent = none (bot sessions, or no MIND key). */
+  connectedApps?: string[];
 }): string {
   const lines = [
     o.identity ?? "You are Daebot (Dae), Anthony Conti's own agent. MIND is your memory and the only source of truth about his world.",
@@ -163,6 +168,7 @@ export function composeSystemPrompt(o: {
   } else if (o.appleCalendar === false) {
     lines.push("", "## Apple Calendar", "Apple Calendar is not connected from this app. If the user asks about their Apple Calendar or their iPhone or Mac calendar, say plainly: \"Apple Calendar works in the Daebot iPhone and Mac apps.\" Do not guess at their events.");
   }
+  if (o.connectedApps?.length) lines.push("", ...o.connectedApps);
   if (o.permissions?.trim()) lines.push("", o.permissions.trim());
   if (o.bootContext.trim()) lines.push("", "## MIND context (booted this session)", o.bootContext.trim());
   return lines.join("\n");
@@ -271,13 +277,27 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
   };
   // A session's full tool set: shared builtins + MIND tools addressed by home + bot_talk. Hosted: shell and file tools do not exist at all.
   const botsOn = (): boolean => !!botStore && (overrides.botsEnabled ? overrides.botsEnabled() : botsEnabled(overrides.env ?? process.env));
+  // The user's connected apps (MIND integrations + connected MCP servers), read with THIS runtime's own MIND key, cached for a few minutes.
+  // `servers` is live: the MCP service is in memory. Off when the host wired no MIND base URL, or MINDCLAW_CONNECTED_APPS=0.
+  const appsKey = (): string | undefined => billingKey() || undefined;
+  const mcpSvc = overrides.mcpConnect;
+  const serverLites = (): ServerLite[] => (mcpSvc?.enabled() ? mcpSvc.list(ownerKey).map((s) => ({ id: s.id, name: s.name, enabled: s.enabled, tools: s.tools.length })) : []);
+  const connectedApps = new ConnectedApps({
+    uid: ownerKey, baseUrl: cfg.mindBaseUrl, key: appsKey, fetchImpl: overrides.fetchImpl,
+    catalog: mcpSvc?.enabled() ? () => mcpSvc.catalogItems(ownerKey) : undefined,
+    serversVersion: () => (mcpSvc?.enabled() ? mcpSvc.store.version(ownerKey) : 0),
+  });
+  const appsOn = (): boolean => (overrides.env ?? process.env).MINDCLAW_CONNECTED_APPS?.trim() !== "0";
   const toolsFor = (home: string, selfBot: string | undefined): Tool[] => {
     const on = botsOn();
     const talk = on && botStore && botsCtx ? [createBotTalkTool({ bus: botsCtx.bus, owner: ownerKey, selfBot })] : [];
     const every = [...builtinTools, ...(photoTool ? [photoTool] : []), ...createMindTools({
       home, clientFor: clientForMind, roster: () => botStore?.roster() ?? [],
       refresh: botStore ? async () => { await botStore.list(); } : undefined,
-    }, { user: hosted?.username }).filter((t) => on || t.spec.name !== "mind_tenants"), ...talk];
+    }, { user: hosted?.username }).filter((t) => on || t.spec.name !== "mind_tenants"),
+      // mail, calendar, contacts (the apps' synced data) + mind_apps. A bot reads them as the user's main account (like mind:"main") and can change nothing.
+      ...(appsOn() ? createAppTools({ clientFor: clientForMind, readOnly: !!selfBot, connected: connectedApps, servers: serverLites }) : []),
+      ...talk];
     // mcp_connect is the user's own session only: a bot never proposes connections (and its turns could be peer-driven).
     const withMcp = overrides.mcpConnect && !selfBot ? [...every, createMcpConnectTool(overrides.mcpConnect, ownerKey)] : every;
     const all = hosted ? filterHostedTools(withMcp) : withMcp;
@@ -399,6 +419,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
             mcp: !!overrides.mcpConnect?.enabled() && !botId,
             photos: tools.some((t) => t.spec.name === "view_photo"),
             appleCalendar: botId ? undefined : curCaps.includes("apple_calendar"),
+            connectedApps: botId || !appsOn() ? undefined : connectedAppsLines(connectedApps.state(), { servers: serverLites(), tools: new Set(tools.map((t) => t.spec.name)), deviceCalendar: curCaps.includes("apple_calendar") }),
             permissions: permissions?.preferencesText(),
           });
         },
@@ -444,6 +465,8 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
           let lastCheckpoint = Date.now();
           try {
           while (startNotices.length) { const n = startNotices.shift()!; entry.recorder.push(n); yield n; }
+          // Read the user's connected apps before the model is called, so this turn's prompt names them (cached; a failed read is remembered and said plainly).
+          if (!botRec && appsOn()) { try { await connectedApps.refresh(false, o?.signal); } catch { /* the prompt says the read failed */ } }
           for await (const ev of inner.send(messageWithPhotos(msg, photos), o)) {
             entry.recorder.push(ev);
             if (ev.type === "done") { entry.updatedAt = Date.now(); run.status = "done"; run.updatedAt = Date.now(); persist(id); }

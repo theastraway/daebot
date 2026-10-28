@@ -48,6 +48,9 @@ import { AdminLedger } from "./mistakes.ts";
 import { AngerLedger } from "./anger.ts";
 import { MindFeed } from "./mind-feed.ts";
 import { createMindClient } from "../mind/client.ts";
+import { touchConnectedApps } from "../mind/connected.ts";
+import { addonWords, fetchIntegrations, providerFor } from "../mind/integrations.ts";
+import type { AppRow } from "../mind/integrations.ts";
 import { dataDir } from "../persist.ts";
 import { MAX_PHOTO_BODY, checkPhotos, cleanName, isPhotoId } from "../photos.ts";
 
@@ -259,11 +262,26 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     : undefined;
   // ---- Apps: the user's MIND integrations, always with THEIR key (owner login: a plain sign-in-with-MIND answer).
   const appsBase = opts.apps?.baseUrl ?? opts.cfg?.mindBaseUrl;
+  // Hosted: each signed-in user's own key (the access-code owner has none). Desktop/CLI (no auth): the key the app signed in with.
+  const appsKeyFor: (p: Principal) => string | undefined = opts.apps?.keyFor ?? ((p) => (auth ? (p.owner ? undefined : auth.billingKey(p)) : opts.cfg?.mindApiKey || undefined));
+  // The user's MIND apps for the Connectors list: a connector that is the same product as an app already in the list (GitHub is both) is
+  // marked so the Apps card shows ONE row for it. A few seconds of cache lets the card's two sections share one read.
+  const providerCache = new Map<string, { at: number; rows: AppRow[] }>();
+  async function providersOf(me: Principal): Promise<AppRow[]> {
+    const key = appsKeyFor(me);
+    if (!key || !appsBase) return [];
+    const hit = providerCache.get(me.id);
+    if (hit && Date.now() - hit.at < 5000) return hit.rows;
+    const r = await fetchIntegrations({ baseUrl: appsBase, key, fetchImpl: opts.apps?.fetchImpl ?? opts.auth?.fetchImpl, timeoutMs: 6000 });
+    const rows = r.ok ? r.providers : [];
+    if (r.ok) { providerCache.set(me.id, { at: Date.now(), rows }); if (providerCache.size > 2000) providerCache.delete(providerCache.keys().next().value as string); }
+    return rows;
+  }
   const apps = appsBase
     ? createAppsHandler({
         baseUrl: appsBase,
-        // Hosted: each signed-in user's own key (the access-code owner has none). Desktop/CLI (no auth): the key the app signed in with.
-        keyFor: opts.apps?.keyFor ?? ((p) => (auth ? (p.owner ? undefined : auth.billingKey(p)) : opts.cfg?.mindApiKey || undefined)),
+        keyFor: appsKeyFor,
+        onChanged: (p) => { providerCache.delete(p.id); touchConnectedApps(p.id); },
         returnTo: opts.apps?.returnTo ?? (process.env.DAEBOT_PUBLIC_URL?.trim() || (hosted?.allowedHosts?.[0] && hosted.allowedHosts[0] !== "localhost" ? `https://${hosted.allowedHosts[0]}` : undefined)),
         fetchImpl: opts.apps?.fetchImpl ?? opts.auth?.fetchImpl,
       })
@@ -940,7 +958,12 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       // The MIND App Store connectors for the Apps card (MIND's list, fetched server-side). Listing reaches no third party.
       if (path === "/mcp/catalog") {
         if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-        const items = await mcp.catalogItems(me.id);
+        const all = await mcp.catalogItems(me.id);
+        const providers = await providersOf(me).catch(() => [] as AppRow[]);
+        const items = all.map((it) => {
+          const prov = providerFor(it, providers);
+          return prov ? { ...it, foldedInto: prov, addon: addonWords(providers.find((p) => p.provider === prov)?.name ?? prov, prov) } : it;
+        });
         return sendJson(res, 200, { items, counts: { official: items.filter((i) => i.publisher === "official").length, community: items.filter((i) => i.publisher === "community").length } });
       }
       // Connect on a connector: creates the same pending request a model's proposal would. The URL is looked up here by id; the body never carries one.

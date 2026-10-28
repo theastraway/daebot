@@ -1,5 +1,11 @@
-// "Connectors" section of the Apps card: the MIND App Store's remote MCP servers (official vendor servers and approved community ones).
-// The list comes from the gateway (GET /mcp/catalog), which fetches MIND's list server-side. Connect never sends a URL: it sends the
+// "Connectors": ONE list in the Apps card. It holds every MIND app the user can connect (Google, Microsoft 365, Dropbox, GitHub, Apple
+// Calendar ... they sync data into MIND) AND the MIND App Store's remote MCP servers (official vendor servers and approved community
+// ones, plus the user's own n8n or custom server). All of them are connectors. Connected ones come first, with their real account
+// ("Connected · theastraway"); then the MIND apps that are not connected; then the App Store. One product, one row: GitHub is a MIND app
+// AND an App Store server, so the app's row wins and the server sits inside it. The search box covers the whole list.
+//
+// The MIND apps come from GET /apps/integrations (the gateway asks MIND with the signed-in user's own key). The App Store list comes from
+// the gateway (GET /mcp/catalog), which fetches MIND's list server-side. Connecting an App Store server never sends a URL: it sends the
 // connector's id, the gateway looks the address up itself and creates the SAME pending request the consent card is built from
 // (POST /mcp/catalog/connect). The user's click on the card is the consent; nothing here connects anything.
 // DOM is built by apps.js (createElement + textContent only). Everything in the list is third-party text.
@@ -28,52 +34,120 @@ export function readPaste(text) {
   return { server: addr[0], token: tok[1] };
 }
 
+// The gateway marks an App Store server that is the same product as a MIND app the user can see (`foldedInto`, with the words in `addon`).
+// The list leaves it out as a row of its own; the app's row carries it, so no name is ever shown twice.
+
+/** The App Store servers that are not folded into a MIND app's row. */
+export function connectorRows(items) { return (Array.isArray(items) ? items : []).filter((it) => !it || !it.foldedInto); }
+
+/** An app the user can see: connected, or one MIND has set up. An app MIND has not set up and the user has not connected is not listed at all. */
+export function connectableApp(p) { return !!(p.connected || p.configured !== false); }
+
+/** A MIND app as a connector row. It shows the real state MIND reports: connected, on which account, needs reconnect. */
+export function mindEntry(p) {
+  return {
+    id: p.provider, kind: "mind", provider: p.provider, logo: p.provider, name: p.name, blurb: p.blurb, connected: !!p.connected,
+    needsReconnect: !!p.needsReconnect, account: p.account, auth: p.auth, manageable: false,
+  };
+}
+
+/** The App Store server inside an app's row: the app's own words for it ("GitHub actions (issues, pull requests, code)") and its own button. */
+export function childEntry(it) {
+  const addon = it.addon && typeof it.addon === "object" ? it.addon : {};
+  return {
+    id: it.id, kind: "mcp", logo: String(it.id || "").replace(/^mcp:/, ""), name: addon.label || it.name, blurb: addon.why || "",
+    connected: !!it.connected, serverId: it.serverId, waiting: !!it.pendingId, removeLabel: "Remove",
+  };
+}
+
+/** The MIND apps as rows, each with the App Store servers that are the same product inside it. */
+export function appEntries(providers, items, toEntry = mindEntry) {
+  const list = Array.isArray(items) ? items : [];
+  return providers.map((p) => {
+    const e = toEntry(p);
+    const kids = list.filter((it) => it && it.foldedInto === p.provider).map(childEntry);
+    return kids.length ? { ...e, children: kids } : e;
+  });
+}
+
+/** The one list: everything connected first (MIND apps, then App Store servers), then the MIND apps not connected yet, then the rest of the App Store. */
+export function orderRows(mind, mcp) {
+  return [...mind.filter((e) => e.connected), ...mcp.filter((e) => e.connected), ...mind.filter((e) => !e.connected), ...mcp.filter((e) => !e.connected)];
+}
+
+/** Builds the unified list from MIND's providers and the gateway's App Store items (either may be empty). */
+export function connectorList(providers, items) {
+  return orderRows(appEntries(providers, items), connectorRows(items).map((it) => ({ ...entryOf(it), kind: "mcp" })));
+}
+
 export function initConnectors({ apps, json, getMcp }) {
-  apps.addSection({
-    id: "connectors", title: "Connectors", search: "Search connectors",
-    note: "Servers listed in the MIND App Store. Pick one and Daebot shows you what it can do before anything connects.",
-    async load() {
-      let r;
-      try { r = await json("/mcp/catalog"); }
-      catch (e) { if (/not enabled/i.test(String(e && e.message))) return { entries: [], hidden: true }; throw e; }
-      const items = Array.isArray(r.items) ? r.items : [];
-      if (!items.length) return { entries: [], message: "The MIND App Store list is not available right now. Try again in a moment." };
-      return { entries: items.map(entryOf) };
-    },
-    handlers: {
-      readPaste,
-      async onConnect(e, ctl, values) {
-        if (e.form) {
-          // n8n / custom server: the address and token go straight to the gateway, which probes the server with the token before saving.
-          ctl.busy(true);
-          try {
-            const r = await json("/mcp/catalog/connect-token", { method: "POST", body: JSON.stringify({ id: e.id, url: values && values.url, token: values && values.token, name: values && values.name }) });
-            const n = r && r.server && Array.isArray(r.server.tools) ? r.server.tools.length : 0;
-            apps.say(n ? `Connected ${e.name}: ${n} tool${n === 1 ? "" : "s"} ready. Ask Daebot to use them.` : `Connected ${e.name}.`);
-            const mcp = getMcp(); if (mcp) mcp.load();
-            apps.refresh();
-            return true;
-          } catch (err) { ctl.busy(false); ctl.say(err && err.message ? err.message : `Could not connect ${e.name}.`, "warn"); return false; }
-        }
+  const get = (path) => (apps.cached ? apps.cached(path) : json(path));
+  const mcpHandlers = {
+    readPaste,
+    async onConnect(e, ctl, values) {
+      if (e.form) {
+        // n8n / custom server: the address and token go straight to the gateway, which probes the server with the token before saving.
         ctl.busy(true);
         try {
-          const r = await json("/mcp/catalog/connect", { method: "POST", body: JSON.stringify({ id: e.id }) });
-          const mcp = getMcp();
-          if (mcp && r.pending) mcp.review(r.pending);
-        } catch (err) { ctl.say(err && err.message ? err.message : `Could not start ${e.name}.`, "warn"); }
-        finally { ctl.busy(false); }
-      },
-      async onDisconnect(e, ctl) {
-        ctl.busy(true);
-        try {
-          await json(`/mcp/servers/${encodeURIComponent(e.serverId)}`, { method: "DELETE" });
-          apps.say(`Removed ${e.name}.`);
+          const r = await json("/mcp/catalog/connect-token", { method: "POST", body: JSON.stringify({ id: e.id, url: values && values.url, token: values && values.token, name: values && values.name }) });
+          const n = r && r.server && Array.isArray(r.server.tools) ? r.server.tools.length : 0;
+          apps.say(n ? `Connected ${e.name}: ${n} tool${n === 1 ? "" : "s"} ready. Ask Daebot to use them.` : `Connected ${e.name}.`);
           const mcp = getMcp(); if (mcp) mcp.load();
           apps.refresh();
-        } catch (err) { ctl.busy(false); ctl.say(err && err.message ? err.message : `Could not remove ${e.name}.`, "warn"); }
-      },
-      onManage(e) { const mcp = getMcp(); if (mcp && e.serverId) mcp.manage(e.serverId); },
-      confirmText: (e) => `Remove ${e.name}? Daebot stops using it and its stored sign-in is deleted.`,
+          return true;
+        } catch (err) { ctl.busy(false); ctl.say(err && err.message ? err.message : `Could not connect ${e.name}.`, "warn"); return false; }
+      }
+      ctl.busy(true);
+      try {
+        const r = await json("/mcp/catalog/connect", { method: "POST", body: JSON.stringify({ id: e.id }) });
+        const mcp = getMcp();
+        if (mcp && r.pending) mcp.review(r.pending);
+      } catch (err) { ctl.say(err && err.message ? err.message : `Could not start ${e.name}.`, "warn"); }
+      finally { ctl.busy(false); }
     },
+    async onDisconnect(e, ctl) {
+      ctl.busy(true);
+      try {
+        await json(`/mcp/servers/${encodeURIComponent(e.serverId)}`, { method: "DELETE" });
+        apps.say(`Removed ${e.name}.`);
+        const mcp = getMcp(); if (mcp) mcp.load();
+        apps.refresh();
+      } catch (err) { ctl.busy(false); ctl.say(err && err.message ? err.message : `Could not remove ${e.name}.`, "warn"); }
+    },
+    onManage(e) { const mcp = getMcp(); if (mcp && e.serverId) mcp.manage(e.serverId); },
+    confirmText: (e) => `Remove ${e.name}? Daebot stops using it and its stored sign-in is deleted.`,
+  };
+  const mind = apps.mind;
+  // One list, two kinds of row: a MIND app is connected and disconnected at MIND (apps.mind), an App Store server through the gateway's MCP routes.
+  const handlers = {
+    readPaste, // the n8n / custom server form fills both boxes from one pasted config block
+    onConnect: (e, ctl, values) => (e.kind === "mind" ? mind.handlers.onConnect(e, ctl) : mcpHandlers.onConnect(e, ctl, values)),
+    onDisconnect: (e, ctl) => (e.kind === "mind" ? mind.handlers.onDisconnect(e, ctl) : mcpHandlers.onDisconnect(e, ctl)),
+    onManage: (e) => { if (e.kind !== "mind") mcpHandlers.onManage(e); },
+    confirmText: (e) => (e.kind === "mind" ? `Disconnect ${e.name}? Anything already synced to MIND stays.` : mcpHandlers.confirmText(e)),
+    child: mcpHandlers, // the App Store server inside a MIND app's row (GitHub actions inside GitHub)
+  };
+  apps.addSection({
+    id: "connectors", title: "Connectors", search: "Search connectors",
+    note: "Your MIND apps and the MIND App Store, in one list. What is connected comes first. Pick a connector and Daebot shows you what it can do before anything connects.",
+    async load() {
+      const [m, c] = await Promise.allSettled([get("/apps/integrations"), get("/mcp/catalog")]);
+      let providers = [], message = "";
+      if (m.status === "fulfilled") {
+        const r = m.value || {};
+        if (r.signedIn === false) message = r.message || "Sign in with MIND to connect your MIND apps.";
+        else if (r.enabled !== false) providers = (Array.isArray(r.providers) ? r.providers : []).filter(connectableApp);
+      }
+      let items = [], storeOff = false;
+      if (c.status === "fulfilled") items = Array.isArray(c.value && c.value.items) ? c.value.items : [];
+      else if (/not enabled/i.test(String(c.reason && c.reason.message))) storeOff = true;
+      // Nothing could be read at all: the card's own "Try again".
+      if (m.status === "rejected" && c.status === "rejected" && !storeOff) throw c.reason;
+      if (m.status === "rejected" && !providers.length) message = "Your MIND apps could not be loaded right now. Try again in a moment.";
+      const entries = connectorList(providers, items);
+      if (!entries.length) return storeOff ? { entries: [], hidden: true } : { entries: [], message: message || "The MIND App Store list is not available right now. Try again in a moment." };
+      return message ? { entries, message } : { entries };
+    },
+    handlers,
   });
 }

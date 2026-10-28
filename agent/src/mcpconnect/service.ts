@@ -115,6 +115,9 @@ export interface CatalogEntry { name: string; url: string; official: boolean; de
 export interface CatalogItemView {
   id: string; name: string; blurb: string; category: string; publisher: "official" | "community"; auth: CatalogAuth; host: string;
   connected: boolean; serverId?: string; pendingId?: string;
+  /** Set by the gateway when this connector is the same product as an app in the user's MIND integrations list (GitHub is both): the Apps card shows ONE row,
+   *  the app's, with this connector inside it. `addon` is the words for that inner part. */
+  foldedInto?: string; addon?: { label: string; why: string };
   /** Present on connectors that need the user's own server address AND a token (n8n, custom). The card shows these fields inline. */
   form?: { fields: { name: "url" | "token" | "name"; label: string; placeholder: string; secret?: boolean; optional?: boolean }[]; submitLabel: string; why?: string; steps?: string[]; help?: { label: string; url: string } };
 }

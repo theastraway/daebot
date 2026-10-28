@@ -1,6 +1,8 @@
 // Apps card for Daebot (web). A settings card opened from the "Apps" button at the bottom of the sidebar.
-// Sections: "MIND integrations" (Google, Microsoft 365, Dropbox, ...) from GET /apps/integrations, which the gateway
-// proxies to MIND with the signed-in user's own key. More sections (e.g. MCP servers) plug in with addSection().
+// Its main section is ONE "Connectors" list (connectors.js): the MIND apps (Google, Microsoft 365, Dropbox, GitHub, ... from
+// GET /apps/integrations, which the gateway proxies to MIND with the signed-in user's own key) and the MIND App Store's MCP servers.
+// This module renders any list of entries, owns the card and holds the MIND-app connect/disconnect calls (api.mind.handlers).
+// More sections (e.g. connected MCP servers) plug in with addSection().
 //
 // Reusable pieces (the MCP builder uses these, nothing else needs to change):
 //   renderEntries(body, entries, handlers)   ONE render function for any list of apps. An entry is
@@ -10,6 +12,9 @@
 //       registers a section; it loads when the card opens and after the user comes back to the tab. `search` (a placeholder
 //       string) adds a search box that filters the section's entries by name, category, description and tags.
 //   An entry can also carry { tags: [{ text, tone? }], waiting?, removeLabel? }; handlers can add onManage(entry) for a Manage button on connected rows.
+//   An entry can carry { children: [entry, ...] }: connectors that are the SAME product as the app (GitHub is both a MIND integration and an MCP
+//   connector). They draw inside the app's own group, under it, each with its own button, driven by handlers.child (same shape as handlers).
+//   One product, one row: the Apps card never shows two rows with the same name.
 //   api.suspend() / api.resume() hide the card while another dialog (the MCP consent card) is the only thing on screen.
 // DOM is built with createElement + textContent only; no innerHTML; same-origin requests only.
 import { markFor } from "/apps-icons.js";
@@ -107,18 +112,38 @@ function openForm(e, ctl, handlers, confirm, rowBtn) {
   host.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
+/** The brand's dot-matrix LED for a part of an app: lit when it is connected. */
+function ledFor(e) {
+  const dot = el("span", `app-led${e.connected ? " is-on" : ""}`);
+  dot.setAttribute("aria-hidden", "true");
+  return dot;
+}
+
 /** Renders `entries` into `body`. Safe to call again with fresh entries; keeps nothing between calls. */
 export function renderEntries(body, entries, handlers = {}) {
   body.replaceChildren();
   if (!entries.length) { body.append(el("p", "apps-empty", "Nothing here yet.")); return; }
   for (const e of entries) {
+    const kids = Array.isArray(e.children) ? e.children : [];
+    const [row, confirm] = rowFor(e, handlers, false);
+    if (!kids.length) { body.append(row, confirm); continue; }
+    const group = el("div", "app-group"); group.dataset.group = e.id;
+    group.append(row, confirm);
+    for (const k of kids) { const [kr, kc] = rowFor(k, handlers.child || {}, true); group.append(kr, kc); }
+    body.append(group);
+  }
+}
+
+/** One row and its confirm area. `sub` rows are the connector inside an app's group: an LED instead of a logo, no tags. */
+function rowFor(e, handlers, sub) {
+  {
     const st = statusOf(e);
-    const row = el("div", "app-row"); row.dataset.app = e.id;
+    const row = el("div", sub ? "app-row is-sub" : "app-row"); row.dataset.app = e.id;
     const main = el("div", "app-main");
     main.append(el("div", "app-name", e.name));
-    const sub = el("div", `app-state is-${st.tone}`, st.text); sub.setAttribute("role", "status");
-    main.append(sub);
-    if (Array.isArray(e.tags) && e.tags.length) {
+    const stateEl = el("div", `app-state is-${st.tone}`, st.text); stateEl.setAttribute("role", "status");
+    main.append(stateEl);
+    if (!sub && Array.isArray(e.tags) && e.tags.length) {
       const tags = el("div", "app-tags");
       for (const t of e.tags) if (t && t.text) tags.append(el("span", `app-tag${t.tone ? ` is-${t.tone}` : ""}`, t.text));
       main.append(tags);
@@ -129,18 +154,18 @@ export function renderEntries(body, entries, handlers = {}) {
     btn.type = "button";
     btn.textContent = e.connected ? (e.needsReconnect ? "Reconnect" : (e.removeLabel || "Disconnect")) : e.waiting ? "Review" : "Connect";
     btn.setAttribute("aria-label", `${btn.textContent} ${e.name}`);
-    if (e.connected && !e.needsReconnect && handlers.onManage) {
+    if (e.connected && !e.needsReconnect && handlers.onManage && e.manageable !== false) {
       const manage = el("button", "btn-quiet app-btn", "Manage"); manage.type = "button";
       manage.setAttribute("aria-label", `Manage ${e.name}`);
       manage.addEventListener("click", () => handlers.onManage(e));
       actions.append(manage);
     }
     actions.append(btn);
-    row.append(logoFor(e), main, actions);
+    row.append(sub ? ledFor(e) : logoFor(e), main, actions);
     const confirm = el("div", "app-confirm"); confirm.hidden = true;
     const ctl = {
       busy(on) { btn.disabled = on; if (on) { btn.dataset.label = btn.textContent; btn.textContent = "Working…"; } else if (btn.dataset.label) { btn.textContent = btn.dataset.label; delete btn.dataset.label; } },
-      say(text, tone) { sub.textContent = text; sub.className = `app-state is-${tone || "warn"}`; },
+      say(text, tone) { stateEl.textContent = text; stateEl.className = `app-state is-${tone || "warn"}`; },
     };
     btn.addEventListener("click", () => {
       if (e.connected && !e.needsReconnect) {
@@ -156,7 +181,7 @@ export function renderEntries(body, entries, handlers = {}) {
         openForm(e, ctl, handlers, confirm, btn);
       } else handlers.onConnect && handlers.onConnect(e, ctl);
     });
-    body.append(row, confirm);
+    return [row, confirm];
   }
 }
 
@@ -169,9 +194,19 @@ export function initApps(ctx) {
     if (!res.ok) throw new Error(body.message || body.error || `HTTP ${res.status}`);
     return body;
   };
+  // The card's sections read the same lists (the Connectors list also feeds the app rows): one request per list per refresh.
+  const memo = new Map();
+  const cached = (path) => {
+    const hit = memo.get(path);
+    if (hit && Date.now() - hit.at < 2500) return hit.p;
+    const p = json(path);
+    memo.set(path, { at: Date.now(), p });
+    p.catch(() => { if (memo.get(path) && memo.get(path).p === p) memo.delete(path); });
+    return p;
+  };
   const $ = (id) => document.getElementById(id);
   const q = { open: $("btn-apps"), card: $("apps-modal"), close: $("apps-close"), list: $("apps-sections"), live: $("apps-live") };
-  if (!q.open || !q.card) return { open() {}, close() {}, refresh() {}, addSection() {}, say() {}, suspend() { return false; }, resume() {} };
+  if (!q.open || !q.card) return { open() {}, close() {}, refresh() {}, addSection() {}, say() {}, suspend() { return false; }, resume() {}, cached, mind: { handlers: {} } };
   const sections = new Map();
   let isOpen = false, suspended = false, lastFocus = null, token = 0;
   const bc = typeof BroadcastChannel === "function" ? new BroadcastChannel("daebot-apps") : null;
@@ -211,7 +246,7 @@ export function initApps(ctx) {
   function paint(s) {
     const needle = s.search ? s.search.value.trim().toLowerCase() : "";
     const all = s.entries || [];
-    const shown = needle ? all.filter((e) => [e.name, e.blurb, ...(e.tags || []).map((t) => t.text)].join(" ").toLowerCase().includes(needle)) : all;
+    const shown = needle ? all.filter((e) => [e.name, e.blurb, ...(e.tags || []).map((t) => t.text), ...(e.children || []).map((k) => k.name)].join(" ").toLowerCase().includes(needle)) : all;
     renderEntries(s.body, shown, { ...(s.def.handlers || {}), formHost: s.formHost });
     if (needle && !shown.length) s.body.replaceChildren(el("p", "apps-empty", `Nothing matches "${s.search.value.trim().slice(0, 40)}".`));
     if (s.count) s.count.textContent = all.length ? (needle ? `${shown.length} of ${all.length}` : `${all.length}`) : "";
@@ -242,7 +277,7 @@ export function initApps(ctx) {
     if (isOpen) loadSection(s);
   }
 
-  function refresh() { if (suspended) return; for (const s of sections.values()) loadSection(s); }
+  function refresh() { if (suspended) return; memo.clear(); for (const s of sections.values()) loadSection(s); }
 
   function open() {
     if (isOpen) return;
@@ -296,26 +331,14 @@ export function initApps(ctx) {
     }
   }
 
-  // ---- Section 1: MIND integrations ----
-  const toEntry = (p) => ({
-    id: p.provider, provider: p.provider, logo: p.provider, name: p.name, blurb: p.blurb, connected: p.connected, needsReconnect: p.needsReconnect,
-    account: p.account, auth: p.auth,
-  });
-  // An app this user cannot connect right now (MIND has not set it up) is not listed at all. A connected one always is.
-  const connectable = (p) => p.connected || p.configured !== false;
+  // ---- MIND apps (Google, Microsoft 365, Dropbox, GitHub, Apple Calendar ...) ----
+  // They are connectors like every other: connectors.js lists them with the App Store in ONE section and calls these two handlers for a MIND row.
   async function openWindow(url, pre) {
     if (pre && !pre.closed) { pre.location.href = url; return; }
     const w = window.open(url, "_blank");
     if (!w) location.href = url; // pop-up blocked: MIND bounces back here when done
   }
-  addSection({
-    id: "integrations", title: "MIND integrations",
-    async load() {
-      const r = await json("/apps/integrations");
-      if (r.signedIn === false) return { signIn: true, message: r.message };
-      if (r.enabled === false) return { entries: [], hidden: true };
-      return { entries: (r.providers || []).filter(connectable).map(toEntry) };
-    },
+  const mind = {
     handlers: {
       async onConnect(e, ctl) {
         ctl.busy(true);
@@ -329,11 +352,11 @@ export function initApps(ctx) {
       },
       async onDisconnect(e, ctl) {
         ctl.busy(true);
-        try { await json(`/apps/integrations/${encodeURIComponent(e.id)}/disconnect`, { method: "POST", body: "{}" }); say(`Disconnected ${e.name}.`); await loadSection(sections.get("integrations")); }
+        try { await json(`/apps/integrations/${encodeURIComponent(e.id)}/disconnect`, { method: "POST", body: "{}" }); say(`Disconnected ${e.name}.`); refresh(); }
         catch (err) { ctl.busy(false); ctl.say(err && err.message ? err.message : `Could not disconnect ${e.name}.`, "warn"); }
       },
     },
-  });
+  };
 
-  return { open, close, refresh, addSection, say, renderEntries, suspend, resume };
+  return { open, close, refresh, addSection, say, renderEntries, suspend, resume, cached, mind };
 }
