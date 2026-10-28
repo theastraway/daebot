@@ -7,7 +7,7 @@ import { DEFAULT_CONFIG, isValidAccelerator, loadConfig, normalizeConfig, resolv
 import { envForKernelMode, isKernelMode } from "../src/lib/kernel.mjs";
 
 test("default shortcut is Alt+Space and kernel is enforced", () => {
-  assert.deepEqual(loadConfig("/nonexistent/desktop.json"), { shortcut: "Alt+Space", kernelMode: "enforced", idleTrimSeconds: 300 });
+  assert.deepEqual(loadConfig("/nonexistent/desktop.json"), { shortcut: "Alt+Space", kernelMode: "enforced", idleTrimSeconds: 300, keepWorking: true });
   assert.equal(DEFAULT_CONFIG.shortcut, "Alt+Space");
 });
 
@@ -20,7 +20,7 @@ test("config file overrides valid keys only; bad values fall back to defaults", 
   const dir = mkdtempSync(join(tmpdir(), "mcd-"));
   const p = join(dir, "desktop.json");
   writeFileSync(p, JSON.stringify({ shortcut: "Ctrl+Alt+M", kernelMode: "SHADOW" }));
-  assert.deepEqual(loadConfig(p), { shortcut: "Ctrl+Alt+M", kernelMode: "shadow", idleTrimSeconds: 300 });
+  assert.deepEqual(loadConfig(p), { shortcut: "Ctrl+Alt+M", kernelMode: "shadow", idleTrimSeconds: 300, keepWorking: true });
   assert.equal(normalizeConfig({ idleTrimSeconds: 0 }).idleTrimSeconds, 0);
   assert.equal(normalizeConfig({ idleTrimSeconds: -5 }).idleTrimSeconds, 300);
   assert.equal(normalizeConfig({ idleTrimSeconds: "9" }).idleTrimSeconds, 300);

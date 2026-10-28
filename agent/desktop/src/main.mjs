@@ -1,6 +1,6 @@
 // Daebot desktop shell (Electron main process). Thin: it starts the gateway as a child, waits for /health,
 // and shows the existing web UI. All decisions live in src/lib/* (unit-tested); this file is glue.
-import { app, BrowserWindow, Tray, Menu, globalShortcut, Notification, ipcMain, shell, nativeImage, nativeTheme, screen, session, dialog } from "electron";
+import { app, BrowserWindow, Tray, Menu, powerSaveBlocker, globalShortcut, Notification, ipcMain, shell, nativeImage, nativeTheme, screen, session, dialog } from "electron";
 import { createRequire } from "node:module";
 import { spawn, execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -13,8 +13,9 @@ import { clearKey, readConfigJson, readKey, resolveSignIn, saveKey, looksLikeMin
 import { AccountStore, accountsPath, dataDirFor } from "./lib/accounts.mjs";
 import { buildSignInPage } from "./lib/signin-page.mjs";
 import { signInWithMind } from "./lib/mind-signin.mjs";
-import { loadConfig, saveKernelMode, configPath, statePath, loadState, writeJson, resolveBounds, desktopHome } from "./lib/config.mjs";
+import { loadConfig, saveKernelMode, saveKeepWorking, configPath, statePath, loadState, writeJson, resolveBounds, desktopHome } from "./lib/config.mjs";
 import { isKernelMode } from "./lib/kernel.mjs";
+import { applyKeepWorking } from "./lib/keepworking.mjs";
 import { buildAppMenuTemplate, buildTrayTemplate } from "./lib/menu.mjs";
 import { buildLoadUrl, classifyUrl, originOf, redactUrl } from "./lib/allowlist.mjs";
 import { buildConfirmNotification, createRateLimiter, shouldNotify, validateNotifyPayload } from "./lib/notify.mjs";
@@ -446,7 +447,14 @@ async function setKernelMode(mode) {
 }
 
 // ---------- tray + menus ----------
-const handlers = { toggle: toggleWindow, newSession, setKernelMode, signOut, quit: () => app.quit(), hideWindow };
+let keepWorkingId = null;
+function setKeepWorking(on) {
+  config = { ...config, keepWorking: !!on };
+  if (!SMOKE) { try { saveKeepWorking(!!on); } catch (e) { log("could not save keep-working:", String(e?.message ?? e)); } }
+  keepWorkingId = applyKeepWorking({ powerSaveBlocker, enabled: config.keepWorking, current: keepWorkingId });
+  refreshTray();
+}
+const handlers = { toggle: toggleWindow, newSession, setKernelMode, setKeepWorking, signOut, quit: () => app.quit(), hideWindow };
 
 // Auto-update (electron-updater, generic feed; see lib/updater.mjs). Off in --mindclaw-smoke and in unpackaged runs.
 const updater = createUpdater({
@@ -475,7 +483,7 @@ function refreshTray() {
   if (!tray || tray.isDestroyed()) return;
   tray.setContextMenu(Menu.buildFromTemplate(buildTrayTemplate({
     windowVisible: !!win && !win.isDestroyed() && win.isVisible(),
-    kernelMode: config.kernelMode, shortcut: config.shortcut, handlers, update: updater.menuItem(),
+    kernelMode: config.kernelMode, shortcut: config.shortcut, handlers, update: updater.menuItem(), keepWorking: config.keepWorking,
   })));
 }
 
@@ -507,7 +515,7 @@ gateway.on("crashed", async ({ code, signal }) => {
 app.on("second-instance", showWindow);
 app.on("activate", showWindow);
 app.on("window-all-closed", () => {}); // menu bar app: keep running
-app.on("will-quit", () => { updater.stop(); globalShortcut.unregisterAll(); });
+app.on("will-quit", () => { keepWorkingId = applyKeepWorking({ powerSaveBlocker, enabled: false, current: keepWorkingId }); updater.stop(); globalShortcut.unregisterAll(); });
 app.on("before-quit", (e) => {
   if (quitting) return;
   quitting = true;
@@ -588,6 +596,7 @@ app.whenReady().then(async () => {
   if (!SMOKE) {
     applyAppMenu();
     createTray();
+    keepWorkingId = applyKeepWorking({ powerSaveBlocker, enabled: config.keepWorking, current: keepWorkingId });
     registerShortcut();
   }
   if (!(await ensureSignedIn())) return app.quit();
