@@ -195,6 +195,9 @@ export function createMindProvider(cfg: Config, o: MindProviderOptions): Provide
   return {
     name: "mind",
     async *stream(req) {
+      // pinModel (view_photo): the caller picked the exact model for the job and already knows the plan. No free/paid swap and no
+      // fallback list (`free` has none); a billing refusal still surfaces as MindBillingError for the caller to word.
+      if (req.pinModel) { yield* free.stream(req); return; }
       const b = await o.credits.get(o.getKey());
       const onFree = b?.tier === FREE_TIER;
       let emitted = false;

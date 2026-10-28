@@ -1,5 +1,5 @@
 // Helpers over the AgentEvent stream that need to understand `retract`. Pure, no I/O.
-import type { AgentEvent, HistoryEvent } from "./types.ts";
+import type { AgentEvent, HistoryEvent, PhotoRef } from "./types.ts";
 
 /**
  * The assistant text a user actually ended up seeing: text deltas minus every block a later `retract` withdrew.
@@ -30,8 +30,8 @@ export class HistoryRecorder {
     this.items = initial.slice();
     this.cap = cap;
   }
-  user(text: string): void {
-    this.items.push({ type: "user", text });
+  user(text: string, photos?: PhotoRef[]): void {
+    this.items.push({ type: "user", text, ...(photos?.length ? { photos } : {}) });
     this.trim();
   }
   push(ev: AgentEvent): void {

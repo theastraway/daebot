@@ -17,6 +17,12 @@ const DEFAULTS = {
   // live model metadata (supported_parameters), one of the free models that supports tool calling, which the agent loop needs.
   // 262k context; the other free picks are smaller, vision/omni variants, or have no tool support.
   freeModel: "nvidia/nemotron-3-super-120b-a12b:free",
+  // view_photo (src/tools/photo.ts). The chat model is text-first and answers an image with nothing, so photos are read by a
+  // dedicated vision model. Measured live through MIND on a 1024x700 estimate: gemini-2.5-flash-lite read every line item exactly
+  // in 2.4s for $0.000087; claude-haiku-5.5 was exact too in 8.1s for $0.00018. Explorer (free) users get the free gemma.
+  visionModel: "google/gemini-2.5-flash-lite",
+  visionFallback: ["anthropic/claude-haiku-5.5"],
+  visionFreeModel: "google/gemma-4-31b-it:free",
 };
 
 function posInt(v: string | undefined): number | undefined {
@@ -70,6 +76,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const rounds = Number(env.MINDCLAW_MAX_TOOL_ROUNDS ?? file.maxToolRoundsPerTurn);
 
   const mindApiKey = str(env.MIND_API_KEY) ?? str(file.mindApiKey) ?? "";
+  const visionFallback = nameList(env.DAEBOT_VISION_FALLBACK, undefined);
   return {
     mindBaseUrl: (str(env.MIND_BASE_URL) ?? str(file.mindBaseUrl) ?? DEFAULTS.mindBaseUrl).replace(/\/+$/, ""),
     mindApiKey,
@@ -78,6 +85,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     openrouterKey: str(env.OPENROUTER_API_KEY) ?? str(file.openrouterKey) ?? "",
     billing: (str(env.DAEBOT_BILLING) ?? str(file.billing) ?? "").toLowerCase() === "mind" ? "mind" : "openrouter",
     freeModel: str(env.DAEBOT_FREE_MODEL) ?? str(file.freeModel) ?? DEFAULTS.freeModel,
+    vision: {
+      model: str(env.DAEBOT_VISION_MODEL) ?? DEFAULTS.visionModel,
+      fallback: visionFallback.length ? visionFallback : [...DEFAULTS.visionFallback],
+      freeModel: str(env.DAEBOT_VISION_FREE_MODEL) ?? DEFAULTS.visionFreeModel,
+    },
     models: {
       // The main model comes from the environment only (MINDCLAW_MODEL); a stray config file never picks it.
       default: str(env.MINDCLAW_MODEL) ?? DEFAULTS.defaultModel,

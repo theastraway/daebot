@@ -41,6 +41,7 @@
   <symbol id="i-refresh" viewBox="0 0 20 20"><path d="M16 9a6 6 0 10-1.6 4.5M16 4.5V9h-4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-users" viewBox="0 0 20 20"><circle cx="8" cy="7" r="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2.8 16c.4-2.7 2.5-4.2 5.2-4.2s4.8 1.5 5.2 4.2M13.5 4.4a2.7 2.7 0 010 5.2M14.6 11.9c1.6.4 2.4 1.7 2.6 3.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
   <symbol id="i-logout" viewBox="0 0 20 20"><path d="M8 3.5H5.5A1.5 1.5 0 004 5v10a1.5 1.5 0 001.5 1.5H8M12.5 6.5L16 10l-3.5 3.5M16 10H8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-image" viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="12" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="7.6" cy="8.4" r="1.4" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M4 14.4l3.8-3.6 3 2.5 2.3-2 3.6 3.3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-copy" viewBox="0 0 20 20"><rect x="7" y="7" width="9" height="9" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M13 7V5.5A1.5 1.5 0 0011.5 4h-6A1.5 1.5 0 004 5.5v6A1.5 1.5 0 005.5 13H7" fill="none" stroke="currentColor" stroke-width="1.4"/></symbol>
 </svg>
 
@@ -130,8 +131,12 @@
         </div>
         <button class="bypass-chip" id="bypass-chip" type="button" title="Bypass is on in this chat: Daebot acts without asking. Click to turn it off." hidden><span class="bc-dot" aria-hidden="true"></span>Bypass on<svg class="ic"><use href="#i-x"/></svg></button>
       </div>
+      <p class="attach-note" id="attach-note" role="status" aria-live="polite" hidden></p>
+      <div class="attach-strip" id="attach-strip" role="group" aria-label="Photos to send" hidden></div>
       <form class="composer" id="composer" autocomplete="off">
         <textarea id="input" rows="1" placeholder="Message Daebot" aria-label="Message"></textarea>
+        <button class="attach" id="btn-attach" type="button" aria-label="Attach photos" title="Attach photos (or drop or paste them here)"><svg class="ic"><use href="#i-image"/></svg></button>
+        <input type="file" id="photo-input" accept="image/*" multiple hidden>
         <button class="mic" id="btn-mic" type="button" aria-label="Talk to Daebot (hold, or tap to start)" aria-pressed="false" title="Hold to talk, or tap to start and stop"><svg class="ic"><use href="#i-mic"/></svg></button>
         <button class="send" id="btn-send" type="submit" aria-label="Send"><svg class="ic"><use href="#i-send"/></svg></button>
         <button class="send stop" id="btn-stop" type="button" aria-label="Stop (Esc)" hidden><svg class="ic"><use href="#i-stop"/></svg></button>
@@ -139,6 +144,8 @@
       <p class="hint"><kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line · <kbd>Esc</kbd> to stop · hold the mic to talk</p>
     </div>
   </main>
+
+  <div class="drop-overlay" id="drop-overlay" hidden aria-hidden="true"><div class="drop-card"><svg class="ic"><use href="#i-image"/></svg><span>Drop photos to attach</span></div></div>
 
   <aside class="drawer" id="drawer" aria-label="Kernel violations" hidden>
     <div class="drawer-head">

@@ -26,7 +26,7 @@ export function createKernel(opts: {
   isolation?: IsolationOptions;
   clientNames?: string[];            // optional client registry for the semantic owner check
   tier?: Tier;                       // identity tier; default admin (unrestricted)
-  hosted?: boolean;                  // public deployment: only web_fetch and mind_* tools may run
+  hosted?: boolean;                  // public deployment: only web_fetch, view_photo and mind_* tools may run
 }): Kernel {
   const log: Violation[] = [];
   const tier: Tier = opts.tier ?? "admin";

@@ -7,6 +7,6 @@ export const hostedGate: Gate = {
   name: "hosted",
   preTool(_s, call) {
     if (hostedToolAllowed(call.name)) return undefined;
-    return { gate: "hosted", action: "block", reason: `${call.name} is not available on the hosted deployment (only web_fetch, decide and mind_* tools run here)` };
+    return { gate: "hosted", action: "block", reason: `${call.name} is not available on the hosted deployment (only web_fetch, decide, view_photo and mind_* tools run here)` };
   },
 };
