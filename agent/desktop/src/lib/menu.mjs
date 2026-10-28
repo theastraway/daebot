@@ -1,7 +1,7 @@
 // Menu templates (plain data; main.mjs feeds them to Menu.buildFromTemplate). Handlers are injected so this is testable.
 import { KERNEL_MODES } from "./kernel.mjs";
 
-export function buildTrayTemplate({ windowVisible, kernelMode, shortcut, handlers, update = null }) {
+export function buildTrayTemplate({ windowVisible, kernelMode, shortcut, handlers, update = null, keepWorking = true }) {
   return [
     { label: windowVisible ? "Hide Daebot" : "Show Daebot", accelerator: shortcut || undefined, registerAccelerator: false, click: handlers.toggle },
     { label: "New Session", click: handlers.newSession },
@@ -12,6 +12,7 @@ export function buildTrayTemplate({ windowVisible, kernelMode, shortcut, handler
         label: m.label, type: "radio", checked: id === kernelMode, click: () => handlers.setKernelMode(id),
       })),
     },
+    { label: "Keep working in the background", type: "checkbox", checked: !!keepWorking, click: () => handlers.setKeepWorking?.(!keepWorking) },
     { type: "separator" },
     ...(update ? [update, { type: "separator" }] : []),
     { label: "Sign out of MIND", click: handlers.signOut },

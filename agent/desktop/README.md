@@ -23,11 +23,18 @@ It never imports the agent loop, provider or kernel: it starts the gateway as a 
   raises a native notification for `confirm` events while the window is hidden or unfocused. No web/ changes needed.
 - Optional hook: `window.mindclawDesktop.notify({ title, body })` (validated, rate limited, honored only from the gateway origin).
 - Quit stops only the child it spawned (SIGTERM, SIGKILL after 3s). The child also exits if its stdin closes.
+- Keep working in the background (tray checkbox, `keepWorking`, default on): closing the window only hides it (the "close" handler calls
+  `preventDefault` + `hide`; only Quit, sign-out or an update install stops the app), and hiding or trimming the idle renderer never aborts a
+  turn, because the gateway is a separate process whose runs are server-owned and stop only on an explicit abort. While the setting is on the
+  app holds a `powerSaveBlocker("prevent-app-suspension")` so the machine does not idle-sleep mid-job; it changes no OS security setting.
+  The agent's `process` tool (start/status/tail/kill) runs long jobs as children of the gateway. While the screen is LOCKED those keep running
+  (plain processes, not tied to the session desktop), but screen capture and mouse/keyboard injection do not work (they need an unlocked,
+  interactive desktop). Background processes stop when the gateway quits (Quit, sign-out, update install), not when the window closes.
 - Single-instance lock; Cmd+N new session, Cmd+W hide window, Cmd+Q quit; dark/light follows the system.
 
 ## Config: `~/.mindclaw/desktop.json`
 ```json
-{ "shortcut": "Alt+Space", "kernelMode": "enforced", "idleTrimSeconds": 300 }
+{ "shortcut": "Alt+Space", "kernelMode": "enforced", "idleTrimSeconds": 300, "keepWorking": true }
 ```
 `shortcut` is an Electron accelerator (`null` disables it). Window bounds live in `~/.mindclaw/desktop-state.json`.
 Credentials: see Sign-in below. Without any usable key the gateway child reports why and the window shows a plain error page.

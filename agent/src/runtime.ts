@@ -58,7 +58,7 @@ const noKernelSpoof = (s: string): string => s.replace(/\[kernel/gi, "[ kernel")
  */
 export function botSessionTools(tools: Tool[]): Tool[] {
   return tools
-    .filter((t) => !["bash", "write_file", "edit_file"].includes(t.spec.name))
+    .filter((t) => !["bash", "process", "write_file", "edit_file"].includes(t.spec.name))
     .map((t) => (t.spec.name !== "web_fetch" ? t : {
       ...t,
       classFor: (a: Record<string, unknown>) => (/[?#]/.test(String(a.url ?? "")) || a.body !== undefined || (typeof a.method === "string" && a.method.toUpperCase() !== "GET") ? "outward" : t.class),

@@ -3,8 +3,9 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
+// keepWorking: keep the gateway running and the machine awake while the window is closed/hidden (see keepworking.mjs).
 // idleTrimSeconds: after the window has been hidden this long, its renderer is destroyed to cut idle RAM (0 = never).
-export const DEFAULT_CONFIG = Object.freeze({ shortcut: "Alt+Space", kernelMode: "enforced", idleTrimSeconds: 300 });
+export const DEFAULT_CONFIG = Object.freeze({ shortcut: "Alt+Space", kernelMode: "enforced", idleTrimSeconds: 300, keepWorking: true });
 export const KERNEL_MODE_NAMES = Object.freeze(["enforced", "shadow", "off"]);
 
 export function desktopHome(env = process.env) {
@@ -37,6 +38,7 @@ export function normalizeConfig(raw) {
     if (isValidAccelerator(raw.shortcut)) out.shortcut = raw.shortcut;
     if (typeof raw.kernelMode === "string" && KERNEL_MODE_NAMES.includes(raw.kernelMode.toLowerCase())) out.kernelMode = raw.kernelMode.toLowerCase();
     if (Number.isInteger(raw.idleTrimSeconds) && raw.idleTrimSeconds >= 0 && raw.idleTrimSeconds <= 86400) out.idleTrimSeconds = raw.idleTrimSeconds;
+    if (typeof raw.keepWorking === "boolean") out.keepWorking = raw.keepWorking;
     if (raw.shortcut === null || raw.shortcut === "") out.shortcut = null; // explicit opt-out
   }
   return out;
@@ -66,6 +68,16 @@ export function saveKernelMode(mode, path = configPath(), io) {
     if (p && typeof p === "object" && !Array.isArray(p)) existing = p;
   } catch { /* new file */ }
   writeJson(path, { ...existing, kernelMode: mode }, io);
+}
+
+/** Persist just keepWorking, preserving other user keys in desktop.json. */
+export function saveKeepWorking(on, path = configPath(), io) {
+  let existing = {};
+  try {
+    const p = JSON.parse(readFileSync(path, "utf8"));
+    if (p && typeof p === "object" && !Array.isArray(p)) existing = p;
+  } catch { /* new file */ }
+  writeJson(path, { ...existing, keepWorking: !!on }, io);
 }
 
 // ---- window bounds ----
