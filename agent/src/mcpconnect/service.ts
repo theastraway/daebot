@@ -334,7 +334,7 @@ export class McpConnectService {
     if (this.store.list(uid).length >= lim.maxServers) throw new McpConnectError(`You already have ${lim.maxServers} connected servers (the limit). Remove one first.`);
     const wanted = (typeof a.name === "string" && slugify(a.name)) || preset.nameBase || suggestName(u.hostname);
     const p: Pending = {
-      id: "mcp_" + randomBytes(9).toString("base64url"), uid, url: urlStr, host: u.host, publisher: "unknown",
+      id: "mcp_" + randomBytes(9).toString("base64url"), uid, url: urlStr, host: u.host, publisher: "self", // the user's own server: its read-only labels count
       authRequired: true, oauthOk: false, tools: null, toolsTruncated: false,
       suggestedName: this.uniqueName(uid, wanted), createdAt: now, expiresAt: now + PENDING_TTL_MS,
     };

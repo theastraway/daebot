@@ -5,7 +5,7 @@
 // DOM is built with createElement + textContent only. Everything a server said (names, descriptions) is untrusted text.
 
 export function publisherLabel(p) {
-  return p === "official" ? "Official publisher" : p === "community" ? "Community, listed in the MIND App Store" : "Unknown publisher";
+  return p === "official" ? "Official publisher" : p === "community" ? "Community, listed in the MIND App Store" : p === "self" ? "Your own server" : "Unknown publisher";
 }
 export function authLabel(p) {
   if (!p.authRequired) return "No sign-in needed";

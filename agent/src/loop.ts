@@ -403,6 +403,13 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
         perms.noteUse(ruleEval.rule);
         permitted = true;
         if (dangerAsk) dropPending();
+      } else if ((state.deniedCalls ?? []).includes(sig)) {
+        // The user already said no to this exact call in this chat (a retry, or a regenerated answer): refuse without a second card.
+        blockedThisTurn.push({ tool: tool.spec.name, gate: "permission" });
+        if (dangerAsk) dropPending();
+        messages.push(toolMsg(call, "not executed: the user already denied this exact request in this conversation. Do not retry it; offer another way or ask what they want."));
+        yield { type: "gate", verdict: { gate: "permission", action: "block", reason: "you already denied this exact request in this chat" }, enforced: true };
+        return "ok";
       } else if (turnInteractive) {
         const req = perms.open({ sessionId: id, facts, args });
         yield req.event;
@@ -412,6 +419,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
         if (dangerAsk) dropPending();
         if (res.allow) permitted = true;
         else {
+          if (!res.expired) state.deniedCalls = [...(state.deniedCalls ?? []), sig].slice(-200);
           blockedThisTurn.push({ tool: tool.spec.name, gate: "permission" });
           messages.push(toolMsg(call, res.expired
             ? "not executed: the user did not answer the permission card in time. Do not retry; ask in plain words if they still want it."
