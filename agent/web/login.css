@@ -34,6 +34,9 @@
 .login-link { display: block; text-align: center; text-decoration: none; }
 .login-alt { background: transparent; color: var(--ink); border-color: var(--line-strong); box-shadow: none; }
 .login-hint { margin: 0; color: var(--ink-3); font-size: 12.5px; }
+.get-app { display: grid; gap: 8px; margin-top: 6px; border-top: 1px solid var(--line); padding-top: 12px; }
+.get-app-btn { display: flex; align-items: center; justify-content: center; text-decoration: none; }
+.get-app-other { color: var(--ink-3); font-size: 12px; text-underline-offset: 3px; }
 .login-owner { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 10px; }
 .login-owner summary { cursor: pointer; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
 .login-owner form { display: grid; gap: 10px; margin-top: 10px; }
