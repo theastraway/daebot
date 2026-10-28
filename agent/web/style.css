@@ -507,3 +507,7 @@ button.model-badge[aria-expanded="true"] { box-shadow: 0 0 0 1px rgba(255,255,25
 .ver-line { margin: 0; font-weight: 550; font-size: 14px; color: var(--ink); }
 .ver-notes { margin: 0; padding-left: 18px; font-size: 13px; color: var(--ink-2); display: grid; gap: 4px; }
 .ver-notes:empty { display: none; }
+.app-form { display: grid; gap: 10px; }
+.app-field { display: grid; gap: 4px; font-size: 13px; color: var(--ink-2); }
+.app-field input { font: inherit; font-size: 14px; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); width: 100%; box-sizing: border-box; }
+.app-form .row { display: flex; gap: 8px; }

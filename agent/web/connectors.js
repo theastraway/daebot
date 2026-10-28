@@ -4,7 +4,7 @@
 // (POST /mcp/catalog/connect). The user's click on the card is the consent; nothing here connects anything.
 // DOM is built by apps.js (createElement + textContent only). Everything in the list is third-party text.
 
-const AUTH_TEXT = { none: "No sign-in", oauth: "Sign in (OAuth)", key: "API key", oauth_or_key: "OAuth or API key" };
+const AUTH_TEXT = { none: "No sign-in", oauth: "Sign in (OAuth)", key: "API key", oauth_or_key: "OAuth or API key", url_token: "Your URL + token" };
 
 export function entryOf(it) {
   const tags = [];
@@ -13,7 +13,7 @@ export function entryOf(it) {
   if (AUTH_TEXT[it.auth]) tags.push({ text: AUTH_TEXT[it.auth] });
   return {
     id: it.id, logo: String(it.id || "").replace(/^mcp:/, ""), name: it.name, blurb: it.blurb, tags, connected: !!it.connected, serverId: it.serverId, waiting: !!it.pendingId,
-    removeLabel: "Remove",
+    removeLabel: "Remove", form: it.form && Array.isArray(it.form.fields) ? it.form : undefined,
   };
 }
 
@@ -30,7 +30,18 @@ export function initConnectors({ apps, json, getMcp }) {
       return { entries: items.map(entryOf) };
     },
     handlers: {
-      async onConnect(e, ctl) {
+      async onConnect(e, ctl, values) {
+        if (e.form) {
+          // n8n / custom server: the address and token go straight to the gateway, which probes the server with the token before saving.
+          ctl.busy(true);
+          try {
+            await json("/mcp/catalog/connect-token", { method: "POST", body: JSON.stringify({ id: e.id, url: values && values.url, token: values && values.token, name: values && values.name }) });
+            apps.say(`Connected ${e.name}.`);
+            const mcp = getMcp(); if (mcp) mcp.load();
+            apps.refresh();
+            return true;
+          } catch (err) { ctl.busy(false); ctl.say(err && err.message ? err.message : `Could not connect ${e.name}.`, "warn"); return false; }
+        }
         ctl.busy(true);
         try {
           const r = await json("/mcp/catalog/connect", { method: "POST", body: JSON.stringify({ id: e.id }) });
