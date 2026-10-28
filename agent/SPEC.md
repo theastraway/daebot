@@ -50,7 +50,7 @@ THIRD-PARTY-NOTICES.md  provenance of any borrowed code (see section 7)
 
 ## 5. Gateway protocol (gateway/)
 `mindclaw serve` starts the daemon on 127.0.0.1:7777 (configurable). Auth: bearer token in
-~/.mindclaw/gateway-token (generated on first run, 0600). HTTP: `GET /health`, `GET /sessions`,
+~/.daebot/gateway-token (generated on first run, 0600). HTTP: `GET /health`, `GET /sessions`,
 `POST /sessions` {surface,title,resumeId} -> {sessionId}, `POST /sessions/:id/send` {text} -> SSE stream of AgentEvent,
 `POST /sessions/:id/abort`, `DELETE /sessions/:id`. WebSocket `/ws` carries ClientFrame/ServerFrame from types.ts.
 Static: `/` serves web/. Surfaces connect over this; a surface never imports loop/provider/kernel.
@@ -77,7 +77,7 @@ If a license allows reuse (MIT, Apache-2.0, BSD, ISC), code may be used verbatim
 - Code only against src/types.ts. Need a type change? Write the proposal at the end of your report; do not edit types.ts.
 - Touch only your assigned directories.
 - Tests: `node --test --test-concurrency=2`. Never run the whole repo at default concurrency. No network in unit tests (fake provider/fake fetch).
-- Never print or write secrets. API keys come from env (MIND_API_KEY, OPENROUTER_API_KEY) or ~/.mindclaw/config.json.
+- Never print or write secrets. API keys come from env (MIND_API_KEY, OPENROUTER_API_KEY) or ~/.daebot/config.json.
 - Do not launch GUI apps, do not drive the user's mouse/windows, do not run `agent-browser close --all` or any kill-all.
 - Do not git commit, push, or run mship. The orchestrator commits.
 - Finish by reporting: files created, test results (the summary line, not the exit code of a piped command), open questions, and the exact commands to run it.

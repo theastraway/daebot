@@ -1,4 +1,4 @@
-// First-run sign-in for the desktop app: one pasted MIND API key, kept in a 0600 file under ~/.mindclaw and handed to the
+// First-run sign-in for the desktop app: one pasted MIND API key, kept in a 0600 file under ~/.daebot and handed to the
 // gateway child through its environment (never argv, never a log line, never a URL). Pure helpers + small fs wrappers.
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -37,7 +37,7 @@ export function clearKey(path = keyPath()) {
  *   { mode: "mind", key }       bill to the user's MIND account (default). key may be undefined when the gateway child finds one itself.
  *   { mode: "openrouter" }      developer setup: DAEBOT_BILLING is not "mind", no MIND key anywhere, an OpenRouter key exists.
  *   { mode: "needs-key" }       nothing usable: show the sign-in window.
- * `config` is the parsed ~/.mindclaw/config.json (or {}).
+ * `config` is the parsed ~/.daebot/config.json (or {}).
  */
 export function resolveSignIn({ env = process.env, saved, config = {} } = {}) {
   const fromEnv = looksLikeMindKey(env.MIND_API_KEY) ? env.MIND_API_KEY.trim() : undefined;

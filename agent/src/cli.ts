@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-// MINDClaw CLI. Subcommands: chat (default), run "<prompt>", serve. Flags: --shadow, --local, --version.
+// Daebot CLI. Subcommands: chat (default), run "<prompt>", serve. Flags: --shadow, --local, --version.
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { createInterface } from "node:readline";
 import { loadConfig } from "./config.ts";
+import { migrateHome } from "./home.ts";
 import { DailyCostCap, HostedConfigError, hostedPort, isHostedEnv, loadHostedOptions, parseDailyCap } from "./hosted.ts";
 import type { AuthContext } from "./auth/tenancy.ts";
 import { BootCache } from "./mind/boot-cache.ts";
@@ -52,7 +53,7 @@ async function makeRuntime(cfg: ReturnType<typeof loadConfig>, argv: string[] = 
 function preflight(cfg: ReturnType<typeof loadConfig>): string | undefined {
   // DAEBOT_BILLING=mind: calls are billed to MIND accounts (the owner login to MIND_API_KEY), so no OpenRouter key is needed.
   if (cfg.billing === "mind") return cfg.mindApiKey ? undefined : "DAEBOT_BILLING=mind needs MIND_API_KEY (the owner login is billed to that MIND account).";
-  if (!cfg.openrouterKey) return "OPENROUTER_API_KEY is not set (env or ~/.mindclaw/config.json).";
+  if (!cfg.openrouterKey) return "OPENROUTER_API_KEY is not set (env or ~/.daebot/config.json).";
   return undefined;
 }
 
@@ -87,7 +88,7 @@ async function chat(cfg: ReturnType<typeof loadConfig>, plain: boolean): Promise
   const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: "> " });
   let ctl: AbortController | undefined;
   rl.on("SIGINT", () => { if (ctl) ctl.abort(); else rl.close(); });
-  process.stdout.write(`MINDClaw ${version()} (${cfg.shadow ? "shadow" : cfg.kernel ? "kernel on" : "kernel off"}). /quit to exit, ctrl-c aborts a turn.\n`);
+  process.stdout.write(`Daebot ${version()} (${cfg.shadow ? "shadow" : cfg.kernel ? "kernel on" : "kernel off"}). /quit to exit, ctrl-c aborts a turn.\n`);
   rl.prompt();
   for await (const line of rl) {
     const text = line.trim();
@@ -179,7 +180,7 @@ async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promis
     // Never print the login secret (platform logs are not a safe place for it).
     process.stdout.write(`MINDClaw hosted gateway listening on ${gw.url} (login required; allowed hosts: ${hosted.allowedHosts.join(", ")}; MIND sign-in: ${auth?.store.enabled ? `on (${auth.store.count()} users${auth.oauth ? ", OAuth" : ""})` : "off, set DAEBOT_SECRET_KEY to enable"})\n`);
   } else {
-    process.stdout.write(`MINDClaw gateway on ${gw.url} (token in ~/.mindclaw/gateway-token)\n`);
+    process.stdout.write(`Daebot gateway on ${gw.url} (token in ~/.daebot/gateway-token)\n`);
     // Machine-readable line for the desktop shell and scripts.
     process.stdout.write(`${JSON.stringify({ mindclawGateway: { url: gw.url, token: gw.token } })}\n`);
   }
@@ -210,6 +211,7 @@ export async function main(argv: string[]): Promise<number> {
   const rest = argv.filter((a, i) => !a.startsWith("--") && !(i > 0 && ["--port", "--host"].includes(argv[i - 1])));
   if (flags.has("--version") || flags.has("-v")) { process.stdout.write(`${version()}\n`); return 0; }
   if (flags.has("--shadow")) process.env.MINDCLAW_SHADOW = "1";
+  if (!isHostedEnv(process.env, argv)) migrateHome(); // a pre-rename ~/.mindclaw becomes ~/.daebot once, before anything reads config.json (hosted sets its paths explicitly and has nothing to move)
   const cfg = loadConfig();
   const cmd = rest[0] ?? "chat";
   if (cmd === "run") {

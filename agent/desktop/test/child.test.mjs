@@ -25,7 +25,8 @@ const READY = JSON.stringify({ mindclaw: "ready", url: "http://127.0.0.1:50000",
 test("parseReadyLine: JSON ready/error, stock banner, and noise", () => {
   assert.deepEqual(parseReadyLine(READY), { url: "http://127.0.0.1:50000", token: "t0k" });
   assert.deepEqual(parseReadyLine('{"mindclaw":"error","message":"no key"}'), { error: "no key" });
-  assert.deepEqual(parseReadyLine("MINDClaw gateway on http://127.0.0.1:7777 (token in ~/.mindclaw/gateway-token)"), { url: "http://127.0.0.1:7777" });
+  assert.deepEqual(parseReadyLine("Daebot gateway on http://127.0.0.1:7777 (token in ~/.daebot/gateway-token)"), { url: "http://127.0.0.1:7777" });
+  assert.deepEqual(parseReadyLine("MINDClaw gateway on http://127.0.0.1:7777 (token in ~/.mindclaw/gateway-token)"), { url: "http://127.0.0.1:7777" }, "an older build's banner still parses");
   for (const n of ["", "hello", "{bad json", '{"other":1}', '{"mindclaw":"ready"}']) assert.equal(parseReadyLine(n), null);
 });
 

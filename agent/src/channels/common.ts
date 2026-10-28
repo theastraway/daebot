@@ -2,8 +2,8 @@
 // serialization, event draining, per-channel formatting/chunking, tier policy, rate limiting,
 // and channel config loading. Original code (no third-party source copied).
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { daebotHome } from "../home.ts";
 import type { AgentEvent, AgentSession } from "../types.ts";
 
 // ---------- gateway + config types ----------
@@ -420,10 +420,10 @@ function tiersFromEnv(env: NodeJS.ProcessEnv, prefix: string): Record<string, Ti
   return t;
 }
 
-/** Build ChannelsConfig from ~/.mindclaw/channels.json (or MINDCLAW_CHANNELS_FILE) overlaid with env.
+/** Build ChannelsConfig from ~/.daebot/channels.json (or MINDCLAW_CHANNELS_FILE) overlaid with env.
  *  Env wins. Tokens are never logged. */
 export function loadChannelsConfig(env: NodeJS.ProcessEnv = process.env, file?: string): ChannelsConfig {
-  const path = file ?? env.MINDCLAW_CHANNELS_FILE ?? join(homedir(), ".mindclaw", "channels.json");
+  const path = file ?? env.MINDCLAW_CHANNELS_FILE ?? join(daebotHome(env), "channels.json");
   let fromFile: ChannelsConfig = {};
   try { fromFile = JSON.parse(readFileSync(path, "utf8")) as ChannelsConfig; } catch { /* absent or invalid: env only */ }
   const cfg: ChannelsConfig = { ...fromFile };

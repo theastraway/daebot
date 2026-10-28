@@ -1,5 +1,5 @@
 // Remembered MIND accounts for the desktop app: sign in once, switch any time. Same secure storage as the single key
-// (a 0600 file in a 0700 directory under ~/.mindclaw, never argv, never a log line, never the web UI): accounts.json holds every
+// (a 0600 file in a 0700 directory under ~/.daebot, never argv, never a log line, never the web UI): accounts.json holds every
 // signed-in account's key, and the active account's key is mirrored into the legacy `mind-key` file so everything that already reads
 // that file keeps working. The web UI only ever sees { id, name, active } (publicList), never a key.
 //

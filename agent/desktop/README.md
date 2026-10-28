@@ -12,7 +12,7 @@ It never imports the agent loop, provider or kernel: it starts the gateway as a 
   (`ELECTRON_RUN_AS_NODE`, Node 24 with type stripping). The entry imports `agent/src/gateway/index.ts` and starts on a random
   loopback port. Both paths print one JSON line with the real port and the token (`{"mindclaw":"ready",...}` from the entry file,
   `{"mindclawGateway":{...}}` from the binary). The token only travels over that pipe and
-  is never logged. Both persist sessions to `~/.mindclaw/data`, bill the user's MIND account (`DAEBOT_BILLING=mind`) and keep the
+  is never logged. Both persist sessions to `~/.daebot/data`, bill the user's MIND account (`DAEBOT_BILLING=mind`) and keep the
   local bash/fs tools with the kernel enforced.
 - Main waits for `/health`, then loads `http://127.0.0.1:<port>/?token=...` (token in the query once; the web UI scrubs it).
 - Window: `contextIsolation`, no `nodeIntegration`, `sandbox`, in-memory session partition, all permission requests denied,
@@ -32,19 +32,22 @@ It never imports the agent loop, provider or kernel: it starts the gateway as a 
   interactive desktop). Background processes stop when the gateway quits (Quit, sign-out, update install), not when the window closes.
 - Single-instance lock; Cmd+N new session, Cmd+W hide window, Cmd+Q quit; dark/light follows the system.
 
-## Config: `~/.mindclaw/desktop.json`
+## Home folder: `~/.daebot`
+Everything Daebot keeps on the machine (config, sign-in, accounts, chats) lives in `~/.daebot` (Windows: `%USERPROFILE%\.daebot`). `DAEBOT_HOME` (or the older `MINDCLAW_DESKTOP_HOME`) overrides it. An install from before the rename has `~/.mindclaw`: on first start it is renamed to `~/.daebot` once and `~/.mindclaw` is left as a link to it, so an older Daebot still finds its files. If the rename cannot be done (another disk, a locked file on Windows) that run keeps using `~/.mindclaw` and tries again next time; when both folders exist `~/.daebot` is used and `~/.mindclaw` is never touched. Code: `src/lib/home.mjs` (mirrors `agent/src/home.ts`).
+
+## Config: `~/.daebot/desktop.json`
 ```json
 { "shortcut": "Alt+Space", "kernelMode": "enforced", "idleTrimSeconds": 300, "keepWorking": true }
 ```
-`shortcut` is an Electron accelerator (`null` disables it). Window bounds live in `~/.mindclaw/desktop-state.json`.
+`shortcut` is an Electron accelerator (`null` disables it). Window bounds live in `~/.daebot/desktop-state.json`.
 Credentials: see Sign-in below. Without any usable key the gateway child reports why and the window shows a plain error page.
 
 ## Sign-in (first run)
 No OpenRouter key is needed. On first launch the app shows a small window asking for a MIND API key (m-i-n-d.ai, Settings, Developer,
-API Keys). It checks the key against MIND (`GET <MIND_BASE_URL>/profile`), then stores it in `~/.mindclaw/mind-key` (mode 0600, inside a
+API Keys). It checks the key against MIND (`GET <MIND_BASE_URL>/profile`), then stores it in `~/.daebot/mind-key` (mode 0600, inside a
 0700 folder). The key reaches the gateway child through its environment (`MIND_API_KEY` + `DAEBOT_BILLING=mind`), never argv, a URL
 or a log line. Closing the window quits the app. The menu bar item has **Sign out of MIND** (deletes the file and asks again).
-Developer setups keep working: with `OPENROUTER_API_KEY` (env or `~/.mindclaw/config.json`) and no MIND key, the app skips the prompt
+Developer setups keep working: with `OPENROUTER_API_KEY` (env or `~/.daebot/config.json`) and no MIND key, the app skips the prompt
 and bills OpenRouter as before; `MIND_API_KEY` in the env or `mindApiKey` in `config.json` is used as is.
 
 ## Run

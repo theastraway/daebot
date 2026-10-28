@@ -18,8 +18,8 @@ export function parseReadyLine(line) {
     } catch { /* not ours */ }
     return null;
   }
-  // Fallback for the stock `mindclaw serve` banner: "MINDClaw gateway on http://127.0.0.1:7777 (token in ...)".
-  const m = /^MINDClaw gateway on (https?:\/\/\S+)/.exec(s);
+  // Fallback for the stock `daebot serve` banner: "Daebot gateway on http://127.0.0.1:7777 (token in ...)" (older builds said "MINDClaw gateway on").
+  const m = /^(?:Daebot|MINDClaw) gateway on (https?:\/\/\S+)/.exec(s);
   return m ? { url: m[1] } : null;
 }
 

@@ -21,7 +21,7 @@ test("token file is created 0600 with 32 random bytes hex under a temp HOME", as
   process.env.HOME = home;
   try {
     const gw = await startGateway({ runtime: fakeRuntime(), port: 0, staticDir: tmpStatic().dir });
-    const p = join(home, ".mindclaw", "gateway-token");
+    const p = join(home, ".daebot", "gateway-token");
     assert.equal(statSync(p).mode & 0o777, 0o600);
     assert.match(readFileSync(p, "utf8").trim(), /^[0-9a-f]{64}$/);
     assert.equal(gw.token, readFileSync(p, "utf8").trim());

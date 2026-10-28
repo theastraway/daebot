@@ -151,7 +151,7 @@ function tty(client: SessionClient, extra: { env?: Record<string, string>; histo
 test("interactive: raw mode on, typing + Enter streams a reply, redraws only the live region, Ctrl+D quits", async () => {
   const { app, stdin, stdout, done } = tty(fakeClient());
   assert.equal(app.interactive, true);
-  await until(() => stdout.buf.includes("MINDClaw terminal"));
+  await until(() => stdout.buf.includes("Daebot terminal"));
   assert.equal(stdin.raw, true);
   assert.match(stdout.buf, /\x1b\[\?2004h/, "bracketed paste enabled");
   stdin.feed("hi there");
@@ -169,7 +169,7 @@ test("interactive: raw mode on, typing + Enter streams a reply, redraws only the
 
 test("interactive: NO_COLOR emits no SGR colour sequences but still positions the cursor", async () => {
   const { stdin, stdout, done } = tty(fakeClient(), { env: { NO_COLOR: "1" } });
-  await until(() => stdout.buf.includes("MINDClaw terminal"));
+  await until(() => stdout.buf.includes("Daebot terminal"));
   stdin.feed("x\r");
   await until(() => stdout.text.includes("echo: x"));
   assert.doesNotMatch(stdout.buf, /\x1b\[[0-9;]*m/);
@@ -179,7 +179,7 @@ test("interactive: NO_COLOR emits no SGR colour sequences but still positions th
 
 test("interactive: with colour, rows carry SGR", async () => {
   const { stdin, stdout, done } = tty(fakeClient());
-  await until(() => stdout.buf.includes("MINDClaw terminal"));
+  await until(() => stdout.buf.includes("Daebot terminal"));
   stdin.feed("x\r");
   await until(() => stdout.text.includes("echo: x"));
   assert.match(stdout.buf, /\x1b\[3[0-9]m/);
@@ -194,7 +194,7 @@ test("interactive: Ctrl+C aborts the running turn; a second Ctrl+C within 2s qui
   };
   const client = fakeClient({ script: (text, signal) => script(text, signal) });
   const { stdin, stdout, done } = tty(client, { now: () => t });
-  await until(() => stdout.buf.includes("MINDClaw terminal"));
+  await until(() => stdout.buf.includes("Daebot terminal"));
   stdin.feed("go\r");
   await until(() => stdout.text.includes("streaming part one"));
   stdin.feed("\x03");
@@ -209,7 +209,7 @@ test("interactive: Ctrl+C aborts the running turn; a second Ctrl+C within 2s qui
 test("interactive: a lone Ctrl+C when idle does not quit; after 2s it does not count as a double press", async () => {
   let t = 1000;
   const { stdin, stdout, done } = tty(fakeClient(), { now: () => t });
-  await until(() => stdout.buf.includes("MINDClaw terminal"));
+  await until(() => stdout.buf.includes("Daebot terminal"));
   stdin.feed("\x03");
   await until(() => stdout.text.includes("press ctrl+c again to quit"));
   t += 2500;
@@ -224,7 +224,7 @@ test("interactive: a lone Ctrl+C when idle does not quit; after 2s it does not c
 
 test("interactive: Ctrl+D with text in the buffer does not quit", async () => {
   const { stdin, stdout, done } = tty(fakeClient());
-  await until(() => stdout.buf.includes("MINDClaw terminal"));
+  await until(() => stdout.buf.includes("Daebot terminal"));
   stdin.feed("ab\x01\x04");   // Ctrl+A, Ctrl+D deletes forward
   await tick(60);
   stdin.feed("\r");
@@ -235,7 +235,7 @@ test("interactive: Ctrl+D with text in the buffer does not quit", async () => {
 test("interactive: Shift+Enter inserts a newline, Enter sends the multi-line message", async () => {
   const client = fakeClient();
   const { stdin, stdout, done } = tty(client);
-  await until(() => stdout.buf.includes("MINDClaw terminal"));
+  await until(() => stdout.buf.includes("Daebot terminal"));
   stdin.feed("line1\x1b[13;2uline2\r");
   await until(() => client.sent.length === 1);
   assert.deepEqual(client.sent, ["line1\nline2"]);
@@ -252,7 +252,7 @@ test("interactive: messages typed during a turn are queued and sent afterwards",
     })(),
   });
   const { stdin, stdout, done } = tty(client);
-  await until(() => stdout.buf.includes("MINDClaw terminal"));
+  await until(() => stdout.buf.includes("Daebot terminal"));
   stdin.feed("first\r");
   await until(() => client.sent.length === 1);
   stdin.feed("second\r");
@@ -267,7 +267,7 @@ test("interactive: history persists to the history file and is recalled with Up 
   const dir = mkdtempSync(join(tmpdir(), "mc-hist-"));
   const path = join(dir, "history");
   const a = tty(fakeClient(), { history: path });
-  await until(() => a.stdout.buf.includes("MINDClaw terminal"));
+  await until(() => a.stdout.buf.includes("Daebot terminal"));
   a.stdin.feed("remember me\r");
   await until(() => a.stdout.text.includes("echo: remember me"));
   a.stdin.feed("\x04"); await a.done;
@@ -276,7 +276,7 @@ test("interactive: history persists to the history file and is recalled with Up 
   writeFileSync(path, JSON.stringify("older") + "\n" + JSON.stringify("multi\nline") + "\n");
   const client = fakeClient();
   const b = tty(client, { history: path });
-  await until(() => b.stdout.buf.includes("MINDClaw terminal"));
+  await until(() => b.stdout.buf.includes("Daebot terminal"));
   b.stdin.feed("\x1b[A");           // Up: newest entry (multi-line)
   b.stdin.feed("\x1b[A");           // Up inside the multi-line buffer: cursor to first row
   b.stdin.feed("\x1b[A");           // Up at row 0: older entry
@@ -289,7 +289,7 @@ test("interactive: history persists to the history file and is recalled with Up 
 
 test("interactive: terminal resize redraws the live region at the new width", async () => {
   const { stdin, stdout, done } = tty(fakeClient());
-  await until(() => stdout.buf.includes("MINDClaw terminal"));
+  await until(() => stdout.buf.includes("Daebot terminal"));
   const before = stdout.buf.length;
   stdout.columns = 50;
   stdout.emit("resize");
@@ -303,7 +303,7 @@ test("interactive: terminal resize redraws the live region at the new width", as
 test("interactive: Tab completes a unique slash command", async () => {
   const client = fakeClient();
   const { stdin, stdout, done } = tty(client);
-  await until(() => stdout.buf.includes("MINDClaw terminal"));
+  await until(() => stdout.buf.includes("Daebot terminal"));
   stdin.feed("/viol\t\r");
   await until(() => stdout.text.includes("No violations recorded"));
   stdin.feed("\x04"); await done;

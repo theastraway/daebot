@@ -43,9 +43,10 @@ test("saveKernelMode preserves other keys, is 0600, and round-trips", () => {
   assert.equal(statSync(p).mode & 0o777, 0o600);
 });
 
-test("desktop home honors override env", () => {
+test("desktop home is ~/.daebot and honors the override envs", () => {
   assert.equal(desktopHome({ MINDCLAW_DESKTOP_HOME: "/x/y" }), "/x/y");
-  assert.equal(configPath({ HOME: "/h" }), "/h/.mindclaw/desktop.json");
+  assert.equal(desktopHome({ DAEBOT_HOME: "/x/z", MINDCLAW_DESKTOP_HOME: "/x/y" }), "/x/z");
+  assert.equal(configPath({ HOME: "/h" }), "/h/.daebot/desktop.json");
 });
 
 test("window bounds: clamps size, drops off-screen position, keeps visible position", () => {

@@ -15,6 +15,7 @@ import { buildSignInPage } from "./lib/signin-page.mjs";
 import { signInWithMind } from "./lib/mind-signin.mjs";
 import { loadConfig, saveKernelMode, saveKeepWorking, configPath, statePath, loadState, writeJson, resolveBounds, desktopHome } from "./lib/config.mjs";
 import { isKernelMode } from "./lib/kernel.mjs";
+import { migrateHome } from "./lib/home.mjs";
 import { applyKeepWorking } from "./lib/keepworking.mjs";
 import { installMediaPermissions } from "./lib/media-permission.mjs";
 import { buildAppMenuTemplate, buildTrayTemplate } from "./lib/menu.mjs";
@@ -38,6 +39,9 @@ if (SMOKE) {
 }
 const gotLock = SMOKE ? true : app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
+// Daebot's home is ~/.daebot. A pre-rename install has ~/.mindclaw: move it once, here, before anything reads desktop.json, accounts.json or
+// mind-key and before the gateway child starts (lib/home.mjs; if the move fails this run keeps using ~/.mindclaw and the child follows).
+if (!SMOKE && gotLock) migrateHome(process.env, log);
 
 let config = loadConfig(SMOKE ? join(app.getPath("userData"), "desktop.json") : configPath());
 const agentRoot = app.isPackaged ? join(process.resourcesPath, "agent") : resolve(here, "..", "..");
