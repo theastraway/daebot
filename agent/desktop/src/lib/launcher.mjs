@@ -51,6 +51,8 @@ export function findBundledBinary({ resourcesPath, platform = process.platform, 
 export function buildSpawnPlan(o) {
   const env = { ...o.baseEnv, ...envForKernelMode(o.kernelMode), MINDCLAW_AGENT_ROOT: o.agentRoot, MINDCLAW_PARENT_PIPE: "1" };
   if (o.mindKey) { env.DAEBOT_BILLING = "mind"; env.MIND_API_KEY = o.mindKey; }
+  // Match daebot.live: Bots (Sessions | Bots toggle, bot_talk) is on in the app. An explicit value in the environment still wins.
+  if (env.DAEBOT_BOTS_ENABLED === undefined) env.DAEBOT_BOTS_ENABLED = "1";
   if (o.fake) env.MINDCLAW_DESKTOP_FAKE = "1";
   if (o.tokenPath) env.MINDCLAW_DESKTOP_TOKEN_PATH = o.tokenPath;
   let plan;
