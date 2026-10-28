@@ -216,3 +216,14 @@ test("HTTP: bypass is refused (403 waiver_required) until the waiver is recorded
 test("sanity: factsOf is what the loop prompts on (guards the helper used above)", () => {
   assert.equal(factsOf("mind_email", "outward", { action: "send", to: "bob@acme.com" }, "/p").cls, "outward");
 });
+
+test("bypass still blocks a call the user denied earlier in this chat", async () => {
+  const t = fakeTool("mind_email", "outward", "sent");
+  const { perms, session, setMode } = make([{ calls: [mail()] }, { text: "no" }, { calls: [mail()] }, { text: "still no" }], [t], { mode: undefined, waiver: true });
+  for await (const e of session.send("email bob", { interactive: true })) if (e.type === "permission") setImmediate(() => perms.decide(e.id, { decision: "deny", remember: "once" }));
+  assert.equal(t.calls.length, 0);
+  setMode("bypass");
+  const ev = await collect(session.send("again", { interactive: true }));
+  assert.equal(t.calls.length, 0, "the earlier denial holds under bypass");
+  assert.ok(ev.some((e) => e.type === "gate" && (e as any).verdict.gate === "permission"));
+});

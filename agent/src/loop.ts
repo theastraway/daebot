@@ -401,10 +401,12 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     // This chat's mode. Bypass is honored only with the account's recorded waiver; otherwise the account default stands.
     const chatMode = perms ? safe(() => perms.effectiveMode(deps.permMode?.()), undefined as SessionPermMode | undefined) : undefined;
     const bypass = chatMode === "bypass";
-    if (perms && facts && enforced() && (dangerAsk || (!v && perms.needsPrompt(facts, chatMode)))) {
+    // A call the user already denied in this chat stays denied, bypass or not.
+    const deniedBefore = (state.deniedCalls ?? []).includes(callSignature(call));
+    if (perms && facts && enforced() && (dangerAsk || (!v && perms.needsPrompt(facts, chatMode)) || (bypass && deniedBefore))) {
       const sig = callSignature(call);
       const dropPending = () => { state.confirmations = state.confirmations.filter((c) => !(c.forCallSignature === sig && c.grantedAtUserMsg === undefined)); };
-      if (bypass && dangerAsk) {
+      if (bypass && dangerAsk && !deniedBefore) {
         // Bypass: the danger gate's typed "send it" is auto-granted. The user's own deny rules were applied above; every other gate still refuses.
         permitted = true;
         dropPending();
