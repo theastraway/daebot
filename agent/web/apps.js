@@ -12,9 +12,7 @@
 //       registers a section; it loads when the card opens and after the user comes back to the tab. `search` (a placeholder
 //       string) adds a search box that filters the section's entries by name, category, description and tags.
 //   An entry can also carry { tags: [{ text, tone? }], waiting?, removeLabel? }; handlers can add onManage(entry) for a Manage button on connected rows.
-//   An entry can carry { children: [entry, ...] }: connectors that are the SAME product as the app (GitHub is both a MIND integration and an MCP
-//   connector). They draw inside the app's own group, under it, each with its own button, driven by handlers.child (same shape as handlers).
-//   One product, one row: the Apps card never shows two rows with the same name.
+//   One product, one row: the Apps card never shows two rows with the same name, and a row never has a second row inside it.
 //   api.suspend() / api.resume() hide the card while another dialog (the MCP consent card) is the only thing on screen.
 // DOM is built with createElement + textContent only; no innerHTML; same-origin requests only.
 import { markFor } from "/apps-icons.js";
@@ -112,38 +110,26 @@ function openForm(e, ctl, handlers, confirm, rowBtn) {
   host.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
-/** The brand's dot-matrix LED for a part of an app: lit when it is connected. */
-function ledFor(e) {
-  const dot = el("span", `app-led${e.connected ? " is-on" : ""}`);
-  dot.setAttribute("aria-hidden", "true");
-  return dot;
-}
-
 /** Renders `entries` into `body`. Safe to call again with fresh entries; keeps nothing between calls. */
 export function renderEntries(body, entries, handlers = {}) {
   body.replaceChildren();
   if (!entries.length) { body.append(el("p", "apps-empty", "Nothing here yet.")); return; }
   for (const e of entries) {
-    const kids = Array.isArray(e.children) ? e.children : [];
-    const [row, confirm] = rowFor(e, handlers, false);
-    if (!kids.length) { body.append(row, confirm); continue; }
-    const group = el("div", "app-group"); group.dataset.group = e.id;
-    group.append(row, confirm);
-    for (const k of kids) { const [kr, kc] = rowFor(k, handlers.child || {}, true); group.append(kr, kc); }
-    body.append(group);
+    const [row, confirm] = rowFor(e, handlers);
+    body.append(row, confirm);
   }
 }
 
-/** One row and its confirm area. `sub` rows are the connector inside an app's group: an LED instead of a logo, no tags. */
-function rowFor(e, handlers, sub) {
+/** One row and its confirm area. */
+function rowFor(e, handlers) {
   {
     const st = statusOf(e);
-    const row = el("div", sub ? "app-row is-sub" : "app-row"); row.dataset.app = e.id;
+    const row = el("div", "app-row"); row.dataset.app = e.id;
     const main = el("div", "app-main");
     main.append(el("div", "app-name", e.name));
     const stateEl = el("div", `app-state is-${st.tone}`, st.text); stateEl.setAttribute("role", "status");
     main.append(stateEl);
-    if (!sub && Array.isArray(e.tags) && e.tags.length) {
+    if (Array.isArray(e.tags) && e.tags.length) {
       const tags = el("div", "app-tags");
       for (const t of e.tags) if (t && t.text) tags.append(el("span", `app-tag${t.tone ? ` is-${t.tone}` : ""}`, t.text));
       main.append(tags);
@@ -161,7 +147,7 @@ function rowFor(e, handlers, sub) {
       actions.append(manage);
     }
     actions.append(btn);
-    row.append(sub ? ledFor(e) : logoFor(e), main, actions);
+    row.append(logoFor(e), main, actions);
     const confirm = el("div", "app-confirm"); confirm.hidden = true;
     const ctl = {
       busy(on) { btn.disabled = on; if (on) { btn.dataset.label = btn.textContent; btn.textContent = "Working…"; } else if (btn.dataset.label) { btn.textContent = btn.dataset.label; delete btn.dataset.label; } },
@@ -246,7 +232,7 @@ export function initApps(ctx) {
   function paint(s) {
     const needle = s.search ? s.search.value.trim().toLowerCase() : "";
     const all = s.entries || [];
-    const shown = needle ? all.filter((e) => [e.name, e.blurb, ...(e.tags || []).map((t) => t.text), ...(e.children || []).map((k) => k.name)].join(" ").toLowerCase().includes(needle)) : all;
+    const shown = needle ? all.filter((e) => [e.name, e.blurb, ...(e.tags || []).map((t) => t.text)].join(" ").toLowerCase().includes(needle)) : all;
     renderEntries(s.body, shown, { ...(s.def.handlers || {}), formHost: s.formHost });
     if (needle && !shown.length) s.body.replaceChildren(el("p", "apps-empty", `Nothing matches "${s.search.value.trim().slice(0, 40)}".`));
     if (s.count) s.count.textContent = all.length ? (needle ? `${shown.length} of ${all.length}` : `${all.length}`) : "";
