@@ -32,10 +32,19 @@ export class ProviderHttpError extends Error {
 
 const retryable = (status: number) => status === 429 || status >= 500;
 
+// Only the newest image-bearing tool results are sent as images: older screenshots are stale and cost tokens every call.
+export const MAX_IMAGE_MESSAGES = 2;
+
 export function toWireMessages(messages: Message[]): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = [];
   let seenNonSystem = false;
+  const withImages = messages.filter((m) => m.role === "tool" && m.images?.length);
+  const sendImages = new Set(withImages.slice(-MAX_IMAGE_MESSAGES));
+  // Tool messages must stay contiguous after their assistant turn, so images are held until the tool run ends.
+  let pendingImages: Record<string, unknown>[] = [];
+  const flushImages = () => { if (pendingImages.length) { out.push(...pendingImages); pendingImages = []; } };
   for (const m of messages) {
+    if (m.role !== "tool") flushImages();
     if (m.role === "system") {
       // Mid-conversation system nudges are folded into a user turn: not every model behind
       // OpenRouter accepts system messages after the first assistant/user message.
@@ -56,10 +65,18 @@ export function toWireMessages(messages: Message[]): Record<string, unknown>[] {
       out.push(wire);
     } else if (m.role === "tool") {
       out.push({ role: "tool", tool_call_id: m.toolCallId, content: m.content });
+      // Most providers only accept images in user content, so the screenshot follows the tool results as a user turn.
+      if (m.images?.length && sendImages.has(m)) {
+        pendingImages.push({ role: "user", content: [
+          { type: "text", text: `[screenshot from ${m.name ?? "tool"} ${m.toolCallId ?? ""}]`.replace(/\s+]/, "]") },
+          ...m.images.map((url) => ({ type: "image_url", image_url: { url } })),
+        ] });
+      }
     } else {
       out.push({ role: "user", content: m.content });
     }
   }
+  flushImages();
   return out;
 }
 

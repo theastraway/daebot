@@ -89,7 +89,8 @@ export function createFileStore(dir: string): SessionStore {
   return {
     save(rec) {
       const file = join(root, fileNameFor(rec.id));
-      const data = JSON.stringify(rec);
+      // Screenshots are sent to the model once and never written to disk (size, and they can show anything on screen).
+      const data = JSON.stringify(rec, (k, v) => (k === "images" ? undefined : v));
       const prev = queues.get(rec.id) ?? Promise.resolve();
       const next = prev.catch(() => {}).then(async () => {
         await mkdir(root, { recursive: true, mode: 0o700 });
