@@ -816,7 +816,7 @@ async function ping() {
   try {
     const r = await fetch("/health", { cache: "no-store" });
     setOnline(r.ok);
-    if (r.ok) { const h = await r.json().catch(() => ({})); state.hosted = h.hosted === true; applyBotsFlag(h.bots === true); els.btnLogout.hidden = !state.hosted; if (h.model !== state.model) { state.model = h.model || ""; renderConn(); models.setHealth(typeof state.model === "string" ? state.model : state.model.id || state.model.name || ""); } if (state.hosted && !state.who) showWho(); }
+    if (r.ok) { const h = await r.json().catch(() => ({})); state.hosted = h.hosted === true; applyBotsFlag(h.bots === true); els.btnLogout.hidden = !state.hosted && !desktopBridge(); if (h.model !== state.model) { state.model = h.model || ""; renderConn(); models.setHealth(typeof state.model === "string" ? state.model : state.model.id || state.model.name || ""); } if (state.hosted && !state.who) showWho(); else if (!state.hosted && !state.who) showDesktopWho(); }
   } catch { setOnline(false); }
 }
 
@@ -845,6 +845,20 @@ function showPlan(me) {
 async function refreshPlan() {
   if (!state.hosted || document.getElementById("plan").hidden) return; // only when a plan is shown (mind billing)
   try { const r = await fetch("/auth/me?fresh=1", { credentials: "same-origin" }); if (r.ok) showPlan(await r.json()); } catch { /* keep what is shown */ }
+}
+
+// Desktop app: the shell exposes signOut(); the gateway answers /account with the MIND account the app signed in as.
+function desktopBridge() { return typeof window.mindclawDesktop?.signOut === "function" ? window.mindclawDesktop : null; }
+async function showDesktopWho() {
+  try {
+    const r = await api("/account");
+    if (!r.ok) return;
+    const me = await r.json().catch(() => ({}));
+    if (!me.signedIn || !me.username) return;
+    state.who = me.username;
+    const el = document.getElementById("who");
+    if (el) { el.textContent = `Signed in as ${me.username}`; el.title = `MIND account ${me.username}`; el.hidden = false; }
+  } catch { /* shown on the next ping */ }
 }
 
 // Hosted: show which MIND account this session is acting as (its own MIND, or the owner's).
@@ -981,6 +995,8 @@ boot();
 setInterval(ping, 10000);
 setInterval(() => { if ((token || state.hosted) && state.online) refreshSessions(); }, 30000);
 els.btnLogout.addEventListener("click", async () => {
+  const desk = !state.hosted && desktopBridge();
+  if (desk) { desk.signOut(); return; } // the app clears its saved sign-in and shows Sign in with MIND again
   try { await fetch("/logout", { method: "POST", credentials: "same-origin" }); } catch { /* leaving anyway */ }
   location.replace("/");
 });

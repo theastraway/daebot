@@ -137,17 +137,19 @@ async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promis
   const credits = cfg.billing === "mind" ? new (await import("./provider/mind.ts")).MindCredits({ mindBaseUrl: cfg.mindBaseUrl }) : undefined;
   // Bots: one data dir + one late-bound bus shared by the owner runtime, every user runtime and the gateway (which sets bus.current).
   const bots = { dir: dataDir(), bus: {} };
-  // Connected MCP servers: sealed per-user store under DATA_DIR/mcp. Only hosted deployments (cookie logins) expose it.
+  // Connected MCP servers: sealed per-user store under DATA_DIR/mcp. Hosted: sealed with DAEBOT_SECRET_KEY. Desktop/CLI: sealed with a
+  // random per-install secret kept next to the data (0600), so the 60-connector Apps list works there too.
   let mcpConnect: import("./mcpconnect/service.ts").McpConnectService | undefined;
   // The App Store list is fetched with the signed-in user's OWN MIND key. `auth` is built after the service, so the lookup is late-bound.
   const catalogKey: { of: (uid: string) => string | undefined } = { of: (uid) => (uid === "owner" ? cfg.mindApiKey || undefined : undefined) };
-  if (hostedMode) {
+  {
     const { McpStore } = await import("./mcpconnect/store.ts");
     const { McpConnectService } = await import("./mcpconnect/service.ts");
     const { createMindCatalog } = await import("./mcpconnect/catalog.ts");
     const { join } = await import("node:path");
     try {
-      const store = new McpStore({ dir: join(dataDir(), "mcp"), secretKey: process.env.DAEBOT_SECRET_KEY });
+      const secretKey = hostedMode ? process.env.DAEBOT_SECRET_KEY : process.env.DAEBOT_SECRET_KEY || (await import("./mcpconnect/local-secret.ts")).localSecret(join(dataDir(), "mcp"));
+      const store = new McpStore({ dir: join(dataDir(), "mcp"), secretKey });
       mcpConnect = new McpConnectService({ store, catalog: createMindCatalog({ baseUrl: cfg.mindBaseUrl, keyFor: (uid) => catalogKey.of(uid) }) });
     } catch (e) { process.stderr.write(`${e instanceof HostedConfigError ? e.message : "invalid MCP connect configuration"}\n`); return 1; }
   }

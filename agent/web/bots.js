@@ -118,6 +118,7 @@ export function initBots(ctx) {
     del: $("bd-delete"), verText: $("bd-ver-text"), verCurrent: $("bd-ver-current"), verNotes: $("bd-ver-notes"), verBtn: $("bd-update"),
     card: $("bot-new"), cardForm: $("bot-new-form"), bnName: $("bn-name"), bnPurpose: $("bn-purpose"), bnInstr: $("bn-instr"),
     bnErr: $("bn-err"), bnCreate: $("bn-create"), bnCancel: $("bn-cancel"),
+    bnBrief: $("bn-brief"), bnAsk: $("bn-ask"), bnAskState: $("bn-ask-state"),
   };
   if (!el.tabBots || !el.botList) return null;
 
@@ -337,6 +338,27 @@ export function initBots(ctx) {
   el.bnName.addEventListener("input", regenTemplate);
   el.bnPurpose.addEventListener("input", regenTemplate);
   el.bnInstr.addEventListener("input", () => { st.cardDirty = true; });
+  // Ask Caelum: MIND's agent builder drafts name, purpose and instructions from a plain-words brief. Nothing is saved until Create.
+  if (el.bnAsk && el.bnBrief) {
+    el.bnAsk.addEventListener("click", async () => {
+      const brief = el.bnBrief.value.trim();
+      if (brief.length < 8) { el.bnAskState.textContent = "Tell Caelum what the bot should do."; return el.bnBrief.focus(); }
+      el.bnAsk.disabled = true; el.bnErr.hidden = true; el.bnAskState.textContent = "Caelum is drafting your bot...";
+      try {
+        const res = await api("/bots/caelum", { method: "POST", body: JSON.stringify({ brief }) });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) { el.bnAskState.textContent = ""; return showCardError({ text: body.error || "Caelum could not draft that bot." }); }
+        if (body.name) el.bnName.value = String(body.name).slice(0, 40);
+        if (body.purpose) el.bnPurpose.value = String(body.purpose).slice(0, 140);
+        if (body.instructions) el.bnInstr.value = String(body.instructions);
+        el.bnAskState.textContent = "Drafted. Review it, then Create bot.";
+        el.bnName.focus();
+      } catch (err) {
+        el.bnAskState.textContent = "";
+        if (err.message !== "unauthorized") showCardError({ text: "Could not reach Caelum. Try again." });
+      } finally { el.bnAsk.disabled = false; }
+    });
+  }
   el.bnCancel.addEventListener("click", closeCard);
   el.card.addEventListener("pointerdown", (e) => { if (e.target === el.card) closeCard(); });
   el.card.addEventListener("keydown", (e) => {

@@ -167,6 +167,12 @@ export async function startFakeMind(initial: Record<string, string> = {}): Promi
       if (rest === "/agent-sessions/open") return json(res, 200, { session_id: `ms-${username}`, pending_replies: [] });
       return json(res, 200, { ok: true });
     }
+    // Caelum (MINDapp backend/routes/agentbuilder_routes.py): brief -> AgentSpec.
+    if (u.pathname === "/api/agentbuilder/intake" && req.method === "POST") {
+      if (!m.keys.has(key)) return json(res, 401, { detail: "Not authenticated" });
+      const brief = String((parsed as any)?.brief ?? "");
+      return json(res, 200, { spec: { name: "claim_review_bot", role: "Claim email reviewer", primary_responsibility: `Handles: ${brief}`, purposes: ["Summarize each claim"], rules: ["Never email a client"], success_criteria: ["Every claim summarized by 9am"], traits: ["careful"] }, preview: {} });
+    }
     json(res, 404, { detail: "not found" });
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
