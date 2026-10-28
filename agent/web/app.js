@@ -207,6 +207,8 @@ els.scroll.addEventListener("scroll", () => {
   stick = els.scroll.scrollHeight - els.scroll.scrollTop - els.scroll.clientHeight < 80;
 });
 function toBottom(force) { if (force || stick) els.scroll.scrollTop = els.scroll.scrollHeight; }
+// The on-screen keyboard rose or fell (shell.js): a reader who was at the bottom stays at the bottom.
+window.addEventListener("daebot:viewport", () => toBottom());
 
 function renderEmpty() {
   const box = h("div", "empty");

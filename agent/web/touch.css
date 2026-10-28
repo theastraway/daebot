@@ -1,0 +1,107 @@
+/* Touch and app-shell feel: the iPhone app (WKWebView on daebot.live) and mobile browsers.
+   Loaded after style.css, brand.css and login.css, so it only adds or overrides; the design itself is untouched.
+   Desktop (fine pointer, hover) renders exactly as before: every rule below is behind a touch media query, an
+   html class set by /shell.js (.in-app .ios-app .vv .kb), or is a no-op on a mouse. */
+
+/* ---- everywhere ---- */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+
+@media (pointer: coarse), (hover: none) {
+  /* No whole-page rubber band on the chat shell (the login page really scrolls, so it keeps its bounce);
+     the message list and the other scrollers keep their own momentum and bounce but never hand a drag to the page. */
+  html:not(:has(> body.login-body)), body:not(.login-body) { overscroll-behavior: none; }
+  .scroll, .session-list, .mm-list, .drawer-body, .viol-list, .bot-card, .apps-card, .mcp-modal, .mcp-tools, .acct-menu, .am-sub, .tool-body pre, .perm-args pre { overscroll-behavior: contain; }
+  .scroll { -webkit-overflow-scrolling: touch; }
+
+  /* iOS zooms the page into any text field under 16px when it is focused and then leaves it zoomed, scrolling sideways.
+     Every text field is at least 16px on a touch device (this reaches .fld, .fld-area, .app-field input, the login and
+     token inputs, the confirm reply box, the connector search, the instructions editor and anything added later). */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="color"]):not([type="image"]),
+  textarea:not([hidden]):not([data-fs]):not([data-fs2]), select:not([hidden]):not([data-fs]):not([data-fs2]) { font-size: 16px; }
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="color"]):not([type="image"]):not([hidden]) { min-height: 44px; }
+
+  /* Chrome is not text: no selection handles, no callout on a long press. Messages, code and fields stay selectable.
+     (Never on an ancestor of a field: iOS refuses to edit inside user-select:none.) */
+  button, summary, .sess, .bot-item, .seg, .top-title, .brand, .side-label, .acct-btn, .mm-item, .am-item, .suggest-chip { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  a, img { -webkit-touch-callout: none; }
+  .msg-asst a { -webkit-touch-callout: default; }
+
+  /* A tap feels like a press, and a hover style must not stay painted on the thing you just tapped. */
+  button:not(:disabled):active, a.am-item:active, summary:active, .sess:active, .bot-item:active, .suggest-chip:active, .perm-opt:active, .perm-mode:active { opacity: .7; }
+  .btn-new:hover, .login-btn:hover { transform: none; box-shadow: none; }
+  .btn-new:hover { border-color: var(--ink); }
+  .login-btn:hover { box-shadow: 0 10px 22px -12px #d92d2d; }
+  .login-alt:hover { box-shadow: none; }
+  .icon-btn:hover:not([aria-expanded="true"]):not(.on) { background: none; color: var(--ink-2); }
+  .btn-chip:hover:not([aria-expanded="true"]), .model-badge:hover:not([aria-expanded="true"]):not(:focus-visible), .mode-btn:hover:not([aria-expanded="true"]):not(:focus-visible),
+  .side-icon:hover:not([aria-expanded="true"]):not(:focus-visible), .acct-btn:hover:not([aria-expanded="true"]):not(:focus-visible) { background: none; border-color: transparent; }
+  .btn-chip:hover:not([aria-expanded="true"]) { border-color: var(--line-strong); color: var(--ink-2); }
+  .model-badge:hover .mb-chev, .mode-btn:hover .mb-chev { color: var(--ink-3); }
+
+  /* ---- tap targets: at least 44 x 44 points ----
+     Icon buttons and the composer keys keep their look; an invisible ::before widens only what a thumb can hit.
+     Stacked rows (menus, drawers, lists) are given the real height instead. */
+  .icon-btn, .send, .mic, .attach, .model-badge, .mode-btn, .btn-chip, .copy, .seg-btn, .queue-x, .queue-btn, .swatch, .acct-btn, .suggest-chip, .bot-newthread,
+  .btn-quiet.sm, .btn-danger.sm, .btn-primary.sm, .tool summary { position: relative; } /* (.row-del and .bot-upd are already absolute) */
+  .icon-btn::before, .send::before, .mic::before, .attach::before, .model-badge::before, .mode-btn::before, .btn-chip::before, .row-del::before, .copy::before, .seg-btn::before,
+  .queue-x::before, .queue-btn::before, .swatch::before, .acct-btn::before, .suggest-chip::before, .bot-newthread::before, .btn-quiet.sm::before, .btn-danger.sm::before, .btn-primary.sm::before, .tool summary::before {
+    content: ""; position: absolute; inset: -4px;
+  }
+  .icon-btn::before { inset: -4px -6px; }
+  .model-badge::before, .mode-btn::before { inset: -5px 0; } /* these have a 1px border, so the padding box is 34px tall */
+  .acct-btn::before { inset: -4px 0; }
+  .side-icon::before { inset: -5px -6px; }
+  .btn-chip::before { inset: -8px -5px; }
+  .row-del::before { inset: -8px; }
+  .copy::before { inset: -11px -4px; }
+  .seg-btn::before { inset: -8px 0; }
+  .queue-x::before, .queue-btn::before { inset: -9px; }
+  .swatch::before { inset: -8px; }
+  .suggest-chip::before { inset: -7px 0; }
+  .bot-newthread::before { inset: -6px 0; }
+  .btn-quiet.sm::before, .btn-danger.sm::before, .btn-primary.sm::before { inset: -8px -4px; }
+  .tool summary::before { inset: -5px 0; }
+  .btn-new, .btn-primary, .btn-quiet, .btn-danger, .login-btn, .app-btn { min-height: 44px; }
+  .btn-quiet.sm, .btn-danger.sm, .btn-primary.sm { min-height: 0; }
+  .am-item, .am-acct { min-height: 44px; }
+  .mm-item, .mode-menu .mm-item { min-height: 44px; }
+  .mm-group { min-height: 40px; }
+  .perm-opt, .perm-mode { min-height: 44px; }
+  .login-owner summary { display: flex; align-items: center; min-height: 44px; }
+  .mcp-det summary { min-height: 36px; display: flex; align-items: center; }
+
+  /* the sidebar slides on a layer that already exists, and a closed sidebar costs nothing and cannot be tabbed into */
+  .scrim { animation: scrim-in .2s ease; }
+}
+@keyframes scrim-in { from { opacity: 0; } to { opacity: 1; } }
+@media (max-width: 760px) {
+  .sidebar { will-change: transform; visibility: hidden; transition: transform .2s ease, visibility 0s linear .2s; }
+  .sidebar.open { visibility: visible; transition-delay: 0s; }
+}
+
+/* ---- the iPhone app: no zoom, no sideways drag, nothing under the notch or the home indicator ---- */
+html.in-app .app { overflow-x: clip; max-width: 100vw; }
+html.in-app .thread { overflow-x: clip; }
+.gate-token { padding-top: calc(16px + env(safe-area-inset-top)); padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
+.bot-card { max-height: calc(100dvh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
+.apps-card { max-height: calc(100dvh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
+.drawer-body { padding-bottom: calc(32px + env(safe-area-inset-bottom)); }
+.viol-list { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+
+/* ---- the keyboard (iOS WebKit; /shell.js sets --vvh and --vvt from the visual viewport) ----
+   The layout is pinned to exactly what is visible: when the keyboard rises the composer sits right above it, the top bar
+   stays on screen, and the message list (kept at the bottom by app.js) shrinks instead of the page being shoved up. */
+html.vv .app { position: fixed; top: var(--vvt, 0px); left: 0; right: 0; height: var(--vvh, 100dvh); }
+html.vv .gate-token, html.vv .scrim, html.vv .drawer, html.vv .photo-view, html.vv .drop-overlay { top: var(--vvt, 0px); bottom: auto; height: var(--vvh, 100dvh); }
+@media (max-width: 760px) { html.vv .sidebar { top: var(--vvt, 0px); bottom: auto; height: var(--vvh, 100dvh); } }
+/* with the keyboard up the home indicator is covered, so the composer's bottom gutter is just a gutter */
+html.kb .composer-wrap { padding-bottom: 8px; }
+html.kb .hint { display: none; }
+
+/* ---- never wider than the screen (every device) ----
+   A tool row with a long name (MCP tool names run long) used to push the whole message list wider than the phone, and the list
+   then slid sideways under a finger. Names now shrink with an ellipsis, long machine strings wrap, and the list itself never pans. */
+.scroll { overflow-x: hidden; }
+.tool-name { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gate-name, .viol-top .g, .confirm .act-tool, .perm-rule-tool, .mcp-tool-name { min-width: 0; overflow-wrap: anywhere; }
+.perm-head h3 { min-width: 0; overflow-wrap: anywhere; }

@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script src="/shell.js"></script>
 <title>Sign in · Daebot</title>
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#0c0b0a">
@@ -10,6 +11,7 @@
 <link rel="icon" href="data:image/png;base64,__FAV__" type="image/png">
 <link rel="stylesheet" href="/style.css">
 <link rel="stylesheet" href="/login.css">
+<link rel="stylesheet" href="/touch.css">
 </head>
 <body class="login-body">
 <main class="login">
