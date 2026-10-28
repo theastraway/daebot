@@ -33,6 +33,80 @@ function logoFor(e) {
   return box;
 }
 
+/** The URL + token form (n8n, custom MCP server). It opens in the section's form slot (`handlers.formHost`) when there is one: that slot
+ *  sits outside the scrolling list and survives the list being redrawn, which happens every time the user comes back to Daebot, and
+ *  the user always leaves Daebot once here, to copy the token. Without a slot it opens under the row, as before. */
+function openForm(e, ctl, handlers, confirm, rowBtn) {
+  const host = handlers.formHost || confirm;
+  if (host.dataset.formFor === e.id && !host.hidden) { host.scrollIntoView({ block: "nearest", behavior: "smooth" }); return; }
+  host.replaceChildren(); host.dataset.formFor = e.id;
+  const close = () => { host.hidden = true; host.replaceChildren(); delete host.dataset.formFor; if (rowBtn.isConnected) rowBtn.focus(); };
+  const form = el("form", "app-form"); form.autocomplete = "off";
+  if (handlers.formHost) {
+    const head = el("div", "app-form-head");
+    head.append(logoFor(e), el("h4", "", `Connect ${e.name}`));
+    form.append(head);
+  }
+  if (e.form.why) form.append(el("p", "app-why", e.form.why));
+  if (Array.isArray(e.form.steps) && e.form.steps.length) {
+    const ol = el("ol", "app-steps");
+    for (const st of e.form.steps) ol.append(el("li", "", st));
+    form.append(ol);
+  }
+  const inputs = [];
+  for (const f of e.form.fields) {
+    const lab = el("label", "app-field"); lab.append(el("span", "", f.label + (f.optional ? " (optional)" : "")));
+    const inp = document.createElement("input"); inp.type = f.secret ? "password" : "text"; inp.name = f.name;
+    inp.placeholder = f.placeholder || ""; inp.autocomplete = f.secret ? "new-password" : "off"; inp.spellcheck = false; inp.required = !f.optional;
+    inp.setAttribute("autocapitalize", "off"); inp.setAttribute("autocorrect", "off"); inp.maxLength = 5000;
+    lab.append(inp); form.append(lab); inputs.push(inp);
+  }
+  const byName = (n) => inputs.find((i) => i.name === n);
+  // One paste of a whole config block (n8n's "Configuration JSON") fills both boxes.
+  if (handlers.readPaste) for (const inp of inputs) {
+    inp.addEventListener("paste", (ev) => {
+      const text = ev.clipboardData && ev.clipboardData.getData("text");
+      const got = text && handlers.readPaste(text);
+      if (!got) return;
+      ev.preventDefault();
+      if (got.server && byName("url")) byName("url").value = got.server;
+      if (got.token && byName("token")) byName("token").value = got.token;
+      fsay(got.server && got.token ? "Server URL and token filled in from what you pasted." : "", "ok");
+    });
+  }
+  const status = el("p", "app-form-status"); status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite"); status.hidden = true;
+  const fsay = (text, tone) => {
+    status.textContent = text || ""; status.className = `app-form-status is-${tone || "warn"}`; status.hidden = !text;
+    if (text) status.parentElement && r.scrollIntoView({ block: "nearest", behavior: "smooth" }); // the answer and the buttons stay in view
+  };
+  const r = el("div", "row");
+  const label = e.form.submitLabel || "Connect";
+  const go = el("button", "btn-primary", label); go.type = "submit";
+  const no = el("button", "btn-quiet", "Cancel"); no.type = "button";
+  no.addEventListener("click", close);
+  // The form's own status line and button, so the result shows where the user is looking (the row's line can be scrolled away).
+  const fctl = {
+    busy(on) { go.disabled = on; no.disabled = on; go.textContent = on ? "Connecting…" : label; if (on) fsay(`Checking ${e.name} with that token…`, "off"); ctl.busy(on); },
+    say(text, tone) { fsay(text, tone); ctl.say(text, tone); },
+  };
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const values = {}; for (const i of inputs) values[i.name] = i.value;
+    const ok = handlers.onConnect && await handlers.onConnect(e, fctl, values);
+    if (ok !== false) close();
+    else { fctl.busy(false); if (status.hidden) fsay(`Could not connect ${e.name}.`, "warn"); }
+  });
+  if (e.form.help && /^https:\/\//.test(e.form.help.url)) {
+    const a = el("a", "app-help", e.form.help.label); a.href = e.form.help.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+    form.append(a);
+  }
+  form.append(status);
+  r.append(go, no); form.append(r);
+  host.append(form); host.hidden = false;
+  inputs[0].focus({ preventScroll: true });
+  host.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
 /** Renders `entries` into `body`. Safe to call again with fresh entries; keeps nothing between calls. */
 export function renderEntries(body, entries, handlers = {}) {
   body.replaceChildren();
@@ -79,34 +153,7 @@ export function renderEntries(body, entries, handlers = {}) {
         no.addEventListener("click", () => { confirm.hidden = true; btn.focus(); });
         r.append(yes, no); confirm.append(r); confirm.hidden = false; no.focus();
       } else if (e.form && Array.isArray(e.form.fields)) {
-        // A connector that needs the user's own address and a token: the form opens inline and posts its values to onConnect.
-        confirm.replaceChildren();
-        const form = el("form", "app-form"); form.autocomplete = "off";
-        if (e.form.why) form.append(el("p", "app-why", e.form.why));
-        if (e.form.help && /^https:\/\//.test(e.form.help.url)) {
-          const a = el("a", "app-help", e.form.help.label); a.href = e.form.help.url; a.target = "_blank"; a.rel = "noopener noreferrer";
-          form.append(a);
-        }
-        const inputs = [];
-        for (const f of e.form.fields) {
-          const lab = el("label", "app-field"); lab.append(el("span", "", f.label + (f.optional ? " (optional)" : "")));
-          const inp = document.createElement("input"); inp.type = f.secret ? "password" : "text"; inp.name = f.name;
-          inp.placeholder = f.placeholder || ""; inp.autocomplete = f.secret ? "new-password" : "off"; inp.spellcheck = false; inp.required = !f.optional;
-          inp.setAttribute("autocapitalize", "off"); inp.maxLength = f.secret ? 5000 : 600;
-          lab.append(inp); form.append(lab); inputs.push(inp);
-        }
-        const r = el("div", "row");
-        const go = el("button", "btn-primary", e.form.submitLabel || "Connect"); go.type = "submit";
-        const no = el("button", "btn-quiet", "Cancel"); no.type = "button";
-        no.addEventListener("click", () => { confirm.hidden = true; btn.focus(); });
-        form.addEventListener("submit", async (ev) => {
-          ev.preventDefault();
-          const values = {}; for (const i of inputs) values[i.name] = i.value;
-          go.disabled = true;
-          try { const ok = handlers.onConnect && await handlers.onConnect(e, ctl, values); if (ok !== false) confirm.hidden = true; }
-          finally { go.disabled = false; }
-        });
-        r.append(go, no); form.append(r); confirm.append(form); confirm.hidden = false; inputs[0].focus();
+        openForm(e, ctl, handlers, confirm, btn);
       } else handlers.onConnect && handlers.onConnect(e, ctl);
     });
     body.append(row, confirm);
@@ -165,7 +212,7 @@ export function initApps(ctx) {
     const needle = s.search ? s.search.value.trim().toLowerCase() : "";
     const all = s.entries || [];
     const shown = needle ? all.filter((e) => [e.name, e.blurb, ...(e.tags || []).map((t) => t.text)].join(" ").toLowerCase().includes(needle)) : all;
-    renderEntries(s.body, shown, s.def.handlers || {});
+    renderEntries(s.body, shown, { ...(s.def.handlers || {}), formHost: s.formHost });
     if (needle && !shown.length) s.body.replaceChildren(el("p", "apps-empty", `Nothing matches "${s.search.value.trim().slice(0, 40)}".`));
     if (s.count) s.count.textContent = all.length ? (needle ? `${shown.length} of ${all.length}` : `${all.length}`) : "";
   }
@@ -176,7 +223,8 @@ export function initApps(ctx) {
     const h = el("h3", "", def.title); h.id = `apps-h-${def.id}`;
     const noteEl = el("p", "apps-note"); noteEl.hidden = true;
     const body = el("div", "apps-body"); body.setAttribute("role", "group"); body.setAttribute("aria-labelledby", h.id);
-    const s = { def, root, body, noteEl, token: 0, loaded: false };
+    const formHost = el("div", "apps-formhost"); formHost.hidden = true;
+    const s = { def, root, body, noteEl, formHost, token: 0, loaded: false };
     root.append(h, noteEl);
     if (def.search) {
       const bar = el("div", "apps-search");
@@ -188,7 +236,7 @@ export function initApps(ctx) {
       bar.append(inp, count); root.append(bar);
       s.search = inp; s.count = count;
     }
-    root.append(body);
+    root.append(formHost, body);
     q.list.append(root);
     sections.set(def.id, s);
     if (isOpen) loadSection(s);

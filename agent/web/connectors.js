@@ -17,6 +17,17 @@ export function entryOf(it) {
   };
 }
 
+/** A pasted config block (n8n's "Configuration JSON", or "Authorization: Bearer ..." next to a URL) read into { server, token }:
+ *  the two values the user pasted, for the form's own boxes. Nothing is sent from here.
+ *  Returns null for an ordinary paste, which then lands in the box as usual. The gateway reads the same shapes again. */
+export function readPaste(text) {
+  const t = String(text || "");
+  const tok = /Bearer\s+([^\s"'`,\]}]+)/i.exec(t);
+  const addr = /https?:\/\/[^\s"'`,\]}]+/i.exec(t);
+  if (!tok || !addr) return null;
+  return { server: addr[0], token: tok[1] };
+}
+
 export function initConnectors({ apps, json, getMcp }) {
   apps.addSection({
     id: "connectors", title: "Connectors", search: "Search connectors",
@@ -30,13 +41,15 @@ export function initConnectors({ apps, json, getMcp }) {
       return { entries: items.map(entryOf) };
     },
     handlers: {
+      readPaste,
       async onConnect(e, ctl, values) {
         if (e.form) {
           // n8n / custom server: the address and token go straight to the gateway, which probes the server with the token before saving.
           ctl.busy(true);
           try {
-            await json("/mcp/catalog/connect-token", { method: "POST", body: JSON.stringify({ id: e.id, url: values && values.url, token: values && values.token, name: values && values.name }) });
-            apps.say(`Connected ${e.name}.`);
+            const r = await json("/mcp/catalog/connect-token", { method: "POST", body: JSON.stringify({ id: e.id, url: values && values.url, token: values && values.token, name: values && values.name }) });
+            const n = r && r.server && Array.isArray(r.server.tools) ? r.server.tools.length : 0;
+            apps.say(n ? `Connected ${e.name}: ${n} tool${n === 1 ? "" : "s"} ready. Ask Daebot to use them.` : `Connected ${e.name}.`);
             const mcp = getMcp(); if (mcp) mcp.load();
             apps.refresh();
             return true;
