@@ -122,7 +122,7 @@ export interface CatalogItemView {
 export interface LocalConnector { id: string; name: string; blurb: string; category: string; urlLabel: string; urlPlaceholder: string; defaultPath?: string; nameBase: string }
 export const LOCAL_CONNECTORS: LocalConnector[] = [
   { id: "local:n8n", name: "n8n", blurb: "Search, read and run the workflows you switched on for MCP in your own n8n. Needs the instance address and the access token from Settings > Instance-level MCP.", category: "automation",
-    urlLabel: "n8n URL", urlPlaceholder: "https://n8n.srv996174.hstgr.cloud/mcp-server/http", defaultPath: "/mcp-server/http", nameBase: "n8n" },
+    urlLabel: "n8n URL", urlPlaceholder: "https://your-n8n.example.com", defaultPath: "/mcp-server/http", nameBase: "n8n" },
   { id: "local:custom", name: "Custom MCP server", blurb: "Any remote MCP server that takes a bearer token: paste its address and token.",
     category: "developer", urlLabel: "Server URL", urlPlaceholder: "https://example.com/mcp", nameBase: "" },
 ];
