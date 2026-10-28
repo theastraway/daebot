@@ -16,12 +16,22 @@ input{font:15px ui-monospace,Menlo,Consolas,monospace;padding:13px 14px;border:1
 input:focus-visible{outline:0;border-color:#e8a900;box-shadow:0 0 0 4px rgba(255,210,90,.25)}
 button{padding:13px 14px;font:650 15px inherit;border-radius:12px;border:1px solid #d92d2d;background:#d92d2d;color:#fff;cursor:pointer;box-shadow:0 10px 22px -12px #d92d2d}
 button[disabled]{opacity:.6;cursor:progress}
+.alt{background:transparent;color:inherit;border-color:${dark ? "#38322c" : "#d6c7ab"};box-shadow:none;font-weight:600}
+.or{text-align:center;font-size:12px;color:${dark ? "#8a806f" : "#857c6e"}}
 .err{color:${dark ? "#ff5a52" : "#b42318"};font-size:13px}
 .hint{font-size:12.5px;color:${dark ? "#8a806f" : "#857c6e"}}
 [hidden]{display:none!important}`;
 
 const SCRIPT = `
-const f=document.getElementById("f"),i=document.getElementById("k"),b=document.getElementById("b"),e=document.getElementById("e");
+const f=document.getElementById("f"),i=document.getElementById("k"),b=document.getElementById("b"),e=document.getElementById("e"),m=document.getElementById("m"),s=document.getElementById("s"),o=document.getElementById("o");
+o.addEventListener("click",()=>{f.hidden=false;o.hidden=true;i.focus()});
+m.addEventListener("click",async()=>{
+  e.hidden=true;m.disabled=true;m.textContent="Finish signing in in your browser...";s.hidden=false;
+  let r;
+  try{r=await window.daebotSignIn.mind()}catch{r={ok:false,error:"Sign-in failed."}}
+  if(r&&r.ok){m.textContent="Signed in";s.hidden=true;return}
+  e.textContent=(r&&r.error)||"Sign-in failed.";e.hidden=false;m.disabled=false;m.textContent="Sign in with MIND";s.hidden=true;
+});
 f.addEventListener("submit",async(ev)=>{
   ev.preventDefault();
   e.hidden=true;b.disabled=true;b.textContent="Checking...";
@@ -30,7 +40,7 @@ f.addEventListener("submit",async(ev)=>{
   if(r&&r.ok){b.textContent="Signed in";i.value="";return}
   e.textContent=(r&&r.error)||"Sign-in failed.";e.hidden=false;b.disabled=false;b.textContent="Continue";i.focus();
 });
-i.focus();`;
+m.focus();`;
 
 const sha = (s) => `'sha256-${createHash("sha256").update(s).digest("base64")}'`;
 
@@ -39,14 +49,19 @@ export function buildSignInHtml({ dark = false } = {}) {
   const csp = `default-src 'none'; style-src ${sha(style)}; script-src ${sha(SCRIPT)}; base-uri 'none'; form-action 'none'`;
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><title>Sign in to Daebot</title><style>${style}</style></head><body><main>
 <h1>Daebot<span class="dot">.</span></h1>
-<p>Paste your MIND API key to start. Daebot works inside your own MIND and bills your MIND account.</p>
-<form id="f" autocomplete="off" novalidate>
+<p>Sign in with your MIND account to start. Daebot works inside your own MIND and bills your MIND account.</p>
+<button id="m" type="button">Sign in with MIND</button>
+<p id="s" class="hint" hidden>Your browser opened MIND's sign-in page. Approve Daebot there, then come back here.</p>
+<p class="or">or</p>
+<button id="o" type="button" class="alt">Use an API key instead</button>
+<p id="e" class="err" role="alert" hidden></p>
+<form id="f" autocomplete="off" novalidate hidden>
 <label for="k">MIND API key</label>
 <input id="k" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="mind_...">
 <button id="b" type="submit">Continue</button>
-<p id="e" class="err" role="alert" hidden></p>
+<p class="hint">Find it at m-i-n-d.ai under Settings, Developer, API Keys.</p>
 </form>
-<p class="hint">Find it at m-i-n-d.ai under Settings, Developer, API Keys. It is stored on this computer only, in a private file.</p>
+<p class="hint">Your sign-in is stored on this computer only, in a private file.</p>
 </main><script>${SCRIPT}</script></body></html>`;
   return html;
 }

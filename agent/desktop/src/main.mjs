@@ -11,6 +11,7 @@ import { ChildGateway, waitForHealth } from "./lib/child.mjs";
 import { buildSpawnPlan, findBundledBinary, findNode } from "./lib/launcher.mjs";
 import { clearKey, readConfigJson, readKey, resolveSignIn, saveKey, looksLikeMindKey } from "./lib/credentials.mjs";
 import { buildSignInPage } from "./lib/signin-page.mjs";
+import { signInWithMind } from "./lib/mind-signin.mjs";
 import { loadConfig, saveKernelMode, configPath, statePath, loadState, writeJson, resolveBounds, desktopHome } from "./lib/config.mjs";
 import { isKernelMode } from "./lib/kernel.mjs";
 import { buildAppMenuTemplate, buildTrayTemplate } from "./lib/menu.mjs";
@@ -269,12 +270,32 @@ async function checkKey(key) {
 function promptForKey() {
   return new Promise((resolve) => {
     const w = new BrowserWindow({
-      width: 460, height: 420, resizable: false, minimizable: false, maximizable: false, show: false, title: "Sign in to Daebot",
+      width: 460, height: 500, resizable: false, minimizable: false, maximizable: false, show: false, title: "Sign in to Daebot",
       backgroundColor: nativeTheme.shouldUseDarkColors ? "#0c0b0a" : "#fbf6ee",
       webPreferences: { preload: join(here, "signin-preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true, spellcheck: false, partition: "daebot-signin" },
     });
     let done = false;
-    const finish = (v) => { if (done) return; done = true; ipcMain.removeHandler("daebot:signin"); if (!w.isDestroyed()) w.destroy(); resolve(v); };
+    const browserFlow = new AbortController();
+    const finish = (v) => { if (done) return; done = true; browserFlow.abort(); ipcMain.removeHandler("daebot:signin"); ipcMain.removeHandler("daebot:signin-mind"); if (!w.isDestroyed()) w.destroy(); resolve(v); };
+    let mindFlowRunning = false;
+    ipcMain.handle("daebot:signin-mind", async (e) => {
+      if (e.sender !== w.webContents) return { ok: false, error: "Sign-in failed." };
+      if (mindFlowRunning) return { ok: false, error: "Sign-in is already open in your browser." };
+      mindFlowRunning = true;
+      try {
+        const key = await signInWithMind({ mindBaseUrl: mindBaseUrl(), openExternal: (url) => shell.openExternal(url), signal: browserFlow.signal });
+        const c = await checkKey(key);
+        if (!c.ok) return c;
+        try { saveKey(key); } catch { return { ok: false, error: "Could not save your sign-in on this computer." }; }
+        if (!w.isDestroyed()) { w.show(); w.focus(); }
+        setTimeout(() => finish(key.trim()), 400);
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : "Sign-in failed." };
+      } finally {
+        mindFlowRunning = false;
+      }
+    });
     ipcMain.handle("daebot:signin", async (e, key) => {
       if (e.sender !== w.webContents || typeof key !== "string") return { ok: false, error: "Sign-in failed." };
       const c = await checkKey(key);
