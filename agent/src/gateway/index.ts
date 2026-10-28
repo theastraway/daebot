@@ -122,7 +122,7 @@ export const OAUTH_APP_COOKIE = "mc_oauth_app";
 // Reachable without a session in hosted mode (the login page and what it needs to render).
 // The download page (daebot.live/download) is public: it only links to release files hosted elsewhere.
 const HOSTED_PUBLIC_STATIC = new Set([
-  "/login.html", "/login.js", "/login.css", "/style.css", "/favicon.svg", "/brand/mbot.js", "/brand/daebot-head.webp",
+  "/login.html", "/login.js", "/login.css", "/style.css", "/shell.js", "/touch.css", "/favicon.svg", "/brand/mbot.js", "/brand/daebot-head.webp",
   "/download", "/download/", "/download/index.html", "/download/download.js", "/download/download.css", "/download/releases.json", "/download/ios-latest.json",
 ]);
 const HSTS = "max-age=31536000; includeSubDomains";
