@@ -11,7 +11,7 @@
   "ios": {
     "contentInset": "never",
     "allowsLinkPreview": false,
-    "appendUserAgent": "DaebotApp/ios 1.0.0 (4)",
+    "appendUserAgent": "DaebotApp/ios 1.0.0 (5)",
     "backgroundColor": "#0c0b0a"
   }
 }
