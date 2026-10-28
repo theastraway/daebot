@@ -67,7 +67,7 @@ If a license allows reuse (MIT, Apache-2.0, BSD, ISC), code may be used verbatim
 
 ## 8. Rules for builders
 - Code only against src/types.ts. Need a type change? Write the proposal at the end of your report; do not edit types.ts.
-- Touch only your assigned directories. No edits to other directories or to the legacy wrapper (bin/, src/ at repo root).
+- Touch only your assigned directories.
 - Tests: `node --test --test-concurrency=2`. Never run the whole repo at default concurrency. No network in unit tests (fake provider/fake fetch).
 - Never print or write secrets. API keys come from env (MIND_API_KEY, OPENROUTER_API_KEY) or ~/.mindclaw/config.json.
 - Do not launch GUI apps, do not drive the user's mouse/windows, do not run `agent-browser close --all` or any kill-all.

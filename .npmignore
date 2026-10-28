@@ -1,8 +1,0 @@
-.git/
-.github/
-backend-changes/
-node_modules/
-*.log
-.DS_Store
-.env
-test/

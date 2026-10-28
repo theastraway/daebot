@@ -1,5 +1,5 @@
 // Maps an MCP-style tool name + args onto the real MIND REST route. Discovered 2026-10-15 by reading
-// the MIT-licensed @astramindapp/openclaw-mind client (concepts only, no code copied) and probing the
+// the MIND MCP tool surface and probing the
 // live API with read-only calls. MIND REST is resource-based (/life/items, /crm/contacts, ...), NOT a
 // uniform POST /<tool>, so each tool+action needs a route. Unknown tools fall back to POST /<tool>.
 
