@@ -79,7 +79,8 @@ export function initAccount({ json, h, icon, notify, desktop, isHosted, closeSid
     const box = $("upd"), text = $("upd-text"), b = $("upd-btn"), chk = $("am-check");
     const d = desktop();
     chk.hidden = !d || !s || !s.enabled;
-    $("am-check-text").textContent = s && s.status === "checking" ? "Checking for updates" : s && s.currentVersion ? `Check for updates (Daebot ${s.currentVersion})` : "Check for updates";
+    $("am-check-text").textContent = s && s.status === "checking" ? "Checking for updates" : "Check for updates";
+    $("am-check-ver").textContent = s && s.currentVersion ? `v${s.currentVersion}` : "";
     const bn = updateBanner(s);
     box.hidden = !bn;
     $("acct-badge").hidden = !(bn && bn.action);
