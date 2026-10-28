@@ -580,7 +580,7 @@ button.model-badge[aria-expanded="true"] { box-shadow: 0 0 0 1px rgba(255,255,25
 .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .acct-badge { position: absolute; top: -2px; left: 26px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); border: 2px solid var(--bg-side); }
 
-.acct-menu { position: absolute; z-index: 30; left: 0; right: 0; bottom: calc(100% + 8px); display: grid; gap: 1px; padding: 6px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: var(--shadow); }
+.acct-menu { position: absolute; z-index: 30; left: 0; right: 0; bottom: calc(100% + 8px); display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; padding: 6px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: var(--shadow); }
 .acct-menu[hidden], .am-sub[hidden], .am-item[hidden], .am-update[hidden] { display: none; }
 .am-head { display: flex; align-items: center; gap: 10px; padding: 8px 8px 10px; }
 .am-who { display: grid; min-width: 0; line-height: 1.25; }
@@ -594,6 +594,8 @@ button.model-badge[aria-expanded="true"] { box-shadow: 0 0 0 1px rgba(255,255,25
 .am-item .ic { flex: none; width: 17px; height: 17px; color: var(--ink-2); }
 .am-item span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .am-item .chev { flex: none; width: 14px; height: 14px; color: var(--ink-3); }
+.am-item .am-ver { flex: none; font-size: 12px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.am-item .am-ver:empty { display: none; }
 .am-sep { height: 1px; margin: 4px 6px; background: var(--line); }
 .am-sub { display: grid; gap: 1px; padding: 6px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: var(--shadow); position: absolute; left: calc(100% + 6px); bottom: 0; width: 248px; max-height: 60dvh; overflow-y: auto; }
 .am-acct { display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 9px; background: none; border: 0; border-radius: 9px; color: var(--ink); text-align: left; font: 500 14px var(--sans); cursor: pointer; }
