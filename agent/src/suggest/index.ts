@@ -194,8 +194,11 @@ export async function generateReplies(o: {
       if (ev.type === "text") text += ev.delta;
       else if (ev.type === "done") usage = ev.usage;
     }
-    return { replies: parseReplies(text), usage };
-  } catch {
+    const replies = parseReplies(text);
+    if (!replies.length && text.trim()) process.stderr.write(`suggest: no replies parsed from model output (${JSON.stringify(text.slice(0, 160))})\n`);
+    return { replies, usage };
+  } catch (e) {
+    process.stderr.write(`suggest: model call failed (${String((e as Error)?.message ?? e).split("\n")[0].slice(0, 160)})\n`);
     return { replies: [] }; // suggestions are a nicety: a failed call is simply no chips
   } finally {
     clearTimeout(timer);
