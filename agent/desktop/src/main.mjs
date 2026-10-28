@@ -248,6 +248,14 @@ ipcMain.on("desktop:signout", (e) => {
   void signOut();
 });
 
+// In-window update control (the Updates bar in the sidebar). Same controller as the tray and app menu.
+const fromOurUi = (e) => classifyUrl(e.senderFrame?.url ?? "", gatewayInfo?.origin) === "internal";
+const publicUpdateState = (s) => ({ enabled: updater.enabled, status: s.status, currentVersion: s.currentVersion, nextVersion: s.nextVersion, percent: s.percent, error: s.error ? String(s.error).slice(0, 300) : null });
+function sendUpdateState(s) { try { if (win && !win.isDestroyed()) win.webContents.send("desktop:update-state", publicUpdateState(s)); } catch { /* window going away */ } }
+ipcMain.handle("desktop:update-get", (e) => (fromOurUi(e) ? publicUpdateState(updater.getState()) : null));
+ipcMain.handle("desktop:update-check", async (e) => (fromOurUi(e) ? publicUpdateState(await updater.check("window", { manual: true })) : null));
+ipcMain.handle("desktop:update-install", async (e) => (fromOurUi(e) ? updater.install() : false));
+
 ipcMain.on("desktop:notify", (e, payload) => {
   if (classifyUrl(e.senderFrame?.url ?? "", gatewayInfo?.origin) !== "internal") return; // only our own UI
   const p = validateNotifyPayload(payload);
@@ -372,7 +380,7 @@ const updater = createUpdater({
     await Promise.race([gateway.stop(), new Promise((r) => setTimeout(r, 5000))]);
   },
   onInstallAborted: () => { quitting = false; void loadUi(); },
-  onChange: () => { refreshTray(); applyAppMenu(); },
+  onChange: (s) => { refreshTray(); applyAppMenu(); sendUpdateState(s); },
 });
 
 function applyAppMenu() {
