@@ -68,3 +68,10 @@ test("kernel mode maps to the env vars the agent reads (src/config.ts)", () => {
   assert.throws(() => envForKernelMode("yolo"));
   assert.ok(isKernelMode("shadow") && !isKernelMode("toString") && !isKernelMode(undefined));
 });
+
+test("gateway child gets Bots on by default, matching daebot.live; an explicit env value wins", async () => {
+  const { buildSpawnPlan } = await import("../src/lib/launcher.mjs");
+  const base = { agentRoot: "/a", entry: "/a/e.mjs", nodePath: "/n", kernelMode: "enforced" };
+  assert.equal(buildSpawnPlan({ ...base, baseEnv: {} }).env.DAEBOT_BOTS_ENABLED, "1");
+  assert.equal(buildSpawnPlan({ ...base, baseEnv: { DAEBOT_BOTS_ENABLED: "0" } }).env.DAEBOT_BOTS_ENABLED, "0");
+});
