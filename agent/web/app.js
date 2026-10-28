@@ -400,6 +400,33 @@ function renderHeader() {
 function setBusyUi() {
   const busy = state.busy.has(tkey());
   els.btnSend.hidden = busy; els.btnStop.hidden = !busy;
+  workingSignal(state.busy.size > 0);
+}
+
+// "Still working" signal: while any turn is in flight the sidebar M thinks and the tab favicon shows a slowly breathing
+// LED dot, so a long turn never looks idle. Back to the plain icon the moment every turn ends.
+var favTimer = 0, favImg = null, favLinks = null, favOrig = null; // var, not let: setBusyUi may run before this line
+function workingSignal(on) {
+  if (!favLinks) { favLinks = [...document.querySelectorAll('link[rel="icon"]')]; favOrig = favLinks.map((l) => l.href); }
+  const bot = document.querySelector("m-bot.brand-bot");
+  if (bot) { if (on) { if (bot.mood === "idle") bot.mood = "think"; } else if (bot.mood === "think") bot.mood = "idle"; }
+  if (on === !!favTimer) return;
+  if (!on) { clearInterval(favTimer); favTimer = 0; favLinks.forEach((l, i) => { l.href = favOrig[i]; }); return; }
+  const c = document.createElement("canvas"); c.width = c.height = 32;
+  const g = c.getContext("2d");
+  if (!g) return;
+  if (!favImg) { favImg = new Image(); favImg.src = favOrig[0] || "/brand/favicon-32.png"; }
+  const t0 = performance.now();
+  favTimer = setInterval(() => {
+    const t = (performance.now() - t0) / 1000;
+    const a = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(t * 3.2)); // slow breathe
+    g.clearRect(0, 0, 32, 32);
+    if (favImg.complete && favImg.naturalWidth) g.drawImage(favImg, 0, 0, 32, 32);
+    g.beginPath(); g.arc(25, 25, 6.5, 0, Math.PI * 2); g.fillStyle = "#0c0b0a"; g.fill();
+    g.beginPath(); g.arc(25, 25, 4.5, 0, Math.PI * 2); g.fillStyle = `rgba(255, 90, 82, ${a.toFixed(2)})`; g.fill();
+    const url = c.toDataURL("image/png");
+    favLinks.forEach((l) => { l.href = url; });
+  }, 250);
 }
 function renderSessions() {
   els.list.replaceChildren();
