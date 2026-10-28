@@ -43,12 +43,21 @@ export function connectorRows(items) { return (Array.isArray(items) ? items : []
 /** An app the user can see: connected, or one MIND has set up. An app MIND has not set up and the user has not connected is not listed at all. */
 export function connectableApp(p) { return !!(p.connected || p.configured !== false); }
 
-/** A MIND app as a connector row. It shows the real state MIND reports: connected, on which account, needs reconnect. */
-export function mindEntry(p) {
-  return {
+/** A MIND app as a connector row. It shows the real state MIND reports: connected, on which account, needs reconnect.
+ *  `linked` is the connection that rides on this app (MIND links GitHub's own MCP server with the app's token): it is the SAME row, with a tag saying how many tools
+ *  Daebot has through it and a Manage button for them. It never becomes a second row. */
+export function mindEntry(p, linked) {
+  const e = {
     id: p.provider, kind: "mind", provider: p.provider, logo: p.provider, name: p.name, blurb: p.blurb, connected: !!p.connected,
     needsReconnect: !!p.needsReconnect, account: p.account, auth: p.auth, manageable: false,
   };
+  if (linked && p.connected && linked.serverId) {
+    const n = Number(linked.tools) || 0;
+    e.serverId = linked.serverId;
+    e.manageable = true;
+    e.tags = [{ text: linked.enabled === false ? `Actions off (${n} tool${n === 1 ? "" : "s"})` : `Actions on: ${n} tool${n === 1 ? "" : "s"}`, tone: linked.enabled === false ? undefined : "ok" }];
+  }
+  return e;
 }
 
 /** The MIND apps as rows. An App Store server that is the same product as one of them has no row of its own (the gateway marks it `foldedInto`);
@@ -60,9 +69,12 @@ export function orderRows(mind, mcp) {
   return [...mind.filter((e) => e.connected), ...mcp.filter((e) => e.connected), ...mind.filter((e) => !e.connected), ...mcp.filter((e) => !e.connected)];
 }
 
-/** Builds the unified list from MIND's providers and the gateway's App Store items (either may be empty). */
-export function connectorList(providers, items) {
-  return orderRows(appEntries(providers), connectorRows(items).map((it) => ({ ...entryOf(it), kind: "mcp" })));
+/** Builds the unified list from MIND's providers and the gateway's App Store items (either may be empty). `linked` (optional) are the connections that ride on a MIND app:
+ *  each one is shown inside that app's one row, never as its own. */
+export function connectorList(providers, items, linked) {
+  const byProvider = {};
+  for (const l of Array.isArray(linked) ? linked : []) if (l && l.provider && !byProvider[l.provider]) byProvider[l.provider] = l;
+  return orderRows(appEntries(providers, (p) => mindEntry(p, byProvider[p.provider])), connectorRows(items).map((it) => ({ ...entryOf(it), kind: "mcp" })));
 }
 
 export function initConnectors({ apps, json, getMcp }) {
@@ -108,7 +120,7 @@ export function initConnectors({ apps, json, getMcp }) {
     readPaste, // the n8n / custom server form fills both boxes from one pasted config block
     onConnect: (e, ctl, values) => (e.kind === "mind" ? mind.handlers.onConnect(e, ctl) : mcpHandlers.onConnect(e, ctl, values)),
     onDisconnect: (e, ctl) => (e.kind === "mind" ? mind.handlers.onDisconnect(e, ctl) : mcpHandlers.onDisconnect(e, ctl)),
-    onManage: (e) => { if (e.kind !== "mind") mcpHandlers.onManage(e); },
+    onManage: (e) => { if (e.kind !== "mind" || e.serverId) mcpHandlers.onManage(e); },
     confirmText: (e) => (e.kind === "mind" ? `Disconnect ${e.name}? Anything already synced to MIND stays.` : mcpHandlers.confirmText(e)),
   };
   apps.addSection({
@@ -122,13 +134,13 @@ export function initConnectors({ apps, json, getMcp }) {
         if (r.signedIn === false) message = r.message || "Sign in with MIND to connect your MIND apps.";
         else if (r.enabled !== false) providers = (Array.isArray(r.providers) ? r.providers : []).filter(connectableApp);
       }
-      let items = [], storeOff = false;
-      if (c.status === "fulfilled") items = Array.isArray(c.value && c.value.items) ? c.value.items : [];
+      let items = [], linked = [], storeOff = false;
+      if (c.status === "fulfilled") { items = Array.isArray(c.value && c.value.items) ? c.value.items : []; linked = Array.isArray(c.value && c.value.linked) ? c.value.linked : []; }
       else if (/not enabled/i.test(String(c.reason && c.reason.message))) storeOff = true;
       // Nothing could be read at all: the card's own "Try again".
       if (m.status === "rejected" && c.status === "rejected" && !storeOff) throw c.reason;
       if (m.status === "rejected" && !providers.length) message = "Your MIND apps could not be loaded right now. Try again in a moment.";
-      const entries = connectorList(providers, items);
+      const entries = connectorList(providers, items, linked);
       if (!entries.length) return storeOff ? { entries: [], hidden: true } : { entries: [], message: message || "The MIND App Store list is not available right now. Try again in a moment." };
       return message ? { entries, message } : { entries };
     },

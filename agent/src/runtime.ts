@@ -281,11 +281,16 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
   // `servers` is live: the MCP service is in memory. Off when the host wired no MIND base URL, or MINDCLAW_CONNECTED_APPS=0.
   const appsKey = (): string | undefined => billingKey() || undefined;
   const mcpSvc = overrides.mcpConnect;
-  const serverLites = (): ServerLite[] => (mcpSvc?.enabled() ? mcpSvc.list(ownerKey).map((s) => ({ id: s.id, name: s.name, enabled: s.enabled, tools: s.tools.length })) : []);
+  const serverLites = (): ServerLite[] => (mcpSvc?.enabled()
+    ? mcpSvc.list(ownerKey).map((s) => ({
+        id: s.id, name: s.name, enabled: s.enabled, tools: s.toolCount ?? s.tools.length,
+        ...(s.via === "mind" ? { via: "mind" as const } : {}), ...(s.integration ? { integration: s.integration } : {}), ...(s.status && s.status !== "ok" ? { status: s.status } : {}),
+      }))
+    : []);
   const connectedApps = new ConnectedApps({
     uid: ownerKey, baseUrl: cfg.mindBaseUrl, key: appsKey, fetchImpl: overrides.fetchImpl,
     catalog: mcpSvc?.enabled() ? () => mcpSvc.catalogItems(ownerKey) : undefined,
-    serversVersion: () => (mcpSvc?.enabled() ? mcpSvc.store.version(ownerKey) : 0),
+    serversVersion: () => (mcpSvc?.enabled() ? mcpSvc.version(ownerKey) : 0),
   });
   const appsOn = (): boolean => (overrides.env ?? process.env).MINDCLAW_CONNECTED_APPS?.trim() !== "0";
   const toolsFor = (home: string, selfBot: string | undefined): Tool[] => {
@@ -465,6 +470,8 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
           let lastCheckpoint = Date.now();
           try {
           while (startNotices.length) { const n = startNotices.shift()!; entry.recorder.push(n); yield n; }
+          // MIND holds the user's connected MCP servers (when it does): make this turn's view of them current before the model is called (cached for seconds; never waits long).
+          if (!botRec && overrides.mcpConnect?.enabled()) { try { await overrides.mcpConnect.prepare(ownerKey, 5000); } catch { /* the last good read stands */ } }
           // Read the user's connected apps before the model is called, so this turn's prompt names them (cached; a failed read is remembered and said plainly).
           if (!botRec && appsOn()) { try { await connectedApps.refresh(false, o?.signal); } catch { /* the prompt says the read failed */ } }
           for await (const ev of inner.send(messageWithPhotos(msg, photos), o)) {

@@ -7,6 +7,21 @@
 export function publisherLabel(p) {
   return p === "official" ? "Official publisher" : p === "community" ? "Community, listed in the MIND App Store" : p === "self" ? "Your own server" : "Unknown publisher";
 }
+/** What the user sees when they come back from a server's sign-in (MIND sends them to /?mcp_connected=<id> or /?mcp_error=<code>). */
+const RETURN_ERRORS = {
+  access_denied: "You cancelled the sign-in. Nothing was connected.",
+  duplicate: "That server is already connected.",
+  limit: "You are at the limit of connected servers. Remove one first.",
+  unreachable: "MIND could not reach that server. Try again in a moment.",
+  not_mcp: "That address did not answer like an MCP server.",
+  bad_token: "The server did not accept the sign-in.",
+  refused: "That address cannot be connected.",
+  needs_auth: "The server wants a sign-in that did not finish.",
+  no_oauth: "That server does not offer a sign-in. Paste its key instead.",
+  rate_limited: "Too many attempts. Try again shortly.",
+};
+export function returnMessage(code) { return RETURN_ERRORS[code] || "The MCP sign-in did not finish. Nothing was connected."; }
+
 export function authLabel(p) {
   if (!p.authRequired) return "No sign-in needed";
   return p.oauth ? "Sign in (OAuth) or paste an API key" : "Needs an API key";
@@ -14,7 +29,7 @@ export function authLabel(p) {
 
 export function initMcp({ json, api, h, icon, notify, mount, section, openApps, suspendApps, resumeApps }) {
   const side = mount;           // the sidebar section element
-  let servers = [], pending = [], limits = null, enabled = false;
+  let servers = [], pending = [], limits = null, enabled = false, via = "local";
   const shown = new Set();      // pending ids that already have a card in the thread
   const readerOpen = { v: false };
 
@@ -23,7 +38,7 @@ export function initMcp({ json, api, h, icon, notify, mount, section, openApps, 
       const r = await api("/mcp/servers");
       if (!r.ok) { enabled = false; if (section) section.hidden = true; return; }
       const d = await r.json();
-      enabled = true; servers = d.servers || []; pending = d.pending || []; limits = d.limits || null;
+      enabled = true; servers = d.servers || []; pending = d.pending || []; limits = d.limits || null; via = d.via === "mind" ? "mind" : "local";
       renderSide();
     } catch { /* offline: keep what is shown */ }
   }
@@ -123,6 +138,8 @@ export function initMcp({ json, api, h, icon, notify, mount, section, openApps, 
     side.replaceChildren();
     const body = h("div", "mcp-body");
     if (!servers.length && !pending.length) body.append(h("p", "empty-side", "None yet. Ask Daebot to find and connect one, e.g. a vendor's docs."));
+    // MIND holds these for the account, so Daebot on the web, the desktop and the phone all show the same ones.
+    if (via === "mind") body.append(h("p", "drawer-fine", "Held by MIND for your account: the same servers show in Daebot on the web, the desktop and your phone."));
     for (const p of pending) {
       const r = h("div", "mcp-row pend");
       r.append(h("span", "mcp-host", p.host), h("span", "mcp-state", "Waiting for you"));
@@ -138,13 +155,14 @@ export function initMcp({ json, api, h, icon, notify, mount, section, openApps, 
   function serverRow(s) {
     const wrap = h("div", "mcp-srv" + (s.enabled ? "" : " off")); wrap.dataset.srv = s.id;
     const top = h("div", "mcp-row");
-    const label = h("div", "mcp-lab"); label.append(h("span", "mcp-host", s.name), h("span", "mcp-sub", `${s.host} · ${s.tools.length} tools${s.truncated ? " (capped)" : ""}`));
+    const n = typeof s.toolCount === "number" ? s.toolCount : s.tools.length;
+    const label = h("div", "mcp-lab"); label.append(h("span", "mcp-host", s.name), h("span", "mcp-sub", `${s.host} · ${n} tools${s.truncated ? " (capped)" : ""}${s.status === "reauth_required" ? " · needs you to reconnect it" : s.status === "error" ? " · MIND reports an error" : ""}${s.via === "local" ? " · only on this device" : ""}`));
     const tog = h("button", "btn-quiet sm", s.enabled ? "On" : "Off"); tog.type = "button"; tog.setAttribute("aria-pressed", String(s.enabled));
     tog.addEventListener("click", async () => { try { await json(`/mcp/servers/${encodeURIComponent(s.id)}`, { method: "PATCH", body: JSON.stringify({ enabled: !s.enabled }) }); } catch (e) { notify(String(e.message || e)); } load(); });
     top.append(label, tog);
     wrap.append(top);
     const det = document.createElement("details"); det.className = "mcp-det";
-    det.append(h("summary", "", `${s.publisher} publisher · tools`));
+    det.append(h("summary", "", s.auth === "integration" ? `through your ${s.integration || s.name} connection in MIND · tools` : `${s.publisher} publisher · tools`));
     const box = h("div", "mcp-tools"); const boxes = [];
     for (const t of s.tools) boxes.push([t.name, toolRow(t, box, { checked: t.allowed || t.runsWithoutAsking })]);
     det.append(box);
@@ -158,7 +176,8 @@ export function initMcp({ json, api, h, icon, notify, mount, section, openApps, 
       if (del.dataset.sure !== "1") { del.dataset.sure = "1"; del.textContent = "Really remove?"; setTimeout(() => { del.dataset.sure = ""; del.textContent = "Remove"; }, 4000); return; }
       json(`/mcp/servers/${encodeURIComponent(s.id)}`, { method: "DELETE" }).catch((e) => notify(String(e.message || e))).finally(load);
     });
-    acts.append(save, ref, del);
+    // A connection that rides on a MIND app is switched off here, or removed by disconnecting the app: removing it would only make MIND link it again.
+    if (s.auth === "integration") acts.append(save, ref); else acts.append(save, ref, del);
     det.append(acts);
     wrap.append(det);
     return wrap;
@@ -198,7 +217,19 @@ export function initMcp({ json, api, h, icon, notify, mount, section, openApps, 
       const t = row.querySelector("button"); if (t) t.focus({ preventScroll: true });
     },
     enabled: () => enabled,
-    /** Back from an OAuth sign-in (?mcp=connected|failed). */
-    returned(q) { if (q) notify(q === "connected" ? "MCP server connected." : "The MCP sign-in did not finish."); },
+    /** Back from an OAuth sign-in: ?mcp=connected|failed (this gateway's own callback), or ?mcp_connected=<server id> / ?mcp_error=<code> (MIND's callback). */
+    async returned(q, o) {
+      if (!q && !(o && (o.connectedId || o.errorCode))) return;
+      if (o && o.errorCode) { notify(returnMessage(o.errorCode)); return; }
+      if (q === "failed") { notify("The MCP sign-in did not finish."); return; }
+      if (o && o.connectedId) {
+        await load();
+        const s = servers.find((x) => x.id === o.connectedId);
+        const n = s ? (typeof s.toolCount === "number" ? s.toolCount : s.tools.length) : 0;
+        notify(s ? `Connected ${s.name}: ${n} tool${n === 1 ? "" : "s"} ready. Ask Daebot to use them.` : "MCP server connected.");
+        return;
+      }
+      notify("MCP server connected.");
+    },
   };
 }

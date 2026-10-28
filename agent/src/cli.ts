@@ -151,7 +151,9 @@ async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promis
     try {
       const secretKey = hostedMode ? process.env.DAEBOT_SECRET_KEY : process.env.DAEBOT_SECRET_KEY || (await import("./mcpconnect/local-secret.ts")).localSecret(join(dataDir(), "mcp"));
       const store = new McpStore({ dir: join(dataDir(), "mcp"), secretKey });
-      mcpConnect = new McpConnectService({ store, catalog: createMindCatalog({ baseUrl: cfg.mindBaseUrl, keyFor: (uid) => catalogKey.of(uid) }) });
+      // MIND holds the user's connections when it can (their own key, GET /mcp/config decides): the same servers on the web, the desktop app and the phone.
+      // The local store above stays as the fallback when MIND is off or unreachable.
+      mcpConnect = new McpConnectService({ store, catalog: createMindCatalog({ baseUrl: cfg.mindBaseUrl, keyFor: (uid) => catalogKey.of(uid) }), mind: { baseUrl: cfg.mindBaseUrl, keyFor: (uid) => catalogKey.of(uid) } });
     } catch (e) { process.stderr.write(`${e instanceof HostedConfigError ? e.message : "invalid MCP connect configuration"}\n`); return 1; }
   }
   const runtime = createRuntime(cfg, { mcpConnect, hosted: hostedRt ? { ...hostedRt, sharedCap: globalCap, exempt: true, username: process.env.DAEBOT_OWNER_USERNAME?.trim() || "anthonyjconti" } : undefined, store: sessionStore, credits, bots });
