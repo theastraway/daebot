@@ -21,7 +21,20 @@ test("sidebar bottom bar: avatar + name, connection dot, Apps icon; the old Sign
   assert.match(menu, /role="menu"/);
   assert.match(html, /id="acct-btn"[^>]*aria-haspopup="menu"/);
   assert.match(html, /id="acct-btn"[^>]*aria-expanded="false"/);
-  for (const id of ["mode-btn", "mode-menu", "bypass-chip"]) assert.match(html, new RegExp(`id="${id}"`), id);
+  for (const id of ["mode-btn", "mode-menu"]) assert.match(html, new RegExp(`id="${id}"`), id);
+  assert.doesNotMatch(html, /bypass-chip/, "Bypass is shown by the mode button itself, not a separate chip");
+});
+
+test("quiet controls: the model picker and the permissions control are LED-glyph triggers, never capsules, and Bypass is the permissions control itself", () => {
+  const html = read("index.html"), css = read("brand/brand.css") + read("style.css"), perms = strip(read("permissions.js"));
+  for (const id of ["model-badge", "mode-btn"]) assert.match(html, new RegExp(`id="${id}"[^>]*>\\s*<svg class="led`), `${id} starts with the LED glyph`);
+  assert.doesNotMatch(html, /class="[^"]*btn-chip[^"]*mode-btn|class="[^"]*mode-btn[^"]*btn-chip/, "the permissions control is not the Instructions capsule");
+  const rule = (sel: string) => css.split("\n").filter((l) => l.startsWith(sel)).join("\n");
+  assert.match(rule(".model-badge, .mode-btn {"), /border-radius: 6px/);
+  assert.doesNotMatch(css, /\.(model-badge|mode-btn|bypass-chip)[^{]*\{[^}]*border-radius: 999px/);
+  for (const m of ["risky", "writes", "everything", "bypass"]) assert.match(css, new RegExp(`\\.mode-btn\\[data-mode="${m}"\\]`), `LED pattern for ${m}`);
+  assert.match(perms, /btn\.dataset\.mode =/); assert.match(perms, /aria-label/);
+  assert.match(css, /\.composer-wrap:has\(\.mode-btn\.is-bypass\) \.composer \{ border-color: var\(--accent\)/, "the red composer hairline stays");
 });
 
 test("account menu: apps links are device-aware and hidden inside the apps", () => {

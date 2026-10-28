@@ -249,7 +249,7 @@ kbd { font-size: 10.5px; background: var(--surface-2); border: 1px solid var(--l
 @media (max-width: 560px) {
   .topbar { padding: env(safe-area-inset-top) calc(8px + env(safe-area-inset-right)) 0 calc(8px + env(safe-area-inset-left)); gap: 2px; }
   .voice-btn, .topbar .icon-btn { width: 34px; }
-  .model-badge { max-width: 24vw; }
+  .model-badge { max-width: 30vw; }
   .top-title { flex: 1 1 70px; }
   .top-title p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 }
@@ -290,20 +290,16 @@ kbd { font-size: 10.5px; background: var(--surface-2); border: 1px solid var(--l
 .btn-chip:hover, .btn-chip[aria-expanded="true"] { background: var(--surface-2); color: var(--ink); }
 .btn-chip .ic { width: 16px; height: 16px; }
 .model-wrap { position: relative; flex: none; display: flex; }
-button.model-badge { border: 0; cursor: pointer; text-align: left; }
-button.model-badge:hover { box-shadow: 0 0 0 1px rgba(255,255,255,.18) inset, 0 0 0 3px color-mix(in srgb, var(--led) 28%, transparent); }
-button.model-badge[aria-expanded="true"] { box-shadow: 0 0 0 1px rgba(255,255,255,.18) inset, 0 0 0 3px color-mix(in srgb, var(--led) 40%, transparent); }
-.model-badge .mb-chev { width: 13px; height: 13px; color: #a89c88; margin-right: -2px; }
-.model-menu { position: absolute; z-index: 40; top: calc(100% + 8px); right: 0; width: 320px; max-width: calc(100vw - 24px); padding: 6px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: var(--shadow); }
+.model-menu { position: absolute; z-index: 40; top: calc(100% + 8px); right: 0; width: 320px; max-width: calc(100vw - 24px); padding: 6px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: var(--shadow); }
 .mm-head { padding: 6px 10px 4px; font: 600 11px var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
 .mm-list { display: grid; gap: 1px; max-height: min(60dvh, 360px); overflow-y: auto; }
-.mm-group { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; margin-top: 4px; padding: 7px 10px; background: none; border: 0; border-radius: 8px; font: 600 11px var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); text-align: left; user-select: none; }
+.mm-group { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; margin-top: 4px; padding: 7px 10px; background: none; border: 0; border-radius: 6px; font: 600 11px var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); text-align: left; user-select: none; }
 .mm-group:first-child { margin-top: 0; }
 .mm-group:hover:not([data-pinned]), .mm-group:focus-visible { background: var(--surface-2); color: var(--ink-2); }
 .mm-group[data-pinned] { cursor: default; color: var(--ink-2); }
 .mm-group .ic { width: 14px; height: 14px; flex: none; }
 .mm-gcount { margin-left: 6px; text-transform: none; letter-spacing: 0; font-weight: 500; opacity: .75; }
-.mm-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 8px 10px 8px 16px; background: none; border: 0; border-radius: 10px; color: var(--ink); }
+.mm-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 8px 10px 8px 16px; background: none; border: 0; border-radius: 6px; color: var(--ink); }
 .mm-item:hover:not(.locked), .mm-item:focus-visible { background: var(--surface-2); }
 .mm-item[aria-checked="true"] { background: var(--surface-2); }
 .mm-item.locked { cursor: not-allowed; color: var(--ink-3); }
@@ -384,8 +380,7 @@ button.model-badge[aria-expanded="true"] { box-shadow: 0 0 0 1px rgba(255,255,25
   #btn-speak { display: none; } /* the hands-free button stays; the mic is in the composer */
   .topbar { gap: 0; padding: env(safe-area-inset-top) calc(6px + env(safe-area-inset-right)) 0 calc(6px + env(safe-area-inset-left)); }
   .topbar .icon-btn, .btn-chip { width: 32px; }
-  #model-badge { max-width: 31vw; padding: 0 7px 0 10px; gap: 4px; }
-  #model-badge .mb-led { display: none; }
+  #model-badge { padding: 0 6px; gap: 6px; }
   #top-badge { display: none; } /* the title's subtitle names the bot, and the mascot wears its colour */
 }
 
@@ -614,26 +609,21 @@ button.model-badge[aria-expanded="true"] { box-shadow: 0 0 0 1px rgba(255,255,25
 }
 
 /* ---- per-chat permission mode (composer) ---- */
-.mode-row { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; min-height: 0; }
-.mode-row:not(:has(.mode-btn:not([hidden]), .bypass-chip:not([hidden]))) { display: none; }
+/* sits on the composer's column: same 740px measure, and the glyph lines up with the text inside the composer (8px + 1px border + 8px = its 16px + 1px) */
+.mode-row { display: flex; align-items: center; gap: 8px; max-width: 740px; margin: 0 auto 2px; padding: 0 8px; min-height: 0; }
+.mode-row:not(:has(.mode-btn:not([hidden]))) { display: none; }
 .mode-wrap { position: relative; }
-.mode-btn { height: 28px; font-size: 12.5px; }
-.mode-btn .mb-chev { width: 13px; height: 13px; opacity: .7; }
-.mode-menu { position: absolute; z-index: 25; left: 0; bottom: calc(100% + 6px); width: min(340px, 88vw); display: grid; gap: 1px; padding: 6px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: var(--shadow); }
+.mode-menu { position: absolute; z-index: 25; left: 0; bottom: calc(100% + 6px); width: min(340px, 88vw); display: grid; gap: 1px; padding: 6px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: var(--shadow); }
 .mode-menu[hidden] { display: none; }
-.mm-item { display: grid; grid-template-columns: 18px 1fr; gap: 2px 8px; align-items: start; width: 100%; padding: 8px 10px; background: none; border: 0; border-radius: 9px; text-align: left; color: var(--ink); cursor: pointer; font: 500 13.5px var(--sans); }
-.mm-item:hover, .mm-item:focus-visible { background: var(--surface-2); }
-.mm-item .ic { width: 16px; height: 16px; color: var(--ok); margin-top: 2px; visibility: hidden; }
-.mm-item[aria-checked="true"] .ic { visibility: visible; }
-.mm-item small { grid-column: 2; color: var(--ink-3); font: 400 12px/1.35 var(--sans); }
-.mm-item.bypass strong { color: var(--accent); }
-.bypass-chip { display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 8px 0 10px; border-radius: 999px; border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent); font: 650 12.5px var(--sans); cursor: pointer; }
-.bypass-chip[hidden] { display: none; }
-.bypass-chip .bc-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
-.bypass-chip .ic { width: 13px; height: 13px; }
-.bypass-chip:hover { background: var(--accent); color: var(--bg); }
-.bypass-chip:hover .bc-dot { background: var(--bg); }
-.composer-wrap:has(.bypass-chip:not([hidden])) .composer { border-color: var(--accent); }
+/* the permission menu rows (scoped: the model menu has its own .mm-item rows above, and an unscoped grid squeezed them to "Qw...") */
+.mode-menu .mm-item { display: grid; grid-template-columns: 18px 1fr; gap: 2px 8px; align-items: start; width: 100%; padding: 8px 10px; background: none; border: 0; border-radius: 6px; text-align: left; color: var(--ink); cursor: pointer; font: 500 13.5px var(--sans); }
+.mode-menu .mm-item:hover, .mode-menu .mm-item:focus-visible { background: var(--surface-2); }
+.mode-menu .mm-item .ic { width: 16px; height: 16px; color: var(--ok); margin-top: 2px; visibility: hidden; }
+.mode-menu .mm-item[aria-checked="true"] .ic { visibility: visible; }
+.mode-menu .mm-item small { grid-column: 2; color: var(--ink-3); font: 400 12px/1.35 var(--sans); }
+.mode-menu .mm-item.bypass strong { color: var(--accent); }
+/* Bypass on: the permissions control turns red (see brand.css) and so does the composer hairline */
+.composer-wrap:has(.mode-btn.is-bypass) .composer { border-color: var(--accent); }
 .waiver-card .waiver-text { margin: 4px 0 10px; padding: 12px 14px; border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 12px; color: var(--ink); font-size: 14px; line-height: 1.5; }
 .waiver-card label.waiver-check { display: flex; align-items: flex-start; gap: 10px; margin: 6px 0 10px; font-size: 14px; color: var(--ink); cursor: pointer; }
 .waiver-card label.waiver-check input { width: 18px; height: 18px; margin-top: 2px; accent-color: var(--accent); flex: none; }
