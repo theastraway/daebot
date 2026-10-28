@@ -1,6 +1,6 @@
 {
   "name": "daebot-desktop",
-  "version": "0.3.12",
+  "version": "0.3.13",
   "private": true,
   "description": "Daebot desktop app: menu bar item, global shortcut, native window around the Daebot gateway and web UI.",
   "license": "MIT",
