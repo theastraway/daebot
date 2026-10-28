@@ -517,3 +517,51 @@ button.model-badge[aria-expanded="true"] { box-shadow: 0 0 0 1px rgba(255,255,25
 .queue-tag { flex: none; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); }
 .queue-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .queue-x { flex: none; font-size: 16px; line-height: 1; padding: 2px 6px; }
+
+/* permission cards, Settings > Permissions, suggested replies */
+.btn-danger:disabled, .btn-primary:disabled, .btn-quiet:disabled { opacity: .55; cursor: default; }
+.confirm.perm { border-color: var(--ink); }
+.perm-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.perm-head h3 { margin: 0; }
+.perm-cls { font: 600 10.5px var(--sans); letter-spacing: .05em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--ink-2); }
+.perm-cls.outward, .perm-cls.public { color: var(--warn); border-color: var(--warn); background: var(--warn-soft); }
+.perm-cls.irreversible { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.perm-rows { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0 0 10px; background: var(--surface-2); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+.perm-rows dt { color: var(--ink-3); }
+.perm-rows dd { margin: 0; min-width: 0; overflow-wrap: anywhere; color: var(--ink); }
+.perm-rows dd.mono { font: 12.5px var(--mono); }
+.perm-args { margin: 0 0 10px; font-size: 12.5px; color: var(--ink-3); }
+.perm-args pre { margin: 6px 0 0; padding: 8px 10px; background: var(--surface-2); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 var(--mono); color: var(--ink-2); max-height: 220px; overflow: auto; }
+.perm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.perm-note { margin: 8px 0 0; font-size: 12.5px; color: var(--ink-3); }
+.perm-suggest { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 0 10px; padding: 8px 12px; border-radius: 9px; background: var(--warn-soft); color: var(--ink); font-size: 13px; }
+.perm-scope-title { margin: 0 0 6px; font-weight: 600; font-size: 13px; }
+.perm-scope-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.perm-opt { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 9px; font-size: 13px; cursor: pointer; overflow-wrap: anywhere; }
+.perm-opt.broad { border-style: dashed; }
+.confirm.perm input[type="radio"], .perm-mode input[type="radio"] { flex: none; width: 16px; height: 16px; padding: 0; margin: 2px 0 0; accent-color: var(--ink); }
+.perm-result { margin: 0; font-size: 13px; color: var(--ink-2); }
+.perm-result.allowed::before { content: "✓ "; color: var(--ok); }
+.perm-result.denied::before { content: "✕ "; color: var(--accent); }
+.confirm.perm.done .perm-rows, .confirm.perm.done .perm-args { display: none; }
+.confirm.perm.done { opacity: .8; }
+.perm-modes { display: flex; flex-direction: column; gap: 8px; }
+.perm-mode { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 10px; cursor: pointer; }
+.perm-mode-text { display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--ink-2); }
+.perm-mode-text strong { color: var(--ink); font-weight: 600; }
+.perm-rules { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.perm-rule { border: 1px solid var(--line-strong); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+.perm-rule-top { display: flex; align-items: center; gap: 8px; }
+.perm-eff { font: 650 10.5px var(--sans); letter-spacing: .05em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; }
+.perm-eff.allow { color: var(--ok); border: 1px solid var(--ok); }
+.perm-eff.deny { color: var(--accent); border: 1px solid var(--accent); }
+.perm-rule-tool { font: 12.5px var(--mono); color: var(--ink-2); }
+.perm-rule-scope { margin: 6px 0 2px; overflow-wrap: anywhere; }
+.perm-rule-meta { margin: 0 0 8px; color: var(--ink-3); font-size: 12px; }
+.perm-edit { display: flex; flex-wrap: wrap; gap: 8px; }
+.perm-edit .fld { flex: 1; min-width: 160px; }
+.suggest { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 0 8px; }
+.suggest[hidden] { display: none; }
+.suggest-label { font-size: 12px; color: var(--ink-3); }
+.suggest-chip { max-width: 100%; text-align: left; font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); cursor: pointer; overflow-wrap: anywhere; }
+.suggest-chip:hover, .suggest-chip.picked { border-color: var(--ink); }

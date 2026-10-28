@@ -68,3 +68,14 @@ test("rate limiter allows N per window then blocks, then recovers", () => {
   t = 1500;
   assert.equal(ok(), true);
 });
+
+test("a permission card also notifies when the window is hidden, with the plain title and no arguments", () => {
+  const card = { type: "permission", id: "p1", tool: "bash", title: "Run a command on this computer", args: { command: "SECRET-CMD" }, detail: [] };
+  assert.equal(shouldNotify(card, { visible: false, focused: false }), true);
+  assert.equal(shouldNotify(card, { visible: true, focused: true }), false);
+  const n = buildConfirmNotification(card);
+  assert.equal(n.title, "Daebot is asking permission: bash");
+  assert.equal(n.body, "Run a command on this computer");
+  assert.ok(!JSON.stringify(n).includes("SECRET-CMD"));
+  assert.equal(shouldNotify({ type: "permissionResolved", id: "p1" }, null), false);
+});

@@ -10,6 +10,8 @@ import { initMcp } from "/mcp.js";
 import { initConnectors } from "/connectors.js";
 import { transcriptBehind } from "/sync.js";
 import { confirmDialog, deleteControl, sessionDeleteText } from "/manage.js";
+import { buildPermissionCard, initPermissions } from "/permissions.js";
+import { initSuggest } from "/suggest.js";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -206,6 +208,7 @@ function buildItem(it, tr) {
     case "tool": node = buildTool(it); break;
     case "gate": node = buildGate(it); break;
     case "confirm": node = buildConfirm(it); break;
+    case "permission": node = buildPermissionCard(it, { json, h, notify, onChange: () => toBottom() }); break;
     case "mcp": node = mcp.buildCard(it.pending, () => { it.done = true; }); if (it.done) node.classList.add("done"); break;
     default: // a billing notice carries an upgrade link; anything else stays plain text
       node = h("div", `notice ${it.level === "warn" ? "warn" : ""}`, /https?:\/\//.test(it.text) ? undefined : it.text);
@@ -248,6 +251,14 @@ function buildGate(it) {
   const g = h("div", `gate ${it.enforced ? "enforced" : "shadow"}`);
   g.append(h("span", "gate-label", "Gate"), h("span", "gate-name", v.gate), h("span", "gate-mode", `${v.action} · ${it.enforced ? "enforced" : "shadow"}`), h("span", "gate-reason", v.reason));
   return g;
+}
+// A permission card in the thread. state: pending (waiting on a click) | resolved | gone (a saved transcript, nothing waits).
+function permissionItem(ev) {
+  return { kind: "permission", id: ev.id, tool: ev.tool, cls: ev.cls, title: ev.title, detail: ev.detail || [], args: ev.args || {},
+    allowOptions: ev.allowOptions || [], denyOptions: ev.denyOptions || [], suggest: ev.suggest, expiresAt: ev.expiresAt, state: "pending" };
+}
+function resolvePermission(it, ev) {
+  it.state = "resolved"; it.outcome = ev.outcome; it.remembered = ev.remembered;
 }
 function buildConfirm(it) {
   const c = h("div", "confirm");
@@ -294,7 +305,7 @@ function replaceItem(sessionId, oldIt, newIt) {
 
 // Rebuild transcript items from the server's saved history (same shapes the live stream produces).
 function itemsFromHistory(events) {
-  const items = [], byReceipt = new Map(), usage = { in: 0, out: 0, cost: 0 };
+  const items = [], byReceipt = new Map(), usage = { in: 0, out: 0, cost: 0 }, permById = new Map();
   let asst = null, model = "";
   for (const ev of events) {
     switch (ev.type) {
@@ -315,12 +326,15 @@ function itemsFromHistory(events) {
       case "toolEnd": { const it = byReceipt.get(ev.receiptId); if (it) { it.status = ev.ok ? "ok" : "fail"; it.preview = ev.preview; } break; }
       case "gate": asst = null; items.push({ kind: "gate", verdict: ev.verdict, enforced: ev.enforced }); break;
       case "confirm": asst = null; items.push({ kind: "confirm", id: ev.id, tool: ev.tool, args: ev.args, reason: ev.reason, done: true }); break;
+      case "permission": { asst = null; const it = permissionItem(ev); items.push(it); permById.set(ev.id, it); break; }
+      case "permissionResolved": { const it = permById.get(ev.id); if (it) resolvePermission(it, ev); break; }
       case "notice": items.push({ kind: "notice", level: ev.level, text: ev.text }); break;
       case "usage": usage.in += ev.usage.promptTokens; usage.out += ev.usage.completionTokens; usage.cost = ev.totalCostUsd; if (ev.model) model = ev.model; break;
       default: break;
     }
   }
   for (const it of items) if (it.kind === "tool" && it.status === "run") it.status = "fail";
+  for (const it of items) if (it.kind === "permission" && it.state === "pending") it.state = "gone"; // a finished transcript has no card still waiting
   return { items, usage, model };
 }
 
@@ -501,6 +515,7 @@ async function refreshSessions() {
 
 async function selectSession(s) {
   closeSidebar();
+  suggest.clear();
   if (!s.live) {
     try {
       const { sessionId } = await json("/sessions", { method: "POST", body: JSON.stringify({ surface: "web", title: s.title, resumeId: s.id, ...(s.bot ? { bot: s.bot } : {}) }) });
@@ -521,6 +536,7 @@ async function selectSession(s) {
 }
 function newSession() {
   closeSidebar();
+  suggest.clear();
   state.currentId = null;
   state.curBot = "";
   state.transcripts.delete(DRAFT);
@@ -530,6 +546,7 @@ function newSession() {
 // A new thread with one of the user's bots: a draft until the first message, like a new session.
 function newBotThread(botId) {
   closeSidebar();
+  suggest.clear();
   state.currentId = null;
   state.curBot = botId;
   state.transcripts.delete(DRAFT);
@@ -644,6 +661,7 @@ async function attachRun(id, baseEvents) {
 async function sendMessage(text) {
   text = text.trim();
   if (!text) return;
+  suggest.onSend(text); // tells Dae whether the suggested replies were taken, edited or ignored, and clears them
   // Show the message immediately; opening a session can take several seconds while MIND boots.
   const startKey = tkey();
   const userItem = addItem(startKey, { kind: "user", text });
@@ -698,6 +716,7 @@ async function sendMessage(text) {
     if (!els.drawer.hidden) loadViolations(); else refreshViolCount();
     if (id === state.currentId || id === tkey()) voice.turnDone(answerText(transcript(id), userItem));
     else voice.turnDone("");
+    if (id === state.currentId) suggest.load(id); // drafts what the user will probably say next, if the reply waits on them
   }
 }
 
@@ -781,6 +800,17 @@ function onEvent(id, ev, asst, toolByReceipt) {
       if (asst) { asst.streaming = false; paintAssistant(asst); }
       addItem(id, { kind: "confirm", id: ev.id, tool: ev.tool, args: ev.args, reason: ev.reason });
       return null;
+    case "permission": {
+      if (asst) { asst.streaming = false; paintAssistant(asst); }
+      const it = addItem(id, permissionItem(ev));
+      (tr.perms ||= new Map()).set(ev.id, it);
+      return null;
+    }
+    case "permissionResolved": {
+      const it = tr.perms && tr.perms.get(ev.id);
+      if (it) { resolvePermission(it, ev); if (it.repaint) it.repaint(); }
+      return asst;
+    }
     case "notice":
       addItem(id, { kind: "notice", level: ev.level, text: ev.text });
       return asst;
@@ -1016,6 +1046,14 @@ const voice = initVoice({
   bots: () => [...document.querySelectorAll(".hero-bot, .bot-dock m-bot")],
 });
 
+// ---------- suggested replies + permissions ----------
+const suggest = initSuggest({
+  json, h, wrap: $("suggest"), input: els.input, grow,
+  currentId: () => state.currentId, isBusy: (id) => state.busy.has(id),
+});
+const permissions = initPermissions({ json, h, icon, notify, button: $("btn-perms") });
+$("btn-perms").addEventListener("click", closeSidebar);
+
 // ---------- bots + model picker ----------
 const models = initModels({
   json, store, notify, icon,
@@ -1063,6 +1101,7 @@ async function boot() {
   if (state.hosted && !(await showWho())) return location.replace("/");
   await refreshSessions();
   mcp.load();
+  permissions.probe();
   let last = null;
   try { last = sessionStorage.getItem("daebot:current"); } catch { /* none */ }
   if (!last) { try { const f = JSON.parse(localStorage.getItem("daebot:inflight") || "null"); if (f && f.id) { last = f.id; sessionStorage.setItem("daebot:bot", f.bot || ""); } } catch { /* none */ } }

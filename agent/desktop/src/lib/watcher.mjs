@@ -62,7 +62,7 @@ export class ConfirmWatcher {
   _frame(text) {
     let f;
     try { f = JSON.parse(text); } catch { return; }
-    if (!f || f.t !== "event" || !f.event || f.event.type !== "confirm") return;
+    if (!f || f.t !== "event" || !f.event || (f.event.type !== "confirm" && f.event.type !== "permission")) return; // a typed confirmation or a permission card: both wait on the user
     const key = `${f.sessionId}:${f.event.id}`;
     if (this.seenConfirm.has(key)) return;
     this.seenConfirm.add(key);

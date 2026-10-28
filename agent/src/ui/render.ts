@@ -54,6 +54,9 @@ export class TurnFolder {
       case "confirm":
         this.pendingConfirm = { id: ev.id, tool: ev.tool, args: ev.args, reason: ev.reason };
         return [{ kind: "confirm", id: ev.id, tool: ev.tool, args: ev.args, reason: ev.reason }];
+      case "permission": // cards are for the web UI; the terminal never asks to show one (its turns are not interactive)
+      case "permissionResolved":
+        return [];
       case "notice":
         return [{ kind: "notice", level: ev.level, text: ev.text }];
       case "retract":
