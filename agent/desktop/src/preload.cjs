@@ -6,11 +6,14 @@
 //                                                      as that account, add opens the sign-in window (all main-process, gateway origin only)
 //   window.mindclawDesktop.updates.get() / check() / install() / onChange(cb)   the in-window update control (main only
 //                                                      answers the gateway origin; install() restarts into the new version)
+//   window.mindclawDesktop.calendar.call(op, args)    Mac only: Apple Calendar through the bundled EventKit helper -> { ok, result | error }.
+//                                                      Absent on Windows and Linux, so the web UI sees no Calendar bridge there.
 //   window.mindclawDesktop.platform / version         read-only strings
 // The desktop shell also watches confirm events itself, so the web UI does not need to call notify() at all.
 const { contextBridge, ipcRenderer } = require("electron");
 
 const str = (v, max) => (typeof v === "string" ? v.slice(0, max) : "");
+const CALENDAR_OPS = ["status", "request", "calendars", "events", "create", "update", "delete"];
 
 contextBridge.exposeInMainWorld("mindclawDesktop", Object.freeze({
   platform: process.platform,
@@ -30,6 +33,11 @@ contextBridge.exposeInMainWorld("mindclawDesktop", Object.freeze({
       ipcRenderer.on("desktop:update-state", (_e, s) => { try { cb(s); } catch { /* UI bug must not break updates */ } });
     },
   }),
+  ...(process.platform === "darwin" ? {
+    calendar: Object.freeze({
+      call: (op, args) => ipcRenderer.invoke("desktop:calendar", typeof op === "string" && CALENDAR_OPS.includes(op) ? op : "", args && typeof args === "object" && !Array.isArray(args) ? args : {}),
+    }),
+  } : {}),
   notify(payload) {
     const p = payload && typeof payload === "object" ? payload : {};
     ipcRenderer.send("desktop:notify", { title: str(p.title, 200), body: str(p.body, 600) });

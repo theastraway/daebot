@@ -15,6 +15,7 @@ import { buildPermissionCard, initChatMode, initPermissions } from "/permissions
 import { initAccount } from "/account.js";
 import { initSuggest } from "/suggest.js";
 import { initPhotos, normQueue, packQueue, queueLabel, SAYS as PHOTO_SAYS } from "/photos.js";
+import { calendarCapabilities, createDeviceCalls } from "/device-calendar.js";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -86,6 +87,8 @@ async function json(path, opts) {
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
   return res.json();
 }
+// Apple Calendar on the user's own device (the iPhone and Mac apps): the agent's device_call events are answered here, natively, and POSTed back.
+const deviceCalls = createDeviceCalls({ post: (sid, body) => api(`/sessions/${encodeURIComponent(sid)}/device-result`, { method: "POST", body: JSON.stringify(body) }) });
 
 // ---------- markdown-lite (DOM-built; escapes everything by construction) ----------
 const INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\[[^\]\n]+\]\((https?:\/\/[^\s)]+)\))|(https?:\/\/[^\s<>)\]]+)|(\*[^*\n]+\*)/g;
@@ -686,6 +689,7 @@ async function attachRun(id, baseEvents) {
     seq: 0, sawDone: false, lost: false, asst: null, tools: new Map(),
     handle(ev) {
       if (ev.type === "user") { addItem(id, { kind: "user", text: ev.text, ...(ev.photos?.length ? { photos: ev.photos } : {}) }); return; }
+      if (ev.type === "device_call") { void deviceCalls.handle(id, ev); return; } // the device runs it; the turn keeps streaming
       ctx.asst = onEvent(id, ev, ctx.asst, ctx.tools);
     },
   };
@@ -738,13 +742,15 @@ async function sendMessage(text, attached = []) {
     handle(ev) {
       // The server stored the photos: remember their ids so the thumbnails can be loaded again after a reload.
       if (ev.type === "photos") { (userItem.photos || []).forEach((p, i) => { if (ev.photos?.[i]) p.id = ev.photos[i].id; }); return; }
+      if (ev.type === "device_call") { void deviceCalls.handle(id, ev); return; } // the device runs it; the turn keeps streaming
       if (first && ev.type !== "usage") { first = false; dropWaiting(); }
       ctx.asst = onEvent(id, ev, ctx.asst, ctx.tools);
     },
   };
   let refused = false; // the server turned the message away before any turn started
   try {
-    const body = attached.length ? { text, photos: attached.map(({ name, dataUrl }) => ({ name, dataUrl })) } : { text };
+    const capabilities = calendarCapabilities(); // ["apple_calendar"] inside the iPhone and Mac apps, [] anywhere else
+    const body = { text, ...(attached.length ? { photos: attached.map(({ name, dataUrl }) => ({ name, dataUrl })) } : {}), ...(capabilities.length ? { capabilities } : {}) };
     const res = await api(`/sessions/${encodeURIComponent(id)}/send`, { method: "POST", body: JSON.stringify(body) });
     if (res.status === 409) throw new Error("This session is busy with another turn.");
     if (!res.ok) { refused = true; throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`); }

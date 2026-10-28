@@ -19,7 +19,7 @@ test("hosted: the offered tool set is web_fetch plus mind_* only; no shell or fi
   assert.ok(names.every((n) => n === "web_fetch" || n.startsWith("mind_")), names.join(","));
   // before boot the kernel narrows further, so assert on the pure filter too
   const all = filterHostedTools(createBuiltinTools()).map((t) => t.spec.name);
-  assert.deepEqual(all, ["web_fetch"]);
+  assert.deepEqual(all, ["web_fetch", "apple_calendar"]); // apple_calendar runs on the user's device through the relay, never on this host
   // local (non hosted) runtime still offers the full set
   const p2 = new FakeProvider([{ text: "hi" }]);
   const rt2 = createRuntime(baseCfg(), { provider: p2, fetchImpl: offline });

@@ -56,6 +56,7 @@ export class TurnFolder {
         return [{ kind: "confirm", id: ev.id, tool: ev.tool, args: ev.args, reason: ev.reason }];
       case "permission": // cards are for the web UI; the terminal never asks to show one (its turns are not interactive)
       case "permissionResolved":
+      case "device_call": // relay-only: a device request for the iPhone or Mac app, never shown in a terminal
         return [];
       case "notice":
         return [{ kind: "notice", level: ev.level, text: ev.text }];

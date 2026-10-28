@@ -10,6 +10,7 @@ import { COOKIE_NAME, hostnameOf, isLocalHost, isLocalOrigin, loadOrCreateToken,
 import { HostedConfigError, LoginLimiter, MIN_TOKEN_LEN, SESSION_TTL_MS, issueSession, parseSession } from "../hosted.ts";
 import type { HostedOptions } from "../hosted.ts";
 import { RunRegistry } from "./runs.ts";
+import { DeviceRelay, parseCapabilities } from "./device-relay.ts";
 import type { Run } from "./runs.ts";
 import { BusyError, ForbiddenError, NotFoundError, SessionManager } from "./sessions.ts";
 import { OWNER } from "../auth/users.ts";
@@ -280,8 +281,9 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   const wsWho = new WeakMap<WsConnection, Principal>();
   const subscribers = new Map<string, Set<WsConnection>>(); // sessionId -> ws conns
   const runs = new RunRegistry(); // server-owned turns: they outlive the request that started them
+  const deviceRelay = new DeviceRelay(); // tool -> the user's own device (Apple Calendar in the iPhone and Mac apps) and back
   const wsConns = new Set<WsConnection>();
-  const SESSION_ROUTE = /^\/sessions\/([^/]+)(?:\/(send|abort|violations|history|events|suggest|suggest-feedback))?$/;
+  const SESSION_ROUTE = /^\/sessions\/([^/]+)(?:\/(send|abort|violations|history|events|suggest|suggest-feedback|device-result))?$/;
   const PHOTO_ROUTE = /^\/sessions\/([^/]+)\/photos\/([^/]+)$/;
   let photoBodies = 0; // sends with a body over MAX_BODY being read or decoded right now: each holds tens of MB briefly
   // Which LLM answers (shown in the UI). Absent when the gateway was started without a Config (tests, fakes).
@@ -652,7 +654,12 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (withUser && after === 0) res.write(`id: 0\ndata: ${JSON.stringify({ type: "user", text: run.userText, ...(run.userPhotos?.length ? { photos: run.userPhotos } : {}) })}\n\n`);
     const send = (seq: number, ev: unknown) => { if (!res.writableEnded && !res.destroyed) res.write(`id: ${seq}\ndata: ${JSON.stringify(ev)}\n\n`); };
     let last = after;
-    for (const e of run.events) if (e.seq > after) { send(e.seq, e.ev); last = e.seq; }
+    for (const e of run.events) {
+      if (e.seq <= after) continue;
+      // A device request that was already answered (or expired) is never replayed: a re-attached page must not run it on the device twice.
+      if (e.ev.type !== "device_call" || deviceRelay.isPending(e.ev.id)) send(e.seq, e.ev);
+      last = e.seq;
+    }
     if (run.status === "done") return void res.end();
     const hb = setInterval(() => { if (!res.writableEnded && !res.destroyed) res.write(": ping\n\n"); }, 15_000);
     hb.unref();
@@ -669,9 +676,13 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     res.on("close", () => cleanup(false)); // the client left: the run does not
   }
 
-  async function streamTurn(res: ServerResponse, id: string, text: string, extraHeaders: Record<string, string> = {}, first?: Record<string, unknown>, me?: Principal, interactive = false, photos?: PhotoRef[]): Promise<void> {
+  async function streamTurn(res: ServerResponse, id: string, text: string, extraHeaders: Record<string, string> = {}, first?: Record<string, unknown>, me?: Principal, interactive = false, photos?: PhotoRef[], capabilities: string[] = []): Promise<void> {
     res.writeHead(200, sseHeaders(extraHeaders));
     const run = runs.start(id, text, photos);
+    // A client that listed a capability (e.g. the iPhone or Mac app's Apple Calendar bridge) gets a relay for this turn: tools ask the device through the run feed.
+    const device = me && capabilities.length
+      ? deviceRelay.bridge({ sessionId: id, owner: me.id, publish: (ev) => { run.publish(ev); broadcast(id, ev); } })
+      : undefined;
     // The run is detached from this request: it publishes into the run feed, the WebSocket subscribers and (via the runtime) the disk.
     void (async () => {
       try {
@@ -682,11 +693,12 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         await manager.turn(id, text, (ev) => {
           run.publish(ev);
           broadcast(id, ev);
-        }, undefined, "user", interactive, photos);
+        }, undefined, "user", interactive, photos, device ? { capabilities, device } : undefined);
       } catch (err) {
         const msg = err instanceof BusyError || err instanceof NotFoundError ? err.message : "internal error";
         run.publish({ type: "notice", level: "warn", text: msg });
       } finally {
+        deviceRelay.endSession(id);
         run.finish();
       }
     })();
@@ -1327,6 +1339,13 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
     if (!ls) return sendJson(res, 404, { error: "no such session" });
 
+    if (action === "device-result") {
+      // The device's answer to a device_call of this session's running turn. Ownership was checked above (403 for another owner's session);
+      // the relay refuses an unknown, expired or already-answered id, and an id that belongs to another principal.
+      if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+      const out = deviceRelay.answer({ sessionId: id, owner: me.id, body: await readJson(req) });
+      return out.ok ? sendJson(res, 200, { ok: true }) : sendJson(res, out.status, { error: out.error });
+    }
     if (action === "violations") {
       if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
       return sendJson(res, 200, { violations: ls.session.violations() });
@@ -1377,7 +1396,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         refs = added.photos.map((p) => ({ id: p.id, name: p.name, width: p.width, height: p.height }));
       }
       // The first SSE event of a photo send names the stored photos, so the client can show them from the server after a reload.
-      return streamTurn(res, id, text, {}, refs ? { type: "photos", photos: refs } : undefined, me, true, refs); // the web/desktop/mobile UI can answer a permission card
+      // capabilities: what THIS client can do (the iPhone or Mac app lists "apple_calendar"); the agent offers a device tool only to a client that says so.
+      return streamTurn(res, id, text, {}, refs ? { type: "photos", photos: refs } : undefined, me, true, refs, parseCapabilities(b.capabilities)); // the web/desktop/mobile UI can answer a permission card
     } finally {
       if (big) photoBodies--;
     }

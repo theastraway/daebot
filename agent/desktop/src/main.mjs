@@ -22,6 +22,7 @@ import { buildLoadUrl, classifyUrl, originOf, redactUrl } from "./lib/allowlist.
 import { buildConfirmNotification, createRateLimiter, shouldNotify, validateNotifyPayload } from "./lib/notify.mjs";
 import { ConfirmWatcher } from "./lib/watcher.mjs";
 import { createUpdater } from "./lib/updater.mjs";
+import { CALENDAR_CHANNEL, createCalendarBridge, createCalendarHandler, findCalendarHelper } from "./lib/calendar.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SMOKE = process.argv.includes("--mindclaw-smoke");
@@ -261,6 +262,12 @@ ipcMain.handle("desktop:account-add", async (e) => (fromOurUi(e) ? addAccount() 
 
 // In-window update control (the Updates bar in the sidebar). Same controller as the tray and app menu.
 const fromOurUi = (e) => classifyUrl(e.senderFrame?.url ?? "", gatewayInfo?.origin) === "internal";
+// Apple Calendar (Mac only): the bundled EventKit helper, run once per call and answered to our own window only. On other systems the channel
+// does not exist and the preload exposes no `calendar`, so the web UI sees no Calendar bridge.
+if (process.platform === "darwin") {
+  const helperPath = findCalendarHelper({ resourcesPath: app.isPackaged ? process.resourcesPath : undefined, devDir: join(here, "..", "build", "bin") });
+  ipcMain.handle(CALENDAR_CHANNEL, createCalendarHandler({ bridge: createCalendarBridge({ helperPath, spawn }), isOurUi: fromOurUi }));
+}
 const publicUpdateState = (s) => ({ enabled: updater.enabled, status: s.status, currentVersion: s.currentVersion, nextVersion: s.nextVersion, percent: s.percent, error: s.error ? String(s.error).slice(0, 300) : null });
 function sendUpdateState(s) { try { if (win && !win.isDestroyed()) win.webContents.send("desktop:update-state", publicUpdateState(s)); } catch { /* window going away */ } }
 ipcMain.handle("desktop:update-get", (e) => (fromOurUi(e) ? publicUpdateState(updater.getState()) : null));

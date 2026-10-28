@@ -18,5 +18,8 @@
   <!-- Mic button and hands-free voice. Without it the hardened runtime refuses the microphone and macOS never asks. -->
   <key>com.apple.security.device.audio-input</key>
   <true/>
+  <!-- Apple Calendar through the daebot-calendar helper (EventKit). Without it the hardened runtime refuses Calendar and macOS never asks. -->
+  <key>com.apple.security.personal-information.calendars</key>
+  <true/>
 </dict>
 </plist>
