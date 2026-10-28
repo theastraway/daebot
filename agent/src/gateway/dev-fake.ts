@@ -7,6 +7,10 @@ import type { AgentEvent, AgentSession, HistoryEvent, Runtime, Violation } from 
 import { createServer, request as httpRequest } from "node:http";
 import { startGateway } from "./index.ts";
 import { createBotsFake } from "./dev-fake-bots.ts";
+import { PermissionService } from "../permissions/index.ts";
+import type { SessionPermMode } from "../permissions/index.ts";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 
 const sleep = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
@@ -30,7 +34,9 @@ const SEED_HISTORY: HistoryEvent[] = [
 
 export function createFakeRuntime(opts: { speed?: number } = {}): Runtime {
   const speed = opts.speed ?? 1;
-  const sessions = new Map<string, { id: string; surface: string; title: string; updatedAt: number }>();
+  const sessions = new Map<string, { id: string; surface: string; title: string; updatedAt: number; permMode?: string }>();
+  // Permissions (modes, waiver, per-chat mode) are real; only the model is fake.
+  const permissions = new PermissionService({ dir: mkdtempSync(join(tmpdir(), "dev-fake-perms-")), owner: "owner" });
   const recorders = new Map<string, HistoryRecorder>();
   const recorderFor = (id: string) => { let r = recorders.get(id); if (!r) recorders.set(id, (r = new HistoryRecorder())); return r; };
   let n = 0;
@@ -46,6 +52,7 @@ export function createFakeRuntime(opts: { speed?: number } = {}): Runtime {
       id, surface,
       violations: () => violations.slice(),
       close: async () => {},
+      setPermMode(m?: SessionPermMode) { const meta = sessions.get(id); if (!meta) return; if (m === "bypass" && !permissions.waiverAccepted()) return; if (m) meta.permMode = m; else delete meta.permMode; },
       async *send(msg: string, o?: { signal?: AbortSignal }): AsyncIterable<AgentEvent> {
         const rec = recorderFor(id);
         rec.user(msg);
@@ -105,6 +112,7 @@ export function createFakeRuntime(opts: { speed?: number } = {}): Runtime {
       return make(id, o.surface);
     },
     listSessions: () => [...sessions.values()],
+    permissions,
     history(id): HistoryEvent[] | undefined {
       if (id === "seed-claims") return SEED_HISTORY;
       return recorders.get(id)?.events();

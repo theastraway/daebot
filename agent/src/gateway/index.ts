@@ -17,6 +17,7 @@ import { caelumToBot } from "./caelum.ts";
 import type { Principal } from "../auth/users.ts";
 import type { AuthContext } from "../auth/tenancy.ts";
 import { MindAuthError, whoami } from "../auth/mind-auth.ts";
+import { WAIVER_TEXT, WAIVER_VERSION, isSessionMode } from "../permissions/index.ts";
 import { AppHandoff, appRedirect, isValidChallenge } from "../auth/app-handoff.ts";
 import { AGENT_SURFACE_RE, AGENT_TURN_PATH, KeyIdentityCache, TurnRateLimiter } from "./agent-api.ts";
 import { userIdFor } from "../auth/users.ts";
@@ -366,14 +367,76 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       return sendJson(res, 401, { error: "that access code was not accepted" });
     }
     limiter.success(ip);
-    const s = issueSession(token, hosted?.sessionTtlMs ?? SESSION_TTL_MS);
-    res.setHeader("set-cookie", `${HOSTED_COOKIE}=${s.value}; ${cookieAttrs(s.maxAgeSec)}`);
+    res.setHeader("set-cookie", signInCookies(req, "owner"));
     return sendJson(res, 200, { ok: true });
   }
 
-  function userCookie(uid: string): string {
-    const s = issueSession(token, hosted?.sessionTtlMs ?? SESSION_TTL_MS, Date.now(), uid);
-    return `${HOSTED_COOKIE}=${s.value}; ${cookieAttrs(s.maxAgeSec)}`;
+  // ---------- remembered accounts (hosted). Each account is its own signed session (the same stateless value as mc_session, naming only a user id).
+  // mc_accounts holds the list of those values; mc_session is the active one. Switching re-issues mc_session from a value this server signed,
+  // so no account is reachable without having signed in to it on this browser, and every request is still scoped to the ACTIVE account only.
+  const ACCOUNTS_COOKIE = "mc_accounts";
+  const MAX_ACCOUNTS = 8;
+  // Lax (not Strict): the MIND OAuth callback is a cross-site top-level navigation and must still see the list, so adding an account keeps the others.
+  const accountsCookieAttrs = (maxAge: number): string => `HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
+  const sessionTtl = (): number => hosted?.sessionTtlMs ?? SESSION_TTL_MS;
+  const mintSession = (uid: string): string => issueSession(token, sessionTtl(), Date.now(), uid === "owner" ? undefined : uid).value;
+  const principalForUid = (uid: string): Principal | undefined => (uid === "owner" ? OWNER : auth?.store.principal(uid));
+
+  /** Every account this browser has signed in to and that is still valid (signature, expiry, and the user still exists). Active one first. */
+  function rememberedAccounts(req: IncomingMessage): { uid: string; value: string; principal: Principal }[] {
+    const ck = parseCookies(req.headers["cookie"]);
+    const raw = [ck[HOSTED_COOKIE], ...(ck[ACCOUNTS_COOKIE] ?? "").split("~")];
+    const out: { uid: string; value: string; principal: Principal }[] = [];
+    for (const v of raw) {
+      if (!v) continue;
+      const s = parseSession(token, v);
+      const p = s ? principalForUid(s.uid) : undefined;
+      if (!s || !p || out.some((o) => o.uid === s.uid)) continue;
+      out.push({ uid: s.uid, value: v, principal: p });
+    }
+    return out.slice(0, MAX_ACCOUNTS);
+  }
+
+  /** Set-Cookie pair for "uid is now the active account": a fresh mc_session plus the remembered list with uid first. */
+  function signInCookies(req: IncomingMessage, uid: string): string[] {
+    const fresh = mintSession(uid);
+    const others = rememberedAccounts(req).filter((a) => a.uid !== uid).map((a) => a.value);
+    const list = [fresh, ...others].slice(0, MAX_ACCOUNTS);
+    const age = Math.floor(sessionTtl() / 1000);
+    return [`${HOSTED_COOKIE}=${fresh}; ${cookieAttrs(age)}`, `${ACCOUNTS_COOKIE}=${list.join("~")}; ${accountsCookieAttrs(age)}`];
+  }
+
+  function userCookie(req: IncomingMessage, uid: string): string[] { return signInCookies(req, uid); }
+
+  async function accountsApi(req: IncomingMessage, res: ServerResponse, path: string, method: string): Promise<void> {
+    const cur = principalOf(req);
+    if (!cur) return sendJson(res, 401, { error: "unauthorized" });
+    if (path === "/auth/accounts") {
+      if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+      const list = rememberedAccounts(req);
+      return sendJson(res, 200, { accounts: list.map((a) => ({ id: a.uid, username: a.principal.owner ? "Owner" : a.principal.username, owner: a.principal.owner, active: a.uid === cur.id })) });
+    }
+    if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+    if (path === "/auth/switch") {
+      const b = await readJson(req);
+      const want = typeof b.account === "string" ? b.account : "";
+      const target = rememberedAccounts(req).find((a) => a.uid === want);
+      if (!target) return sendJson(res, 404, { error: "that account is not signed in on this device; use Add another account" });
+      res.setHeader("set-cookie", signInCookies(req, target.uid));
+      return sendJson(res, 200, { ok: true, username: target.principal.owner ? "Owner" : target.principal.username });
+    }
+    // /logout: signs out only the ACTIVE account and moves to the next remembered one; {all:true} signs out of every account on this device.
+    const b = await readJson(req);
+    const rest = b.all === true ? [] : rememberedAccounts(req).filter((a) => a.uid !== cur.id);
+    if (rest.length === 0) {
+      res.setHeader("set-cookie", [`${HOSTED_COOKIE}=; ${cookieAttrs(0)}`, `${ACCOUNTS_COOKIE}=; ${accountsCookieAttrs(0)}`]);
+      return sendJson(res, 200, { ok: true, remaining: 0 });
+    }
+    const next = rest[0];
+    const age = Math.floor(sessionTtl() / 1000);
+    const fresh = mintSession(next.uid);
+    res.setHeader("set-cookie", [`${HOSTED_COOKIE}=${fresh}; ${cookieAttrs(age)}`, `${ACCOUNTS_COOKIE}=${[fresh, ...rest.slice(1).map((a) => a.value)].join("~")}; ${accountsCookieAttrs(age)}`]);
+    return sendJson(res, 200, { ok: true, remaining: rest.length, now: next.principal.owner ? "Owner" : next.principal.username });
   }
 
   function mayUse(username: string): boolean {
@@ -406,7 +469,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     limiter.success(ip);
     const user = auth.store.upsert(name, { kind: "key", mindKey: key });
     auth.evict(user.id);
-    res.setHeader("set-cookie", userCookie(user.id));
+    res.setHeader("set-cookie", userCookie(req, user.id));
     return sendJson(res, 200, { ok: true, username: user.username });
   }
 
@@ -446,7 +509,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       return sendJson(res, 401, { error: "That sign-in expired. Start again." });
     }
     limiter.success(ip);
-    res.setHeader("set-cookie", userCookie(uid));
+    res.setHeader("set-cookie", userCookie(req, uid));
     return sendJson(res, 200, { ok: true });
   }
 
@@ -491,7 +554,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       if (appCc) return appReturn(res, { code: appHandoff.mintCode(user.id, appCc) });
       // A 200 page that navigates itself (not a 302): the next request is then same-site, so the Strict session cookie is sent.
       const body = '<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/"><title>Signed in</title><a href="/">Continue</a>';
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "set-cookie": [userCookie(user.id), `${OAUTH_COOKIE}=; ${oauthCookieAttrs(0)}`, `${OAUTH_APP_COOKIE}=; ${oauthCookieAttrs(0)}`] });
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "set-cookie": [...userCookie(req, user.id), `${OAUTH_COOKIE}=; ${oauthCookieAttrs(0)}`, `${OAUTH_APP_COOKIE}=; ${oauthCookieAttrs(0)}`] });
       return void res.end(body);
     } catch {
       limiter.fail(ip);
@@ -708,8 +771,11 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         return sendJson(res, 200, me);
       } else if (path === "/logout") {
         if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
-        res.setHeader("set-cookie", `${HOSTED_COOKIE}=; ${cookieAttrs(0)}`);
-        return sendJson(res, 200, { ok: true });
+        if (principalOf(req)) return accountsApi(req, res, path, method);
+        res.setHeader("set-cookie", [`${HOSTED_COOKIE}=; ${cookieAttrs(0)}`, `${ACCOUNTS_COOKIE}=; ${accountsCookieAttrs(0)}`]);
+        return sendJson(res, 200, { ok: true, remaining: 0 });
+      } else if (path === "/auth/accounts" || path === "/auth/switch") {
+        return accountsApi(req, res, path, method);
       }
     }
 
@@ -743,6 +809,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       const authed = authorized(req, query, false);
       const isRoot = path === "/" || path === "/index.html" || path === "/login";
       if (isRoot) {
+        // /login?add=1 is "Add another account": the sign-in page is shown even though someone is already signed in.
         staticPath = authed && path !== "/login" ? "/index.html" : "/login.html";
         extra["cache-control"] = "no-store";
       } else if (!authed && !HOSTED_PUBLIC_STATIC.has(path)) {
@@ -1039,6 +1106,18 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       if (!svc.setMode(b.mode)) return sendJson(res, 400, { error: "mode must be risky, writes or everything" });
       return sendJson(res, 200, { ok: true, mode: svc.store.mode() });
     }
+    if (path === "/permissions/waiver") {
+      if (method === "GET") return sendJson(res, 200, { accepted: svc.waiverAccepted(), at: svc.store.waiver()?.at ?? null, version: WAIVER_VERSION, text: WAIVER_TEXT });
+      if (method === "POST") {
+        // The checkbox is the consent: the request must say so for THIS version of the text. Recorded on the account, with a timestamp.
+        const b = await readJson(req);
+        if (b.acknowledged !== true || b.version !== WAIVER_VERSION) return sendJson(res, 400, { error: "waiver_not_acknowledged", message: "Tick the box to accept the waiver.", version: WAIVER_VERSION });
+        const w = svc.store.acceptWaiver();
+        return sendJson(res, 200, { ok: true, accepted: true, at: w.at, version: w.version });
+      }
+      if (method === "DELETE") { svc.store.revokeWaiver(); return sendJson(res, 200, { ok: true, accepted: false }); }
+      return sendJson(res, 405, { error: "method not allowed" });
+    }
     const dm = /^\/permissions\/([^/]+)\/decide$/.exec(path);
     if (dm) {
       if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
@@ -1196,6 +1275,21 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (!action && method === "PATCH") {
       // Change the model of a session (its next turn onward). A persisted session is brought back to life first.
       const b = await readJson(req);
+      // This chat's permission mode (Ask for risky / Ask before changes / Ask for everything / Bypass). Bypass needs the account's recorded waiver.
+      if (b.permMode !== undefined) {
+        const svc = manager.runtimeOf(me.id).permissions;
+        if (!svc) return sendJson(res, 404, { error: "permissions are not available on this deployment" });
+        const pm = b.permMode === null ? undefined : b.permMode;
+        if (pm !== undefined && !isSessionMode(pm)) return sendJson(res, 400, { error: "permMode must be risky, writes, everything or bypass (or null for the account default)" });
+        if (pm !== undefined && !svc.canUseMode(pm)) return sendJson(res, 403, { error: "waiver_required", message: "Bypass needs the waiver: accept it once (POST /permissions/waiver) before turning it on." });
+        let t = ls;
+        if (!t) {
+          if (!manager.runtimeOf(me.id).history?.(id)) return sendJson(res, 404, { error: "no such session" });
+          try { t = await manager.open({ surface: "web", resumeId: id, owner: me.id }); } catch (e) { if (e instanceof ForbiddenError) throw e; return sendJson(res, 404, { error: "no such session" }); }
+        }
+        if (!manager.setPermMode(id, pm)) return sendJson(res, 409, { error: "could not change this chat's permission mode" });
+        return sendJson(res, 200, { ok: true, permMode: pm ?? null });
+      }
       const model = b.model === null ? null : optStr(b.model, 130);
       if (model === undefined) return sendJson(res, 400, { error: "model required (or null for the default)" });
       if (model) { const bad = await modelProblem(me, model); if (bad) return sendJson(res, bad.status === 402 ? 403 : bad.status, bad.body); }

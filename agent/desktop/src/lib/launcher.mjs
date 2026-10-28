@@ -44,6 +44,7 @@ export function findBundledBinary({ resourcesPath, platform = process.platform, 
  * @param {string} o.electronPath process.execPath of Electron
  * @param {Record<string,string|undefined>} o.baseEnv
  * @param {string} [o.mindKey] MIND API key for DAEBOT_BILLING=mind; goes into the child's env only
+ * @param {string} [o.dataDir] DATA_DIR for this account's sessions/bots/permissions (absent = the default directory)
  * @param {boolean} [o.fake] use the scripted fake runtime (smoke test only; node path)
  * @param {string} [o.tokenPath] override token file (smoke test only; node path)
  * @param {string} [o.home] working directory for the binary (the user's home by default)
@@ -51,6 +52,7 @@ export function findBundledBinary({ resourcesPath, platform = process.platform, 
 export function buildSpawnPlan(o) {
   const env = { ...o.baseEnv, ...envForKernelMode(o.kernelMode), MINDCLAW_AGENT_ROOT: o.agentRoot, MINDCLAW_PARENT_PIPE: "1" };
   if (o.mindKey) { env.DAEBOT_BILLING = "mind"; env.MIND_API_KEY = o.mindKey; }
+  if (o.dataDir) env.DATA_DIR = o.dataDir;
   // Match daebot.live: Bots (Sessions | Bots toggle, bot_talk) is on in the app. An explicit value in the environment still wins.
   if (env.DAEBOT_BOTS_ENABLED === undefined) env.DAEBOT_BOTS_ENABLED = "1";
   if (o.fake) env.MINDCLAW_DESKTOP_FAKE = "1";

@@ -102,6 +102,7 @@ if (nativeAuth()) {
     ownerBox.querySelector("summary").hidden = true;
     sub.textContent = "Private agent. Enter your access code to continue.";
   }
+  if (new URLSearchParams(location.search).get("add")) sub.textContent = "Add another account. The accounts you are already signed in to stay signed in.";
   const e = new URLSearchParams(location.search).get("e");
   if (e) fail(REASONS[e] || "Sign-in did not complete. Try again.");
 })();

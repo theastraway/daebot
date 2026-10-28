@@ -3,6 +3,7 @@
 // no parameter properties, no namespaces) so Node strips types natively.
 
 import type { BotsApi } from "./bots/types.ts";
+import type { SessionPermMode } from "./permissions/store.ts";
 
 // ---------- messages ----------
 export type Role = "system" | "user" | "assistant" | "tool";
@@ -190,6 +191,8 @@ export interface AgentSession {
   send(userMessage: string, opts?: { signal?: AbortSignal; origin?: "user" | "bot"; interactive?: boolean }): AsyncIterable<AgentEvent>;
   /** Model for the next turn (per-session model). undefined = the configured default. */
   setModel?(model: string | undefined): void;
+  /** This chat's permission mode for the next call onward. undefined = the account default. The caller has already checked bypass against the waiver. */
+  setPermMode?(mode: SessionPermMode | undefined): void;
   violations(): Violation[];
   close(summary?: string): Promise<void>;
   // Model-facing history (without the system prompt) so a session can be persisted and resumed.
@@ -202,11 +205,11 @@ export interface Runtime {
   // boot: runs mind_context before returning; throws only if tools are unreachable.
   // botId: open a session of that bot (home MIND = the bot's); peer: the other end of a bot-to-bot DM thread; model: per-session model.
   openSession(opts: { surface: string; title?: string; resumeId?: string; identity?: string; botId?: string; peer?: string; model?: string }): Promise<AgentSession>;
-  listSessions(): { id: string; surface: string; title: string; updatedAt: number; bot?: string; peer?: string; model?: string }[];
+  listSessions(): { id: string; surface: string; title: string; updatedAt: number; bot?: string; peer?: string; model?: string; permMode?: string }[];
   /** Bots of this runtime's owner (absent on runtimes built without a bots context). */
   bots?: BotsApi;
   /** Bot / peer / model of a live or persisted session of this owner. */
-  sessionInfo?(id: string): { bot?: string; peer?: string; model?: string } | undefined;
+  sessionInfo?(id: string): { bot?: string; peer?: string; model?: string; permMode?: string } | undefined;
   /** Deletes every saved session of a deleted bot: its own threads and the DM threads where it is the peer or the recipient. */
   purgeBotSessions?(botId: string): Promise<number>;
   /** Permanently deletes one saved or live session of this owner (its transcript and state). false = no such session. */

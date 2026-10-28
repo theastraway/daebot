@@ -8,9 +8,9 @@ import type {
   SessionState, SessionSync, StreamEvent, Tool, ToolCall, ToolResult, TurnState, Usage, Violation,
 } from "./types.ts";
 import { clipToolOutputs, compactMessages, estimateTokens, needsCompaction } from "./compact.ts";
-import { factsOf } from "./permissions/rules.ts";
+import { describeCall, factsOf } from "./permissions/rules.ts";
 import type { CallFacts } from "./permissions/rules.ts";
-import type { PermissionService } from "./permissions/index.ts";
+import type { PermissionService, SessionPermMode } from "./permissions/index.ts";
 
 export const UNVERIFIED_FOOTER = "[unverified: receipt gate]";
 const MAX_REGENERATIONS = 2;
@@ -51,6 +51,8 @@ export interface SessionDeps {
   learn?: LearnHooks;
   /** Granular permissions (rules + paused permission cards). Absent = the loop behaves exactly as before (typed confirmations only). */
   permissions?: PermissionService;
+  /** This chat's own permission mode (read per call). Absent = the account default. "bypass" only counts when the account has a recorded waiver. */
+  permMode?: () => SessionPermMode | undefined;
   /** Tools that can appear or change between turns (e.g. MCP servers the user connected mid-chat). Re-read every round; a name already in `tools` is never shadowed. */
   dynamicTools?: () => Tool[];
 }
@@ -396,10 +398,19 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     // A card (or a saved allow rule) can stand in for the typed "send it" on the danger gate, and only there: every other gate still refuses.
     const dangerAsk = !!v && v.gate === "danger" && v.action === "needs-confirmation" && enforced();
     let permitted = false;
-    if (perms && facts && enforced() && (dangerAsk || (!v && perms.needsPrompt(facts)))) {
+    // This chat's mode. Bypass is honored only with the account's recorded waiver; otherwise the account default stands.
+    const chatMode = perms ? safe(() => perms.effectiveMode(deps.permMode?.()), undefined as SessionPermMode | undefined) : undefined;
+    const bypass = chatMode === "bypass";
+    // A call the user already denied in this chat stays denied, bypass or not.
+    const deniedBefore = (state.deniedCalls ?? []).includes(callSignature(call));
+    if (perms && facts && enforced() && (dangerAsk || (!v && perms.needsPrompt(facts, chatMode)) || (bypass && deniedBefore))) {
       const sig = callSignature(call);
       const dropPending = () => { state.confirmations = state.confirmations.filter((c) => !(c.forCallSignature === sig && c.grantedAtUserMsg === undefined)); };
-      if (ruleEval.effect === "allow" && ruleEval.rule) {
+      if (bypass && dangerAsk && !deniedBefore) {
+        // Bypass: the danger gate's typed "send it" is auto-granted. The user's own deny rules were applied above; every other gate still refuses.
+        permitted = true;
+        dropPending();
+      } else if (ruleEval.effect === "allow" && ruleEval.rule) {
         perms.noteUse(ruleEval.rule);
         permitted = true;
         if (dangerAsk) dropPending();
@@ -430,6 +441,11 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
         }
       }
       // else: no UI to show a card on (bots, API, chat apps): the existing typed confirmation below still applies.
+    }
+    // Every action Bypass let through without asking is written to the transcript.
+    if (bypass && enforced() && facts && (permitted || (!v && facts.cls !== "read"))) {
+      const d = safe(() => describeCall(facts!, args), undefined);
+      yield { type: "notice", level: "info", text: `auto-approved (bypass): ${d?.title ?? tool.spec.name} [${tool.spec.name}]` };
     }
     if (v && !permitted) {
       yield { type: "gate", verdict: v, enforced: enforced() };

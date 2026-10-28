@@ -27,7 +27,8 @@ import type { McpConnectService } from "./mcpconnect/service.ts";
 import type { McpServerConfig } from "./mcp/client.ts";
 import { repairMessages } from "./persist.ts";
 import { botBase } from "./bots/versions.ts";
-import { PermissionService } from "./permissions/index.ts";
+import { PermissionService, isSessionMode } from "./permissions/index.ts";
+import type { SessionPermMode } from "./permissions/index.ts";
 import { SuggestionStore, awaitsUser, generateReplies, tailOf } from "./suggest/index.ts";
 import type { SuggestionFeedback } from "./suggest/index.ts";
 import { facePersonality, faceOf } from "./bots/faces.ts";
@@ -136,7 +137,7 @@ export function composeSystemPrompt(o: {
   return lines.join("\n");
 }
 
-interface Entry { session: AgentSession; surface: string; title: string; updatedAt: number; tier: Tier; recorder: HistoryRecorder; createdAt: number; bot?: string; peer?: string; model?: string; run?: RunMark }
+interface Entry { session: AgentSession; surface: string; title: string; updatedAt: number; tier: Tier; recorder: HistoryRecorder; createdAt: number; bot?: string; peer?: string; model?: string; permMode?: SessionPermMode; run?: RunMark }
 
 export const INTERRUPTED_TEXT = "Interrupted: the server restarted while this reply was being written. Your message is saved above; send it again to retry.";
 const interruptedNotice = (): AgentEvent => ({ type: "notice", level: "warn", text: INTERRUPTED_TEXT });
@@ -270,7 +271,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     void store.save({
       v: 1, id, surface: e.surface, title: e.title, tier: e.tier, owner: ownerId, createdAt: e.createdAt, updatedAt: e.updatedAt,
       state: st, violations: e.session.violations(), history: e.recorder.events(),
-      ...(e.bot ? { bot: e.bot } : {}), ...(e.peer ? { peer: e.peer } : {}), ...(e.model ? { model: e.model } : {}), ...(e.run ? { run: { ...e.run } } : {}),
+      ...(e.bot ? { bot: e.bot } : {}), ...(e.peer ? { peer: e.peer } : {}), ...(e.model ? { model: e.model } : {}), ...(e.permMode ? { permMode: e.permMode } : {}), ...(e.run ? { run: { ...e.run } } : {}),
     }).catch((err) => process.stderr.write(`persist: could not save a session (${String((err as Error)?.message ?? err).split("\n")[0].slice(0, 120)})\n`));
   }
 
@@ -315,6 +316,8 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       const explicitModel = opts.model && validModelId(opts.model) ? opts.model : stored?.model && validModelId(stored.model) ? stored.model : undefined;
       const userDefault = () => settings?.get().defaultModel;
       let curModel: string | undefined = explicitModel;
+      // This chat's permission mode: stored with the session. A stored bypass is re-checked against the waiver on every call (the loop), never trusted from the file.
+      let curPerm: SessionPermMode | undefined = isSessionMode(stored?.permMode) ? stored!.permMode as SessionPermMode : undefined;
 
       let boot: { ok: boolean; context: string; error?: string; degraded?: boolean };
       try { boot = await bootCache.get(botRec ? `${cfg.mindApiKey}|bot:${botRec.slug}` : cfg.mindApiKey, () => bootMind(clientForMind(home))); } catch (e) { boot = { ok: false, context: "", error: String((e as Error)?.message ?? e) }; }
@@ -334,6 +337,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         id, surface: opts.surface, provider, kernel: kernelFor(tier), tools, sync, cfg, cwd, bootContext, learn,
         // Bots take their orders from their owner's rules too; a bot's turns are never interactive, so they keep the typed confirmation.
         permissions,
+        permMode: () => curPerm,
         // Servers the user connects mid-chat appear on the next round, without reopening the session. A tier only ever sees the classes it may run.
         dynamicTools: overrides.mcpConnect && !botRec ? () => overrides.mcpConnect!.tools(ownerKey).filter((t) => tier === "admin" || tierAllows(tier, t)) : undefined,
         model: explicitModel ?? userDefault(),
@@ -357,7 +361,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       const entry: Entry = {
         session: inner, surface: stored?.surface ?? opts.surface, title, updatedAt: Date.now(), tier,
         recorder: new HistoryRecorder(stored?.history), createdAt: stored?.createdAt ?? Date.now(),
-        bot: botRec?.id, peer, model: explicitModel,
+        bot: botRec?.id, peer, model: explicitModel, permMode: curPerm,
       };
       if (wasInterrupted && stored) {
         entry.recorder.push(interruptedNotice());
@@ -419,6 +423,14 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
           inner.setModel?.(next ?? userDefault());
           persist(id);
         },
+        setPermMode(m) {
+          const next = m && isSessionMode(m) ? m : undefined;
+          // Defense in depth: even if a caller forgot, bypass without a recorded waiver is never stored.
+          if (next === "bypass" && !permissions?.waiverAccepted()) return;
+          curPerm = next;
+          entry.permMode = next;
+          persist(id);
+        },
         async close(summary) {
           sessions.delete(id);
           await inner.close(summary);
@@ -429,11 +441,11 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       return session;
     },
     listSessions() {
-      type Row = { id: string; surface: string; title: string; updatedAt: number; bot?: string; peer?: string; model?: string };
+      type Row = { id: string; surface: string; title: string; updatedAt: number; bot?: string; peer?: string; model?: string; permMode?: string };
       const out = new Map<string, Row>();
-      const row = (m: Row): Row => ({ id: m.id, surface: m.surface, title: m.title, updatedAt: m.updatedAt, ...(m.bot ? { bot: m.bot } : {}), ...(m.peer ? { peer: m.peer } : {}), ...(m.model ? { model: m.model } : {}) });
+      const row = (m: Row): Row => ({ id: m.id, surface: m.surface, title: m.title, updatedAt: m.updatedAt, ...(m.bot ? { bot: m.bot } : {}), ...(m.peer ? { peer: m.peer } : {}), ...(m.model ? { model: m.model } : {}), ...(m.permMode ? { permMode: m.permMode } : {}) });
       for (const m of store?.list() ?? []) if (mine(m)) out.set(m.id, row(m));
-      for (const [id, e] of sessions) if (out.has(id) || e.recorder.events().some((h) => h.type === "user")) out.set(id, row({ id, surface: e.surface, title: e.title, updatedAt: e.updatedAt, bot: e.bot, peer: e.peer, model: e.model }));
+      for (const [id, e] of sessions) if (out.has(id) || e.recorder.events().some((h) => h.type === "user")) out.set(id, row({ id, surface: e.surface, title: e.title, updatedAt: e.updatedAt, bot: e.bot, peer: e.peer, model: e.model, ...(e.permMode ? { permMode: e.permMode } : {}) }));
       return [...out.values()].sort((a, b) => b.updatedAt - a.updatedAt);
     },
     bots: botStore,
@@ -486,9 +498,9 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     },
     sessionInfo(id) {
       const live = sessions.get(id);
-      if (live) return { bot: live.bot, peer: live.peer, model: live.model };
+      if (live) return { bot: live.bot, peer: live.peer, model: live.model, ...(live.permMode ? { permMode: live.permMode } : {}) };
       const m = store?.meta?.(id);
-      return m && mine(m) ? { bot: m.bot, peer: m.peer, model: m.model } : undefined;
+      return m && mine(m) ? { bot: m.bot, peer: m.peer, model: m.model, ...(m.permMode ? { permMode: m.permMode } : {}) } : undefined;
     },
     history(id): HistoryEvent[] | undefined {
       const live = sessions.get(id);
