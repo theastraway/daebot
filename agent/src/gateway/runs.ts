@@ -3,7 +3,7 @@
 // attach to it by session id and resume from a sequence number. Only an explicit abort (manager.abort) stops it.
 // The visible transcript is persisted separately by the runtime (history + a "running" mark, checkpointed during the turn);
 // this registry only holds the live, replayable event feed of the latest turn per session, in memory (single instance).
-import type { AgentEvent, HistoryEvent } from "../types.ts";
+import type { AgentEvent, HistoryEvent, PhotoRef } from "../types.ts";
 
 export interface RunEvent { seq: number; ev: HistoryEvent }
 export type RunStatus = "running" | "done";
@@ -17,8 +17,9 @@ export class Run {
   readonly sessionId: string;
   readonly startedAt: number;
   readonly userText: string;
-  constructor(id: string, sessionId: string, startedAt: number, userText: string) {
-    this.id = id; this.sessionId = sessionId; this.startedAt = startedAt; this.userText = userText;
+  readonly userPhotos: PhotoRef[] | undefined;
+  constructor(id: string, sessionId: string, startedAt: number, userText: string, userPhotos?: PhotoRef[]) {
+    this.id = id; this.sessionId = sessionId; this.startedAt = startedAt; this.userText = userText; this.userPhotos = userPhotos;
   }
   publish(ev: HistoryEvent): void {
     const e: RunEvent = { seq: this.events.length + 1, ev };
@@ -39,9 +40,9 @@ export const RUN_KEEP_MS = 10 * 60 * 1000;
 
 export class RunRegistry {
   private runs = new Map<string, Run>();
-  start(sessionId: string, userText: string): Run {
+  start(sessionId: string, userText: string, userPhotos?: PhotoRef[]): Run {
     this.sweep();
-    const run = new Run(`run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, sessionId, Date.now(), userText);
+    const run = new Run(`run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, sessionId, Date.now(), userText, userPhotos);
     this.runs.set(sessionId, run);
     return run;
   }

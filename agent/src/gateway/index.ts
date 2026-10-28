@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { existsSync } from "node:fs";
 import type { AddressInfo } from "node:net";
-import type { AgentEvent, AgentSession, ClientFrame, Config, MindClient, Runtime, ServerFrame } from "../types.ts";
+import type { AgentEvent, AgentSession, ClientFrame, Config, MindClient, PhotoRef, Runtime, ServerFrame } from "../types.ts";
 import { COOKIE_NAME, hostnameOf, isLocalHost, isLocalOrigin, loadOrCreateToken, parseCookies, presentedToken, safeEqual } from "./auth.ts";
 import { HostedConfigError, LoginLimiter, MIN_TOKEN_LEN, SESSION_TTL_MS, issueSession, parseSession } from "../hosted.ts";
 import type { HostedOptions } from "../hosted.ts";
@@ -48,6 +48,7 @@ import { AngerLedger } from "./anger.ts";
 import { MindFeed } from "./mind-feed.ts";
 import { createMindClient } from "../mind/client.ts";
 import { dataDir } from "../persist.ts";
+import { MAX_PHOTO_BODY, checkPhotos, cleanName, isPhotoId } from "../photos.ts";
 
 // ---------- inbound webhooks (channel adapters register here) ----------
 export interface WebhookRequest {
@@ -126,6 +127,7 @@ const HOSTED_PUBLIC_STATIC = new Set([
 const HSTS = "max-age=31536000; includeSubDomains";
 
 const MAX_BODY = 1 << 20;
+const MAX_BIG_BODIES = 3; // simultaneous sends whose body is over MAX_BODY (photos)
 
 // Where the web UI lives when it is not embedded: a web/ folder next to a compiled binary, else the source tree.
 function defaultStaticDir(): string {
@@ -144,13 +146,13 @@ class HttpError extends Error {
   }
 }
 
-function readBody(req: IncomingMessage): Promise<Buffer> {
+function readBody(req: IncomingMessage, limit = MAX_BODY): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
     req.on("data", (c: Buffer) => {
       size += c.length;
-      if (size > MAX_BODY) {
+      if (size > limit) {
         reject(new HttpError(413, "body too large"));
         req.destroy();
         return;
@@ -159,11 +161,16 @@ function readBody(req: IncomingMessage): Promise<Buffer> {
     });
     req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
+    // The client hung up before the body ended: settle, so nothing waits on it (the photo-upload slot below is held while reading).
+    req.on("close", () => reject(new HttpError(400, "request aborted")));
   });
 }
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
-  const buf = await readBody(req);
+  return parseJsonObject(await readBody(req));
+}
+
+function parseJsonObject(buf: Buffer): Record<string, unknown> {
   if (buf.length === 0) return {};
   let v: unknown;
   try {
@@ -275,6 +282,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   const runs = new RunRegistry(); // server-owned turns: they outlive the request that started them
   const wsConns = new Set<WsConnection>();
   const SESSION_ROUTE = /^\/sessions\/([^/]+)(?:\/(send|abort|violations|history|events|suggest|suggest-feedback))?$/;
+  const PHOTO_ROUTE = /^\/sessions\/([^/]+)\/photos\/([^/]+)$/;
+  let photoBodies = 0; // sends with a body over MAX_BODY being read or decoded right now: each holds tens of MB briefly
   // Which LLM answers (shown in the UI). Absent when the gateway was started without a Config (tests, fakes).
   const modelInfo = (): { model?: string; provider?: string } => (opts.cfg ? { model: opts.cfg.models.default, provider: opts.cfg.billing === "mind" ? "MIND" : "openrouter" } : {});
 
@@ -640,7 +649,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   function attachRun(res: ServerResponse, run: Run, after: number, first?: Record<string, unknown>, withUser = false): void {
     res.write(": open\n\n");
     if (first) res.write(`data: ${JSON.stringify(first)}\n\n`);
-    if (withUser && after === 0) res.write(`id: 0\ndata: ${JSON.stringify({ type: "user", text: run.userText })}\n\n`);
+    if (withUser && after === 0) res.write(`id: 0\ndata: ${JSON.stringify({ type: "user", text: run.userText, ...(run.userPhotos?.length ? { photos: run.userPhotos } : {}) })}\n\n`);
     const send = (seq: number, ev: unknown) => { if (!res.writableEnded && !res.destroyed) res.write(`id: ${seq}\ndata: ${JSON.stringify(ev)}\n\n`); };
     let last = after;
     for (const e of run.events) if (e.seq > after) { send(e.seq, e.ev); last = e.seq; }
@@ -660,9 +669,9 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     res.on("close", () => cleanup(false)); // the client left: the run does not
   }
 
-  async function streamTurn(res: ServerResponse, id: string, text: string, extraHeaders: Record<string, string> = {}, first?: Record<string, unknown>, me?: Principal, interactive = false): Promise<void> {
+  async function streamTurn(res: ServerResponse, id: string, text: string, extraHeaders: Record<string, string> = {}, first?: Record<string, unknown>, me?: Principal, interactive = false, photos?: PhotoRef[]): Promise<void> {
     res.writeHead(200, sseHeaders(extraHeaders));
-    const run = runs.start(id, text);
+    const run = runs.start(id, text, photos);
     // The run is detached from this request: it publishes into the run feed, the WebSocket subscribers and (via the runtime) the disk.
     void (async () => {
       try {
@@ -673,7 +682,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         await manager.turn(id, text, (ev) => {
           run.publish(ev);
           broadcast(id, ev);
-        }, undefined, "user", interactive);
+        }, undefined, "user", interactive, photos);
       } catch (err) {
         const msg = err instanceof BusyError || err instanceof NotFoundError ? err.message : "internal error";
         run.publish({ type: "notice", level: "warn", text: msg });
@@ -1234,6 +1243,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       return sendJson(res, 405, { error: "method not allowed" });
     }
 
+    const pm = PHOTO_ROUTE.exec(path);
+    if (pm) return photoApi(res, method, pm[1], pm[2], me);
     const m = SESSION_ROUTE.exec(path);
     if (!m) return sendJson(res, 404, { error: "not found" });
     let id: string;
@@ -1341,14 +1352,54 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       const ok = rt.recordSuggestionFeedback?.(id, { shown, picked: optStr(b.picked, 600), sent: optStr(b.sent, 2000), action: action2 }) ?? false;
       return sendJson(res, 200, { ok });
     }
-    // send
+    // send. The body may carry photos, so this route (and only this one) takes a larger body than the rest.
     if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
-    const b = await readJson(req);
-    const text = optStr(b.text, 200_000);
-    if (!text || !text.trim()) return sendJson(res, 400, { error: "text required" });
-    if (ls.busy) return sendJson(res, 409, { error: "session is busy with another turn" });
+    const declared = Number(headerOne(req, "content-length"));
+    const big = !(declared <= MAX_BODY);
+    if (big && photoBodies >= MAX_BIG_BODIES) { res.setHeader("retry-after", "5"); return sendJson(res, 429, { error: "too many photo uploads at once; try again in a moment" }); }
+    if (big) photoBodies++;
+    try {
+      const raw = await readBody(req, MAX_PHOTO_BODY);
+      const b = parseJsonObject(raw);
+      if (raw.length > MAX_BODY && b.photos === undefined) throw new HttpError(413, "body too large");
+      const text = optStr(b.text, 200_000) ?? "";
+      const check = checkPhotos(b.photos);
+      if (!check.ok) return sendJson(res, check.status, { error: check.error });
+      if (!text.trim() && check.photos.length === 0) return sendJson(res, 400, { error: "text required" });
+      if (ls.busy) return sendJson(res, 409, { error: "session is busy with another turn" });
+      let refs: PhotoRef[] | undefined;
+      if (check.photos.length) {
+        const photos = manager.runtimeOf(me.id).photos;
+        if (!photos) return sendJson(res, 404, { error: "photos are not available on this deployment" });
+        const added = await photos.add(id, check.photos);
+        if (!added.ok) return sendJson(res, added.status, { error: added.error });
+        if (ls.busy) return sendJson(res, 409, { error: "session is busy with another turn" });
+        refs = added.photos.map((p) => ({ id: p.id, name: p.name, width: p.width, height: p.height }));
+      }
+      // The first SSE event of a photo send names the stored photos, so the client can show them from the server after a reload.
+      return streamTurn(res, id, text, {}, refs ? { type: "photos", photos: refs } : undefined, me, true, refs); // the web/desktop/mobile UI can answer a permission card
+    } finally {
+      if (big) photoBodies--;
+    }
+  }
 
-    return streamTurn(res, id, text, {}, undefined, me, true); // the web/desktop/mobile UI can answer a permission card
+  // GET /sessions/:id/photos/:pid -> the stored image of THIS owner's session. Same auth as the session; per-user data is never cached.
+  async function photoApi(res: ServerResponse, method: string, rawId: string, pid: string, me: Principal): Promise<void> {
+    if (method !== "GET" && method !== "HEAD") return sendJson(res, 405, { error: "method not allowed" });
+    let id: string;
+    try { id = decodeURIComponent(rawId); } catch { return sendJson(res, 400, { error: "bad session id" }); }
+    if (manager.access(id, me.id) === "forbidden") return sendJson(res, 403, { error: "forbidden" });
+    const store = manager.runtimeOf(me.id).photos;
+    const hit = store && isPhotoId(pid) ? await store.read(id, pid) : undefined;
+    if (!hit) return sendJson(res, 404, { error: "no such photo" });
+    res.writeHead(200, {
+      "content-type": hit.meta.mime,
+      "content-length": String(hit.data.length),
+      "content-disposition": `inline; filename="${cleanName(hit.meta.name, "photo")}"`,
+      "cache-control": "private, no-store", // browser caches do not vary on the signed-in user
+      ...BASE_HEADERS,
+    });
+    res.end(method === "HEAD" ? undefined : hit.data);
   }
 
   // ---------- WebSocket ----------

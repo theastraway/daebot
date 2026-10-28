@@ -3,7 +3,8 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { HistoryRecorder } from "../events.ts";
-import type { AgentEvent, AgentSession, HistoryEvent, Runtime, Violation } from "../types.ts";
+import type { AgentEvent, AgentSession, HistoryEvent, PhotoRef, Runtime, Violation } from "../types.ts";
+import { PhotoStore } from "../photos.ts";
 import { createServer, request as httpRequest } from "node:http";
 import { startGateway } from "./index.ts";
 import { createBotsFake } from "./dev-fake-bots.ts";
@@ -37,6 +38,8 @@ export function createFakeRuntime(opts: { speed?: number } = {}): Runtime {
   const sessions = new Map<string, { id: string; surface: string; title: string; updatedAt: number; permMode?: string }>();
   // Permissions (modes, waiver, per-chat mode) are real; only the model is fake.
   const permissions = new PermissionService({ dir: mkdtempSync(join(tmpdir(), "dev-fake-perms-")), owner: "owner" });
+  // Photos are real too (validation, storage, the GET route); only the vision read below is scripted.
+  const photos = new PhotoStore({ dir: mkdtempSync(join(tmpdir(), "dev-fake-photos-")), owner: "owner" });
   const recorders = new Map<string, HistoryRecorder>();
   const recorderFor = (id: string) => { let r = recorders.get(id); if (!r) recorders.set(id, (r = new HistoryRecorder())); return r; };
   let n = 0;
@@ -53,13 +56,13 @@ export function createFakeRuntime(opts: { speed?: number } = {}): Runtime {
       violations: () => violations.slice(),
       close: async () => {},
       setPermMode(m?: SessionPermMode) { const meta = sessions.get(id); if (!meta) return; if (m === "bypass" && !permissions.waiverAccepted()) return; if (m) meta.permMode = m; else delete meta.permMode; },
-      async *send(msg: string, o?: { signal?: AbortSignal }): AsyncIterable<AgentEvent> {
+      async *send(msg: string, o?: { signal?: AbortSignal; photos?: PhotoRef[] }): AsyncIterable<AgentEvent> {
         const rec = recorderFor(id);
-        rec.user(msg);
+        rec.user(msg, o?.photos);
         for await (const ev of script(msg, o)) { rec.push(ev); yield ev; }
       },
     };
-    async function* script(msg: string, o?: { signal?: AbortSignal }): AsyncGenerator<AgentEvent> {
+    async function* script(msg: string, o?: { signal?: AbortSignal; photos?: PhotoRef[] }): AsyncGenerator<AgentEvent> {
       {
         const signal = o?.signal;
         userMsgs++;
@@ -77,6 +80,17 @@ export function createFakeRuntime(opts: { speed?: number } = {}): Runtime {
           yield { type: "toolEnd", receiptId, tool: name, ok, preview };
         };
         try {
+          if (o?.photos?.length) {
+            // A message with photos: the scripted model calls view_photo, then answers from what it returned.
+            const ids = o.photos.map((p) => p.id).join(",");
+            yield* say("Reading the photo.\n\n");
+            yield* tool("view_photo", { photo: ids, question: msg.trim() || "Read everything on the photo exactly." }, true, "Roof estimate, 3 line items. Total: $5,211.50");
+            yield* say(`SURFACE✓ #c${calls} looked at the photo -> estimate total\nThe total printed on the estimate is **$5,211.50**.`);
+            total += 0.0001;
+            yield { type: "usage", usage: { promptTokens: 284, completionTokens: 60, costUsd: 0.0001 }, totalCostUsd: total, model: "google/gemini-2.5-flash-lite" };
+            yield { type: "done", finalText: final };
+            return;
+          }
           yield* say("Checking MIND before I answer.\n\n");
           yield* tool("mind_query", { query: "What is the current state of the gateway work?" }, true,
             "Gateway: HTTP + WebSocket, token auth, static web UI. Open item: channel webhook adapters.");
@@ -113,6 +127,7 @@ export function createFakeRuntime(opts: { speed?: number } = {}): Runtime {
     },
     listSessions: () => [...sessions.values()],
     permissions,
+    photos,
     history(id): HistoryEvent[] | undefined {
       if (id === "seed-claims") return SEED_HISTORY;
       return recorders.get(id)?.events();

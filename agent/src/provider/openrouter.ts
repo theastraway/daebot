@@ -72,6 +72,9 @@ export function toWireMessages(messages: Message[]): Record<string, unknown>[] {
           ...m.images.map((url) => ({ type: "image_url", image_url: { url } })),
         ] });
       }
+    } else if (m.images?.length) {
+      // A user turn that carries images (the one-off view_photo vision call): text first, then each image.
+      out.push({ role: "user", content: [{ type: "text", text: m.content }, ...m.images.map((url) => ({ type: "image_url", image_url: { url } }))] });
     } else {
       out.push({ role: "user", content: m.content });
     }
@@ -189,7 +192,8 @@ export function createOpenRouterProvider(cfg: Config, fetchImpl: typeof fetch = 
   return {
     name: opts.name ?? "openrouter",
     async *stream(req) {
-      const models = [req.model, ...cfg.models.fallback.filter((m) => m !== req.model)];
+      // pinModel: exactly this model. The chat fallbacks are text models; a vision call must not slide onto one of them.
+      const models = req.pinModel ? [req.model] : [req.model, ...cfg.models.fallback.filter((m) => m !== req.model)];
       let lastErr: unknown;
       for (const model of models) {
         let res: Response;

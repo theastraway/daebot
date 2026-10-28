@@ -46,9 +46,9 @@ const opt = (o: ScopeOption): PermissionOption => ({ id: o.id, label: o.label, b
 const sameScope = (a: ScopeOption, b: { tool: string; matcher: { kind: string; value?: string } }): boolean =>
   a.tool === b.tool && a.matcher.kind === b.matcher.kind && (a.matcher.value ?? "") === (b.matcher.value ?? "");
 
-/** Tools that never ask in "everything" mode: reading the user's own MIND and local files. */
+/** Tools that never ask in "everything" mode: reading the user's own MIND and local files, and the photos they attached to this chat. */
 function quietRead(f: CallFacts): boolean {
-  return f.cls === "read" && (/^mind_[a-z0-9_]+$/.test(f.tool) || f.tool === "read_file" || f.tool === "glob" || f.tool === "grep" || f.tool === "decide");
+  return f.cls === "read" && (/^mind_[a-z0-9_]+$/.test(f.tool) || f.tool === "read_file" || f.tool === "glob" || f.tool === "grep" || f.tool === "decide" || f.tool === "view_photo");
 }
 
 export class PermissionService {

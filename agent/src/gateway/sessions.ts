@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AgentEvent, AgentSession, Runtime } from "../types.ts";
+import type { AgentEvent, AgentSession, PhotoRef, Runtime } from "../types.ts";
 import type { SessionPermMode } from "../permissions/store.ts";
 
 export class BusyError extends Error {}
@@ -157,7 +157,7 @@ export class SessionManager {
   }
 
   /** Runs one turn. Throws BusyError / NotFoundError synchronously-in-promise before any event is emitted. */
-  async turn(id: string, text: string, onEvent: (e: AgentEvent) => void, external?: AbortSignal, origin: "user" | "bot" = "user", interactive = false): Promise<void> {
+  async turn(id: string, text: string, onEvent: (e: AgentEvent) => void, external?: AbortSignal, origin: "user" | "bot" = "user", interactive = false, photos?: PhotoRef[]): Promise<void> {
     const ls = this.live.get(id);
     if (!ls) throw new NotFoundError("no such session");
     if (ls.busy) throw new BusyError("session is busy with another turn");
@@ -173,7 +173,7 @@ export class SessionManager {
     }
     let sawDone = false;
     try {
-      for await (const ev of ls.session.send(text, { signal: ac.signal, origin, interactive })) {
+      for await (const ev of ls.session.send(text, { signal: ac.signal, origin, interactive, ...(photos?.length ? { photos } : {}) })) {
         if (ev.type === "done") sawDone = true;
         onEvent(ev);
         if (sawDone) break;

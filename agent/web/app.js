@@ -14,6 +14,7 @@ import { compareBuild, webUpdateText, WEB_CHECK_MS } from "/webupdate.js";
 import { buildPermissionCard, initChatMode, initPermissions } from "/permissions.js";
 import { initAccount } from "/account.js";
 import { initSuggest } from "/suggest.js";
+import { initPhotos, normQueue, packQueue, queueLabel, SAYS as PHOTO_SAYS } from "/photos.js";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -25,6 +26,7 @@ const els = {
   drawer: $("drawer"), drawerClose: $("btn-drawer-close"), drawerNote: $("drawer-note"), violList: $("viol-list"),
   connDot: $("conn-dot"), connText: $("conn-text"), tokenGate: $("token-gate"), tokenForm: $("token-form"),
   tokenInput: $("token-input"), tokenErr: $("token-err"), btnLogout: $("btn-logout"),
+  attachStrip: $("attach-strip"), attachNote: $("attach-note"), dropOverlay: $("drop-overlay"), photoInput: $("photo-input"), btnAttach: $("btn-attach"),
 };
 
 // ---------- storage (always guarded) ----------
@@ -190,6 +192,12 @@ function ago(ms) {
 const fmtCost = (n) => (n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`);
 const fmtTok = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
+// ---------- photos (drag and drop, paste, attach button) ----------
+const photos = initPhotos({
+  els: { strip: els.attachStrip, note: els.attachNote, overlay: els.dropOverlay, picker: els.photoInput, btn: els.btnAttach, input: els.input },
+  h, icon, api,
+});
+
 // ---------- thread rendering ----------
 let stick = true;
 els.scroll.addEventListener("scroll", () => {
@@ -207,7 +215,10 @@ function renderEmpty() {
 function buildItem(it, tr) {
   let node;
   switch (it.kind) {
-    case "user": node = h("div", "msg-user", it.text); break;
+    case "user":
+      node = h("div", it.photos?.length ? "msg-user has-photos" : "msg-user", it.text || undefined);
+      if (it.photos?.length) node.prepend(photos.thumbs(it.photos, tkey()));
+      break;
     case "assistant": node = h("div", "msg-asst"); updateAssistant(node, it); break;
     case "tool": node = buildTool(it); break;
     case "gate": node = buildGate(it); break;
@@ -313,7 +324,7 @@ function itemsFromHistory(events) {
   let asst = null, model = "";
   for (const ev of events) {
     switch (ev.type) {
-      case "user": asst = null; items.push({ kind: "user", text: ev.text }); break;
+      case "user": asst = null; items.push({ kind: "user", text: ev.text, ...(ev.photos?.length ? { photos: ev.photos } : {}) }); break;
       case "text":
         if (!asst) { asst = { kind: "assistant", text: "", streaming: false }; items.push(asst); }
         asst.text += ev.delta; break;
@@ -419,26 +430,34 @@ function renderHeader() {
 // Messages sent while Dae is working wait here (per chat) until the user picks one: Send now (stops the running turn first),
 // Copy, or remove. Nothing sends itself. Kept in sessionStorage so a reload does not drop them.
 var QKEY = "daebot.queue";
-var queue = (() => { try { return JSON.parse(sessionStorage.getItem(QKEY) || "{}") || {}; } catch { return {}; } })();
-function saveQueue() { try { sessionStorage.setItem(QKEY, JSON.stringify(queue)); } catch { /* private mode */ } }
+// A queued message is { text, photos: [{ name, dataUrl, width, height }], lost }. Photos stay in memory; a reload restores them only
+// while they fit the sessionStorage budget (packQueue), and says how many it could not keep.
+var queue = (() => { try { return normQueue(JSON.parse(sessionStorage.getItem(QKEY) || "{}")); } catch { return {}; } })();
+function saveQueue() {
+  try {
+    const { json, dropped } = packQueue(queue);
+    sessionStorage.setItem(QKEY, json);
+    if (dropped) photos.say(`Queued photos are too big to keep across a reload; ${dropped} will be lost if you reload now.`);
+  } catch { /* private mode */ }
+}
 function queueFor(key) { if (!queue) queue = {}; return queue[key]; }
-function enqueue(key, text) { (queue[key] ||= []).push(text.trim()); saveQueue(); renderQueue(); }
+function enqueue(key, text, attached = []) { (queue[key] ||= []).push({ text: text.trim(), photos: attached, lost: 0 }); saveQueue(); renderQueue(); }
 // Send one queued message now. If Dae is still working, stop that turn first, then send it the moment the turn ends.
 var queueSendWanted = null;
 async function sendQueued(i) {
   const key = tkey(), q = queueFor(key);
   if (!q || !q[i]) return;
-  const text = q.splice(i, 1)[0];
+  const item = q.splice(i, 1)[0];
   if (!q.length) delete queue[key];
   saveQueue(); renderQueue();
-  if (!state.busy.has(key)) return sendMessage(text);
-  queueSendWanted = { key, text };
+  if (!state.busy.has(key)) return sendMessage(item.text, item.photos);
+  queueSendWanted = { key, item };
   await abortTurn();
   const t0 = Date.now();
   const wait = () => {
     if (!queueSendWanted || queueSendWanted.key !== key) return;
-    if (!state.busy.has(key)) { const w = queueSendWanted; queueSendWanted = null; sendMessage(w.text); return; }
-    if (Date.now() - t0 > 15000) { enqueue(key, queueSendWanted.text); queueSendWanted = null; notify("Dae did not stop in time; the message is back in the queue."); return; }
+    if (!state.busy.has(key)) { const w = queueSendWanted; queueSendWanted = null; sendMessage(w.item.text, w.item.photos); return; }
+    if (Date.now() - t0 > 15000) { enqueue(key, queueSendWanted.item.text, queueSendWanted.item.photos); queueSendWanted = null; notify("Dae did not stop in time; the message is back in the queue."); return; }
     setTimeout(wait, 150);
   };
   wait();
@@ -446,16 +465,20 @@ async function sendQueued(i) {
 function renderQueue() {
   let box = document.getElementById("queue");
   const q = queueFor(tkey()) || [];
-  if (!box) { box = document.createElement("div"); box.id = "queue"; box.className = "queue"; els.composer.before(box); }
+  if (!box) { box = document.createElement("div"); box.id = "queue"; box.className = "queue"; (els.attachNote || els.composer).before(box); }
   box.replaceChildren();
   box.hidden = !q.length;
-  q.forEach((t, i) => {
+  q.forEach((it, i) => {
+    const t = it.text;
     const row = h("div", "queue-item");
-    row.append(h("span", "queue-tag", `Queued ${i + 1}`), h("span", "queue-text", t));
+    row.append(h("span", "queue-tag", `Queued ${i + 1}`));
+    if (it.photos.length) row.append(photos.mini(it.photos));
+    const label = queueLabel(it) + (it.lost ? ` (${it.lost} photo${it.lost === 1 ? "" : "s"} not kept after the reload)` : "");
+    row.append(h("span", "queue-text", label));
     const send = h("button", "btn-quiet queue-btn", "Send now"); send.type = "button";
     send.title = state.busy.has(tkey()) ? "Stop what Dae is doing and send this now" : "Send this message";
     send.onclick = () => { sendQueued(i); };
-    const copy = h("button", "btn-quiet queue-btn", "Copy"); copy.type = "button"; copy.title = "Copy this message";
+    const copy = h("button", "btn-quiet queue-btn", "Copy"); copy.type = "button"; copy.title = "Copy this message"; copy.hidden = !t.trim();
     copy.onclick = async () => { try { await navigator.clipboard.writeText(t); copy.textContent = "Copied"; setTimeout(() => { copy.textContent = "Copy"; }, 1200); } catch { els.input.value = t; grow(); els.input.focus(); } };
     const x = h("button", "btn-quiet queue-x", "×"); x.type = "button"; x.title = "Remove from queue"; x.setAttribute("aria-label", "Remove queued message");
     x.onclick = () => { q.splice(i, 1); if (!q.length) delete queue[tkey()]; saveQueue(); renderQueue(); };
@@ -662,7 +685,7 @@ async function attachRun(id, baseEvents) {
   const ctx = {
     seq: 0, sawDone: false, lost: false, asst: null, tools: new Map(),
     handle(ev) {
-      if (ev.type === "user") { addItem(id, { kind: "user", text: ev.text }); return; }
+      if (ev.type === "user") { addItem(id, { kind: "user", text: ev.text, ...(ev.photos?.length ? { photos: ev.photos } : {}) }); return; }
       ctx.asst = onEvent(id, ev, ctx.asst, ctx.tools);
     },
   };
@@ -680,13 +703,13 @@ async function attachRun(id, baseEvents) {
   }
 }
 
-async function sendMessage(text) {
+async function sendMessage(text, attached = []) {
   text = text.trim();
-  if (!text) return;
+  if (!text && !attached.length) return;
   suggest.onSend(text); // tells Dae whether the suggested replies were taken, edited or ignored, and clears them
   // Show the message immediately; opening a session can take several seconds while MIND boots.
   const startKey = tkey();
-  const userItem = addItem(startKey, { kind: "user", text });
+  const userItem = addItem(startKey, { kind: "user", text, ...(attached.length ? { photos: attached.map((p) => ({ name: p.name, dataUrl: p.dataUrl, width: p.width, height: p.height })) } : {}) });
   voice.turnStart();
   const waiting = addItem(startKey, { kind: "notice", level: "info", text: "Thinking…" });
   state.busy.add(startKey); setBusyUi(); stick = true; toBottom(true);
@@ -700,6 +723,7 @@ async function sendMessage(text) {
   try { id = await ensureSession(); } catch (e) {
     state.busy.delete(startKey); setBusyUi(); dropWaiting();
     els.input.value = text; grow();
+    if (attached.length && !photos.count()) photos.set(attached);
     return notify(`Could not start a session: ${e.message}`);
   }
   if (startKey !== id) { state.busy.delete(startKey); state.busy.add(id); }
@@ -707,24 +731,37 @@ async function sendMessage(text) {
   refreshSessions();
   const tr = transcript(id);
   const meta = metaById(id);
-  if (meta && (!meta.title || meta.title === "New session")) meta.title = text.slice(0, 60);
+  if (meta && (!meta.title || meta.title === "New session")) meta.title = text.slice(0, 60) || (attached.length ? "Photo" : meta.title);
   let first = true;
   const ctx = {
     seq: 0, sawDone: false, lost: false, asst: null, tools: new Map(),
     handle(ev) {
+      // The server stored the photos: remember their ids so the thumbnails can be loaded again after a reload.
+      if (ev.type === "photos") { (userItem.photos || []).forEach((p, i) => { if (ev.photos?.[i]) p.id = ev.photos[i].id; }); return; }
       if (first && ev.type !== "usage") { first = false; dropWaiting(); }
       ctx.asst = onEvent(id, ev, ctx.asst, ctx.tools);
     },
   };
+  let refused = false; // the server turned the message away before any turn started
   try {
-    const res = await api(`/sessions/${encodeURIComponent(id)}/send`, { method: "POST", body: JSON.stringify({ text }) });
+    const body = attached.length ? { text, photos: attached.map(({ name, dataUrl }) => ({ name, dataUrl })) } : { text };
+    const res = await api(`/sessions/${encodeURIComponent(id)}/send`, { method: "POST", body: JSON.stringify(body) });
     if (res.status === 409) throw new Error("This session is busy with another turn.");
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+    if (!res.ok) { refused = true; throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`); }
     setOnline(true);
     // The turn runs on the server and keeps going if this connection drops; pumpRun re-attaches from the last event seen.
     await pumpRun(id, ctx, res);
   } catch (e) {
     if (e.message !== "unauthorized") { notify(e.message === "Failed to fetch" ? "Lost connection to the gateway." : e.message); if (e.message === "Failed to fetch") setOnline(false); }
+    // A message with photos that the server refused (too big, wrong type, chat full) never reached Dae: take it back out of the
+    // transcript and put the words and photos back in the composer so nothing is lost.
+    if (refused && attached.length) {
+      const t = transcript(id), i = t.items.indexOf(userItem);
+      if (i >= 0) t.items.splice(i, 1);
+      if (userItem.node) userItem.node.remove();
+      if (!els.input.value.trim()) { els.input.value = text; grow(); }
+      if (!photos.count()) photos.set(attached);
+    }
   } finally {
     dropWaiting();
     const asst = ctx.asst;
@@ -764,7 +801,8 @@ function answerText(tr, userItem) {
 // Keep the visible conversation across reloads (this browser tab only).
 function saveTranscript(id) {
   try {
-    const items = transcript(id).items.filter((it) => it.kind !== "notice" || it.level === "warn").map(({ node, parts, ...rest }) => rest);
+    // Photo data never goes into sessionStorage (it would fill it); a photo is shown again from the server by its id.
+    const items = transcript(id).items.filter((it) => it.kind !== "notice" || it.level === "warn").map(({ node, parts, ...rest }) => (rest.photos ? { ...rest, photos: rest.photos.map(({ dataUrl, ...p }) => p) } : rest));
     sessionStorage.setItem(`daebot:t:${id}`, JSON.stringify(items.slice(-200)));
     sessionStorage.setItem("daebot:current", id);
     sessionStorage.setItem("daebot:bot", state.curBot || "");
@@ -1048,10 +1086,13 @@ els.input.addEventListener("keydown", (e) => {
 els.composer.addEventListener("submit", (e) => {
   e.preventDefault();
   const t = els.input.value;
-  if (!t.trim()) return;
+  if (!t.trim() && !photos.count()) return;
+  if (photos.preparing()) { photos.say(PHOTO_SAYS.preparing); return; } // the words stay in the box
   els.input.value = ""; grow();
-  if (state.busy.has(tkey())) { enqueue(tkey(), t); return; } // never refuse: hold it and send when the turn ends
-  sendMessage(t);
+  photos.say("");
+  const attached = photos.take();
+  if (state.busy.has(tkey())) { enqueue(tkey(), t, attached); return; } // never refuse: hold it and send when the turn ends
+  sendMessage(t, attached);
 });
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
