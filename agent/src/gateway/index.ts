@@ -281,7 +281,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     ? createAppsHandler({
         baseUrl: appsBase,
         keyFor: appsKeyFor,
-        onChanged: (p) => { providerCache.delete(p.id); touchConnectedApps(p.id); },
+        onChanged: (p) => { providerCache.delete(p.id); touchConnectedApps(p.id); mcp?.noteAppsChanged(p.id); }, // a MIND app changed: MIND links its MCP server (GitHub) at the next read
         returnTo: opts.apps?.returnTo ?? (process.env.DAEBOT_PUBLIC_URL?.trim() || (hosted?.allowedHosts?.[0] && hosted.allowedHosts[0] !== "localhost" ? `https://${hosted.allowedHosts[0]}` : undefined)),
         fetchImpl: opts.apps?.fetchImpl ?? opts.auth?.fetchImpl,
       })
@@ -878,7 +878,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     return `http://${hostnameOf(String(req.headers.host ?? "127.0.0.1"))}${(/:(\d+)$/.exec(String(req.headers.host ?? "")) ?? [])[0] ?? ""}/mcp/oauth/callback`;
   }
   function mcpFail(res: ServerResponse, e: unknown): void {
-    if (e instanceof McpConnectError) return sendJson(res, e.status, { error: e.message });
+    if (e instanceof McpConnectError) return sendJson(res, e.status, { error: e.message, ...(e.code ? { code: e.code } : {}) });
     throw e;
   }
   const mcpDonePage = (msg: string, ok: boolean): string =>
@@ -953,7 +953,9 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     try {
       if (path === "/mcp/servers") {
         if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-        return sendJson(res, 200, { servers: mcp.list(me.id), pending: mcp.pending(me.id), limits: mcp.limits() });
+        // MIND holds the user's connections when it can (the same on every Daebot they sign in to): make the view current first, then answer.
+        await mcp.prepare(me.id);
+        return sendJson(res, 200, { servers: mcp.list(me.id), pending: mcp.pending(me.id), limits: mcp.limitsFor(me.id), via: mcp.mindMode(me.id) ? "mind" : "local" });
       }
       // The MIND App Store connectors for the Apps card (MIND's list, fetched server-side). Listing reaches no third party.
       if (path === "/mcp/catalog") {
@@ -964,7 +966,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
           const prov = providerFor(it, providers);
           return prov ? { ...it, foldedInto: prov, addon: addonWords(providers.find((p) => p.provider === prov)?.name ?? prov, prov) } : it;
         });
-        return sendJson(res, 200, { items, counts: { official: items.filter((i) => i.publisher === "official").length, community: items.filter((i) => i.publisher === "community").length } });
+        // `linked`: connections that ride on a MIND app (GitHub through the user's GitHub connection). They show under that app's one row, never as a second row.
+        return sendJson(res, 200, { items, counts: { official: items.filter((i) => i.publisher === "official").length, community: items.filter((i) => i.publisher === "community").length }, linked: mcp.integrationServers(me.id) });
       }
       // Connect on a connector: creates the same pending request a model's proposal would. The URL is looked up here by id; the body never carries one.
       if (path === "/mcp/catalog/connect") {
@@ -987,7 +990,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         const allow = Array.isArray(b.allow) ? b.allow.filter((x): x is string => typeof x === "string").slice(0, 500) : undefined;
         const r = await mcp.approve(me.id, m[1], { mode, apiKey: optStr(b.apiKey, 5000), allow, name: optStr(b.name, 40), redirectUri: mcpRedirectUri(req) });
         if (r.status === "authorize") {
-          res.setHeader("set-cookie", `${MCP_COOKIE}=${me.id}.${r.state}.${mcpMac(me.id, r.state)}; ${mcpCookieAttrs(600)}`);
+          // Local flow: this gateway's own callback needs the binding cookie. A MIND-held flow (no state) comes back through MIND's callback instead.
+          if (r.state) res.setHeader("set-cookie", `${MCP_COOKIE}=${me.id}.${r.state}.${mcpMac(me.id, r.state)}; ${mcpCookieAttrs(600)}`);
           return sendJson(res, 200, { status: "authorize", url: r.url });
         }
         return sendJson(res, 200, r);
@@ -998,10 +1002,10 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
           if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
           return sendJson(res, 200, { server: await mcp.refreshTools(me.id, m[1]) });
         }
-        if (method === "DELETE") return sendJson(res, 200, { ok: mcp.remove(me.id, m[1]) });
+        if (method === "DELETE") return sendJson(res, 200, { ok: await mcp.removeServer(me.id, m[1]) });
         if (method === "PATCH") {
           const b = await readJson(req);
-          return sendJson(res, 200, { server: mcp.update(me.id, m[1], { enabled: typeof b.enabled === "boolean" ? b.enabled : undefined, allow: Array.isArray(b.allow) ? (b.allow as unknown[]).filter((x): x is string => typeof x === "string") : undefined }) });
+          return sendJson(res, 200, { server: await mcp.updateServer(me.id, m[1], { enabled: typeof b.enabled === "boolean" ? b.enabled : undefined, allow: Array.isArray(b.allow) ? (b.allow as unknown[]).filter((x): x is string => typeof x === "string") : undefined }) });
         }
         return sendJson(res, 405, { error: "method not allowed" });
       }

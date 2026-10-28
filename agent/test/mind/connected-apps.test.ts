@@ -258,7 +258,7 @@ function runtime(handler: Parameters<typeof fakeFetch>[0], o: { servers?: unknow
     return handler(req, n);
   });
   const mcpConnect = o.servers
-    ? ({ enabled: () => true, list: () => o.servers, catalogItems: async () => o.catalog ?? [], tools: () => [], store: { version: () => 7 } } as any)
+    ? ({ enabled: () => true, list: () => o.servers, catalogItems: async () => o.catalog ?? [], tools: () => [], store: { version: () => 7 }, version: () => 7, prepare: async () => {} } as any)
     : undefined;
   const provider = new FakeProvider([{ text: "ok" }]);
   const rt = createRuntime(baseCfg({ mindBaseUrl: BASE, mindApiKey: SERVER_KEY }), {

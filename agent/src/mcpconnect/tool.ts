@@ -47,10 +47,10 @@ export function createMcpConnectTool(service: McpConnectService, uid: string): T
       if (!service.enabled()) return { ok: false, output: "Connecting MCP servers is switched off on this deployment." };
       const action = typeof args.action === "string" ? args.action : "";
       if (action === "list") {
-        const servers = service.list(uid);
+        const servers = await service.listFresh(uid);
         const pending = service.pending(uid);
         const lines = [
-          ...servers.map((s) => `connected: ${s.name} (${s.host}, ${s.publisher}) ${s.enabled ? "on" : "off"}, ${s.tools.length} tools, tool prefix ${s.name}__`),
+          ...servers.map((s) => `connected${s.via === "mind" ? " through MIND" : ""}: ${s.name} (${s.host}, ${s.publisher}) ${s.enabled ? "on" : "off"}${s.status && s.status !== "ok" ? `, ${s.status === "reauth_required" ? "needs the user to reconnect it" : "reporting an error"}` : ""}, ${s.toolCount ?? s.tools.length} tools, tool prefix ${s.name}__`),
           ...pending.map((p) => `waiting for the user: ${p.host} (request ${p.id})`),
         ];
         return { ok: true, output: lines.length ? lines.join("\n") : "No MCP servers are connected and nothing is waiting." };

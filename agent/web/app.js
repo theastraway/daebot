@@ -1182,7 +1182,12 @@ mcpSec.append(mcpHead, h("p", "apps-note", "Daebot can find a server and ask to 
 $("apps-sections").append(mcpSec);
 mcp = initMcp({ json, api, h, icon, notify, mount: mcpBody, section: mcpSec, openApps: () => $("btn-apps").click(), suspendApps: () => apps.suspend(), resumeApps: () => apps.resume() });
 $("btn-apps").addEventListener("click", () => mcp.load());
-{ const q = new URL(location.href).searchParams.get("mcp"); if (q) { mcp.returned(q); history.replaceState(null, "", location.pathname); } }
+{
+  // Back from a server's sign-in: this gateway's own callback sends ?mcp=connected|failed, MIND's sends ?mcp_connected=<server id> or ?mcp_error=<code>.
+  const sp = new URL(location.href).searchParams;
+  const q = sp.get("mcp"), okId = sp.get("mcp_connected"), errCode = sp.get("mcp_error");
+  if (q || okId || errCode) { mcp.returned(q, { connectedId: okId || "", errorCode: errCode || "" }); history.replaceState(null, "", location.pathname); }
+}
 
 // ---------- boot ----------
 async function boot() {
