@@ -8,10 +8,10 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { McpStore } from "../../src/mcpconnect/store.ts";
-import { LOCAL_CONNECTORS, McpConnectError, McpConnectService } from "../../src/mcpconnect/service.ts";
+import { LOCAL_CONNECTORS, McpConnectError, McpConnectService, mcpLimits, readConnectPaste } from "../../src/mcpconnect/service.ts";
 import type { SafeFetch } from "../../src/mcpconnect/ssrf.ts";
 // @ts-ignore plain JS module
-import { entryOf } from "../../web/connectors.js";
+import { entryOf, readPaste } from "../../web/connectors.js";
 
 const TOKEN = "n8n-test-token-ABC123456";
 const REAL_TOOLS = [
@@ -58,7 +58,7 @@ test("n8n card: listed with a URL + token form, connected with the token, tools 
     assert.equal(before.auth, "url_token");
     assert.deepEqual(before.form!.fields.map((f) => f.name), ["url", "token"]);
     assert.equal(before.form!.fields[1].secret, true);
-    assert.match(before.form!.fields[0].placeholder, /^https:\/\/your-n8n\.example\.com$/);
+    assert.match(before.form!.fields[0].placeholder, /^https:\/\/your-n8n\.example\.com\/mcp-server\/http$/);
     assert.equal(before.connected, false);
 
     const view = await svc.connectWithToken("u1", { presetId: "local:n8n", url: "https://n8n.example.test/mcp-server/http", token: `Bearer ${TOKEN}` });
@@ -123,4 +123,50 @@ test("web: the form entry carries its fields to the card", () => {
   assert.equal(e.form.fields[0].name, "url");
   assert.ok(e.tags.some((t: any) => t.text === "Your URL + token"));
   assert.equal(entryOf({ id: "mcp:x", name: "X", publisher: "official", auth: "oauth" }).form, undefined);
+});
+
+// n8n's "Connect a client" dialog (API key tab) hands out a Configuration JSON with the URL and the token in it.
+const CONFIG_JSON = (tok: string) => JSON.stringify({ mcpServers: { n8n: { type: "http", url: "https://n8n.example.test/mcp-server/http", headers: { Authorization: `Bearer ${tok}` } } } }, null, 2);
+const CONFIG_NPX = (tok: string) => JSON.stringify({ mcpServers: { "n8n-mcp": { command: "npx", args: ["-y", "supergateway", "--streamableHttp", "https://n8n.example.test/mcp-server/http", "--header", `authorization:Bearer ${tok}`] } } });
+
+test("n8n paste: the Configuration JSON in either box, a browser address, or 'Authorization: Bearer' all connect", async () => {
+  for (const [url, token] of [
+    [CONFIG_JSON(TOKEN), ""], ["", CONFIG_JSON(TOKEN)], [CONFIG_NPX(TOKEN), CONFIG_NPX(TOKEN)],
+    ["https://n8n.example.test/home/workflows", `Authorization: Bearer ${TOKEN}`], [`"https://n8n.example.test/mcp-server/http"`, `"${TOKEN}"`],
+  ]) {
+    const m = await n8nMock();
+    try {
+      const { svc } = svcFor(m.net);
+      const v = await svc.connectWithToken("u1", { presetId: "local:n8n", url, token });
+      assert.equal(v.url, "https://n8n.example.test/mcp-server/http", `pasted ${url.slice(0, 30)} / ${token.slice(0, 30)}`);
+      assert.equal(v.tools.length, 2);
+    } finally { await m.close(); }
+  }
+  assert.deepEqual(readConnectPaste("https://a.test/x", "plain-token"), { url: "https://a.test/x", token: "plain-token" }, "an ordinary paste is untouched");
+});
+
+test("n8n errors say what to do in n8n: a wrong token, no MCP server at the address, nothing pasted", async () => {
+  const m = await n8nMock();
+  try {
+    const { svc, store } = svcFor(m.net);
+    await assert.rejects(svc.connectWithToken("u1", { presetId: "local:n8n", url: "https://n8n.example.test", token: "wrong-token-123456" }), /n8n did not accept that token.*API key tab/);
+    await assert.rejects(svc.connectWithToken("u1", { presetId: "local:n8n", url: "https://n8n.example.test/mcp/other", token: TOKEN }), /no n8n MCP server.*Enable MCP access/);
+    await assert.rejects(svc.connectWithToken("u1", { presetId: "local:n8n", url: "https://n8n.example.test", token: "" }), /Paste the access token/);
+    await assert.rejects(svc.connectWithToken("u1", { presetId: "local:n8n", url: "", token: TOKEN }), /Paste your Server URL/);
+    assert.equal(store.list("u1").length, 0);
+    const n8n = (await svc.catalogItems("u1")).find((i) => i.id === "local:n8n")!;
+    assert.ok(n8n.form!.steps!.some((st) => /Instance-level MCP/.test(st)) && n8n.form!.steps!.some((st) => /API key tab/.test(st)), "the card carries n8n's own steps");
+  } finally { await m.close(); }
+});
+
+test("web: one paste of the Configuration JSON fills both boxes; an ordinary paste is left alone", () => {
+  assert.deepEqual(readPaste(CONFIG_JSON("eyJabc.def.ghi")), { server: "https://n8n.example.test/mcp-server/http", token: "eyJabc.def.ghi" });
+  assert.deepEqual(readPaste(CONFIG_NPX("eyJabc.def.ghi")), { server: "https://n8n.example.test/mcp-server/http", token: "eyJabc.def.ghi" });
+  assert.equal(readPaste("https://n8n.example.test"), null);
+  assert.equal(readPaste("eyJabc.def.ghi"), null);
+});
+
+test("limits: room for MIND's own tools and many servers by default", () => {
+  const d = mcpLimits({});
+  assert.ok(d.maxServers >= 50 && d.maxTools >= 1000, JSON.stringify(d));
 });

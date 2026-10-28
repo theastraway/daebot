@@ -130,7 +130,8 @@ export function initMcp({ json, api, h, icon, notify, mount, section, openApps, 
       r.append(b); body.append(r);
     }
     for (const s of servers) body.append(serverRow(s));
-    if (limits) body.append(h("p", "drawer-fine", `Up to ${limits.maxServers} servers and ${limits.maxTools} tools.`));
+    // The limit is only worth a line when it is close: the gateway itself says so plainly if a connect would cross it.
+    if (limits && servers.length >= limits.maxServers - 2) body.append(h("p", "drawer-fine", `${servers.length} of ${limits.maxServers} servers connected.`));
     side.append(body);
   }
 

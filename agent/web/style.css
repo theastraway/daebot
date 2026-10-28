@@ -504,8 +504,21 @@ kbd { font-size: 10.5px; background: var(--surface-2); border: 1px solid var(--l
 .ver-notes:empty { display: none; }
 .app-form { display: grid; gap: 10px; }
 .app-field { display: grid; gap: 4px; font-size: 13px; color: var(--ink-2); }
-.app-field input { font: inherit; font-size: 14px; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); width: 100%; box-sizing: border-box; }
-.app-form .row { display: flex; gap: 8px; }
+/* 16px: smaller text makes iOS zoom the whole page when the field is tapped */
+.app-field input { font: inherit; font-size: 16px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line-strong); background: var(--bg); color: var(--ink); width: 100%; box-sizing: border-box; }
+.app-field input:focus { outline: none; border-color: var(--ink-2); box-shadow: 0 0 0 3px var(--surface-2); }
+.app-form .row { display: flex; gap: 8px; margin-top: 2px; }
+/* The URL + token form's own slot: above the connector list, outside its scroll box, so it survives the list redrawing */
+.apps-formhost { margin: 0 0 10px; padding: 16px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface); }
+.apps-formhost[hidden] { display: none; }
+.app-form-head { display: flex; align-items: center; gap: 10px; }
+.app-form-head h4 { margin: 0; font: 600 15.5px var(--sans); color: var(--ink); }
+.app-steps { margin: 0; padding-left: 20px; display: grid; gap: 5px; font-size: 13px; line-height: 1.5; color: var(--ink-2); }
+.app-form-status { margin: 0; font-size: 13px; line-height: 1.45; color: var(--ink-2); }
+.app-form-status[hidden] { display: none; }
+.app-form-status.is-ok { color: var(--ok); }
+.app-form-status.is-warn { color: var(--warn); }
+.app-confirm p.app-why, .app-confirm p.app-form-status { padding: 0; background: none; }
 
 .queue { display: grid; gap: 4px; margin: 0 0 6px; padding-right: 76px; } /* clear of the floating M (bot dock) */
 .queue-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 10px; border: 1px dashed var(--line-strong); border-radius: 10px; background: var(--surface); font-size: 13px; color: var(--ink-2); }
@@ -631,8 +644,8 @@ kbd { font-size: 10.5px; background: var(--surface-2); border: 1px solid var(--l
 .waiver-card label.waiver-check input { width: 18px; height: 18px; margin-top: 2px; accent-color: var(--accent); flex: none; }
 .waiver-card .btn-danger:disabled { opacity: .4; cursor: not-allowed; }
 .perm-waiver { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
-.app-why { margin: 0 0 8px; font-size: 12.5px; line-height: 1.5; color: var(--ink-2); }
-.app-help { display: inline-block; margin: 0 0 10px; font-size: 12.5px; color: var(--accent); text-underline-offset: 3px; }
+.app-why { margin: 0; font-size: 13px; line-height: 1.5; color: var(--ink-3); }
+.app-help { justify-self: start; font-size: 12.5px; color: var(--ink-3); text-underline-offset: 3px; }
 .queue-btn { flex: none; font-size: 12px; padding: 2px 8px; }
 
 /* ---------- photos: attach button, thumbnails, drop overlay, sent photos ---------- */
