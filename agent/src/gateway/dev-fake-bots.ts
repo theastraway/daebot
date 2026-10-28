@@ -8,8 +8,9 @@
 import { request as httpRequest } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { COOKIE_NAME, parseCookies, safeEqual } from "./auth.ts";
+import { isFaceId } from "../bots/faces.ts";
 
-export interface FakeBot { id: string; slug: string; name: string; purpose: string; color: string; updatedAt: number; live: boolean; busy: boolean }
+export interface FakeBot { id: string; slug: string; name: string; purpose: string; color: string; face?: string | null; updatedAt: number; live: boolean; busy: boolean }
 
 const MAX_INSTRUCTIONS = 8 * 1024;
 const COLORS = ["#ffd25a", "#ff9a3d", "#7dff9a", "#5ee0ff", "#a98bff", "#ff7ad9"];
@@ -110,7 +111,9 @@ export function createBotsFake(opts: { token: string; backendPort: number; botLi
         if ([...bots.values()].some((x) => x.name.toLowerCase() === name.toLowerCase())) { json(res, 409, { error: "name_taken" }); return true; }
         const text = typeof b.instructions === "string" ? b.instructions : "";
         if (Buffer.byteLength(text) > MAX_INSTRUCTIONS) { json(res, 413, { error: "instructions_too_long" }); return true; }
-        const bot = add(name.slice(0, 40), typeof b.purpose === "string" ? b.purpose.slice(0, 140) : "", COLORS[bots.size % COLORS.length], {}, text);
+        const color = typeof b.color === "string" && /^#[0-9a-f]{6}$/i.test(b.color) ? b.color.toLowerCase() : COLORS[bots.size % COLORS.length];
+        if (b.face !== undefined && b.face !== null && b.face !== "" && !isFaceId(b.face)) { json(res, 400, { error: "bad_face" }); return true; }
+        const bot = add(name.slice(0, 40), typeof b.purpose === "string" ? b.purpose.slice(0, 140) : "", color, { face: b.face || null }, text);
         json(res, 201, bot);
         return true;
       }
@@ -143,6 +146,10 @@ export function createBotsFake(opts: { token: string; backendPort: number; botLi
           }
           if (typeof b.purpose === "string") bot.purpose = b.purpose.slice(0, 140);
           if (typeof b.color === "string" && /^#[0-9a-f]{6}$/i.test(b.color)) bot.color = b.color.toLowerCase();
+          if (b.face !== undefined) {
+            if (b.face !== null && b.face !== "" && !isFaceId(b.face)) { json(res, 400, { error: "bad_face" }); return true; }
+            bot.face = b.face || null;
+          }
           bot.updatedAt = Date.now();
           json(res, 200, bot);
           return true;

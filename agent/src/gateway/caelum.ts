@@ -1,6 +1,8 @@
 // Ask Caelum: maps MIND's AgentSpec (MINDapp backend/models/agent_spec.py, returned by POST /api/agentbuilder/intake) onto the
 // three fields of Daebot's New bot form. The spec is third-party-shaped data: every string is clipped, lists are capped.
 
+import { suggestFace } from "../bots/faces.ts";
+
 const str = (v: unknown, max: number): string => (typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, max) : "");
 const list = (v: unknown, n = 8, max = 300): string[] => (Array.isArray(v) ? v.map((x) => str(x, max)).filter(Boolean).slice(0, n) : []);
 
@@ -13,7 +15,7 @@ export function displayName(raw: string): string {
   return spaced.split(" ").map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(" ").slice(0, BOT_NAME_MAX).trim();
 }
 
-export function caelumToBot(spec: any): { name: string; purpose: string; instructions: string } {
+export function caelumToBot(spec: any): { name: string; purpose: string; instructions: string; face?: string } {
   const role = str(spec?.role, 120);
   const name = displayName(str(spec?.name, 80)) || displayName(role) || "New bot";
   const purpose = (str(spec?.primary_responsibility, 400) || str(spec?.frontmatter_description, 400) || role).slice(0, BOT_PURPOSE_MAX);
@@ -31,5 +33,6 @@ export function caelumToBot(spec: any): { name: string; purpose: string; instruc
     para("Personality", [str(spec?.soul_paragraph, 600), list(spec?.traits, 6, 60).join(", ")].filter(Boolean).join(" ")),
     para("Start of every task", str(spec?.startup_query, 300) || str(spec?.mind_query_on_start, 300)),
   ].join("").trim();
-  return { name, purpose, instructions };
+  const face = suggestFace([name, role, purpose, str(spec?.mission_paragraph, 600), list(spec?.traits, 6, 60).join(" "), list(spec?.purposes, 8, 120).join(" ")].join(" "));
+  return { name, purpose, instructions, ...(face ? { face } : {}) };
 }

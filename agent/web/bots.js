@@ -8,6 +8,7 @@
 // api()/json() helpers. The pure helpers are exported (and unit tested); everything that touches `document` lives in initBots().
 
 import { confirmDialog, deleteControl, botDeleteText, updateText } from "./manage.js";
+import { FACES, faceOf, faceSvg } from "./faces.js";
 
 export const VIEW_KEY = "mc_view";
 export const SELECTED_KEY = "mc_bot";
@@ -15,7 +16,7 @@ export const MAX_INSTRUCTION_BYTES = 8 * 1024;
 export const NAME_MAX = 40;
 export const PURPOSE_MAX = 140;
 export const DEFAULT_COLOR = "#ffd25a";
-/** The six preset LED colours a bot can wear. */
+/** The preset LED colours a bot can wear. */
 export const COLORS = [
   { hex: "#ffd25a", name: "Amber" },
   { hex: "#ff9a3d", name: "Orange" },
@@ -23,7 +24,13 @@ export const COLORS = [
   { hex: "#5ee0ff", name: "Cyan" },
   { hex: "#a98bff", name: "Violet" },
   { hex: "#ff7ad9", name: "Pink" },
+  { hex: "#ff6b6b", name: "Red" },
+  { hex: "#6b8cff", name: "Blue" },
+  { hex: "#2dd4bf", name: "Teal" },
+  { hex: "#c8f04a", name: "Lime" },
 ];
+/** The face a new bot starts with (its personality is shown right under the grid, so nothing is applied silently). */
+export const DEFAULT_FACE = "operator";
 
 // ---------------------------------------------------------------- pure helpers
 
@@ -115,6 +122,7 @@ export function initBots(ctx) {
     drawer: $("instr-drawer"), drawerTitle: $("instr-title"), drawerClose: $("instr-close"),
     text: $("instr-text"), count: $("instr-count"), stateEl: $("instr-state"), save: $("instr-save"), revert: $("instr-revert"),
     name: $("bd-name"), purpose: $("bd-purpose"), colors: $("bd-colors"), saveDetails: $("bd-save"), detailsState: $("bd-state"),
+    faces: $("bd-faces"), faceDesc: $("bd-face-desc"), bnFaces: $("bn-faces"), bnFaceDesc: $("bn-face-desc"), bnColors: $("bn-colors"),
     del: $("bd-delete"), verText: $("bd-ver-text"), verCurrent: $("bd-ver-current"), verNotes: $("bd-ver-notes"), verBtn: $("bd-update"),
     card: $("bot-new"), cardForm: $("bot-new-form"), bnName: $("bn-name"), bnPurpose: $("bn-purpose"), bnInstr: $("bn-instr"),
     bnErr: $("bn-err"), bnCreate: $("bn-create"), bnCancel: $("bn-cancel"),
@@ -130,7 +138,7 @@ export function initBots(ctx) {
     expanded: new Set(),
     threads: [], threadsFor: "", cache: new Map(), loading: new Set(),
     drawerBot: "", baseline: "", drafts: new Map(), loadingInstr: false, drawerOpen: false,
-    color: DEFAULT_COLOR, cardDirty: false, lastFocus: null,
+    color: DEFAULT_COLOR, face: "", newColor: DEFAULT_COLOR, newFace: DEFAULT_FACE, cardDirty: false, lastFocus: null,
   };
   if (st.selected) st.expanded.add(st.selected);
 
@@ -139,9 +147,68 @@ export function initBots(ctx) {
   function activeBotId() { return app.currentBot() || (st.view === "bots" ? st.selected : "") || ""; }
   const activeBot = () => botById(activeBotId());
 
+  /** A bot's badge: its face in its LED colour, else (bots made before faces) the first letter of its name. */
   function paintBadge(node, bot) {
-    node.textContent = initialOf(bot && bot.name);
+    const svg = faceSvg(bot && bot.face);
+    node.classList.toggle("has-face", !!svg);
+    if (svg) node.replaceChildren(svg); else node.textContent = initialOf(bot && bot.name);
     node.style.setProperty("--bot", safeColor(bot && bot.color));
+  }
+
+  /** LED colour swatches in `box` (a radiogroup): get/set the colour, arrow keys move the choice. */
+  function mountSwatches(box, get, set) {
+    const paint = () => {
+      box.replaceChildren();
+      for (const c of COLORS) {
+        const b = h("button", "swatch"); b.type = "button";
+        b.setAttribute("role", "radio"); b.setAttribute("aria-checked", String(c.hex === get())); b.setAttribute("aria-label", c.name); b.title = c.name;
+        b.tabIndex = c.hex === get() ? 0 : -1;
+        b.style.setProperty("--sw", c.hex);
+        b.addEventListener("click", () => { set(c.hex); paint(); b.focus(); });
+        box.append(b);
+      }
+    };
+    box.addEventListener("keydown", (e) => {
+      if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+      e.preventDefault();
+      const i = Math.max(0, COLORS.findIndex((c) => c.hex === get()));
+      const d = e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 1;
+      set(COLORS[(i + d + COLORS.length) % COLORS.length].hex);
+      paint();
+      box.querySelector('[aria-checked="true"]').focus();
+    });
+    return paint;
+  }
+
+  /** The face grid in `box` (a radiogroup) plus the picked face's name and one-liner in `desc`. The face is drawn in the chosen LED colour. */
+  function mountFaces(box, desc, get, set, color) {
+    const paint = () => {
+      box.replaceChildren();
+      box.style.setProperty("--bot", safeColor(color()));
+      const cur = get();
+      FACES.forEach((f, i) => {
+        const on = f.id === cur;
+        const b = h("button", "face-opt"); b.type = "button";
+        b.setAttribute("role", "radio"); b.setAttribute("aria-checked", String(on)); b.setAttribute("aria-label", `${f.name}: ${f.blurb}`); b.title = `${f.name}: ${f.blurb}`;
+        b.tabIndex = on || (!cur && i === 0) ? 0 : -1;
+        b.dataset.face = f.id;
+        b.append(faceSvg(f.id), h("span", "face-name", f.name));
+        b.addEventListener("click", () => { set(f.id); paint(); box.querySelector('[aria-checked="true"]').focus(); });
+        box.append(b);
+      });
+      const f = faceOf(cur);
+      desc.textContent = f ? `${f.name}: ${f.blurb} Its personality shapes how this bot talks; your instructions still come first.` : "Pick a face. Each one is a personality.";
+    };
+    box.addEventListener("keydown", (e) => {
+      if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+      e.preventDefault();
+      const i = Math.max(0, FACES.findIndex((f) => f.id === get()));
+      const d = e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 1;
+      set(FACES[(i + d + FACES.length) % FACES.length].id);
+      paint();
+      box.querySelector('[aria-checked="true"]').focus();
+    });
+    return paint;
   }
   function badge(bot, cls = "") {
     const b = h("span", `bot-badge ${cls}`.trim());
@@ -313,6 +380,7 @@ export function initBots(ctx) {
     closeDrawer();
     st.lastFocus = document.activeElement;
     el.bnName.value = ""; el.bnPurpose.value = "";
+    st.newColor = DEFAULT_COLOR; st.newFace = DEFAULT_FACE; paintNewColors(); paintNewFaces();
     el.bnInstr.value = starterTemplate("", ""); st.cardDirty = false;
     el.bnErr.hidden = true; el.bnErr.replaceChildren();
     el.bnCreate.disabled = false;
@@ -334,6 +402,9 @@ export function initBots(ctx) {
     } else el.bnErr.textContent = msg.text;
     el.bnErr.hidden = false;
   }
+  const paintNewColors = el.bnColors ? mountSwatches(el.bnColors, () => st.newColor, (c) => { st.newColor = c; paintNewFaces(); }) : () => {};
+  const paintNewFaces = el.bnFaces ? mountFaces(el.bnFaces, el.bnFaceDesc, () => st.newFace, (f) => { st.newFace = f; }, () => st.newColor) : () => {};
+  paintNewColors(); paintNewFaces();
   function regenTemplate() { if (!st.cardDirty) el.bnInstr.value = starterTemplate(el.bnName.value, el.bnPurpose.value); }
   el.bnName.addEventListener("input", regenTemplate);
   el.bnPurpose.addEventListener("input", regenTemplate);
@@ -351,6 +422,7 @@ export function initBots(ctx) {
         if (body.name) el.bnName.value = String(body.name).slice(0, 40);
         if (body.purpose) el.bnPurpose.value = String(body.purpose).slice(0, 140);
         if (body.instructions) el.bnInstr.value = String(body.instructions);
+        if (faceOf(body.face)) { st.newFace = body.face; paintNewFaces(); } // Caelum's nearest personality, preselected (still editable)
         el.bnAskState.textContent = "Drafted. Review it, then Create bot.";
         el.bnName.focus();
       } catch (err) {
@@ -377,7 +449,7 @@ export function initBots(ctx) {
     if (byteLength(instructions) > MAX_INSTRUCTION_BYTES) return showCardError(botErrorMessage(413, {}));
     el.bnCreate.disabled = true; el.bnErr.hidden = true;
     try {
-      const res = await api("/bots", { method: "POST", body: JSON.stringify({ name, purpose, instructions }) });
+      const res = await api("/bots", { method: "POST", body: JSON.stringify({ name, purpose, instructions, color: st.newColor, face: st.newFace }) });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) { el.bnCreate.disabled = false; return showCardError(botErrorMessage(res.status, body)); }
       const bot = body.bot || body;
@@ -417,35 +489,18 @@ export function initBots(ctx) {
     el.name.value = bot ? bot.name : "";
     el.purpose.value = bot ? bot.purpose || "" : "";
     st.color = safeColor(bot && bot.color);
-    paintColors();
+    st.face = faceOf(bot && bot.face) ? bot.face : "";
+    paintColors(); paintFaces();
     el.detailsState.textContent = "";
     el.saveDetails.disabled = true;
     paintVersion(bot);
   }
-  function paintColors() {
-    el.colors.replaceChildren();
-    for (const c of COLORS) {
-      const b = h("button", "swatch"); b.type = "button";
-      b.setAttribute("role", "radio"); b.setAttribute("aria-checked", String(c.hex === st.color)); b.setAttribute("aria-label", c.name); b.title = c.name;
-      b.tabIndex = c.hex === st.color ? 0 : -1;
-      b.style.setProperty("--sw", c.hex);
-      b.addEventListener("click", () => { st.color = c.hex; paintColors(); detailsChanged(); b.focus(); });
-      el.colors.append(b);
-    }
-  }
-  el.colors.addEventListener("keydown", (e) => {
-    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
-    e.preventDefault();
-    const i = COLORS.findIndex((c) => c.hex === st.color);
-    const d = e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 1;
-    st.color = COLORS[(i + d + COLORS.length) % COLORS.length].hex;
-    paintColors(); detailsChanged();
-    el.colors.querySelector('[aria-checked="true"]').focus();
-  });
+  const paintColors = mountSwatches(el.colors, () => st.color, (c) => { st.color = c; paintFaces(); detailsChanged(); });
+  const paintFaces = el.faces ? mountFaces(el.faces, el.faceDesc, () => st.face, (f) => { st.face = f; detailsChanged(); }, () => st.color) : () => {};
   function detailsChanged() {
     const bot = botById(st.drawerBot);
     if (!bot) return;
-    const changed = el.name.value.trim() !== bot.name || el.purpose.value.trim() !== (bot.purpose || "") || st.color !== safeColor(bot.color);
+    const changed = el.name.value.trim() !== bot.name || el.purpose.value.trim() !== (bot.purpose || "") || st.color !== safeColor(bot.color) || st.face !== (faceOf(bot.face) ? bot.face : "");
     el.saveDetails.disabled = !changed || !el.name.value.trim();
     el.detailsState.textContent = changed ? "Unsaved changes" : "";
   }
@@ -513,7 +568,7 @@ export function initBots(ctx) {
   el.saveDetails.addEventListener("click", async () => {
     const id = st.drawerBot, bot = botById(id);
     if (!bot) return;
-    const patch = { name: el.name.value.trim(), purpose: el.purpose.value.trim(), color: st.color };
+    const patch = { name: el.name.value.trim(), purpose: el.purpose.value.trim(), color: st.color, face: st.face };
     el.saveDetails.disabled = true; el.detailsState.textContent = "Saving…";
     try {
       const res = await api(`/bots/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) });

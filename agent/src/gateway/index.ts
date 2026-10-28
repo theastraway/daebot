@@ -893,7 +893,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   }
 
   // ---------- bots + models REST (same cookie auth and origin rules as /sessions; one owner's bots are invisible to everyone else) ----------
-  const botView = (b: BotRecord) => ({ id: b.id, slug: b.slug, name: b.name, purpose: b.purpose, color: b.color, createdAt: b.createdAt, updatedAt: b.updatedAt, ...versionInfo(b) });
+  const botView = (b: BotRecord) => ({ id: b.id, slug: b.slug, name: b.name, purpose: b.purpose, color: b.color, face: b.face ?? null, createdAt: b.createdAt, updatedAt: b.updatedAt, ...versionInfo(b) });
 
   function botFail(res: ServerResponse, e: unknown): void {
     if (e instanceof BotError) return sendJson(res, e.status, { error: e.code, message: e.message, ...(e.extra ?? {}) });
@@ -921,7 +921,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
           const instr = b.instructions === undefined ? undefined : typeof b.instructions === "string" ? b.instructions : null;
           if (instr === null) return sendJson(res, 400, { error: "bad_instructions", message: "instructions must be text" });
           if (instr !== undefined && Buffer.byteLength(instr, "utf8") > 8 * 1024) return sendJson(res, 413, { error: "instructions_too_long", message: "DAEBOT.md is capped at 8 KB" });
-          const rec = await bots.create({ slug, name, purpose: optStr(b.purpose, 1000), color: optStr(b.color, 20) });
+          const rec = await bots.create({ slug, name, purpose: optStr(b.purpose, 1000), color: optStr(b.color, 20), face: b.face });
           if (instr) bots.setInstructions(rec.id, instr);
           return sendJson(res, 201, { bot: { ...botView(rec), live: false, busy: false } });
         }
@@ -952,7 +952,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       }
       if (method === "PATCH") {
         const b = await readJson(req);
-        return sendJson(res, 200, { bot: botView(bots.update(id, { name: optStr(b.name, 120), purpose: optStr(b.purpose, 1000), color: optStr(b.color, 20) })) });
+        return sendJson(res, 200, { bot: botView(bots.update(id, { name: optStr(b.name, 120), purpose: optStr(b.purpose, 1000), color: optStr(b.color, 20), face: b.face })) });
       }
       if (method === "DELETE") {
         await bots.remove(id);

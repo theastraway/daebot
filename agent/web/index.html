@@ -135,6 +135,9 @@
         <input class="fld" id="bd-name" type="text" maxlength="40" autocomplete="off">
         <label class="fld-label" for="bd-purpose">Purpose</label>
         <input class="fld" id="bd-purpose" type="text" maxlength="140" autocomplete="off">
+        <span class="fld-label" id="bd-faces-label">Face (personality)</span>
+        <div class="faces" id="bd-faces" role="radiogroup" aria-labelledby="bd-faces-label"></div>
+        <p class="drawer-fine" id="bd-face-desc"></p>
         <span class="fld-label" id="bd-colors-label">LED color</span>
         <div class="swatches" id="bd-colors" role="radiogroup" aria-labelledby="bd-colors-label"></div>
         <div class="row"><button class="btn-primary" id="bd-save" type="button" disabled>Save details</button><span class="inline-state" id="bd-state" role="status" aria-live="polite"></span></div>
@@ -167,6 +170,11 @@
     <input class="fld" id="bn-name" type="text" maxlength="40" placeholder="Quinn" required>
     <label class="fld-label" for="bn-purpose">Purpose</label>
     <input class="fld" id="bn-purpose" type="text" maxlength="140" placeholder="Triage new claims every morning">
+    <span class="fld-label" id="bn-faces-label">Face (personality)</span>
+    <div class="faces" id="bn-faces" role="radiogroup" aria-labelledby="bn-faces-label"></div>
+    <p class="fine" id="bn-face-desc"></p>
+    <span class="fld-label" id="bn-colors-label">LED color</span>
+    <div class="swatches" id="bn-colors" role="radiogroup" aria-labelledby="bn-colors-label"></div>
     <label class="fld-label" for="bn-instr">Starting instructions</label>
     <textarea class="fld-area" id="bn-instr" rows="9" spellcheck="false"></textarea>
     <p class="err" id="bn-err" role="alert" hidden></p>

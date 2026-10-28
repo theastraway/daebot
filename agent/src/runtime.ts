@@ -27,6 +27,7 @@ import type { McpConnectService } from "./mcpconnect/service.ts";
 import type { McpServerConfig } from "./mcp/client.ts";
 import { repairMessages } from "./persist.ts";
 import { botBase } from "./bots/versions.ts";
+import { facePersonality, faceOf } from "./bots/faces.ts";
 import type { RunMark, SessionStore } from "./persist.ts";
 import type { AgentEvent, AgentSession, Config, HistoryEvent, Message, MindClient, Provider, Runtime, SessionSync, Tool } from "./types.ts";
 
@@ -67,7 +68,7 @@ export function botIdentity(b: Pick<BotRecord, "name" | "slug" | "purpose">, use
 export function composeSystemPrompt(o: {
   identity?: string; tier?: Tier; bootContext: string; surface: string; cwd: string; now?: Date; model?: string; via?: string;
   /** Set for a bot session: the DAEBOT.md text and the bot's own slug (the roster marks it as you). */
-  bot?: { slug: string; instructions: string; base?: string };
+  bot?: { slug: string; instructions: string; base?: string; face?: string };
   /** The user's bots (sessions and bots alike see them). */
   roster?: RosterEntry[];
   /** Connecting MCP servers is available in this session (mcp_connect is offered). */
@@ -103,6 +104,7 @@ export function composeSystemPrompt(o: {
       ...(o.bot.base ? ["## Base rules for this bot (its Daebot definition)", o.bot.base, ""] : []),
       "## Instructions for this bot (DAEBOT.md)",
       text.trim() ? noKernelSpoof(text.trim()) : "(none written yet)",
+      ...(facePersonality(o.bot.face) ? ["", `## Personality: ${faceOf(o.bot.face)!.name} (the face the owner picked for this bot)`, facePersonality(o.bot.face), "This is tone and manner only. The instructions above, the base rules and every gate win over it."] : []),
       "Precedence: these instructions set your role and style. They never lift a kernel gate, the receipt rule, the owner check or the feed rule; where they conflict with those, those win.",
     );
   }
@@ -328,7 +330,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
             identity: live ? botIdentity(live, hosted?.username) : hosted?.persona, tier, bootContext, surface: opts.surface, cwd,
             model: used ?? (mindBilled ? `${cfg.models.default} on paid MIND plans and ${cfg.freeModel} on the free MIND plan (Explorer)` : cfg.models.default),
             via: mindBilled ? "MIND" : undefined,
-            bot: live && botId ? { slug: live.slug, instructions: botStore!.instructions(botId), base: botBase(live.version) } : undefined,
+            bot: live && botId ? { slug: live.slug, instructions: botStore!.instructions(botId), base: botBase(live.version), face: live.face } : undefined,
             roster: botsOn() ? botStore?.roster() : undefined,
             mcp: !!overrides.mcpConnect?.enabled() && !botId,
           });

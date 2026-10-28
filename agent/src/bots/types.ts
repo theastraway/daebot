@@ -7,6 +7,8 @@ export interface BotRecord {
   name: string;
   purpose: string;
   color: string;
+  /** Face id from faces.ts (a personality preset). Absent on bots made before faces: the UI shows the letter badge. */
+  face?: string;
   createdAt: number;
   updatedAt: number;
   /** Definition version installed (absent = 1). See versions.ts. */
@@ -37,8 +39,8 @@ export interface BotsApi {
   snapshot(): BotRecord[];
   get(id: string): BotRecord | undefined;
   bySlug(slug: string): BotRecord | undefined;
-  create(a: { slug: string; name?: string; purpose?: string; color?: string }): Promise<BotRecord>;
-  update(id: string, patch: { name?: string; purpose?: string; color?: string }): BotRecord;
+  create(a: { slug: string; name?: string; purpose?: string; color?: string; face?: unknown }): Promise<BotRecord>;
+  update(id: string, patch: { name?: string; purpose?: string; color?: string; face?: unknown }): BotRecord;
   remove(id: string): Promise<void>;
   /** Moves a bot to the latest definition. Keeps its DAEBOT.md, threads and MIND data. */
   upgrade(id: string): BotRecord;

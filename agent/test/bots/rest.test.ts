@@ -142,6 +142,14 @@ test("bots REST errors: 401, bad slug, duplicate, plan limit 402 (with upgrade i
     assert.equal(big.status, 413);
     assert.equal((await r.call(alice, "PUT", `/bots/${id}/instructions`, { instructions: 5 })).status, 400);
     assert.equal((await r.call(alice, "PATCH", `/bots/${id}`, { color: "red" })).status, 400);
+    // faces: allowlisted personality ids only, on create and on edit; old bots report face null
+    assert.equal((await r.call(alice, "GET", `/bots/${id}`)).json.bot.face, null);
+    const badFace = await r.call(alice, "PATCH", `/bots/${id}`, { face: "evil" });
+    assert.equal(badFace.status, 400);
+    assert.equal(badFace.json.error, "bad_face");
+    assert.equal((await r.call(alice, "PATCH", `/bots/${id}`, { face: "coach", color: "#2dd4bf" })).json.bot.face, "coach");
+    assert.equal((await r.call(alice, "GET", "/bots")).json.bots[0].face, "coach");
+    assert.equal((await r.call(alice, "PATCH", `/bots/${id}`, { face: "" })).json.bot.face, null);
     assert.equal((await r.call(alice, "PATCH", `/bots/${id}`, { name: "  " })).status, 400);
     assert.equal((await r.call(alice, "PUT", "/bots", {})).status, 405);
     assert.equal((await r.call(alice, "POST", "/sessions", { surface: "web", bot: "b_000000000000" })).status, 404);
