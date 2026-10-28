@@ -112,7 +112,8 @@ test("catalogItems: one row per MCP connector with this user's own connected and
       { id: "has space", name: "Spacey", url: "https://spacey.test/mcp", official: false }];
     const { svc } = svcWith(m.net, bad);
     let items = await svc.catalogItems("u1");
-    assert.deepEqual(items.map((i) => i.id), ["mcp:notion", "mcp:sentry", "mcp:acme"]);
+    assert.deepEqual(items.map((i) => i.id), ["local:n8n", "local:custom", "mcp:notion", "mcp:sentry", "mcp:acme"], "Daebot's own n8n and custom-server cards come first");
+    items = items.filter((i) => !i.id.startsWith("local:"));
     assert.ok(items.every((i) => !i.connected && !i.pendingId));
     assert.equal(items[0].publisher, "official");
     assert.equal(items[2].publisher, "community");
@@ -204,8 +205,8 @@ test("gateway: /mcp/catalog and /mcp/catalog/connect need the session, list the 
     const list = await http(gw.url, "GET", "/mcp/catalog", { headers: C });
     assert.equal(list.status, 200);
     const j = JSON.parse(list.body);
-    assert.deepEqual(j.items.map((i: any) => i.id), ["mcp:notion", "mcp:sentry", "mcp:acme"]);
-    assert.deepEqual(j.counts, { official: 2, community: 1 });
+    assert.deepEqual(j.items.map((i: any) => i.id), ["local:n8n", "local:custom", "mcp:notion", "mcp:sentry", "mcp:acme"]);
+    assert.deepEqual(j.counts, { official: 2, community: 3 });
     assert.equal(j.items[0].url, undefined, "the list carries no endpoint URL to click through");
     assert.equal((await http(gw.url, "POST", "/mcp/catalog", { headers: C, body: {} })).status, 405);
     assert.equal((await http(gw.url, "GET", "/mcp/catalog/connect", { headers: C })).status, 405);
@@ -222,16 +223,36 @@ test("gateway: /mcp/catalog and /mcp/catalog/connect need the session, list the 
     assert.equal(p.publisher, "community");
     assert.equal(p.source, "catalog");
     assert.equal(JSON.parse((await http(gw.url, "GET", "/mcp/servers", { headers: C })).body).servers.length, 0, "nothing is connected by that click");
-    assert.equal(JSON.parse((await http(gw.url, "GET", "/mcp/catalog", { headers: C })).body).items[2].pendingId, p.id);
+    assert.equal(JSON.parse((await http(gw.url, "GET", "/mcp/catalog", { headers: C })).body).items[4].pendingId, p.id);
 
     // the user's click on the card is the consent: the existing approve route connects it, and the list then shows it connected
     const ap = await http(gw.url, "POST", `/mcp/pending/${p.id}/approve`, { headers: C, body: { mode: "none", allow: ["lookup"] } });
     assert.equal(ap.status, 200, ap.body);
-    const after = JSON.parse((await http(gw.url, "GET", "/mcp/catalog", { headers: C })).body).items[2];
+    const after = JSON.parse((await http(gw.url, "GET", "/mcp/catalog", { headers: C })).body).items[4];
     assert.equal(after.connected, true);
     const removed = await http(gw.url, "DELETE", `/mcp/servers/${after.serverId}`, { headers: C });
     assert.equal(JSON.parse(removed.body).ok, true);
-    assert.equal(JSON.parse((await http(gw.url, "GET", "/mcp/catalog", { headers: C })).body).items[2].connected, false);
+    assert.equal(JSON.parse((await http(gw.url, "GET", "/mcp/catalog", { headers: C })).body).items[4].connected, false);
+  } finally { await close(); }
+});
+
+test("gateway: POST /mcp/catalog/connect-token connects n8n from the card's form (session + same-origin needed, token never echoed)", async () => {
+  const { gw, cookie, close } = await boot();
+  const C = { ...H, cookie };
+  try {
+    const body = { id: "local:n8n", url: "https://n8n.example.test/mcp-server/http", token: "tok-ABCDEFGH1234", name: "ignored-for-n8n" };
+    assert.equal((await http(gw.url, "POST", "/mcp/catalog/connect-token", { headers: H, body })).status, 401, "needs the session");
+    assert.equal((await http(gw.url, "POST", "/mcp/catalog/connect-token", { headers: { ...C, origin: "https://evil.example" }, body })).status, 403);
+    assert.equal((await http(gw.url, "GET", "/mcp/catalog/connect-token", { headers: C })).status, 405);
+    const bad = await http(gw.url, "POST", "/mcp/catalog/connect-token", { headers: C, body: { ...body, id: "local:nope" } });
+    assert.equal(bad.status, 404);
+    // the shared mock accepts any bearer, so a well-formed request connects
+    const ok = await http(gw.url, "POST", "/mcp/catalog/connect-token", { headers: C, body });
+    assert.equal(ok.status, 200, ok.body);
+    assert.ok(!ok.body.includes("tok-ABCDEFGH1234"));
+    assert.equal(JSON.parse(ok.body).server.tools.length > 0, true);
+    const list = JSON.parse((await http(gw.url, "GET", "/mcp/catalog", { headers: C })).body).items;
+    assert.equal(list.find((i: any) => i.id === "local:n8n").connected, true);
   } finally { await close(); }
 });
 
@@ -262,7 +283,7 @@ test("web: Connect sends an id and never an address; no innerHTML anywhere in th
   const code = (f: string) => web(f).replace(/^\s*\/\/.*$/gm, "");
   for (const f of ["connectors.js", "apps.js", "mcp.js"]) assert.doesNotMatch(code(f), /innerHTML|insertAdjacentHTML|eval\(|new Function|document\.write/, f);
   assert.match(web("connectors.js"), /JSON\.stringify\(\{ id: e\.id \}\)/);
-  assert.doesNotMatch(web("connectors.js"), /\burl\b\s*:/);
+  assert.doesNotMatch(web("connectors.js").replace("url: values && values.url", ""), /\burl\b\s*:/, "the only address the browser sends is the one typed into the n8n / custom form");
   assert.doesNotMatch(web("connectors.js"), /fetch\(/);
   assert.match(web("mcp.js"), /suspendApps\(\)/, "opening the consent card steps the Apps card aside");
   assert.match(web("mcp.js"), /resumeApps\(\)/);
@@ -279,7 +300,7 @@ test("unavailable connectors: MIND's own status words mark a row, the Apps card 
   assert.deepEqual(rows.filter((r) => r.unavailable).map((r) => r.id), ["mcp:soon", "mcp:off", "mcp:flag", "mcp:cfg"]);
   assert.deepEqual(rows.filter((r) => !r.unavailable).map((r) => r.id), ["mcp:ok", "mcp:unk", "mcp:bare"]);
   const { svc } = svcWith(undefined, rows);
-  assert.deepEqual((await svc.catalogItems("u1")).map((i) => i.id), ["mcp:ok", "mcp:unk", "mcp:bare"]);
+  assert.deepEqual((await svc.catalogItems("u1")).map((i) => i.id).filter((i) => !i.startsWith("local:")), ["mcp:ok", "mcp:unk", "mcp:bare"]);
   // already connected by this user: it still shows after MIND marks it unavailable
   const m = await mock();
   try {
@@ -289,6 +310,6 @@ test("unavailable connectors: MIND's own status words mark a row, the Apps card 
     await s2.approve("u1", p.id, { mode: "none", redirectUri: "https://daebot.live/mcp/oauth/callback" });
     live.find((e) => e.id === "mcp:acme")!.unavailable = true;
     live.find((e) => e.id === "mcp:notion")!.unavailable = true;
-    assert.deepEqual((await s2.catalogItems("u1")).map((i) => [i.id, i.connected]), [["mcp:sentry", false], ["mcp:acme", true]], "notion is hidden, the connected acme stays");
+    assert.deepEqual((await s2.catalogItems("u1")).filter((i) => !i.id.startsWith("local:")).map((i) => [i.id, i.connected]), [["mcp:sentry", false], ["mcp:acme", true]], "notion is hidden, the connected acme stays");
   } finally { await m.close(); }
 });

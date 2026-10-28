@@ -105,7 +105,7 @@ interface Flow {
   clientId: string; clientSecret?: string; allow: string[]; name?: string; expiresAt: number;
 }
 
-export type CatalogAuth = "none" | "oauth" | "key" | "oauth_or_key" | "unknown";
+export type CatalogAuth = "none" | "oauth" | "key" | "oauth_or_key" | "url_token" | "unknown";
 /** One MIND App Store remote MCP connector. `official` comes only from MIND's own tier field for the entry, never from the server. */
 export interface CatalogEntry { name: string; url: string; official: boolean; description?: string; id?: string; category?: string; auth?: CatalogAuth;
   /** MIND marks this connector as not connectable right now. The Apps card does not list it (unless this user already has it connected). */
@@ -114,7 +114,18 @@ export interface CatalogEntry { name: string; url: string; official: boolean; de
 export interface CatalogItemView {
   id: string; name: string; blurb: string; category: string; publisher: "official" | "community"; auth: CatalogAuth; host: string;
   connected: boolean; serverId?: string; pendingId?: string;
+  /** Present on connectors that need the user's own server address AND a token (n8n, custom). The card shows these fields inline. */
+  form?: { fields: { name: "url" | "token" | "name"; label: string; placeholder: string; secret?: boolean; optional?: boolean }[]; submitLabel: string };
 }
+
+/** Daebot's own connectors, listed after MIND's. They cannot live in a fixed URL list because the address belongs to the user's own server. */
+export interface LocalConnector { id: string; name: string; blurb: string; category: string; urlLabel: string; urlPlaceholder: string; defaultPath?: string; nameBase: string }
+export const LOCAL_CONNECTORS: LocalConnector[] = [
+  { id: "local:n8n", name: "n8n", blurb: "Search, read and run the workflows you switched on for MCP in your own n8n. Needs the instance address and the access token from Settings > Instance-level MCP.", category: "automation",
+    urlLabel: "n8n URL", urlPlaceholder: "https://n8n.srv996174.hstgr.cloud/mcp-server/http", defaultPath: "/mcp-server/http", nameBase: "n8n" },
+  { id: "local:custom", name: "Custom MCP server", blurb: "Any remote MCP server that takes a bearer token: paste its address and token.",
+    category: "developer", urlLabel: "Server URL", urlPlaceholder: "https://example.com/mcp", nameBase: "" },
+];
 
 // ---------------------------------------------------------------- helpers
 
@@ -260,6 +271,21 @@ export class McpConnectService {
     const have = new Map(this.store.list(uid).map((s) => [s.url, s.id]));
     const waiting = new Map([...this.pendingMap(uid).values()].map((p) => [p.url, p.id]));
     const out: CatalogItemView[] = [];
+    const byPreset = new Map<string, string>();
+    for (const r of this.store.list(uid)) if (r.preset && !byPreset.has(r.preset)) byPreset.set(r.preset, r.id);
+    const mindHas = (l: LocalConnector) => entries.some((e) => (e.id || e.name).toLowerCase().replace(/^mcp:/, "") === l.nameBase.toLowerCase() && l.nameBase !== "");
+    for (const l of LOCAL_CONNECTORS) {
+      if (mindHas(l)) continue; // MIND lists its own n8n one day: its row wins
+      out.push({
+        id: l.id, name: l.name, blurb: l.blurb, category: l.category, publisher: "community", auth: "url_token", host: "your own server",
+        connected: byPreset.has(l.id), serverId: byPreset.get(l.id),
+        form: { submitLabel: "Connect", fields: [
+          { name: "url", label: l.urlLabel, placeholder: l.urlPlaceholder },
+          { name: "token", label: "Access token", placeholder: "paste the token", secret: true },
+          ...(l.id === "local:custom" ? [{ name: "name" as const, label: "Name (tools become name__tool)", placeholder: "my-server", optional: true }] : []),
+        ] },
+      });
+    }
     for (const e of entries) {
       const id = e.id || e.name;
       if (!CATALOG_ID.test(id)) continue;
@@ -284,6 +310,35 @@ export class McpConnectService {
     const hit = CATALOG_ID.test(id) ? entries.find((e) => (e.id || e.name) === id) : undefined;
     if (!hit) throw new McpConnectError("That connector is not in the MIND App Store list any more. Refresh the Apps card.", 404);
     return this.propose(uid, { url: hit.url, reason: hit.description, source: "catalog", nameHint: (hit.id || hit.name).replace(/^mcp:/, "") });
+  }
+
+  /** The card's own form for a connector that needs the user's server address and a token (n8n, custom). The user typing both IS the consent.
+   *  The server is probed with the token first (initialize + tools/list); nothing is saved unless it answers and accepts the token. */
+  async connectWithToken(uid: string, a: { presetId: string; url: string; token: string; name?: string }): Promise<ServerView> {
+    this.requireEnabled();
+    const preset = LOCAL_CONNECTORS.find((l) => l.id === a.presetId);
+    if (!preset) throw new McpConnectError("That connector is not available.", 404);
+    const now = this.now();
+    const recent = (this.proposals.get(uid) ?? []).filter((t) => t > now - PROPOSAL_WINDOW_MS);
+    if (recent.length >= PROPOSALS_PER_WINDOW) throw new McpConnectError("Too many connection attempts in the last few minutes. Try again shortly.", 429);
+    recent.push(now);
+    this.proposals.set(uid, recent);
+    const token = typeof a.token === "string" ? a.token.trim().replace(/^Bearer\s+/i, "") : "";
+    if (!/^[\x21-\x7e]{1,4096}$/.test(token)) throw new McpConnectError("Paste the access token exactly as it was given (no spaces).");
+    let raw = typeof a.url === "string" ? a.url.trim() : "";
+    if (preset.defaultPath && /^https?:\/\/[^/?#]+\/?$/i.test(raw)) raw = raw.replace(/\/+$/, "") + preset.defaultPath; // a bare n8n address gets the MCP path
+    const u = normalizeUrl(raw);
+    const urlStr = u.toString();
+    if (this.store.list(uid).some((s) => s.url === urlStr)) throw new McpConnectError("That server is already connected.");
+    const lim = this.limits();
+    if (this.store.list(uid).length >= lim.maxServers) throw new McpConnectError(`You already have ${lim.maxServers} connected servers (the limit). Remove one first.`);
+    const wanted = (typeof a.name === "string" && slugify(a.name)) || preset.nameBase || suggestName(u.hostname);
+    const p: Pending = {
+      id: "mcp_" + randomBytes(9).toString("base64url"), uid, url: urlStr, host: u.host, publisher: "unknown",
+      authRequired: true, oauthOk: false, tools: null, toolsTruncated: false,
+      suggestedName: this.uniqueName(uid, wanted), createdAt: now, expiresAt: now + PENDING_TTL_MS,
+    };
+    return this.finish(uid, p, { kind: "key", key: token }, [], undefined, preset.id);
   }
 
   // ---- probe: initialize + tools/list, nothing else
@@ -442,7 +497,7 @@ export class McpConnectService {
     return this.finish(uid, p, secret, f.allow, f.name);
   }
 
-  private async finish(uid: string, p: Pending, secret: Secret, allowReq: string[] | undefined, nameReq: string | undefined): Promise<ServerView> {
+  private async finish(uid: string, p: Pending, secret: Secret, allowReq: string[] | undefined, nameReq: string | undefined, preset?: string): Promise<ServerView> {
     const bearer = secret.kind === "key" ? secret.key : secret.kind === "oauth" ? secret.accessToken : undefined;
     const res = await this.probe(p.url, bearer);
     if (res.authRequired) throw new McpConnectError(secret.kind === "none" ? "That server now asks for a sign-in." : "That server did not accept the credentials.");
@@ -455,7 +510,7 @@ export class McpConnectService {
     const id = "srv_" + randomBytes(8).toString("base64url");
     const rec: ServerRec = {
       id, name: this.uniqueName(uid, nameReq ? slugify(nameReq) || p.suggestedName : p.suggestedName, p.id), url: p.url, host: p.host, publisher: p.publisher,
-      auth: secret.kind, enabled: true, addedAt: this.now(), tools,
+      auth: secret.kind, enabled: true, addedAt: this.now(), tools, ...(preset ? { preset } : {}),
       allow: (allowReq ?? p.tools?.filter((t) => t.readOnly && !t.destructive).map((t) => t.name) ?? []).filter((n) => names.has(n)),
       truncated: res.truncated || tools.length < res.tools.length || undefined,
       secret,

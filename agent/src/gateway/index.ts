@@ -861,6 +861,12 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         const b = await readJson(req);
         return sendJson(res, 200, { pending: await mcp.proposeFromCatalog(me.id, optStr(b.id, 80) ?? "") });
       }
+      // n8n / custom MCP server: the user's own address + token from the card's form. Probed with the token before anything is saved.
+      if (path === "/mcp/catalog/connect-token") {
+        if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+        const b = await readJson(req);
+        return sendJson(res, 200, { server: await mcp.connectWithToken(me.id, { presetId: optStr(b.id, 80) ?? "", url: optStr(b.url, 600) ?? "", token: optStr(b.token, 5000) ?? "", name: optStr(b.name, 40) }) });
+      }
       let m = /^\/mcp\/pending\/([A-Za-z0-9_-]{1,40})\/(approve|deny)$/.exec(path);
       if (m) {
         if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });

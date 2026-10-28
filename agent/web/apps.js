@@ -78,6 +78,30 @@ export function renderEntries(body, entries, handlers = {}) {
         yes.addEventListener("click", () => { confirm.hidden = true; handlers.onDisconnect && handlers.onDisconnect(e, ctl); });
         no.addEventListener("click", () => { confirm.hidden = true; btn.focus(); });
         r.append(yes, no); confirm.append(r); confirm.hidden = false; no.focus();
+      } else if (e.form && Array.isArray(e.form.fields)) {
+        // A connector that needs the user's own address and a token: the form opens inline and posts its values to onConnect.
+        confirm.replaceChildren();
+        const form = el("form", "app-form"); form.autocomplete = "off";
+        const inputs = [];
+        for (const f of e.form.fields) {
+          const lab = el("label", "app-field"); lab.append(el("span", "", f.label + (f.optional ? " (optional)" : "")));
+          const inp = document.createElement("input"); inp.type = f.secret ? "password" : "text"; inp.name = f.name;
+          inp.placeholder = f.placeholder || ""; inp.autocomplete = f.secret ? "new-password" : "off"; inp.spellcheck = false; inp.required = !f.optional;
+          inp.setAttribute("autocapitalize", "off"); inp.maxLength = f.secret ? 5000 : 600;
+          lab.append(inp); form.append(lab); inputs.push(inp);
+        }
+        const r = el("div", "row");
+        const go = el("button", "btn-primary", e.form.submitLabel || "Connect"); go.type = "submit";
+        const no = el("button", "btn-quiet", "Cancel"); no.type = "button";
+        no.addEventListener("click", () => { confirm.hidden = true; btn.focus(); });
+        form.addEventListener("submit", async (ev) => {
+          ev.preventDefault();
+          const values = {}; for (const i of inputs) values[i.name] = i.value;
+          go.disabled = true;
+          try { const ok = handlers.onConnect && await handlers.onConnect(e, ctl, values); if (ok !== false) confirm.hidden = true; }
+          finally { go.disabled = false; }
+        });
+        r.append(go, no); form.append(r); confirm.append(form); confirm.hidden = false; inputs[0].focus();
       } else handlers.onConnect && handlers.onConnect(e, ctl);
     });
     body.append(row, confirm);

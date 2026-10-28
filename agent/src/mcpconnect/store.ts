@@ -34,6 +34,7 @@ export interface ServerRec {
   tools: ToolInfo[];
   allow: string[];         // tool names the user lets run without asking
   truncated?: boolean;     // the server offered more tools than the per-user cap allowed
+  preset?: string;         // the Daebot connector card this was connected from (local:n8n, local:custom)
   secret: Secret;
 }
 
