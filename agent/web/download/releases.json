@@ -24,11 +24,11 @@
         {
           "label": "Download for Windows",
           "kind": "exe",
-          "file": "Daebot-Setup-0.3.5-x64.exe",
-          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-Setup-0.3.5-x64.exe",
-          "size": 142925942,
-          "sha256": "8f5142727c77884ae8c91446a8f30c7cc25861af6ad1185d864b4a99a63ee3c5",
-          "version": "0.3.5"
+          "file": "Daebot-Setup-0.3.6-x64.exe",
+          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-Setup-0.3.6-x64.exe",
+          "size": 142928133,
+          "sha256": "e5551c55c9a048039899b49c3d199ca7f35f2465251986571cb0c093c43f9edd",
+          "version": "0.3.6"
         },
         {
           "label": "Windows on ARM (arm64)",
