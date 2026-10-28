@@ -327,14 +327,15 @@ export function askWaiver({ json, h, icon, notify, info }) {
 // ---------------------------------------------------------------- per-chat mode (composer)
 
 /**
- * The mode control above the composer and the red "Bypass on" chip.
+ * The mode control above the composer. It is also the Bypass indicator: with Bypass on its LED glyph and label turn accent red
+ * (the composer hairline follows), and clicking it opens the same menu as always.
  *   getSessionId(): the chat on screen (creates nothing); ensureSession(): its id, creating the session first if needed.
  *   getRow(): the session list row of the chat on screen (carries permMode from the server) or undefined.
  * The mode is stored with the session on the server (PATCH /sessions/:id { permMode }); null falls back to the account default.
  */
 export function initChatMode({ json, h, icon, notify, ids, ensureSession, getSessionId, getRow, onRowMode }) {
-  const btn = document.getElementById(ids.btn), label = document.getElementById(ids.label), menu = document.getElementById(ids.menu), chip = document.getElementById(ids.chip);
-  if (!btn || !menu || !chip) return { render() {}, probe() {} };
+  const btn = document.getElementById(ids.btn), label = document.getElementById(ids.label), menu = document.getElementById(ids.menu);
+  if (!btn || !menu) return { render() {}, probe() {} };
   let snap = null;            // { mode (account default), waiver: {accepted, text, version} }
   const local = new Map();    // sessionId -> mode set in this page (the list row can lag a refresh)
   let open = false;
@@ -352,12 +353,16 @@ export function initChatMode({ json, h, icon, notify, ids, ensureSession, getSes
   };
 
   function render() {
-    if (!snap) { btn.hidden = true; chip.hidden = true; return; }
+    if (!snap) { btn.hidden = true; return; }
     const eff = effective();
+    const shown = eff || snap.mode;
     btn.hidden = false;
-    label.textContent = chatModeName(eff, snap.mode);
+    label.textContent = shown === "bypass" ? "Bypass" : chatModeName(eff, snap.mode);
+    btn.dataset.mode = CHAT_MODES.some((m) => m.id === shown) ? shown : "risky";   // CSS lights the LED glyph from this
     btn.classList.toggle("is-bypass", eff === "bypass");
-    chip.hidden = eff !== "bypass";
+    const aria = eff === "bypass" ? "Permissions: Bypass is on, Daebot acts without asking. Change" : `Permissions: ${chatModeName(eff, snap.mode)}. Change`;
+    btn.setAttribute("aria-label", aria);
+    btn.title = eff === "bypass" ? "Bypass is on in this chat: Daebot acts without asking. Open to change it." : "What Daebot may do in this chat without asking";
     if (open) paintMenu();
   }
 
@@ -404,12 +409,6 @@ export function initChatMode({ json, h, icon, notify, ids, ensureSession, getSes
   }
 
   btn.addEventListener("click", () => toggle(!open));
-  chip.addEventListener("click", async () => {
-    const id = getSessionId();
-    if (!id) return;
-    try { await patch(id, null); } catch (e) { notify(`Could not turn Bypass off: ${e.message}`); }
-    render();
-  });
   document.addEventListener("click", (e) => { if (open && !menu.contains(e.target) && !btn.contains(e.target)) toggle(false); });
   document.addEventListener("keydown", (e) => {
     if (!open) return;

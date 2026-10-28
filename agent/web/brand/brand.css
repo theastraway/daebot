@@ -21,12 +21,33 @@ m-bot svg { display: block; width: 100%; height: 100%; overflow: visible; transf
 .topbar { background: color-mix(in srgb, var(--bg) 86%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
 .top-title h1 { font-family: var(--display); font-weight: 650; font-size: 16px; letter-spacing: -.015em; }
 
-/* which LLM is powering this (rendered by /brand/brand.js from GET /health "model") */
-.model-badge { display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 12px 0 10px; margin-right: 4px; border-radius: 999px; background: var(--plate); color: #f6ead8; font: 600 12px/1 var(--sans); letter-spacing: -.005em; white-space: nowrap; max-width: 46vw; box-shadow: 0 0 0 1px rgba(255,255,255,.08) inset; flex: none; }
-.model-badge .mb-led { width: 6px; height: 6px; border-radius: 50%; background: var(--led); box-shadow: 0 0 7px 1px rgba(255,210,90,.85); flex: none; animation: ledpulse 2.4s ease-in-out infinite; }
-.model-badge .mb-name { overflow: hidden; text-overflow: ellipsis; }
-.model-badge .mb-via { color: #a89c88; font-weight: 500; }
-@keyframes ledpulse { 50% { opacity: .45; } }
+/* Quiet controls: the model picker (which LLM is powering this, filled by /brand/brand.js and /models.js) and the permissions
+   control above the composer. One family: nothing around them at rest, just an LED glyph, the name and a fine chevron. Hover, keyboard
+   focus and open give them a solid surface with a 1px hairline and a 6px corner, never a capsule. The glyph is the dot-matrix: a 3x3
+   of the M's own square pixels, lit from the existing tokens. Colour encodes state only. */
+.model-badge, .mode-btn { --ctl-h: 30px; position: relative; display: inline-flex; align-items: center; gap: 8px; flex: none; min-width: 0; height: var(--ctl-h); margin: 0; padding: 0 8px; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--ink); font: 500 13px/1 var(--sans); letter-spacing: -.005em; white-space: nowrap; text-align: left; cursor: pointer; transition: background-color .12s, border-color .12s; }
+.model-badge { max-width: 46vw; }
+.mode-btn { max-width: 100%; }
+.model-badge:hover, .mode-btn:hover, .model-badge:focus-visible, .mode-btn:focus-visible, .model-badge[aria-expanded="true"], .mode-btn[aria-expanded="true"] { background: var(--surface); border-color: var(--line-strong); }
+.led { display: block; width: 11px; height: 11px; flex: none; }
+.led rect { fill: var(--line-strong); }
+.mb-name, .mode-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mb-via { color: var(--ink-3); font-weight: 400; }
+.mb-via:empty { display: none; }
+.model-badge .mb-chev, .mode-btn .mb-chev { width: 12px; height: 12px; margin-left: 1px; color: var(--ink-3); transition: transform .15s, color .12s; }
+.model-badge:hover .mb-chev, .mode-btn:hover .mb-chev { color: var(--ink-2); }
+.model-badge[aria-expanded="true"] .mb-chev, .mode-btn[aria-expanded="true"] .mb-chev { transform: rotate(180deg); color: var(--ink-2); }
+/* model glyph: the M's face (two eyes and a mouth), lit in the brand LED amber because the model is live */
+.model-badge .led rect:nth-child(1), .model-badge .led rect:nth-child(3), .model-badge .led rect:nth-child(8) { fill: var(--led-deep); }
+/* permissions glyph: the lit rows fill from the bottom as Daebot asks more (risky 1 row, changes 2, everything 3), ink for the default,
+   amber for the stricter ones; Bypass is an X in the accent red. The label is the mode name in small tracked capitals. */
+.mode-label { font: 600 11px/1 var(--sans); letter-spacing: .07em; text-transform: uppercase; color: var(--ink-2); transition: color .12s; }
+.mode-btn:hover .mode-label, .mode-btn:focus-visible .mode-label, .mode-btn[aria-expanded="true"] .mode-label { color: var(--ink); }
+.mode-btn[data-mode="risky"] .led rect:nth-child(n+7) { fill: var(--ink); }
+.mode-btn[data-mode="writes"] .led rect:nth-child(n+4) { fill: var(--led-deep); }
+.mode-btn[data-mode="everything"] .led rect { fill: var(--led-deep); }
+.mode-btn[data-mode="bypass"] .led rect:nth-child(odd) { fill: var(--accent); }
+.mode-btn.is-bypass .mode-label, .mode-btn.is-bypass:hover .mode-label { color: var(--accent); }
 
 /* messages: the M is the assistant avatar */
 .msg-asst { position: relative; padding-left: 44px; font: 16.5px/1.68 var(--sans); }
@@ -69,8 +90,10 @@ m-bot svg { display: block; width: 100%; height: 100%; overflow: visible; transf
   .hero-bot { width: 160px; height: 160px; }
   .msg-asst { padding-left: 40px; font-size: 16px; }
   .msg-asst::before, .notice.thinking::before { width: 28px; height: 28px; }
-  .model-badge { max-width: 42vw; padding: 0 9px 0 8px; font-size: 11.5px; gap: 6px; }
+  .model-badge, .mode-btn { --ctl-h: 36px; } /* touch: a 36px target; the extra height is padding, nothing shows at rest */
+  .model-badge { max-width: 42vw; gap: 7px; }
   .topbar { gap: 4px; }
-  .model-badge .mb-via { display: none; }
+  .mb-via { display: none; }
   .empty h2 { font-size: 28px; }
 }
+@media (pointer: coarse) { .model-badge, .mode-btn { --ctl-h: 36px; } }

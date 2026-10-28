@@ -1123,7 +1123,7 @@ const permissions = initPermissions({ json, h, icon, notify, button: $("btn-perm
 $("btn-perms").addEventListener("click", closeSidebar);
 chatMode = initChatMode({
   json, h, icon, notify,
-  ids: { btn: "mode-btn", label: "mode-label", menu: "mode-menu", chip: "bypass-chip" },
+  ids: { btn: "mode-btn", label: "mode-label", menu: "mode-menu" },
   ensureSession: () => ensureSession(),
   getSessionId: () => state.currentId,
   getRow: () => state.sessions.find((s) => s.id === state.currentId),
