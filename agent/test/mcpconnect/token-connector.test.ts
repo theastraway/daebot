@@ -58,7 +58,7 @@ test("n8n card: listed with a URL + token form, connected with the token, tools 
     assert.equal(before.auth, "url_token");
     assert.deepEqual(before.form!.fields.map((f) => f.name), ["url", "token"]);
     assert.equal(before.form!.fields[1].secret, true);
-    assert.match(before.form!.fields[0].placeholder, /^https:\/\/n8n\.srv996174\.hstgr\.cloud\/mcp-server\/http$/);
+    assert.match(before.form!.fields[0].placeholder, /^https:\/\/your-n8n\.example\.com$/);
     assert.equal(before.connected, false);
 
     const view = await svc.connectWithToken("u1", { presetId: "local:n8n", url: "https://n8n.example.test/mcp-server/http", token: `Bearer ${TOKEN}` });
