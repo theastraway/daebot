@@ -158,6 +158,11 @@ export class MindMcpBackend {
     if (d && typeof d === "object" && typeof d.message === "string" && d.message.trim()) {
       return new McpConnectError(this.scrub(uid, d.message).replace(/\s+/g, " ").trim().slice(0, 400), status, typeof d.code === "string" ? d.code.slice(0, 40) : undefined);
     }
+    // A key signed in with a hand-picked scope list can read connections but not change or run them: say exactly that and how to fix it
+    // (signing in with MIND, or a key with all permissions). Keys minted by Daebot's own "Sign in with MIND" (web, desktop, iPhone) carry every scope.
+    if (status === 403 && typeof d === "string" && /lacks required scope/i.test(d)) {
+      return new McpConnectError("Your MIND key can read your connected servers but cannot change or run them: it was made without the profile:write permission. Sign in with MIND, or make a key with all permissions in MIND under Settings, Developer, and sign in with that.", 502, "mind_scope");
+    }
     if (status === 401 || status === 403) return new McpConnectError("MIND did not accept your sign-in for connected servers. Sign in with MIND again.", 502, "mind_auth");
     if (status === 404) return new McpConnectError("MIND does not have connected servers switched on for this account yet.", 404, "absent");
     if (status === 429) return new McpConnectError("MIND says too many requests. Try again shortly.", 429, "rate_limited");

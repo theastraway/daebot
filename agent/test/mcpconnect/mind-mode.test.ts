@@ -648,6 +648,26 @@ test("gateway routes: list, connect, allow, refresh, OAuth start and remove all 
   } finally { await web.gw.close(); await desktop.gw.close(); }
 });
 
+// ---------------------------------------------------------------- a key without the write permission
+
+test("a MIND key made without profile:write: reading works, changing or running says exactly why and what to do (never 'sign in again' in a loop)", async () => {
+  const mind = newMind();
+  const scoped = (async (url: string | URL | Request, init?: RequestInit) => {
+    const method = init?.method ?? "GET";
+    if (method === "GET") return mind.fetch(url, init);
+    return new Response(JSON.stringify({ detail: "API key lacks required scope: profile:write" }), { status: 403, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const b = new MindMcpBackend({ baseUrl: BASE, keyFor: (u) => KEYS[u], fetchImpl: scoped });
+  assert.equal((await b.config("alice")).kind, "on", "reads are allowed with profile:read");
+  assert.deepEqual(await b.list("alice"), []);
+  for (const run of [
+    () => b.create("alice", { mode: "key", url: "https://n8n.example.com/mcp-server/http", token: "t" }),
+    () => b.callTool("alice", "srv_1", "search_workflows", {}),
+  ]) {
+    await assert.rejects(run(), (e: McpConnectError) => e.status === 502 && e.code === "mind_scope" && /profile:write/.test(e.message) && /Sign in with MIND/.test(e.message) && !e.message.includes(KEYS.alice ?? "no-key"));
+  }
+});
+
 // ---------------------------------------------------------------- the client itself
 
 test("the MIND client: contract errors become McpConnectError with MIND's plain message and code; a 401 is never passed on as the user's own session ending; unknown fields are ignored", async () => {
