@@ -23,6 +23,8 @@ export default {
     target: [{ target: "dmg", arch: ["universal"] }, { target: "zip", arch: ["universal"] }],
     artifactName: "Daebot-${version}-mac-${arch}.${ext}",
     hardenedRuntime: true,
+    // The text macOS shows in its microphone prompt.
+    extendInfo: { NSMicrophoneUsageDescription: "Daebot uses the microphone when you press the mic button or turn on hands-free voice." },
     gatekeeperAssess: false,
     entitlements: "build-resources/entitlements.mac.plist",
     entitlementsInherit: "build-resources/entitlements.mac.plist",

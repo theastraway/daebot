@@ -1,6 +1,6 @@
 // Daebot desktop shell (Electron main process). Thin: it starts the gateway as a child, waits for /health,
 // and shows the existing web UI. All decisions live in src/lib/* (unit-tested); this file is glue.
-import { app, BrowserWindow, Tray, Menu, powerSaveBlocker, globalShortcut, Notification, ipcMain, shell, nativeImage, nativeTheme, screen, session, dialog } from "electron";
+import { app, BrowserWindow, Tray, Menu, powerSaveBlocker, globalShortcut, Notification, ipcMain, shell, nativeImage, nativeTheme, screen, session, dialog, systemPreferences } from "electron";
 import { createRequire } from "node:module";
 import { spawn, execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -16,6 +16,7 @@ import { signInWithMind } from "./lib/mind-signin.mjs";
 import { loadConfig, saveKernelMode, saveKeepWorking, configPath, statePath, loadState, writeJson, resolveBounds, desktopHome } from "./lib/config.mjs";
 import { isKernelMode } from "./lib/kernel.mjs";
 import { applyKeepWorking } from "./lib/keepworking.mjs";
+import { installMediaPermissions } from "./lib/media-permission.mjs";
 import { buildAppMenuTemplate, buildTrayTemplate } from "./lib/menu.mjs";
 import { buildLoadUrl, classifyUrl, originOf, redactUrl } from "./lib/allowlist.mjs";
 import { buildConfirmNotification, createRateLimiter, shouldNotify, validateNotifyPayload } from "./lib/notify.mjs";
@@ -587,12 +588,21 @@ async function runSmoke() {
   app.exit(result.ok ? 0 : 1);
 }
 
+/** macOS asks the user once (then remembers); a "denied" in System Settings stays denied until they change it there. */
+async function askMicAccess() {
+  if (process.platform !== "darwin") return true;
+  const status = systemPreferences.getMediaAccessStatus("microphone");
+  if (status === "granted") return true;
+  if (status === "denied" || status === "restricted") return false;
+  return systemPreferences.askForMediaAccess("microphone");
+}
+
 app.whenReady().then(async () => {
   if (!gotLock) return;
   nativeTheme.themeSource = "system";
   const ses = session.fromPartition("mindclaw");
-  ses.setPermissionRequestHandler((_w, _p, cb) => cb(false));
-  ses.setPermissionCheckHandler(() => false);
+  // Everything is denied except the microphone for our own UI (mic button, hands-free). On macOS this shows the system prompt.
+  installMediaPermissions(ses, { getOrigin: () => gatewayInfo?.origin, askOs: askMicAccess, log });
   if (!SMOKE) {
     applyAppMenu();
     createTray();
