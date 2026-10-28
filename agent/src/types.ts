@@ -58,10 +58,29 @@ export interface Tool {
   // Optional per-call class (e.g. a write tool whose delete action is irreversible). The kernel and the
   // loop read `classFor?.(args) ?? class` everywhere they need a tool's class.
   classFor?(args: Record<string, unknown>): ToolClass;
+  // A client capability this tool needs (e.g. "apple_calendar"). The tool is offered only on turns whose send request listed it;
+  // a call to it on any other turn is answered with `unavailable` and never reaches a gate or a card.
+  requires?: string;
+  unavailable?: string;
   run(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult>;
 }
 
-export interface ToolContext { cwd: string; signal?: AbortSignal; sessionId: string; /** "bot" when the turn was started by a peer bot, not the human. */ origin?: "user" | "bot" }
+// Device relay: the agent never touches a client device itself. A tool asks the client attached to this turn (the web UI inside the
+// iPhone or Mac app), which runs the request natively and posts the answer back. `code` tells a timeout from a stop from an error.
+export type DeviceReply = { ok: true; result: unknown } | { ok: false; error: string; code?: "timeout" | "aborted" | "closed" | "device" };
+export interface DeviceBridge {
+  call(req: { tool: string; op: string; args: Record<string, unknown> }, opts: { timeoutMs: number; signal?: AbortSignal }): Promise<DeviceReply>;
+}
+
+export interface ToolContext {
+  cwd: string; signal?: AbortSignal; sessionId: string;
+  /** "bot" when the turn was started by a peer bot, not the human. */
+  origin?: "user" | "bot";
+  /** What the client that sent this turn can do (e.g. "apple_calendar"). */
+  capabilities?: string[];
+  /** The relay to that client, present only on a turn that listed a capability. */
+  device?: DeviceBridge;
+}
 
 // One executed tool call this turn, with a kernel-assigned short id used in receipts.
 export interface CallRecord {
@@ -177,6 +196,9 @@ export type AgentEvent =
       allowOptions: PermissionOption[]; denyOptions: PermissionOption[];
       suggest?: { effect: "allow" | "deny"; optionId: string; label: string; count: number }; expiresAt: number }
   | { type: "permissionResolved"; id: string; outcome: "allowed" | "denied" | "expired"; by: "user" | "rule"; remembered?: string }
+  // A tool is waiting for the client DEVICE (not the model) to run `op` natively and POST the answer to /sessions/:id/device-result.
+  // Relay-only: published into the run feed, never part of the saved transcript.
+  | { type: "device_call"; id: string; tool: string; op: string; args: Record<string, unknown> }
   | { type: "notice"; level: "info" | "warn"; text: string }          // e.g. pending MIND reply surfaced
   | { type: "usage"; usage: Usage; totalCostUsd: number; model?: string } // model = the model that produced this call
   // The draft just streamed (the text since the last tool/gate/confirm boundary) was withheld by a gate.
@@ -200,7 +222,8 @@ export interface AgentSession {
   // origin "bot": the text came from another bot (bot_talk), not from the human. Such a turn can never grant a pending confirmation.
   // interactive: a person is looking at a UI that can answer a `permission` card (web, desktop, mobile). Absent/false = typed confirmations only.
   // photos: already stored for this session (Runtime.photos); the model is told about them in the message text and reads them with view_photo.
-  send(userMessage: string, opts?: { signal?: AbortSignal; origin?: "user" | "bot"; interactive?: boolean; photos?: PhotoRef[] }): AsyncIterable<AgentEvent>;
+  // capabilities/device: what the sending client can do and the relay to it, for this turn only (see DeviceBridge).
+  send(userMessage: string, opts?: { signal?: AbortSignal; origin?: "user" | "bot"; interactive?: boolean; photos?: PhotoRef[]; capabilities?: string[]; device?: DeviceBridge }): AsyncIterable<AgentEvent>;
   /** Model for the next turn (per-session model). undefined = the configured default. */
   setModel?(model: string | undefined): void;
   /** This chat's permission mode for the next call onward. undefined = the account default. The caller has already checked bypass against the waiver. */

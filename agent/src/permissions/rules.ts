@@ -154,7 +154,8 @@ export function allowKindsFor(cls: ToolClass, tool: string): MatcherKind[] {
   switch (cls) {
     case "read": return ["any", "exact", "prefix", "glob", "domain", "recipient", "recipients", "cwd", "readonly"];
     case "write": return ["any", "exact", "prefix", "glob", "domain", "recipient", "recipients", "cwd"];
-    case "outward": return tool.includes("__") ? ["exact", "any", "recipient", "recipients", "domain"] : ["exact", "recipient", "recipients", "domain"];
+    // Apple Calendar: "any" covers adding and changing events only. A delete is irreversible and so is only ever allowed call by call.
+    case "outward": return tool === "apple_calendar" ? ["exact", "any"] : tool.includes("__") ? ["exact", "any", "recipient", "recipients", "domain"] : ["exact", "recipient", "recipients", "domain"];
     default: return ["exact"]; // irreversible, public
   }
 }
@@ -259,6 +260,9 @@ export function scopeOptions(f: CallFacts, effect: Effect): ScopeOption[] {
     if (f.recipients.length === 1) add(`Only when it targets ${f.recipients[0]}`, f.tool, { kind: "recipient", value: f.recipients[0] });
     add(`This tool, any arguments (${f.tool.slice(f.tool.indexOf("__") + 2)} in ${f.connector})`, f.tool, { kind: "any" }, true);
     if (f.cls === "read") add(`Every read-only tool of ${f.connector}`, `connector:${f.connector}`, { kind: "readonly" }, true);
+  } else if (f.tool === "apple_calendar") {
+    add("Only this exact call (same arguments)", f.tool, { kind: "exact", value: exactValue(f) });
+    add(effect === "allow" ? "Adding and changing events in Apple Calendar, any details (deleting still asks)" : "Everything in Apple Calendar", f.tool, { kind: "any" }, true);
   } else {
     add("Only this exact call (same arguments)", f.tool, { kind: "exact", value: exactValue(f) });
     if (f.recipients.length === 1) add(`Only when it targets ${f.recipients[0]}`, f.tool, { kind: "recipient", value: f.recipients[0] });
@@ -339,6 +343,18 @@ export function describeCall(f: CallFacts, args: Record<string, unknown>): { tit
   else if (f.tool === "edit_file") { title = "Change a file"; rows.push({ label: "File", value: f.paths[0] ?? "" }); }
   else if (FS_PATH_TOOLS.has(f.tool)) { title = f.tool === "read_file" ? "Read a file" : "Look through a folder"; rows.push({ label: f.tool === "read_file" ? "File" : "Folder", value: f.paths[0] ?? "" }); }
   else if (f.url) { title = "Open a web page"; rows.push({ label: "URL", value: clip(f.url, 300) }); }
+  else if (f.tool === "apple_calendar") {
+    // What the user is really being asked: the event, in plain words (the model passes title/start on update and delete so the card names it).
+    const op = typeof args.action === "string" ? args.action.trim().toLowerCase() : "";
+    title = op === "create" ? "Add an event to Apple Calendar" : op === "update" ? "Change an event in Apple Calendar" : op === "delete" ? "Delete an event from Apple Calendar" : "Use Apple Calendar";
+    const text = (v: unknown, n: number): string => (typeof v === "string" ? clip(oneLine(v), n) : "");
+    if (text(args.title, 120)) rows.push({ label: "Event", value: text(args.title, 120) });
+    const when = [text(args.start, 40), text(args.end, 40)].filter(Boolean).join(" to ");
+    if (when) rows.push({ label: "When", value: args.allDay === true ? `${when} (all day)` : when });
+    if (text(args.location, 120)) rows.push({ label: "Where", value: text(args.location, 120) });
+    if (text(args.notes, 160)) rows.push({ label: "Notes", value: text(args.notes, 160) });
+    if (op === "update" || op === "delete") rows.push({ label: "Event id", value: text(args.id, 80) });
+  }
   else if (f.connector) {
     title = `Use ${f.tool.slice(f.tool.indexOf("__") + 2)} in ${f.connector}`;
     rows.push({ label: "Connector", value: f.connector });

@@ -23,15 +23,20 @@ export default {
     target: [{ target: "dmg", arch: ["universal"] }, { target: "zip", arch: ["universal"] }],
     artifactName: "Daebot-${version}-mac-${arch}.${ext}",
     hardenedRuntime: true,
-    // The text macOS shows in its microphone prompt.
-    extendInfo: { NSMicrophoneUsageDescription: "Daebot uses the microphone when you press the mic button or turn on hands-free voice." },
+    // The text macOS shows in its microphone and Calendar prompts. The Calendar helper runs inside the app, so the prompt is Daebot's own.
+    extendInfo: {
+      NSMicrophoneUsageDescription: "Daebot uses the microphone when you press the mic button or turn on hands-free voice.",
+      NSCalendarsUsageDescription: "Daebot reads and adds events in your Apple Calendar when you ask it to.",
+      NSCalendarsFullAccessUsageDescription: "Daebot reads and adds events in your Apple Calendar when you ask it to.",
+    },
     gatekeeperAssess: false,
     entitlements: "build-resources/entitlements.mac.plist",
     entitlementsInherit: "build-resources/entitlements.mac.plist",
     identity: sign ? "ANTHONY JOSEPH CONTI (VJ44THJ238)" : null,
-    extraResources: [{ from: "build/bin", to: "bin", filter: ["daebot-darwin-*"] }],
-    // Both thin gateway binaries are identical in the arm64 and x64 halves of the universal app. They must not be merged into one
-    // fat Mach-O (bun finds its embedded payload at the end of its own file), so they are copied through as they are.
+    // daebot-calendar is the universal EventKit helper for Apple Calendar (scripts/build-calendar-helper.mjs); it is signed with the app.
+    extraResources: [{ from: "build/bin", to: "bin", filter: ["daebot-darwin-*", "daebot-calendar"] }],
+    // Both thin gateway binaries (and the already-universal Calendar helper) are identical in the arm64 and x64 halves of the universal app.
+    // The gateways must not be merged into one fat Mach-O (bun finds its embedded payload at the end of its own file), so all are copied through as they are.
     x64ArchFiles: "Contents/Resources/bin/*",
   },
   dmg: { title: "Daebot", sign },

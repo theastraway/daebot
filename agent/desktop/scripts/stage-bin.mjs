@@ -4,11 +4,13 @@
 //   node scripts/stage-bin.mjs win      -> daebot-windows-x64.exe + daebot-windows-arm64.exe
 //   node scripts/stage-bin.mjs linux    -> daebot-linux-x64
 //   node scripts/stage-bin.mjs host     -> just this machine's binary
+// The mac build also compiles daebot-calendar (the universal EventKit helper behind Apple Calendar) into the same folder.
 // Needs `bun` on PATH (bun.sh). bun cross-compiles every target from any host.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildCalendarHelper } from "./build-calendar-helper.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const agent = join(here, "..", "..");
@@ -35,5 +37,10 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   for (const t of targets) {
     const r = spawnSync(process.execPath, [join(agent, "scripts", "build-bin.mjs"), "--target", t, "--outdir", outdir], { stdio: "inherit" });
     if (r.status !== 0) process.exit(r.status ?? 1);
+  }
+  const platform = process.argv[2] ?? "host";
+  // A mac release without the helper would ship a Calendar button that cannot work: that build fails. A local host build only warns.
+  if (platform === "mac" || (platform === "host" && process.platform === "darwin")) {
+    try { buildCalendarHelper({ outDir: outdir, required: platform === "mac" }); } catch (e) { console.error(String(e.message || e)); process.exit(1); }
   }
 }

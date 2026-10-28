@@ -454,6 +454,7 @@ test("cross-user isolation: another user's session cannot be listed, opened, res
     for (const [m, p, body] of [
       ["POST", `/sessions/${sidA}/send`, { text: "hi" }],
       ["POST", `/sessions/${sidA}/abort`, undefined],
+      ["POST", `/sessions/${sidA}/device-result`, { id: "x", ok: true, result: {} }],
       ["GET", `/sessions/${sidA}/violations`, undefined],
       ["DELETE", `/sessions/${sidA}`, undefined],
     ] as const) {

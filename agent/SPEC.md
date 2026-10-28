@@ -56,6 +56,14 @@ THIRD-PARTY-NOTICES.md  provenance of any borrowed code (see section 7)
 Static: `/` serves web/. Surfaces connect over this; a surface never imports loop/provider/kernel.
 Remote access later via tunnel; bind to localhost by default.
 
+Device relay (gateway/device-relay.ts, tools/apple-calendar.ts). A tool never runs anything on a client device itself; it asks the client
+attached to the turn. `POST /sessions/:id/send` may carry `capabilities: ["apple_calendar"]` (the web UI adds it when `deviceCalendar()`
+finds a bridge: the iPhone app's `webkit.messageHandlers.daebotCalendar` or the Mac app's `window.mindclawDesktop.calendar`). A tool with
+`requires: "<capability>"` is offered only on such a turn. The tool's call becomes a run event
+`{type:"device_call", id, tool, op, args}` on the SSE stream (never saved to the transcript, never replayed once answered); the client runs
+it natively and answers `POST /sessions/:id/device-result {id, ok, result | error}`. Only the session's owner can answer, an id answers once,
+unknown or expired ids are 404. Timeouts: 120 s for `request` (an OS permission prompt), 30 s for every other op.
+
 ## 6. Surfaces
 - Terminal (ui/): full-screen-ish REPL, streaming text, tool lines, gate notices in a distinct style, `/` slash commands (/sessions /model /shadow /violations /cost /quit), works against the gateway or in-process (`--local`).
 - Web (web/): static SPA, no build step (vanilla JS or Preact via import map from a pinned CDN is acceptable, prefer zero deps), chat view with streaming, a gate/violations drawer, session list, confirm dialogs for `confirm` events, dark/light. Follow the repo's UI standards (load the `mind-ui-design-standards` skill).

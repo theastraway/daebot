@@ -5,7 +5,7 @@ import { effectiveClass } from "./tool-class.ts";
 import type { LearnHooks } from "./learn/types.ts";
 import type {
   AgentEvent, AgentSession, CallRecord, Config, GateVerdict, Kernel, Message, Provider,
-  SessionState, SessionSync, StreamEvent, Tool, ToolCall, ToolResult, TurnState, Usage, Violation,
+  DeviceBridge, SessionState, SessionSync, StreamEvent, Tool, ToolCall, ToolResult, TurnState, Usage, Violation,
 } from "./types.ts";
 import { clipToolOutputs, compactMessages, estimateTokens, needsCompaction } from "./compact.ts";
 import { describeCall, factsOf } from "./permissions/rules.ts";
@@ -140,8 +140,12 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
   let blockedThisTurn: { tool: string; gate: string }[] = [];
   let turnOrigin: "user" | "bot" = "user";
   let turnInteractive = false;
+  let turnCaps: string[] = [];
+  let turnDevice: DeviceBridge | undefined;
+  // A tool that needs a client capability is offered (and runs) only on a turn whose client listed it.
+  const hasCap = (t: Pick<Tool, "requires">): boolean => !t.requires || turnCaps.includes(t.requires);
 
-  async function* runTurn(userMessage: string, signal?: AbortSignal, origin: "user" | "bot" = "user", interactive = false): AsyncGenerator<AgentEvent> {
+  async function* runTurn(userMessage: string, signal?: AbortSignal, origin: "user" | "bot" = "user", interactive = false, caps: string[] = [], device?: DeviceBridge): AsyncGenerator<AgentEvent> {
     // ---- start of turn
     state.userMessageIndex += 1;
     state.turnIndex += 1;
@@ -151,6 +155,9 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     state.calls = [];
     turnOrigin = origin;
     turnInteractive = interactive && origin !== "bot";
+    // Client capabilities and the relay to that client belong to the human's own turn: a peer bot's turn never carries them.
+    turnCaps = origin === "bot" ? [] : caps;
+    turnDevice = origin === "bot" ? undefined : device;
     // A granted confirmation is valid for ONE turn only (the one it was granted in); a bot-originated turn starts with none at all.
     state.confirmations = origin === "bot" ? [] : state.confirmations.filter((c) => c.grantedAtUserMsg === undefined);
     // The system prompt is rebuilt each turn (a function prompt reads fresh DAEBOT.md / roster).
@@ -196,7 +203,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
         yield* maybeCompact(signal);
 
         refreshDynamic();
-        const offered = safe(() => kernel.allowedTools(state, liveTools), liveTools);
+        const offered = safe(() => kernel.allowedTools(state, liveTools), liveTools).filter(hasCap);
         const specs = offered.map((t) => t.spec);
 
         // ---- provider call. Text streams to the client as it arrives; if pre_answer then withholds the draft,
@@ -360,6 +367,11 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
       messages.push(toolMsg(call, `unknown tool "${call.name}"`));
       return "ok";
     }
+    // A tool the client cannot support this turn (e.g. Apple Calendar on the plain web): plain words, no gate, no card.
+    if (!hasCap(tool)) {
+      messages.push(toolMsg(call, tool.unavailable ?? `${call.name} is not available on this client`));
+      return "ok";
+    }
     if (typeof call.args?._invalidJson === "string") {
       messages.push(toolMsg(call, `${call.name}: arguments were not valid JSON; resend the call with a valid JSON object`));
       return "ok";
@@ -492,7 +504,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
   let currentSignal: AbortSignal | undefined;
   async function execute(tool: Tool, args: Record<string, unknown>): Promise<ToolResult> {
     try {
-      const r = await tool.run(args, { cwd, signal: currentSignal, sessionId: id, origin: turnOrigin });
+      const r = await tool.run(args, { cwd, signal: currentSignal, sessionId: id, origin: turnOrigin, capabilities: turnCaps, device: turnDevice });
       return r && typeof r.output === "string" ? r : { ok: false, output: "tool returned an invalid result" };
     } catch (e) {
       return { ok: false, output: `${tool.spec.name}: ${String((e as Error)?.message ?? e).split("\n")[0].slice(0, 300)}` };
@@ -504,7 +516,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     surface,
     send(userMessage, opts) {
       currentSignal = opts?.signal;
-      return runTurn(userMessage, opts?.signal, opts?.origin === "bot" ? "bot" : "user", opts?.interactive === true);
+      return runTurn(userMessage, opts?.signal, opts?.origin === "bot" ? "bot" : "user", opts?.interactive === true, Array.isArray(opts?.capabilities) ? opts.capabilities : [], opts?.device);
     },
     setModel(m) { model = m && m.trim() ? m.trim() : undefined; },
     violations() {
