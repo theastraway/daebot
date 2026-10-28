@@ -163,7 +163,7 @@ export function pickRelease(rel, p) {
 }
 async function showGetApp() {
   const box = document.getElementById("get-app");
-  if (!box || window.mindclawDesktop || /electron/i.test(navigator.userAgent)) return;
+  if (!box || window.mindclawDesktop || window.DaebotAndroid || window.Capacitor || /electron|DaebotApp/i.test(navigator.userAgent)) return; // already in a Daebot app
   const p = detectPlatform(navigator.userAgent, navigator.platform, navigator.maxTouchPoints || 0);
   if (!p) return;
   try {
