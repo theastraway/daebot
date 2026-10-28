@@ -225,6 +225,10 @@ func run(op: String, args: [String: Any]) throws -> Any {
         guard let e = string(args, "end") else { throw Fail(message: "end is required.") }
         let start = try parseDate(s, field: "start"), end = try parseDate(e, field: "end")
         if end <= start { throw Fail(message: "end must be after start.") }
+        // EventKit silently cuts a longer range short; say so instead, in the same words as the iPhone app.
+        if let limit = Calendar.current.date(byAdding: .year, value: 4, to: start), end > limit {
+            throw Fail(message: "The calendar can be searched four years at a time. Ask for a shorter range.")
+        }
         var cals: [EKCalendar]? = nil
         if let ids = args["calendarIds"] as? [String], !ids.isEmpty {
             let want = Set(ids)
