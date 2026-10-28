@@ -2,7 +2,7 @@
 // Calendar ... they sync data into MIND) AND the MIND App Store's remote MCP servers (official vendor servers and approved community
 // ones, plus the user's own n8n or custom server). All of them are connectors. Connected ones come first, with their real account
 // ("Connected · theastraway"); then the MIND apps that are not connected; then the App Store. One product, one row: GitHub is a MIND app
-// AND an App Store server, so the app's row wins and the server sits inside it. The search box covers the whole list.
+// AND an App Store server, so the app's row is the one row for it and the server has none of its own. The search box covers the whole list.
 //
 // The MIND apps come from GET /apps/integrations (the gateway asks MIND with the signed-in user's own key). The App Store list comes from
 // the gateway (GET /mcp/catalog), which fetches MIND's list server-side. Connecting an App Store server never sends a URL: it sends the
@@ -34,8 +34,8 @@ export function readPaste(text) {
   return { server: addr[0], token: tok[1] };
 }
 
-// The gateway marks an App Store server that is the same product as a MIND app the user can see (`foldedInto`, with the words in `addon`).
-// The list leaves it out as a row of its own; the app's row carries it, so no name is ever shown twice.
+// The gateway marks an App Store server that is the same product as a MIND app the user can see (`foldedInto`).
+// The list leaves it out: the app's row is the one row for that product, and a row never has a second row inside it.
 
 /** The App Store servers that are not folded into a MIND app's row. */
 export function connectorRows(items) { return (Array.isArray(items) ? items : []).filter((it) => !it || !it.foldedInto); }
@@ -51,24 +51,9 @@ export function mindEntry(p) {
   };
 }
 
-/** The App Store server inside an app's row: the app's own words for it ("GitHub actions (issues, pull requests, code)") and its own button. */
-export function childEntry(it) {
-  const addon = it.addon && typeof it.addon === "object" ? it.addon : {};
-  return {
-    id: it.id, kind: "mcp", logo: String(it.id || "").replace(/^mcp:/, ""), name: addon.label || it.name, blurb: addon.why || "",
-    connected: !!it.connected, serverId: it.serverId, waiting: !!it.pendingId, removeLabel: "Remove",
-  };
-}
-
-/** The MIND apps as rows, each with the App Store servers that are the same product inside it. */
-export function appEntries(providers, items, toEntry = mindEntry) {
-  const list = Array.isArray(items) ? items : [];
-  return providers.map((p) => {
-    const e = toEntry(p);
-    const kids = list.filter((it) => it && it.foldedInto === p.provider).map(childEntry);
-    return kids.length ? { ...e, children: kids } : e;
-  });
-}
+/** The MIND apps as rows. An App Store server that is the same product as one of them has no row of its own (the gateway marks it `foldedInto`);
+ *  the app's row is the one row for that product. */
+export function appEntries(providers, toEntry = mindEntry) { return providers.map((p) => toEntry(p)); }
 
 /** The one list: everything connected first (MIND apps, then App Store servers), then the MIND apps not connected yet, then the rest of the App Store. */
 export function orderRows(mind, mcp) {
@@ -77,7 +62,7 @@ export function orderRows(mind, mcp) {
 
 /** Builds the unified list from MIND's providers and the gateway's App Store items (either may be empty). */
 export function connectorList(providers, items) {
-  return orderRows(appEntries(providers, items), connectorRows(items).map((it) => ({ ...entryOf(it), kind: "mcp" })));
+  return orderRows(appEntries(providers), connectorRows(items).map((it) => ({ ...entryOf(it), kind: "mcp" })));
 }
 
 export function initConnectors({ apps, json, getMcp }) {
@@ -125,7 +110,6 @@ export function initConnectors({ apps, json, getMcp }) {
     onDisconnect: (e, ctl) => (e.kind === "mind" ? mind.handlers.onDisconnect(e, ctl) : mcpHandlers.onDisconnect(e, ctl)),
     onManage: (e) => { if (e.kind !== "mind") mcpHandlers.onManage(e); },
     confirmText: (e) => (e.kind === "mind" ? `Disconnect ${e.name}? Anything already synced to MIND stays.` : mcpHandlers.confirmText(e)),
-    child: mcpHandlers, // the App Store server inside a MIND app's row (GitHub actions inside GitHub)
   };
   apps.addSection({
     id: "connectors", title: "Connectors", search: "Search connectors",
