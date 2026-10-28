@@ -84,7 +84,7 @@ export function createAppsHandler(o: AppsOptions): (req: IncomingMessage, res: S
   return async (req, res, path, p) => {
     const method = req.method ?? "GET";
     const key = o.keyFor(p);
-    const needsSignIn = p.owner || !key;
+    const needsSignIn = !key; // keyFor already returns nothing for the hosted access-code owner
     if (path === "/apps/integrations") {
       if (method !== "GET") return json(res, 405, { error: "method not allowed" });
       if (needsSignIn) return json(res, 200, { signedIn: false, message: SIGN_IN_MESSAGE, enabled: true, providers: [] });

@@ -252,7 +252,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   const apps = appsBase
     ? createAppsHandler({
         baseUrl: appsBase,
-        keyFor: opts.apps?.keyFor ?? ((p) => (p.owner ? undefined : auth?.billingKey(p))),
+        // Hosted: each signed-in user's own key (the access-code owner has none). Desktop/CLI (no auth): the key the app signed in with.
+        keyFor: opts.apps?.keyFor ?? ((p) => (auth ? (p.owner ? undefined : auth.billingKey(p)) : opts.cfg?.mindApiKey || undefined)),
         returnTo: opts.apps?.returnTo ?? (process.env.DAEBOT_PUBLIC_URL?.trim() || (hosted?.allowedHosts?.[0] && hosted.allowedHosts[0] !== "localhost" ? `https://${hosted.allowedHosts[0]}` : undefined)),
         fetchImpl: opts.apps?.fetchImpl ?? opts.auth?.fetchImpl,
       })
