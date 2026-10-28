@@ -184,3 +184,21 @@ test("logos: every mapped file ships, every shipped file is mapped, each has a r
   for (const k of live) assert.ok(logoSrc(k), `${k} has an official logo file`);
 });
 
+
+test("desktop (no hosted auth): the Apps card uses the key the app signed in with", async () => {
+  const key = "mind_" + rnd();
+  const fake = await startFakeMind({ [key]: "desk" });
+  fake.integrations.set("desk", new Map([["google", "desk@example.com"]]));
+  const cfg = baseCfg({ mindBaseUrl: fake.base, mindApiKey: key });
+  const runtime = createRuntime(cfg, { provider: new FakeProvider([]) });
+  const st = tmpStatic();
+  const gw = await startGateway({ runtime, cfg, port: 0, host: "127.0.0.1", staticDir: st.dir });
+  try {
+    const r = await http(gw.url, "GET", "/apps/integrations", { headers: { authorization: "Bearer " + gw.token } });
+    assert.equal(r.status, 200);
+    const j = JSON.parse(r.body);
+    assert.equal(j.signedIn, true);
+    assert.equal(j.providers.find((p: any) => p.provider === "google").connected, true);
+    assert.doesNotMatch(r.body, /mind_/);
+  } finally { await gw.close(); await fake.close(); }
+});
