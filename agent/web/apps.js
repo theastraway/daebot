@@ -82,6 +82,11 @@ export function renderEntries(body, entries, handlers = {}) {
         // A connector that needs the user's own address and a token: the form opens inline and posts its values to onConnect.
         confirm.replaceChildren();
         const form = el("form", "app-form"); form.autocomplete = "off";
+        if (e.form.why) form.append(el("p", "app-why", e.form.why));
+        if (e.form.help && /^https:\/\//.test(e.form.help.url)) {
+          const a = el("a", "app-help", e.form.help.label); a.href = e.form.help.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+          form.append(a);
+        }
         const inputs = [];
         for (const f of e.form.fields) {
           const lab = el("label", "app-field"); lab.append(el("span", "", f.label + (f.optional ? " (optional)" : "")));

@@ -115,14 +115,16 @@ export interface CatalogItemView {
   id: string; name: string; blurb: string; category: string; publisher: "official" | "community"; auth: CatalogAuth; host: string;
   connected: boolean; serverId?: string; pendingId?: string;
   /** Present on connectors that need the user's own server address AND a token (n8n, custom). The card shows these fields inline. */
-  form?: { fields: { name: "url" | "token" | "name"; label: string; placeholder: string; secret?: boolean; optional?: boolean }[]; submitLabel: string };
+  form?: { fields: { name: "url" | "token" | "name"; label: string; placeholder: string; secret?: boolean; optional?: boolean }[]; submitLabel: string; why?: string; help?: { label: string; url: string } };
 }
 
 /** Daebot's own connectors, listed after MIND's. They cannot live in a fixed URL list because the address belongs to the user's own server. */
-export interface LocalConnector { id: string; name: string; blurb: string; category: string; urlLabel: string; urlPlaceholder: string; defaultPath?: string; nameBase: string }
+export interface LocalConnector { id: string; name: string; blurb: string; category: string; urlLabel: string; urlPlaceholder: string; defaultPath?: string; nameBase: string; why?: string; help?: { label: string; url: string } }
 export const LOCAL_CONNECTORS: LocalConnector[] = [
-  { id: "local:n8n", name: "n8n", blurb: "Search, read and run the workflows you switched on for MCP in your own n8n. Needs the instance address and the access token from Settings > Instance-level MCP.", category: "automation",
-    urlLabel: "n8n URL", urlPlaceholder: "https://your-n8n.example.com", defaultPath: "/mcp-server/http", nameBase: "n8n" },
+  { id: "local:n8n", name: "n8n", blurb: "Recommended. Let Daebot search, read and run your n8n workflows, so recurring work keeps running on its own schedule, even when Daebot is closed.", category: "automation",
+    urlLabel: "n8n URL", urlPlaceholder: "https://your-n8n.example.com", defaultPath: "/mcp-server/http", nameBase: "n8n",
+    why: "Why connect n8n: Daebot answers when you ask; n8n runs on a schedule or a trigger, around the clock, without Daebot open. With both, Daebot can build an automation once and hand it to n8n to run, use your 400+ n8n app connections, and check on workflows for you. Optional: Daebot works without it. In n8n, open Settings > Instance-level MCP, turn it on, and copy the URL and token here.",
+    help: { label: "No n8n yet? Create an n8n account", url: "https://n8n.io/" } },
   { id: "local:custom", name: "Custom MCP server", blurb: "Any remote MCP server that takes a bearer token: paste its address and token.",
     category: "developer", urlLabel: "Server URL", urlPlaceholder: "https://example.com/mcp", nameBase: "" },
 ];
@@ -279,7 +281,7 @@ export class McpConnectService {
       out.push({
         id: l.id, name: l.name, blurb: l.blurb, category: l.category, publisher: "community", auth: "url_token", host: "your own server",
         connected: byPreset.has(l.id), serverId: byPreset.get(l.id),
-        form: { submitLabel: "Connect", fields: [
+        form: { submitLabel: "Connect", ...(l.why ? { why: l.why } : {}), ...(l.help ? { help: l.help } : {}), fields: [
           { name: "url", label: l.urlLabel, placeholder: l.urlPlaceholder },
           { name: "token", label: "Access token", placeholder: "paste the token", secret: true },
           ...(l.id === "local:custom" ? [{ name: "name" as const, label: "Name (tools become name__tool)", placeholder: "my-server", optional: true }] : []),
