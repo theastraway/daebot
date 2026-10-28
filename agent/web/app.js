@@ -10,6 +10,7 @@ import { initMcp } from "/mcp.js";
 import { initConnectors } from "/connectors.js";
 import { transcriptBehind } from "/sync.js";
 import { confirmDialog, deleteControl, sessionDeleteText } from "/manage.js";
+import { compareBuild, webUpdateText, WEB_CHECK_MS } from "/webupdate.js";
 import { buildPermissionCard, initPermissions } from "/permissions.js";
 import { initSuggest } from "/suggest.js";
 
@@ -974,6 +975,24 @@ async function initDesktopUpdates() {
   try { renderUpdate(await u.get()); } catch { /* older shell */ }
 }
 initDesktopUpdates();
+
+// Web and mobile apps: same bar, but "latest" is the live gateway's build. A newer build shows Reload; Check for updates re-reads it now.
+let webBuild = null;
+async function checkWebUpdate(manual) {
+  const box = document.getElementById("upd"), text = document.getElementById("upd-text"), btn = document.getElementById("upd-btn");
+  if (!box || desktopUpdates()) return;
+  let h = null;
+  try { const r = await fetch("/health", { cache: "no-store" }); if (r.ok) h = await r.json(); } catch { /* offline: keep what is shown */ }
+  if (!h && !manual) return;
+  const st = compareBuild(webBuild, h);
+  webBuild = st.loaded;
+  const t = webUpdateText(st);
+  box.hidden = false; box.classList.toggle("ready", st.stale);
+  text.textContent = h || webBuild ? t.text : "Daebot · update check failed";
+  btn.textContent = t.button; btn.hidden = false; btn.disabled = false;
+  btn.onclick = st.stale ? () => location.reload() : () => { btn.disabled = true; checkWebUpdate(true); };
+}
+if (!desktopUpdates()) { checkWebUpdate(false); setInterval(() => checkWebUpdate(false), WEB_CHECK_MS); document.addEventListener("visibilitychange", () => { if (!document.hidden) checkWebUpdate(false); }); }
 
 // Hosted: show which MIND account this session is acting as (its own MIND, or the owner's).
 async function showWho() {
