@@ -142,3 +142,40 @@ keyForm.addEventListener("submit", async (e) => {
     keyBtn.disabled = false;
   }
 });
+
+// Get the app: right under sign-in, recommend the Daebot build for this device (Windows, Mac, Linux, iPhone, Android).
+// Release links come from the public /download/releases.json; hidden inside the desktop app itself.
+export function detectPlatform(ua, platform = "", touchPoints = 0) {
+  const u = String(ua || "");
+  if (/android/i.test(u)) return { group: "mobile", key: "android" };
+  if (/iphone|ipad|ipod/i.test(u) || (/macintosh/i.test(u) && touchPoints > 1)) return { group: "mobile", key: "ios" };
+  if (/windows/i.test(u)) return { group: "platforms", key: "windows", arm: /arm64|aarch64/i.test(u) };
+  if (/mac os x|macintosh/i.test(u) || /mac/i.test(platform)) return { group: "platforms", key: "mac" };
+  if (/linux|x11|cros/i.test(u)) return { group: "platforms", key: "linux" };
+  return null;
+}
+export function pickRelease(rel, p) {
+  const entry = p && rel?.[p.group]?.[p.key];
+  const files = Array.isArray(entry?.files) ? entry.files.filter((f) => f && typeof f.url === "string" && /^https:\/\//.test(f.url)) : [];
+  if (!files.length) return null;
+  const file = (p.arm && files.find((f) => /arm64/i.test(f.file || f.url))) || files[0];
+  return { label: file.label || `Download for ${entry.label}`, url: file.url, detail: [entry.detail, file.version ? `Version ${file.version}` : "", file.size ? `${Math.round(file.size / 1048576)} MB` : ""].filter(Boolean).join(" · ") };
+}
+async function showGetApp() {
+  const box = document.getElementById("get-app");
+  if (!box || window.mindclawDesktop || /electron/i.test(navigator.userAgent)) return;
+  const p = detectPlatform(navigator.userAgent, navigator.platform, navigator.maxTouchPoints || 0);
+  if (!p) return;
+  try {
+    const r = await fetch("/download/releases.json", { cache: "no-store" });
+    if (!r.ok) return;
+    const pick = pickRelease(await r.json(), p);
+    if (!pick) return;
+    const a = document.getElementById("get-app-btn");
+    a.textContent = pick.label;
+    a.href = pick.url;
+    document.getElementById("get-app-detail").textContent = pick.detail;
+    box.hidden = false;
+  } catch { /* the footer link to /download/ still works */ }
+}
+if (typeof document !== "undefined") showGetApp();
