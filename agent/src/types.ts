@@ -19,6 +19,7 @@ export interface Message {
   toolCalls?: ToolCall[];   // assistant messages
   toolCallId?: string;      // tool messages
   name?: string;            // tool messages: tool name
+  images?: string[];        // tool messages: data: URLs (screenshots). Sent to the model, never persisted.
 }
 
 // ---------- provider ----------
@@ -45,7 +46,7 @@ export interface Provider {
 // third party or public surface, irreversible = delete/refund/env/DNS/DB-write, public = posts publicly.
 export type ToolClass = "read" | "write" | "outward" | "irreversible" | "public";
 
-export interface ToolResult { ok: boolean; output: string; meta?: Record<string, unknown> }
+export interface ToolResult { ok: boolean; output: string; meta?: Record<string, unknown>; /** data: URLs the model should see (e.g. a screenshot) */ images?: string[] }
 
 export interface Tool {
   spec: ToolSpec;
