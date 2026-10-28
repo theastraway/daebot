@@ -7,6 +7,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, wri
 import { join } from "node:path";
 import type { MindClient } from "../types.ts";
 import { LATEST_BOT_VERSION } from "./versions.ts";
+import { isFaceId } from "./faces.ts";
 import { BotError, MAX_INSTRUCTIONS_BYTES, SLUG_RE, safeUpgradeUrl } from "./types.ts";
 import type { BotRecord, BotsApi, RosterEntry } from "./types.ts";
 
@@ -64,6 +65,13 @@ export function botMindApi(client: MindClient): BotMindApi {
 const MISS_LIMIT = 3;
 const PALETTE = ["#6366f1", "#14b8a6", "#f59e0b", "#ec4899", "#22c55e", "#0ea5e9", "#a855f7", "#ef4444"];
 const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
+/** A face id from the allowlist, or undefined for "no face" (absent, null or ""). Anything else is a 400. */
+function parseFace(v: unknown): string | undefined {
+  if (v === undefined || v === null || v === "") return undefined;
+  if (!isFaceId(v)) throw new BotError(400, "bad_face", "face must be one of the listed personalities");
+  return v;
+}
 const ID_RE = /^b_[0-9a-f]{12}$/;
 
 function safeSegment(s: string): string {
@@ -205,11 +213,11 @@ export class BotStore implements BotsApi {
     return h % PALETTE.length;
   }
 
-  create(a: { slug: string; name?: string; purpose?: string; color?: string }): Promise<BotRecord> {
+  create(a: { slug: string; name?: string; purpose?: string; color?: string; face?: unknown }): Promise<BotRecord> {
     return this.serial(() => this.createLocked(a));
   }
 
-  private async createLocked(a: { slug: string; name?: string; purpose?: string; color?: string }): Promise<BotRecord> {
+  private async createLocked(a: { slug: string; name?: string; purpose?: string; color?: string; face?: unknown }): Promise<BotRecord> {
     const slug = typeof a.slug === "string" ? a.slug.trim() : "";
     if (!SLUG_RE.test(slug)) throw new BotError(400, "bad_slug", "slug must be 1 to 32 characters: lowercase letters, digits and dashes");
     if (slug === "main") throw new BotError(400, "bad_slug", 'the slug "main" is reserved for your main MIND');
@@ -217,12 +225,13 @@ export class BotStore implements BotsApi {
     const name = clip(a.name, 80) || slug;
     const purpose = clip(a.purpose, 500);
     const color = typeof a.color === "string" && COLOR_RE.test(a.color.trim()) ? a.color.trim().toLowerCase() : PALETTE[this.colorIndex(slug)];
+    const face = parseFace(a.face);
     await this.mind.create(slug, name); // MIND first: if it refuses (limit, duplicate), nothing is written here
     const raced = this.bySlug(slug); // re-check after the await: never write a second record for one slug
     if (raced) return raced;
     const id = this.newId();
     const t = this.now();
-    const rec: BotRecord = { id, slug, name, purpose, color, createdAt: t, updatedAt: t, version: LATEST_BOT_VERSION };
+    const rec: BotRecord = { id, slug, name, purpose, color, ...(face ? { face } : {}), createdAt: t, updatedAt: t, version: LATEST_BOT_VERSION };
     this.bots[id] = rec;
     try { this.save(); } catch (e) {
       delete this.bots[id];
@@ -232,7 +241,7 @@ export class BotStore implements BotsApi {
     return { ...rec };
   }
 
-  update(id: string, patch: { name?: string; purpose?: string; color?: string }): BotRecord {
+  update(id: string, patch: { name?: string; purpose?: string; color?: string; face?: unknown }): BotRecord {
     const b = ID_RE.test(id) ? this.bots[id] : undefined;
     if (!b) throw new BotError(404, "not_found", "no such bot");
     if (patch.name !== undefined) {
@@ -241,6 +250,10 @@ export class BotStore implements BotsApi {
       b.name = n;
     }
     if (patch.purpose !== undefined) b.purpose = clip(patch.purpose, 500);
+    if (patch.face !== undefined) {
+      const face = parseFace(patch.face);
+      if (face) b.face = face; else delete b.face;
+    }
     if (patch.color !== undefined) {
       if (typeof patch.color !== "string" || !COLOR_RE.test(patch.color.trim())) throw new BotError(400, "bad_color", "color must look like #1a2b3c");
       b.color = patch.color.trim().toLowerCase();

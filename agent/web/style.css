@@ -262,6 +262,8 @@ kbd { font-size: 10.5px; background: var(--surface-2); border: 1px solid var(--l
 
 /* a bot's identity: its LED colour and its initial, on the same dark plate as the mascot's screen */
 .bot-badge { --bot: var(--led); display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 9px; background: var(--plate); color: var(--bot); font: 700 15px/1 var(--display); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08), 0 0 12px -3px color-mix(in srgb, var(--bot) 75%, transparent); text-shadow: 0 0 8px color-mix(in srgb, var(--bot) 80%, transparent); }
+.bot-badge .face-svg { width: 78%; height: 78%; display: block; filter: drop-shadow(0 0 3px color-mix(in srgb, var(--bot) 70%, transparent)); }
+.bot-badge.has-face { text-shadow: none; }
 .bot-badge.sm { width: 26px; height: 26px; border-radius: 8px; font-size: 13px; margin-right: 2px; }
 
 .bot-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; min-width: 0; }
@@ -338,6 +340,14 @@ button.model-badge[aria-expanded="true"] { box-shadow: 0 0 0 1px rgba(255,255,25
 .swatches { display: flex; gap: 12px; padding: 4px 2px; flex-wrap: wrap; }
 .swatch { width: 28px; height: 28px; border-radius: 50%; border: 0; background: var(--sw); box-shadow: inset 0 0 0 1px rgba(0,0,0,.18); }
 .swatch[aria-checked="true"] { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--ink), 0 0 12px 2px color-mix(in srgb, var(--sw) 60%, transparent); }
+/* face picker: each face is a personality; drawn in the bot's LED colour on the same dark plate as the badge */
+.faces { --bot: var(--led); display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 8px; padding: 2px; }
+.face-opt { display: grid; justify-items: center; gap: 4px; padding: 8px 4px 6px; border: 0; border-radius: 12px; background: var(--surface-2); color: var(--ink-2); font: 600 12px var(--sans); box-shadow: inset 0 0 0 1px var(--line); }
+.face-opt:hover { background: var(--surface); color: var(--ink); }
+.face-opt .face-svg { width: 44px; height: 44px; padding: 5px; box-sizing: border-box; border-radius: 10px; background: var(--plate); color: var(--bot); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08), 0 0 12px -4px color-mix(in srgb, var(--bot) 75%, transparent); }
+.face-opt[aria-checked="true"] { color: var(--ink); background: var(--surface); box-shadow: 0 0 0 2px var(--ink); }
+.face-opt:focus-visible, .swatch:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+#bn-face-desc, #bd-face-desc { min-height: 2.6em; }
 .dsec.danger { border-top: 1px solid var(--line); padding-top: 18px; }
 .btn-danger { justify-self: start; padding: 8px 14px; border-radius: 9px; background: none; border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line)); color: var(--accent); font-weight: 550; }
 .btn-danger:hover { background: var(--accent-soft); }

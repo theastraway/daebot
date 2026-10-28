@@ -23,7 +23,7 @@ test("safeColor and initialOf: only #rrggbb reaches the page; the badge letter i
   assert.equal(bots.initialOf("42 bot"), "4");
   assert.equal(bots.initialOf("***"), "B");
   assert.equal(bots.initialOf(undefined), "B");
-  assert.equal(bots.COLORS.length, 6);
+  assert.equal(bots.COLORS.length, 10);
   for (const c of bots.COLORS) assert.equal(bots.safeColor(c.hex), c.hex);
 });
 
