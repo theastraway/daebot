@@ -91,6 +91,7 @@ export interface TurnState {
   calls: CallRecord[];             // calls made since the latest user message
   allCalls: CallRecord[];          // whole session
   confirmations: Confirmation[];   // outstanding + granted
+  deniedCalls?: string[];          // call signatures the user denied on a card this session: never asked again (no repeat card)
   shadow: boolean;                 // shadow mode: verdicts are logged but never block
 }
 

@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { HostedConfigError } from "../hosted.ts";
 import { SealError, deriveDataKey, open, seal } from "../auth/crypto.ts";
 
-export type Publisher = "official" | "community" | "unknown";
+export type Publisher = "official" | "community" | "self" | "unknown"; // self: a server the user added by its own URL + token (their n8n, their custom MCP)
 export type AuthKind = "none" | "key" | "oauth";
 
 export interface ToolInfo {

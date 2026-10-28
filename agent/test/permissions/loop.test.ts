@@ -166,3 +166,14 @@ test("an aborted turn cancels its pending card", async () => {
   assert.equal(t.calls.length, 0);
   assert.ok(out.some((e) => e.type === "notice" && /aborted/.test((e as any).text)));
 });
+
+test("a call denied on a card is never carded again in the same chat (retry or regenerated answer)", async () => {
+  const t = fakeTool("mind_email", "outward", "sent");
+  const { perms, session } = make([{ calls: [mail()] }, { calls: [mail()] }, { text: "ok, not sending" }], [t]);
+  let cards = 0;
+  const ev = await drive(session, perms, "email bob", () => { cards++; return { decision: "deny", remember: "once" }; });
+  assert.equal(cards, 1, "one card only");
+  assert.equal(t.calls.length, 0, "never ran");
+  assert.ok(ev.some((e) => e.type === "gate" && (e as any).verdict.reason.includes("already denied")));
+  assert.equal(perms.store.rules().length, 0, "deny once makes no rule");
+});
