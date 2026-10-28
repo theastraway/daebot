@@ -1,15 +1,16 @@
-// Desktop config (~/.mindclaw/desktop.json) and window-state persistence. Pure helpers + small fs wrappers.
+// Desktop config (~/.daebot/desktop.json) and window-state persistence. Pure helpers + small fs wrappers.
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { daebotHome } from "./home.mjs";
 
 // keepWorking: keep the gateway running and the machine awake while the window is closed/hidden (see keepworking.mjs).
 // idleTrimSeconds: after the window has been hidden this long, its renderer is destroyed to cut idle RAM (0 = never).
 export const DEFAULT_CONFIG = Object.freeze({ shortcut: "Alt+Space", kernelMode: "enforced", idleTrimSeconds: 300, keepWorking: true });
 export const KERNEL_MODE_NAMES = Object.freeze(["enforced", "shadow", "off"]);
 
+/** Daebot's home folder (~/.daebot). DAEBOT_HOME or the older MINDCLAW_DESKTOP_HOME override it; see home.mjs. */
 export function desktopHome(env = process.env) {
-  return env.MINDCLAW_DESKTOP_HOME || join(env.HOME || homedir(), ".mindclaw");
+  return daebotHome(env);
 }
 export const configPath = (env = process.env) => join(desktopHome(env), "desktop.json");
 export const statePath = (env = process.env) => join(desktopHome(env), "desktop-state.json");

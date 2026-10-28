@@ -1,7 +1,7 @@
 // Entry run by the system `node` (or Electron-as-node) in development and when no bundled binary exists: starts the Daebot gateway
 // on a random localhost port and prints ONE JSON line to stdout: {"mindclaw":"ready","url":...,"token":...}. The token goes only
 // over this pipe. Packaged apps run the bun-compiled binary (`daebot serve --port 0`) instead; both behave the same:
-//   - sessions persist to the file store (DATA_DIR, default ~/.mindclaw/data)
+//   - sessions persist to the file store (DATA_DIR, default ~/.daebot/data)
 //   - DAEBOT_BILLING=mind bills the user's MIND account (MIND_API_KEY from the desktop sign-in), so no OpenRouter key is needed
 //   - local mode: bash/fs tools stay available and the kernel is enforced (MINDCLAW_KERNEL / MINDCLAW_SHADOW from the menu)
 // Imports the agent's TypeScript directly (Node >= 22.18 strips types by default).
@@ -29,7 +29,7 @@ try {
         process.exit(1);
       }
     } else if (!cfg.openrouterKey) {
-      say({ state: "error", data: { message: "Sign in with a MIND API key, or set OPENROUTER_API_KEY (env or ~/.mindclaw/config.json)." } });
+      say({ state: "error", data: { message: "Sign in with a MIND API key, or set OPENROUTER_API_KEY (env or ~/.daebot/config.json)." } });
       process.exit(1);
     }
     const { createRuntime } = await imp("src/runtime.ts");

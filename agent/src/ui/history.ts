@@ -1,12 +1,12 @@
-// Input history persisted at ~/.mindclaw/history (one JSON string per line, so multi-line entries survive).
+// Input history persisted at ~/.daebot/history (one JSON string per line, so multi-line entries survive).
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { daebotHome } from "../home.ts";
 
 export const MAX_HISTORY = 1000;
 
 export function defaultHistoryPath(env: Record<string, string | undefined> = process.env): string {
-  return env.MINDCLAW_HISTORY || join(env.HOME || homedir(), ".mindclaw", "history");
+  return env.MINDCLAW_HISTORY || join(daebotHome(env), "history");
 }
 
 export function loadHistory(path: string): string[] {

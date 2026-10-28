@@ -1,11 +1,11 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { IncomingMessage } from "node:http";
+import { daebotHome } from "../home.ts";
 
 export function defaultTokenPath(): string {
-  return join(homedir(), ".mindclaw", "gateway-token");
+  return join(daebotHome(), "gateway-token");
 }
 
 /** Reads the gateway token, creating it (32 random bytes hex, mode 0600) when missing or malformed. */

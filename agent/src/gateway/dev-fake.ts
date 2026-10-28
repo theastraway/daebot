@@ -1,7 +1,7 @@
 // Dev server: the real gateway + web UI over a scripted fake Runtime (no models, no MIND).
 //   node src/gateway/dev-fake.ts            (PORT=7788 by default, HOST=127.0.0.1)
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { daebotHome } from "../home.ts";
 import { HistoryRecorder } from "../events.ts";
 import type { AgentEvent, AgentSession, HistoryEvent, PhotoRef, Runtime, Violation } from "../types.ts";
 import { PhotoStore } from "../photos.ts";
@@ -143,7 +143,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     runtime,
     port: 0, // the real gateway sits behind the bots/models fake below (a pass-through proxy), on a private port
     host: "127.0.0.1",
-    tokenPath: join(homedir(), ".mindclaw", "dev-fake-token"), // dev-only token, separate from the real gateway token
+    tokenPath: join(daebotHome(), "dev-fake-token"), // dev-only token, separate from the real gateway token
   });
   const backendPort = Number(new URL(gw.url).port);
   const fake = createBotsFake({ token: gw.token, backendPort, botLimit: Number(process.env.BOT_LIMIT ?? 3) });
@@ -159,7 +159,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     req.pipe(up);
   });
   await new Promise<void>((resolve) => front.listen(port, host, () => resolve()));
-  console.log(`MINDClaw gateway (FAKE runtime + fake bots/models REST) listening\n  http://${host}:${port}/?token=${gw.token}`);
+  console.log(`Daebot gateway (FAKE runtime + fake bots/models REST) listening\n  http://${host}:${port}/?token=${gw.token}`);
   const stop = () => void gw.close().then(() => { front.close(); front.closeAllConnections(); process.exit(0); });
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);

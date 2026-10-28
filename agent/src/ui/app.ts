@@ -153,7 +153,7 @@ export class TuiApp {
       return this.finish(1);
     }
     const kernel = this.info.kernel ?? "on";
-    this.pushRow({ kind: "info", text: `MINDClaw terminal  ${this.ascii ? "|" : "·"}  ${this.client.mode === "gateway" ? "gateway " + this.client.label : "in-process"}  ${this.ascii ? "|" : "·"}  session ${shortId(this.sessionId)}  ${this.ascii ? "|" : "·"}  kernel ${kernel}\n/help lists commands.${this.interactive ? " Ctrl+C aborts a turn; Ctrl+D quits." : ""}` });
+    this.pushRow({ kind: "info", text: `Daebot terminal  ${this.ascii ? "|" : "·"}  ${this.client.mode === "gateway" ? "gateway " + this.client.label : "in-process"}  ${this.ascii ? "|" : "·"}  session ${shortId(this.sessionId)}  ${this.ascii ? "|" : "·"}  kernel ${kernel}\n/help lists commands.${this.interactive ? " Ctrl+C aborts a turn; Ctrl+D quits." : ""}` });
     if (this.interactive) this.startInteractive(); else this.startPlain();
   }
 
@@ -372,7 +372,7 @@ export class TuiApp {
         }
         case "model": {
           this.info = { ...this.info, ...(await this.client.info()) };
-          this.pushRow({ kind: "info", text: `model: ${this.info.model ?? "(runtime default; the gateway does not report it)"}\nThe model is chosen by the runtime config (MINDCLAW_MODEL / ~/.mindclaw/config.json); change it there and restart.` });
+          this.pushRow({ kind: "info", text: `model: ${this.info.model ?? "(runtime default; the gateway does not report it)"}\nThe model is chosen by the runtime config (MINDCLAW_MODEL / ~/.daebot/config.json); change it there and restart.` });
           break;
         }
         case "shadow": {

@@ -21,7 +21,7 @@ It differs from local use on purpose:
 | `OPENROUTER_API_KEY` | yes | OpenRouter key |
 | `MINDCLAW_MODEL` | no | main model, read from the environment only. Built-in default `qwen/qwen3.8-flash`; fallback `deepseek/deepseek-v4-flash`. `/health` reports the active model as `model` (provider `openrouter`). The service logs a warning if this is unset. |
 | `MINDCLAW_CHEAP_MODEL` | no | cheap model for light work |
-| `DATA_DIR` | no | where chats are saved as JSON (`<DATA_DIR>/sessions/<id>.json`). `/data` on Render (the 1 GB persistent disk in `render.yaml`). Default locally: `~/.mindclaw/data`. |
+| `DATA_DIR` | no | where chats are saved as JSON (`<DATA_DIR>/sessions/<id>.json`). `/data` on Render (the 1 GB persistent disk in `render.yaml`). Default locally: `~/.daebot/data`. |
 | `MINDCLAW_CONTEXT_WINDOW` | no | model context window in tokens for compaction (default 128000). At 60% (`MINDCLAW_COMPACT_AT=0.6`) older turns are summarized by the cheap model; the last 8 turns and all receipt lines stay verbatim. |
 | `MINDCLAW_MCP_SERVERS` | no | JSON array of remote MCP servers: `[{"name":"acme","url":"https://...","headers":{"Authorization":"Bearer ..."},"classes":{"search":"read"}}]`. Streamable HTTP. Tools appear as `<name>__<tool>`. `classes` maps a tool (or `"*"`) to `read\|write\|outward\|irreversible\|public`; anything not listed is `outward`, so the danger gate asks before it runs. |
 | `MINDCLAW_KERNEL` | no | `1` |

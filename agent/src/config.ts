@@ -1,8 +1,8 @@
-// loadConfig: environment first, then ~/.mindclaw/config.json (env wins). No secrets are ever
+// loadConfig: environment first, then ~/.daebot/config.json (env wins). No secrets are ever
 // printed or written by this module.
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { daebotHome } from "./home.ts";
 import type { Config } from "./types.ts";
 
 const DEFAULTS = {
@@ -36,7 +36,7 @@ function fraction(v: string | undefined): number | undefined {
 }
 
 export function configFilePath(env: NodeJS.ProcessEnv = process.env): string {
-  return env.MINDCLAW_CONFIG || join(env.HOME || homedir(), ".mindclaw", "config.json");
+  return env.MINDCLAW_CONFIG || join(daebotHome(env), "config.json");
 }
 
 function readFileConfig(path: string): Record<string, unknown> {

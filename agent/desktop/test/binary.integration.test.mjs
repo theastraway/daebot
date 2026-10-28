@@ -37,8 +37,8 @@ test("bundled binary: ready line, embedded UI, public download page, token gate,
     assert.match(await dl.text(), /Get Daebot/);
     assert.equal((await fetch(`${url}/sessions`)).status, 401);
     assert.equal((await fetch(`${url}/sessions`, { headers: { authorization: `Bearer ${token}` } })).status, 200);
-    assert.ok(existsSync(join(home, ".mindclaw", "gateway-token")));
-    assert.equal(statSync(join(home, ".mindclaw", "gateway-token")).mode & 0o777, 0o600);
+    assert.ok(existsSync(join(home, ".daebot", "gateway-token")));
+    assert.equal(statSync(join(home, ".daebot", "gateway-token")).mode & 0o777, 0o600);
   } finally {
     await gw.stop();
   }

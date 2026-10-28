@@ -13,9 +13,10 @@ import { FakeProvider, baseCfg, call, collect } from "./helpers.ts";
 const mindOk = (async () => new Response(JSON.stringify({ context: "BOOT" }), { status: 200, headers: { "content-type": "application/json" } })) as any;
 const tmp = () => mkdtempSync(join(tmpdir(), "mc-data-"));
 
-test("dataDir: DATA_DIR wins, otherwise ~/.mindclaw/data", () => {
+test("dataDir: DATA_DIR wins, otherwise ~/.daebot/data", () => {
   assert.equal(dataDir({ DATA_DIR: "/data" }), "/data");
-  assert.equal(dataDir({ HOME: "/home/x" }), "/home/x/.mindclaw/data");
+  assert.equal(dataDir({ HOME: "/home/x" }), "/home/x/.daebot/data");
+  assert.equal(dataDir({ HOME: "/home/x", DAEBOT_HOME: "/srv/d" }), "/srv/d/data");
 });
 
 test("fileNameFor: plain ids are used, anything path-like is hashed", () => {

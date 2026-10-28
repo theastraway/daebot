@@ -1,11 +1,11 @@
 // Server-side session persistence. One JSON file per session under DATA_DIR/sessions so a restart or redeploy
-// does not lose chats. Hosted: DATA_DIR=/data (a Render persistent disk). Local default: ~/.mindclaw/data.
+// does not lose chats. Hosted: DATA_DIR=/data (a Render persistent disk). Local default: ~/.daebot/data.
 // Zero dependencies; writes are atomic (tmp + rename) and serialized per session.
 import { mkdirSync, readFileSync, readdirSync, existsSync } from "node:fs";
 import { rename, writeFile, mkdir, unlink } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { daebotHome } from "./home.ts";
 import type { HistoryEvent, Message, SessionState, Violation } from "./types.ts";
 
 export interface RunMark { id: string; status: "running" | "done" | "error" | "interrupted"; startedAt: number; updatedAt: number }
@@ -53,7 +53,7 @@ export interface SessionStore {
 
 export function dataDir(env: NodeJS.ProcessEnv = process.env): string {
   const d = (env.DATA_DIR ?? "").trim();
-  return d || join(env.HOME || homedir(), ".mindclaw", "data");
+  return d || join(daebotHome(env), "data");
 }
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
