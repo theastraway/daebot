@@ -152,6 +152,18 @@ export function initVoice(o) {
     clearInterval(r.timer);
   }
 
+  // Where the switch actually is: the desktop and phone apps have no "browser settings".
+  function micBlockedHelp() {
+    const ua = navigator.userAgent || "";
+    const app = !!(globalThis.mindclawDesktop || globalThis.Capacitor || globalThis.DaebotAndroid || globalThis.DaebotApp);
+    if (!app) return "Microphone access is blocked. Allow it for this site in your browser settings, then try again.";
+    if (/Android/i.test(ua)) return "Microphone is off for Daebot. Turn it on in Settings > Apps > Daebot > Permissions > Microphone, then try again.";
+    if (/iPhone|iPad|iPod/i.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return "Microphone is off for Daebot. Turn it on in Settings > Daebot > Microphone, then try again.";
+    if (/Mac/i.test(ua)) return "Microphone is off for Daebot. Turn it on in System Settings > Privacy & Security > Microphone, then try again.";
+    if (/Windows/i.test(ua)) return "Microphone is off for Daebot. Turn it on in Settings > Privacy & security > Microphone (allow desktop apps), then try again.";
+    return "Microphone is off for Daebot. Allow it in your system privacy settings, then try again.";
+  }
+
   async function startListening(how) {
     if (!canRecord || unavailable || state === "listening" || state === "transcribing") return;
     stopSpeaking();
@@ -160,9 +172,7 @@ export function initVoice(o) {
       stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
     } catch (e) {
       convo = false; setState("idle");
-      return o.notify(e && (e.name === "NotAllowedError" || e.name === "SecurityError")
-        ? "Microphone access is blocked. Allow it for this site in your browser settings, then try again."
-        : "No microphone was found.");
+      return o.notify(e && (e.name === "NotAllowedError" || e.name === "SecurityError") ? micBlockedHelp() : "No microphone was found.");
     }
     if (state === "listening") { stream.getTracks().forEach((t) => t.stop()); return; }
     const ctx = new AC();
