@@ -223,5 +223,6 @@ test("the Swift helper speaks the contract: every op, EventKit full access on ma
   assert.match(swift, /standardInput\.readDataToEndOfFile/);
   assert.match(swift, /let maxEvents = 500/);
   assert.match(swift, /allowsModify/);
+  assert.match(swift, /The calendar can be searched four years at a time\. Ask for a shorter range\./, "same four-year limit and wording as the iPhone app");
   assert.match(swift, /calendarTitle/);
 });

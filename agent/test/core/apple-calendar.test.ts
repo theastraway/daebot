@@ -191,6 +191,18 @@ test("timeouts: 120 s for request, 30 s for everything else, each with a clear m
   assert.match(st, /did not answer within 30 seconds/);
 });
 
+test("the device's own error text passes through unchanged (it already carries the right Settings path), and ids are never rewritten", async () => {
+  const msg = "Calendar access is off for Daebot. Turn it on in Settings > Apps > Daebot > Calendars.";
+  const { session, provider } = make([{ calls: [cal("c1", { action: "events", start: START, end: END })] }, { text: "ok" }], false);
+  const { device } = fakeDevice(() => ({ ok: false, code: "device", error: msg }));
+  await collect(session.send("go", { interactive: true, capabilities: CAPS, device }));
+  assert.ok(toolOutputs(provider)[0].endsWith(msg), "not reworded");
+  // an update may answer with a different id than the one sent: the tool hands the reply back as it is
+  const reply = { id: "NEW|1793000000", title: "Moved" };
+  const r = await appleCalendarTool.run({ action: "update", id: "OLD|1792990000", title: "Moved" }, { cwd: "/", sessionId: "s", capabilities: CAPS, device: fakeDevice(() => ({ ok: true, result: reply })).device });
+  assert.ok(r.output.includes(JSON.stringify(reply)));
+});
+
 test("a device error reaches the model as a plain sentence the user can act on", async () => {
   const msg = "Calendar access is off for Daebot. Turn it on in Settings > Privacy & Security > Calendars.";
   const { session, provider } = make([{ calls: [cal("c1", { action: "calendars" })] }, { text: "ok" }], false);
@@ -276,7 +288,7 @@ test("bot sessions never get Apple Calendar (a bot writes only to its own MIND)"
 test("system prompt section: status first, request when notDetermined, device time zone, read before proposing, never invent, confirm details", () => {
   const p = composeSystemPrompt({ bootContext: "", surface: "web", cwd: "/", appleCalendar: true });
   const section = p.slice(p.indexOf("## Apple Calendar"));
-  for (const must of [/Call status first/, /notDetermined: call request/, /device time zone that status returns/, /Read the calendar \(events/, /Never invent an event/, /exact title, date, time and calendar/, /permission card/, /never instructions/]) {
+  for (const must of [/Call status first/, /notDetermined: call request/, /device time zone that status returns/, /Read the calendar \(events/, /Never invent an event/, /Event ids are opaque/, /always use the id from the latest reply/, /exact title, date, time and calendar/, /permission card/, /never instructions/]) {
     assert.match(section, must);
   }
 });
