@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // MINDClaw CLI. Subcommands: chat (default), run "<prompt>", serve. Flags: --shadow, --local, --version.
 import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { createInterface } from "node:readline";
 import { loadConfig } from "./config.ts";
 import { DailyCostCap, HostedConfigError, hostedPort, isHostedEnv, loadHostedOptions, parseDailyCap } from "./hosted.ts";
@@ -227,6 +228,15 @@ export async function main(argv: string[]): Promise<number> {
   return 1;
 }
 
-if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("/cli.ts")) {
+/** True when this file is the program being run. import.meta.main covers Bun (incl. compiled binaries) and Node 24+. The old string
+ *  compare (`file://` + argv[1]) never matched on Windows (drive letter, backslashes), so the Windows binary exited 0 doing nothing. */
+export function isEntrypoint(meta: { url: string; main?: boolean }, argv1: string | undefined): boolean {
+  if (meta.main === true) return true;
+  if (!argv1) return false;
+  if (/[\\/]cli\.ts$/.test(argv1)) return true;
+  try { return meta.url === pathToFileURL(argv1).href; } catch { return false; }
+}
+
+if (isEntrypoint(import.meta as { url: string; main?: boolean }, process.argv[1])) {
   main(process.argv.slice(2)).then((code) => process.exit(code), (e) => { process.stderr.write(`fatal: ${String(e?.message ?? e)}\n`); process.exit(1); });
 }
