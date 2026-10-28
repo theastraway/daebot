@@ -511,3 +511,9 @@ button.model-badge[aria-expanded="true"] { box-shadow: 0 0 0 1px rgba(255,255,25
 .app-field { display: grid; gap: 4px; font-size: 13px; color: var(--ink-2); }
 .app-field input { font: inherit; font-size: 14px; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); width: 100%; box-sizing: border-box; }
 .app-form .row { display: flex; gap: 8px; }
+
+.queue { display: grid; gap: 4px; margin: 0 0 6px; }
+.queue-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 10px; border: 1px dashed var(--line-strong); border-radius: 10px; background: var(--surface); font-size: 13px; color: var(--ink-2); }
+.queue-tag { flex: none; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); }
+.queue-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queue-x { flex: none; font-size: 16px; line-height: 1; padding: 2px 6px; }
