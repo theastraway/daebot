@@ -20,7 +20,15 @@ const MAX_RULES = 500;
 const MAX_PATTERNS = 400;
 
 export interface PatternStat { label: string; tool: string; matcher: Matcher; allow: number; deny: number; lastAt: number }
-interface FileShape { v: 1; mode: PermissionMode; rules: PermissionRule[]; patterns: Record<string, PatternStat> }
+/** The Bypass waiver: recorded per account, server side. Without one the server refuses to honor bypass anywhere. */
+export interface Waiver { at: number; version: number }
+/** Bump when the waiver text changes: an older acceptance no longer counts. */
+export const WAIVER_VERSION = 1;
+export const WAIVER_TEXT = "I understand this gives the AI permission to take any action without asking, including sending messages, deleting data and spending money, and that every action it takes is my responsibility.";
+/** Per-chat mode: the three account modes plus bypass (chat level only, never an account default). */
+export type SessionPermMode = PermissionMode | "bypass";
+export const isSessionMode = (m: unknown): m is SessionPermMode => m === "bypass" || isMode(m);
+interface FileShape { v: 1; mode: PermissionMode; rules: PermissionRule[]; patterns: Record<string, PatternStat>; waiver?: Waiver }
 
 function seg(s: string): string {
   const v = s.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 80);
@@ -32,6 +40,7 @@ function clean(raw: unknown): FileShape {
   if (!raw || typeof raw !== "object") return out;
   const j = raw as Partial<FileShape>;
   if (isMode(j.mode)) out.mode = j.mode;
+  if (j.waiver && typeof j.waiver === "object" && Number.isFinite(Number(j.waiver.at)) && Number.isInteger(Number(j.waiver.version))) out.waiver = { at: Number(j.waiver.at), version: Number(j.waiver.version) };
   for (const r of Array.isArray(j.rules) ? j.rules : []) {
     try {
       const v = validateRule({ effect: r.effect, tool: r.tool, matcher: r.matcher });
@@ -86,6 +95,16 @@ export class PermissionStore {
     const d = this.load();
     this.save({ ...d, mode: m });
   }
+
+  /** The recorded waiver, only when it is for the current text. */
+  waiver(): Waiver | undefined { const w = this.load().waiver; return w && w.version === WAIVER_VERSION ? { ...w } : undefined; }
+  acceptWaiver(now = Date.now()): Waiver {
+    const d = this.load();
+    const w: Waiver = { at: now, version: WAIVER_VERSION };
+    this.save({ ...d, waiver: w });
+    return { ...w };
+  }
+  revokeWaiver(): void { const d = this.load(); if (!d.waiver) return; const { waiver: _w, ...rest } = d; this.save(rest); }
 
   rules(): PermissionRule[] { return this.load().rules.map((r) => ({ ...r, matcher: { ...r.matcher } })); }
 

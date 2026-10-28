@@ -24,6 +24,8 @@ export interface StoredSession {
   peer?: string;
   /** Model this session runs on (absent = the default). */
   model?: string;
+  /** This chat's permission mode (absent = the account default). "bypass" is only honored with the account's recorded waiver. */
+  permMode?: string;
   /** The latest turn. "running" on disk with no live owner process = the server died mid-turn (shown as interrupted). */
   run?: RunMark;
   createdAt: number;
@@ -33,10 +35,10 @@ export interface StoredSession {
   history: HistoryEvent[];
 }
 
-export interface StoredMeta { id: string; surface: string; title: string; updatedAt: number; owner?: string; bot?: string; peer?: string; model?: string }
+export interface StoredMeta { id: string; surface: string; title: string; updatedAt: number; owner?: string; bot?: string; peer?: string; model?: string; permMode?: string }
 
 function metaOf(rec: StoredSession): StoredMeta {
-  return { id: rec.id, surface: rec.surface, title: rec.title, updatedAt: rec.updatedAt, owner: rec.owner, bot: rec.bot, peer: rec.peer, model: rec.model };
+  return { id: rec.id, surface: rec.surface, title: rec.title, updatedAt: rec.updatedAt, owner: rec.owner, bot: rec.bot, peer: rec.peer, model: rec.model, ...(rec.permMode ? { permMode: rec.permMode } : {}) };
 }
 
 export interface SessionStore {

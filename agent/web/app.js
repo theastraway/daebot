@@ -11,7 +11,8 @@ import { initConnectors } from "/connectors.js";
 import { transcriptBehind } from "/sync.js";
 import { confirmDialog, deleteControl, sessionDeleteText } from "/manage.js";
 import { compareBuild, webUpdateText, WEB_CHECK_MS } from "/webupdate.js";
-import { buildPermissionCard, initPermissions } from "/permissions.js";
+import { buildPermissionCard, initChatMode, initPermissions } from "/permissions.js";
+import { initAccount } from "/account.js";
 import { initSuggest } from "/suggest.js";
 
 const $ = (id) => document.getElementById(id);
@@ -33,6 +34,8 @@ const store = {
 };
 
 // ---------- token: read ?token= once, keep in sessionStorage, scrub the URL ----------
+let account; // the sidebar bar + account menu (account.js), assigned below once the helpers it needs exist
+let chatMode; // the per-chat permission control above the composer
 let token = store.get("sessionStorage", "mc_token") || "";
 {
   const u = new URL(location.href);
@@ -411,6 +414,7 @@ function renderHeader() {
   models.setServed(transcript(tkey()).model || "");
   bots.sync();
   setBusyUi();
+  chatMode?.render();
 }
 // Messages sent while Dae is working wait here (per chat) and go out one by one as each turn ends. Shown above the composer
 // with a remove button; kept in sessionStorage so a reload does not drop them.
@@ -896,6 +900,7 @@ function setOnline(on) {
   state.online = on;
   els.connDot.className = `dot ${on ? "on" : "off"}`;
   renderConn();
+  account?.setOnline(!!on);
 }
 // DAEBOT_BOTS_ENABLED: when the gateway says bots are off, the Sessions|Bots toggle is hidden and the sidebar stays on Sessions.
 function applyBotsFlag(on) {
@@ -947,27 +952,14 @@ async function showDesktopWho() {
     const me = await r.json().catch(() => ({}));
     if (!me.signedIn || !me.username) return;
     state.who = me.username;
-    const el = document.getElementById("who");
-    if (el) { el.textContent = `Signed in as ${me.username}`; el.title = `MIND account ${me.username}`; el.hidden = false; }
+    account?.setIdentity({ username: me.username, owner: false, sub: "MIND account" });
   } catch { /* shown on the next ping */ }
 }
 
-// Desktop app: the Updates bar. The shell checks on launch and every hour, downloads in the background and asks to restart;
-// this bar shows the same state inside the window and lets you check or restart from here.
+// Desktop app: the shell checks for updates on launch and every hour and downloads in the background. The account menu shows
+// "New update available" with a Restart button, and a "Check for updates" item (account.js).
 function desktopUpdates() { const u = desktopBridge()?.updates; return u && typeof u.get === "function" ? u : null; }
-function renderUpdate(s) {
-  const box = document.getElementById("upd"), text = document.getElementById("upd-text"), btn = document.getElementById("upd-btn");
-  if (!box || !s || !s.enabled) { if (box) box.hidden = true; return; }
-  box.hidden = false;
-  box.classList.toggle("ready", s.status === "downloaded");
-  const v = s.currentVersion ? `Daebot ${s.currentVersion}` : "Daebot";
-  const btnOn = (label) => { btn.textContent = label; btn.hidden = false; btn.disabled = false; };
-  btn.hidden = true;
-  if (s.status === "downloaded") { text.textContent = `Update ${s.nextVersion} ready`; btnOn("Restart to update"); btn.onclick = () => { btn.disabled = true; btn.textContent = "Restarting"; desktopUpdates()?.install(); }; }
-  else if (s.status === "available" || s.status === "downloading") text.textContent = `Downloading ${s.nextVersion || "update"}${s.percent ? ` ${s.percent}%` : ""}`;
-  else if (s.status === "checking") text.textContent = "Checking for updates";
-  else { text.textContent = s.status === "error" ? `${v} · update check failed` : `${v} · up to date`; if (s.status === "idle") text.textContent = v; btnOn("Check for updates"); btn.onclick = async () => { btn.disabled = true; renderUpdate(await desktopUpdates()?.check().catch(() => null) || s); }; }
-}
+function renderUpdate(s) { account?.setUpdate(s); }
 async function initDesktopUpdates() {
   const u = desktopUpdates();
   if (!u) return;
@@ -1002,8 +994,7 @@ async function showWho() {
     const me = await r.json();
     state.who = me.username;
     showPlan(me);
-    const el = document.getElementById("who");
-    if (el) { el.textContent = me.owner ? "Signed in as Owner" : `Signed in as ${me.username}`; el.title = me.owner ? "Owner access code" : `MIND account ${me.username}`; el.hidden = false; }
+    account?.setIdentity({ username: me.username, owner: me.owner, planName: me.tierName });
     return true;
   } catch { return true; /* network blip: not a sign-out */ }
 }
@@ -1072,6 +1063,22 @@ const suggest = initSuggest({
 });
 const permissions = initPermissions({ json, h, icon, notify, button: $("btn-perms") });
 $("btn-perms").addEventListener("click", closeSidebar);
+chatMode = initChatMode({
+  json, h, icon, notify,
+  ids: { btn: "mode-btn", label: "mode-label", menu: "mode-menu", chip: "bypass-chip" },
+  ensureSession: () => ensureSession(),
+  getSessionId: () => state.currentId,
+  getRow: () => state.sessions.find((s) => s.id === state.currentId),
+  onRowMode: (id, mode) => { const r = state.sessions.find((s) => s.id === id); if (r) { if (mode) r.permMode = mode; else delete r.permMode; } },
+});
+account = initAccount({
+  json, h, icon, notify,
+  desktop: () => desktopBridge(),
+  isHosted: () => state.hosted,
+  closeSidebar,
+  openApps: () => $("btn-apps").click(),
+});
+if (state.online !== null) account.setOnline(!!state.online);
 
 // ---------- bots + model picker ----------
 const models = initModels({
@@ -1121,6 +1128,7 @@ async function boot() {
   await refreshSessions();
   mcp.load();
   permissions.probe();
+  chatMode.probe();
   let last = null;
   try { last = sessionStorage.getItem("daebot:current"); } catch { /* none */ }
   if (!last) { try { const f = JSON.parse(localStorage.getItem("daebot:inflight") || "null"); if (f && f.id) { last = f.id; sessionStorage.setItem("daebot:bot", f.bot || ""); } } catch { /* none */ } }
@@ -1137,11 +1145,4 @@ async function boot() {
 boot();
 setInterval(ping, 10000);
 setInterval(() => { if ((token || state.hosted) && state.online) refreshSessions(); }, 30000);
-els.btnLogout.addEventListener("click", async () => {
-  const desk = !state.hosted && desktopBridge();
-  if (desk) { desk.signOut(); return; } // the app clears its saved sign-in and shows Sign in with MIND again
-  try { await fetch("/logout", { method: "POST", credentials: "same-origin" }); } catch { /* leaving anyway */ }
-  location.replace("/");
-});
-
 initUpdates();

@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { ChildGateway, waitForHealth } from "./lib/child.mjs";
 import { buildSpawnPlan, findBundledBinary, findNode } from "./lib/launcher.mjs";
 import { clearKey, readConfigJson, readKey, resolveSignIn, saveKey, looksLikeMindKey } from "./lib/credentials.mjs";
+import { AccountStore, accountsPath, dataDirFor } from "./lib/accounts.mjs";
 import { buildSignInPage } from "./lib/signin-page.mjs";
 import { signInWithMind } from "./lib/mind-signin.mjs";
 import { loadConfig, saveKernelMode, configPath, statePath, loadState, writeJson, resolveBounds, desktopHome } from "./lib/config.mjs";
@@ -42,6 +43,8 @@ const smokeHome = SMOKE ? app.getPath("userData") : null;
 // The packaged app runs the bun-compiled binary from resources/bin; development falls back to node + child-entry.mjs.
 const bundledBinary = app.isPackaged && !SMOKE ? findBundledBinary({ resourcesPath: process.resourcesPath }) : null;
 let mindKey = null; // from the sign-in file; handed to the gateway child through its environment only, never logged
+const accounts = new AccountStore(SMOKE ? join(app.getPath("userData"), "accounts.json") : accountsPath()); // every remembered MIND account (keys stay here)
+let activeAcct = null; // the account the gateway child is running as; picks its own data directory
 
 let win = null;
 let tray = null;
@@ -56,6 +59,7 @@ const gateway = new ChildGateway({
     agentRoot, entry,
     binaryPath: bundledBinary,
     mindKey: mindKey ?? undefined,
+    dataDir: dataDirFor(activeAcct),
     kernelMode: config.kernelMode,
     nodePath: findNode(),
     electronPath: process.execPath,
@@ -243,10 +247,15 @@ function showNotification({ title, body }) {
   n.show();
 }
 
-ipcMain.on("desktop:signout", (e) => {
+ipcMain.on("desktop:signout", (e, opts) => {
   if (classifyUrl(e.senderFrame?.url ?? "", gatewayInfo?.origin) !== "internal") return; // only our own UI
-  void signOut();
+  void signOut({ all: !!(opts && typeof opts === "object" && opts.all === true) });
 });
+
+// Remembered accounts. The UI sees { id, name, active } only; keys never leave this process.
+ipcMain.handle("desktop:accounts-list", (e) => (fromOurUi(e) ? accounts.publicList() : []));
+ipcMain.handle("desktop:account-switch", async (e, id) => (fromOurUi(e) && typeof id === "string" ? switchAccount(id) : { ok: false }));
+ipcMain.handle("desktop:account-add", async (e) => (fromOurUi(e) ? addAccount() : { ok: false }));
 
 // In-window update control (the Updates bar in the sidebar). Same controller as the tray and app menu.
 const fromOurUi = (e) => classifyUrl(e.senderFrame?.url ?? "", gatewayInfo?.origin) === "internal";
@@ -273,7 +282,8 @@ async function checkKey(key) {
     const r = await fetch(`${mindBaseUrl()}/profile`, { headers: { "X-API-Key": key.trim(), accept: "application/json" }, signal: AbortSignal.timeout(15_000) });
     if (r.status === 401 || r.status === 403) return { ok: false, error: "MIND did not accept that key." };
     if (!r.ok) return { ok: false, error: "MIND could not check that key right now. Try again in a moment." };
-    return { ok: true };
+    const j = await r.json().catch(() => ({}));
+    return { ok: true, username: typeof j?.username === "string" ? j.username.slice(0, 80) : "" };
   } catch {
     return { ok: false, error: "Could not reach MIND. Check your connection and try again." };
   }
@@ -328,15 +338,88 @@ function promptForKey() {
 /** Resolves the billing mode and, on first run, asks for the key. Returns false if the user closed the prompt. */
 async function ensureSignedIn() {
   if (SMOKE) return true;
-  const r = resolveSignIn({ env: process.env, saved: readKey(), config: readConfigJson(join(desktopHome(), "config.json")) });
-  if (r.mode === "mind") { mindKey = r.key ?? null; return true; }
+  // A remembered account wins: its key is the active one, and the legacy key file mirrors it.
+  const a = accounts.active();
+  if (a) {
+    activeAcct = a;
+    mindKey = a.key;
+    if (readKey() !== a.key) { try { saveKey(a.key); } catch { /* the store still has it */ } }
+    return true;
+  }
+  const saved = readKey();
+  const r = resolveSignIn({ env: process.env, saved, config: readConfigJson(join(desktopHome(), "config.json")) });
+  if (r.mode === "mind") {
+    mindKey = r.key ?? null;
+    // First run with accounts: the key that was already signed in becomes the first remembered account and keeps its existing chats (default data directory).
+    if (saved && r.key) { await registerAccount(saved, { legacy: true }); }
+    return true;
+  }
   if (r.mode === "openrouter") { mindKey = null; return true; }
   const k = await promptForKey();
   mindKey = k;
+  if (k) await registerAccount(k);
   return k !== null;
 }
 
-async function signOut() {
+/** Remembers a key as an account (name looked up from MIND, best effort) and makes it the active one. */
+async function registerAccount(key, { legacy = false } = {}) {
+  let name = "";
+  try { const c = await checkKey(key); if (c.ok) name = c.username ?? ""; } catch { /* the name is cosmetic */ }
+  try { accounts.add({ key, name, legacy }); } catch (e) { log("could not remember the account:", String(e?.message ?? e)); return; }
+  activeAcct = accounts.active() ?? null;
+}
+
+/** Restarts the gateway child as the (new) active account and reloads the window. Nothing of the previous account stays loaded. */
+async function restartAsActive() {
+  stopWatcher();
+  gatewayInfo = null;
+  await gateway.stop();
+  if (win && !win.isDestroyed()) await loadUi();
+}
+
+async function switchAccount(id) {
+  const a = accounts.switchTo(id);
+  if (!a) return { ok: false, error: "That account is not remembered on this computer." };
+  try { saveKey(a.key); } catch (e) { log("could not mirror the sign-in:", String(e?.message ?? e)); }
+  activeAcct = a;
+  mindKey = a.key;
+  await restartAsActive();
+  return { ok: true, name: a.name };
+}
+
+let addingAccount = false;
+async function addAccount() {
+  if (addingAccount) return { ok: false, error: "Sign-in is already open." };
+  addingAccount = true;
+  const prevKey = readKey();
+  try {
+    const k = await promptForKey();
+    if (!k) { // closed without signing in: put the previous mirror back (promptForKey saved the new key only on success)
+      if (prevKey && readKey() !== prevKey) { try { saveKey(prevKey); } catch { /* mirror only */ } }
+      return { ok: false, cancelled: true };
+    }
+    await registerAccount(k);
+    mindKey = k;
+    await restartAsActive();
+    return { ok: true };
+  } finally { addingAccount = false; }
+}
+
+async function signOut(opts = {}) {
+  const cur = accounts.active();
+  // Sign out of the ACTIVE account only; another remembered account takes over. "Sign out of all" (or the last account) goes to the sign-in window.
+  if (cur && opts.all !== true) {
+    const next = accounts.remove(cur.id);
+    if (next) {
+      try { saveKey(next.key); } catch { /* mirror only */ }
+      activeAcct = next;
+      mindKey = next.key;
+      await restartAsActive();
+      return;
+    }
+  }
+  accounts.clear();
+  activeAcct = null;
   clearKey();
   mindKey = null;
   stopWatcher();

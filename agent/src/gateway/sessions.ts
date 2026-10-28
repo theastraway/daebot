@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AgentEvent, AgentSession, Runtime } from "../types.ts";
+import type { SessionPermMode } from "../permissions/store.ts";
 
 export class BusyError extends Error {}
 export class NotFoundError extends Error {}
@@ -29,7 +30,7 @@ export interface LiveSession {
   turnNonce: string;
 }
 
-export interface SessionRow { id: string; surface: string; title: string; updatedAt: number; live: boolean; busy: boolean; bot?: string; peer?: string; model?: string }
+export interface SessionRow { id: string; surface: string; title: string; updatedAt: number; live: boolean; busy: boolean; bot?: string; peer?: string; model?: string; permMode?: string }
 
 export const IDLE_MS = 6 * 60 * 60 * 1000;
 export const EMPTY_IDLE_MS = 15 * 60 * 1000; // a session nobody has written to is dropped sooner
@@ -149,6 +150,7 @@ export class SessionManager {
         ...((prev?.bot ?? ls.bot) ? { bot: prev?.bot ?? ls.bot } : {}),
         ...((prev?.peer ?? ls.peer) ? { peer: prev?.peer ?? ls.peer } : {}),
         ...(prev?.model ? { model: prev.model } : {}),
+        ...(prev?.permMode ? { permMode: prev.permMode } : {}),
       });
     }
     return [...out.values()].filter((r) => (filter.bot ? r.bot === filter.bot : !r.bot)).sort((a, b) => b.updatedAt - a.updatedAt);
@@ -219,6 +221,14 @@ export class SessionManager {
     const ls = this.live.get(id);
     if (!ls || !ls.session.setModel) return false;
     ls.session.setModel(model);
+    return true;
+  }
+
+  /** Changes a live session's permission mode (undefined = the account default). The caller checked bypass against the waiver. */
+  setPermMode(id: string, mode: SessionPermMode | undefined): boolean {
+    const ls = this.live.get(id);
+    if (!ls || !ls.session.setPermMode) return false;
+    ls.session.setPermMode(mode);
     return true;
   }
 

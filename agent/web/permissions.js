@@ -30,6 +30,19 @@ export const MODE_INFO = {
   everything: { name: "Ask for everything", desc: "A card for every action except reading your own files and MIND." },
 };
 
+/** The per-chat choices in the composer. "default" = follow the account setting in Settings > Permissions. */
+export const CHAT_MODES = [
+  { id: "risky", name: "Ask for risky things", desc: "Cards only for anything that reaches other people, deletes, pays or posts publicly." },
+  { id: "writes", name: "Ask before changes", desc: "Also a card before a command, a file change, or a change in your apps." },
+  { id: "everything", name: "Ask for everything", desc: "A card for every action except reading your own files and MIND." },
+  { id: "bypass", name: "Bypass permissions", desc: "No cards, no confirmations. Your own Always-deny rules still apply.", danger: true },
+];
+
+export function chatModeName(mode, accountMode) {
+  const m = CHAT_MODES.find((x) => x.id === (mode || accountMode));
+  return m ? m.name : "Ask for risky things";
+}
+
 export function ruleLine(r) {
   return `${r.effect === "allow" ? "Allow" : "Deny"} · ${r.tool} · ${r.scope}`;
 }
@@ -201,6 +214,22 @@ export function initPermissions({ json, h, icon, notify, button }) {
     sec.append(modes);
     card.append(sec);
 
+    if (snap.waiver) {
+      const ws = h("section", "apps-sec");
+      ws.append(h("h3", "", "Bypass permissions"));
+      ws.append(h("p", "apps-note", snap.waiver.accepted
+        ? `You accepted the waiver${snap.waiver.at ? ` on ${new Date(snap.waiver.at).toLocaleDateString()}` : ""}. Bypass can be turned on per chat, from the permissions control above the message box.`
+        : "Bypass lets Daebot act without asking in a chat where you turn it on. You accept a waiver the first time you do."));
+      if (snap.waiver.accepted) {
+        const row = h("div", "perm-waiver");
+        const rv = h("button", "btn-quiet", "Withdraw the waiver"); rv.type = "button";
+        rv.addEventListener("click", async () => { try { await json("/permissions/waiver", { method: "DELETE" }); await load(); } catch (e) { notify(`Could not withdraw the waiver: ${e.message}`); } });
+        row.append(rv);
+        ws.append(row);
+      }
+      card.append(ws);
+    }
+
     const rs = h("section", "apps-sec");
     rs.append(h("h3", "", `Your rules (${snap.rules.length})`));
     if (!snap.rules.length) rs.append(h("p", "apps-note", "No rules yet. Press Always allow or Always deny on a permission card and the rule shows up here."));
@@ -242,4 +271,160 @@ export function initPermissions({ json, h, icon, notify, button }) {
     try { await json("/permissions"); button.hidden = false; } catch { button.hidden = true; }
   }
   return { open, load, probe };
+}
+
+
+// ---------------------------------------------------------------- Bypass waiver
+
+/**
+ * The waiver modal. Resolves true only after the box is ticked, the button pressed AND the server recorded the acceptance (POST /permissions/waiver).
+ * The button stays disabled until the box is ticked; the server refuses bypass without a recorded waiver no matter what this page does.
+ */
+export function askWaiver({ json, h, icon, notify, info }) {
+  return new Promise((resolve) => {
+    const text = (info && info.text) || "I understand this gives the AI permission to take any action without asking, including sending messages, deleting data and spending money, and that every action it takes is my responsibility.";
+    const version = info && Number.isInteger(info.version) ? info.version : 1;
+    const modal = h("div", "gate-token modal"); modal.id = "waiver-modal";
+    const card = h("div", "token-card bot-card waiver-card"); card.setAttribute("role", "dialog"); card.setAttribute("aria-modal", "true"); card.setAttribute("aria-labelledby", "waiver-title");
+    card.append(h("h2", "", "Turn on Bypass permissions"));
+    card.lastChild.id = "waiver-title";
+    card.append(h("p", "", "Daebot will stop asking. It can act on its own in any chat where Bypass is on."));
+    card.append(h("p", "waiver-text", text));
+    const lab = h("label", "waiver-check");
+    const box = document.createElement("input"); box.type = "checkbox"; box.id = "waiver-box";
+    lab.append(box, h("span", "", "I have read this and I accept."));
+    card.append(lab);
+    const err = h("p", "err", ""); err.hidden = true; err.setAttribute("role", "alert");
+    card.append(err);
+    const row = h("div", "row");
+    const go = h("button", "btn-danger solid", "Turn on Bypass"); go.type = "button"; go.disabled = true; go.id = "waiver-accept";
+    const no = h("button", "btn-quiet", "Cancel"); no.type = "button";
+    row.append(go, no);
+    card.append(row);
+    modal.append(card);
+    document.body.append(modal);
+    const prev = document.activeElement;
+    const close = (v) => { document.removeEventListener("keydown", onKey); modal.remove(); try { prev && prev.focus && prev.focus(); } catch { /* gone */ } resolve(v); };
+    const onKey = (e) => { if (e.key === "Escape") close(false); };
+    document.addEventListener("keydown", onKey);
+    box.addEventListener("change", () => { go.disabled = !box.checked; });
+    no.addEventListener("click", () => close(false));
+    modal.addEventListener("click", (e) => { if (e.target === modal) close(false); });
+    go.addEventListener("click", async () => {
+      if (!box.checked) return;
+      go.disabled = true; err.hidden = true;
+      try {
+        await json("/permissions/waiver", { method: "POST", body: JSON.stringify({ acknowledged: true, version }) });
+        close(true);
+      } catch (e) {
+        err.textContent = `Could not record your acceptance: ${e.message}`; err.hidden = false; go.disabled = !box.checked;
+      }
+    });
+    box.focus();
+  });
+}
+
+// ---------------------------------------------------------------- per-chat mode (composer)
+
+/**
+ * The mode control above the composer and the red "Bypass on" chip.
+ *   getSessionId(): the chat on screen (creates nothing); ensureSession(): its id, creating the session first if needed.
+ *   getRow(): the session list row of the chat on screen (carries permMode from the server) or undefined.
+ * The mode is stored with the session on the server (PATCH /sessions/:id { permMode }); null falls back to the account default.
+ */
+export function initChatMode({ json, h, icon, notify, ids, ensureSession, getSessionId, getRow, onRowMode }) {
+  const btn = document.getElementById(ids.btn), label = document.getElementById(ids.label), menu = document.getElementById(ids.menu), chip = document.getElementById(ids.chip);
+  if (!btn || !menu || !chip) return { render() {}, probe() {} };
+  let snap = null;            // { mode (account default), waiver: {accepted, text, version} }
+  const local = new Map();    // sessionId -> mode set in this page (the list row can lag a refresh)
+  let open = false;
+
+  const modeOf = () => {
+    const id = getSessionId();
+    if (id && local.has(id)) return local.get(id);
+    const row = getRow();
+    return row && row.permMode ? row.permMode : null;
+  };
+  const effective = () => {
+    const m = modeOf();
+    if (m === "bypass" && !(snap && snap.waiver && snap.waiver.accepted)) return snap ? snap.mode : null; // the server ignores it without a waiver
+    return m;
+  };
+
+  function render() {
+    if (!snap) { btn.hidden = true; chip.hidden = true; return; }
+    const eff = effective();
+    btn.hidden = false;
+    label.textContent = chatModeName(eff, snap.mode);
+    btn.classList.toggle("is-bypass", eff === "bypass");
+    chip.hidden = eff !== "bypass";
+    if (open) paintMenu();
+  }
+
+  function paintMenu() {
+    menu.replaceChildren();
+    const eff = effective() || snap.mode;
+    for (const m of CHAT_MODES) {
+      const it = h("button", `mm-item${m.danger ? " bypass" : ""}`); it.type = "button"; it.setAttribute("role", "menuitemradio"); it.setAttribute("aria-checked", String(eff === m.id));
+      it.append(icon("i-check"), h("strong", "", m.name), h("small", "", m.id === snap.mode && !modeOf() ? `${m.desc} (your default)` : m.desc));
+      it.addEventListener("click", () => { toggle(false); void choose(m.id); });
+      menu.append(it);
+    }
+  }
+
+  function toggle(on) {
+    open = on;
+    menu.hidden = !on;
+    btn.setAttribute("aria-expanded", String(on));
+    if (on) { paintMenu(); const first = menu.querySelector('[aria-checked="true"]') || menu.firstChild; first && first.focus(); }
+  }
+
+  async function patch(id, mode) {
+    await json(`/sessions/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ permMode: mode }) });
+    local.set(id, mode);
+    if (onRowMode) onRowMode(id, mode);
+  }
+
+  async function choose(mode) {
+    let id;
+    try { id = await ensureSession(); } catch (e) { notify(`Could not start a chat: ${e.message}`); return; }
+    if (!id) return;
+    try {
+      if (mode === "bypass" && !(snap.waiver && snap.waiver.accepted)) {
+        const ok = await askWaiver({ json, h, icon, notify, info: snap.waiver });
+        if (!ok) return;
+        snap.waiver = { ...(snap.waiver || {}), accepted: true };
+      }
+      await patch(id, mode === snap.mode ? null : mode);
+    } catch (e) {
+      if (/waiver_required/.test(String(e.message))) { snap.waiver = { ...(snap.waiver || {}), accepted: false }; notify("Bypass needs the waiver first. Pick Bypass again to accept it."); }
+      else notify(`Could not change the permissions for this chat: ${e.message}`);
+    }
+    render();
+  }
+
+  btn.addEventListener("click", () => toggle(!open));
+  chip.addEventListener("click", async () => {
+    const id = getSessionId();
+    if (!id) return;
+    try { await patch(id, null); } catch (e) { notify(`Could not turn Bypass off: ${e.message}`); }
+    render();
+  });
+  document.addEventListener("click", (e) => { if (open && !menu.contains(e.target) && !btn.contains(e.target)) toggle(false); });
+  document.addEventListener("keydown", (e) => {
+    if (!open) return;
+    if (e.key === "Escape") { e.preventDefault(); toggle(false); btn.focus(); return; }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const items = [...menu.querySelectorAll(".mm-item")];
+      const i = items.indexOf(document.activeElement);
+      items[(i + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus();
+    }
+  });
+
+  async function probe() {
+    try { snap = await json("/permissions"); } catch { snap = null; }
+    render();
+  }
+  return { render, probe, refresh: probe };
 }

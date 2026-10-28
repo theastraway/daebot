@@ -154,7 +154,7 @@ const web = (f: string) => readFileSync(join(import.meta.dirname, "..", "..", "w
 test("web wiring: Apps button at the bottom of the sidebar, the card, brand marks from MIND's files, no innerHTML, only /apps requests", () => {
   const html = web("index.html");
   for (const id of ["btn-apps", "apps-modal", "apps-close", "apps-sections", "apps-live", "i-apps"]) assert.match(html, new RegExp(`id="${id}"`), id);
-  assert.ok(html.indexOf('id="btn-apps"') > html.indexOf('id="plan"') && html.indexOf('id="btn-apps"') < html.indexOf('class="side-foot"'), "Apps sits at the bottom of the sidebar");
+  assert.ok(html.indexOf('id="btn-apps"') > html.indexOf('id="acct-btn"') && html.indexOf('id="btn-apps"') < html.indexOf("</aside>"), "the Apps icon sits in the sidebar's bottom bar, next to the account avatar");
   assert.match(web("app.js"), /from "\/apps\.js"/);
   for (const f of ["apps.js", "apps-icons.js"]) assert.doesNotMatch(web(f).replace(/^\s*\/\/.*$/gm, ""), /innerHTML|insertAdjacentHTML|eval\(|new Function|document\.write/, f);
   assert.doesNotMatch(web("apps.js"), /fetch\(/, "apps.js goes through the app's own api helper");

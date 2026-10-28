@@ -4,14 +4,14 @@
 // pending card. The scope the click picks is an id into option lists this module generated from the real call; no text from
 // the model, a tool result or a request body ever becomes a matcher.
 import { randomUUID } from "node:crypto";
-import { LEARN_ALLOW_AFTER, LEARN_DENY_AFTER, MODES, PermissionStore, isMode } from "./store.ts";
-import type { PermissionMode } from "./store.ts";
+import { LEARN_ALLOW_AFTER, LEARN_DENY_AFTER, MODES, PermissionStore, WAIVER_TEXT, WAIVER_VERSION, isMode } from "./store.ts";
+import type { PermissionMode, SessionPermMode } from "./store.ts";
 import { describeCall, evaluate, oneLineLabel, patternOf, previewArgs, scopeOptions } from "./rules.ts";
 import type { CallFacts, Effect, Evaluation, PermissionRule, ScopeOption } from "./rules.ts";
 import type { AgentEvent, PermissionOption } from "../types.ts";
 
-export { PermissionStore, MODES, isMode } from "./store.ts";
-export type { PermissionMode } from "./store.ts";
+export { PermissionStore, MODES, isMode, isSessionMode, WAIVER_TEXT, WAIVER_VERSION } from "./store.ts";
+export type { PermissionMode, SessionPermMode, Waiver } from "./store.ts";
 export { factsOf, evaluate, scopeOptions, validateRule, matches, patternOf } from "./rules.ts";
 export type { CallFacts, PermissionRule, ScopeOption, Evaluation, Effect } from "./rules.ts";
 
@@ -72,8 +72,10 @@ export class PermissionService {
   noteUse(rule: PermissionRule | undefined): void { if (rule) { try { this.store.touch(rule.id, this.now()); } catch { /* counters are best effort */ } } }
 
   /** Calls the kernel does not already hold for confirmation that the user's mode still wants a card for. */
-  needsPrompt(f: CallFacts): boolean {
-    switch (this.store.mode()) {
+  needsPrompt(f: CallFacts, override?: SessionPermMode): boolean {
+    const m = override ?? this.store.mode();
+    if (m === "bypass") return false; // the loop checks bypassActive() first; a bypass that is not honored never reaches here
+    switch (m) {
       case "writes": return f.cls !== "read";
       case "everything": return !quietRead(f);
       default: return false;
@@ -159,6 +161,16 @@ export class PermissionService {
     return [...this.pending.values()].map((p) => ({ id: p.id, sessionId: p.sessionId, event: p.event }));
   }
 
+  /** True only with a recorded waiver for the current text. The server never honors bypass without it. */
+  waiverAccepted(): boolean { return !!this.store.waiver(); }
+  /** A chat's mode, with bypass honored only when the account has a waiver (otherwise the account default applies). */
+  effectiveMode(session: SessionPermMode | undefined): SessionPermMode {
+    if (session === "bypass") return this.waiverAccepted() ? "bypass" : this.store.mode();
+    return session ?? this.store.mode();
+  }
+  /** Sets a chat's mode only if allowed: bypass needs the waiver. */
+  canUseMode(m: SessionPermMode): boolean { return m !== "bypass" || this.waiverAccepted(); }
+
   /** Everything the Settings > Permissions panel shows. */
   snapshot() {
     return {
@@ -166,6 +178,7 @@ export class PermissionService {
       rules: this.store.rules().sort((a, b) => b.createdAt - a.createdAt),
       learned: this.store.learnedDenies().map((p) => ({ key: p.key, label: p.label, deny: p.deny, allow: p.allow })),
       pending: this.pendingList(),
+      waiver: { accepted: this.waiverAccepted(), at: this.store.waiver()?.at ?? null, version: WAIVER_VERSION, text: WAIVER_TEXT },
     };
   }
 
