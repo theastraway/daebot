@@ -167,6 +167,7 @@ export interface VisionConfig {
 export interface Config {
   mindBaseUrl: string;       // default https://m-i-n-d.ai/developer/v1
   mindApiKey: string;        // from env MIND_API_KEY or ~/.mindclaw/config.json
+  mindBackendUrl?: string;   // env MIND_BACKEND_URL; MIND's API origin for the routes that live outside /developer/v1 (Email Manager). Default: derived from mindBaseUrl.
   mindSessionApiKey?: string; // env MIND_SESSION_API_KEY; key with chat:write for Agent Session sync; falls back to mindApiKey
   clientNames?: string[];    // optional registry of client entity names (env MINDCLAW_CLIENT_NAMES, comma separated); default empty
   openrouterKey: string;     // env OPENROUTER_API_KEY (not needed when billing is "mind")

@@ -9,6 +9,10 @@ export interface Route {
   query?: Record<string, string>;
   body?: Record<string, unknown>;
   timeoutMs?: number;                 // override
+  /** "backend": MIND's API origin (Email Manager lives at /email/*, outside /developer/v1). Default: the /developer/v1 base. */
+  root?: "backend";
+  /** Never re-send this request after a network error or a 502/503 (a send or a create must not run twice). */
+  noRetry?: boolean;
 }
 
 // Args that never go to MIND.
@@ -94,12 +98,15 @@ export function routeFor(toolIn: string, args: Record<string, unknown>): Route {
         complete: (a) => ({ method: "POST", path: `/life/items/${need(a, "item_id", tool, "complete")}/complete`, body: {} }),
         move: (a) => ({ method: "POST", path: `/life/items/${need(a, "item_id", tool, "move")}/move`, body: { new_status: a.new_status } }),
         calendar: (a) => ({ method: "GET", path: "/life/calendar", query: toQuery(clean(a)) }),
+        // Adding an event to the MIND Life calendar (mind_calendar create). Never retried: a second POST would be a second event.
+        calendar_create: (a) => ({ method: "POST", path: "/life/calendar", body: clean(a), noRetry: true }),
       });
     case "crm":
       return crud(tool, "/crm/contacts", "contact_id", args, {
         log_activity: (a) => ({ method: "POST", path: `/crm/contacts/${need(a, "contact_id", tool, "log_activity")}/activities`, body: clean(a, ["contact_id"]) }),
         activities: (a) => ({ method: "GET", path: `/crm/contacts/${need(a, "contact_id", tool, "activities")}/activities` }),
       });
+    case "email": return emailRoute(args, action || "inbox");
     case "checklists":
       return crud(tool, "/checklists", "checklist_id", args);
     case "tasks":
@@ -138,5 +145,30 @@ export function routeFor(toolIn: string, args: Record<string, unknown>): Route {
     }
     default:
       return { method: "POST", path: `/${enc(tool)}`, body: clean(args) };
+  }
+}
+
+// MIND Email Manager (the mailbox synced from Google or Microsoft 365). The REST routes live at the backend origin, not under
+// /developer/v1: GET /email/status|inbox|search|thread/<id>|message/<id>, POST /email/draft|draft/save|send. Found in the MIND MCP
+// server (mind_email) and probed read-only on 2026-10-28. A send or a saved draft is never retried.
+function pick(args: Record<string, unknown>, keys: string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of keys) if (args[k] !== undefined && args[k] !== null && args[k] !== "") out[k] = args[k];
+  return out;
+}
+
+function emailRoute(args: Record<string, unknown>, action: string): Route {
+  const root = "backend" as const;
+  const timeoutMs = 30_000;
+  switch (action) {
+    case "status": return { method: "GET", path: "/email/status", root, timeoutMs };
+    case "inbox": return { method: "GET", path: "/email/inbox", root, timeoutMs, query: toQuery(pick(args, ["top", "unread_only", "page_token"])) };
+    case "search": return { method: "GET", path: "/email/search", root, timeoutMs, query: toQuery(pick(args, ["q", "limit"])) };
+    case "thread": return { method: "GET", path: `/email/thread/${need(args, "thread_id", "email", action)}`, root, timeoutMs };
+    case "message": return { method: "GET", path: `/email/message/${need(args, "message_id", "email", action)}`, root, timeoutMs };
+    case "draft": return { method: "POST", path: "/email/draft", root, timeoutMs: 90_000, noRetry: true, body: pick(args, ["message_id", "instructions"]) };
+    case "save_draft": return { method: "POST", path: "/email/draft/save", root, timeoutMs, noRetry: true, body: pick(args, ["message_id", "body_text"]) };
+    case "send": return { method: "POST", path: "/email/send", root, timeoutMs, noRetry: true, body: pick(args, ["to", "cc", "subject", "body_text", "reply_to_message_id"]) };
+    default: throw new Error(`email: unknown action '${action}'`);
   }
 }

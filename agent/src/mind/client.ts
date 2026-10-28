@@ -14,6 +14,20 @@ export interface MindClientOpts {
   bot?: string;
 }
 
+/** MIND's public sites proxy /developer/* to the API service but serve the web app for everything else, so the routes outside /developer/v1 are called on the API service itself. */
+export const MIND_API_ORIGIN = "https://mindapp.onrender.com";
+const MIND_PUBLIC_HOSTS = new Set(["m-i-n-d.ai", "www.m-i-n-d.ai"]);
+
+/** Where routes that live outside /developer/v1 are served: MIND_BACKEND_URL when set; the API service when the base is MIND's public site; otherwise the base's own origin (self-hosted MIND, tests). */
+export function backendOrigin(cfg: Pick<Config, "mindBaseUrl" | "mindBackendUrl">): string {
+  const pick = (u: string): string | undefined => { try { return new URL(u).origin; } catch { return undefined; } };
+  if (cfg.mindBackendUrl) { const o = pick(cfg.mindBackendUrl); if (o) return o; }
+  try {
+    const u = new URL(cfg.mindBaseUrl || "https://m-i-n-d.ai/developer/v1");
+    return MIND_PUBLIC_HOSTS.has(u.hostname.toLowerCase()) ? MIND_API_ORIGIN : u.origin;
+  } catch { return MIND_API_ORIGIN; }
+}
+
 const DEFAULT_CONTEXT_SECTIONS = ["soul", "user", "rules", "priorities", "recent"];
 
 class MindHttpError extends Error {
@@ -39,6 +53,7 @@ export function createMindClient(cfg: Config, fetchImpl?: typeof fetch, opts: Mi
   const curKey = (): string => opts.getKey?.() ?? cfg.mindApiKey;
   const base = (cfg.mindBaseUrl || "https://m-i-n-d.ai/developer/v1").replace(/\/+$/, "");
   const origin = (() => { try { return new URL(base).origin; } catch { return base; } })();
+  const backend = backendOrigin(cfg);
   const timeoutMs = opts.timeoutMs ?? 60_000;
   const contextTimeoutMs = opts.contextTimeoutMs ?? 120_000;
   const retryDelayMs = opts.retryDelayMs ?? 400;
@@ -52,7 +67,7 @@ export function createMindClient(cfg: Config, fetchImpl?: typeof fetch, opts: Mi
   }
 
   function urlFor(route: Route): string {
-    const root = route.path.startsWith("/admin") ? origin : base;
+    const root = route.root === "backend" ? backend : route.path.startsWith("/admin") ? origin : base;
     const qs = route.query && Object.keys(route.query).length ? "?" + new URLSearchParams(route.query).toString() : "";
     return root + route.path + qs;
   }
@@ -113,7 +128,7 @@ export function createMindClient(cfg: Config, fetchImpl?: typeof fetch, opts: Mi
           try { return await once(label, route, ms, signal); } catch (e2) { throw surfaced(scrub((e2 as Error).message), e2); }
         }
       }
-      if (signal?.aborted || !isRetryable(e)) throw surfaced(scrub((e as Error).message), e);
+      if (signal?.aborted || route.noRetry || !isRetryable(e)) throw surfaced(scrub((e as Error).message), e);
       if (retryDelayMs > 0) await new Promise((r) => setTimeout(r, retryDelayMs));
       try {
         return await once(label, route, ms, signal);

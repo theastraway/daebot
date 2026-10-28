@@ -7,6 +7,12 @@
 // "sign in with MIND" answer instead of the server key's integrations.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Principal } from "../auth/users.ts";
+import { normalizeProviders } from "../mind/integrations.ts";
+import type { AppRow } from "../mind/integrations.ts";
+
+// The provider list is read in ../mind/integrations.ts (shared with the system prompt's "Connected apps" section); re-exported here.
+export { normalizeProviders };
+export type { AppRow };
 
 const UPSTREAM_TIMEOUT_MS = 20_000;
 const PROVIDER_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
@@ -20,17 +26,8 @@ export interface AppsOptions {
   /** Where MIND bounces the browser after a provider approves, e.g. https://daebot.live/ . Optional. */
   returnTo?: string;
   fetchImpl?: typeof fetch;
-}
-
-export interface AppRow {
-  provider: string;
-  name: string;
-  blurb: string;
-  auth: "oauth" | "credentials";
-  configured: boolean;
-  connected: boolean;
-  needsReconnect: boolean;
-  account: string | null;
+  /** Called after this user's apps were read, connected or disconnected, so what Daebot knows about them is read again on the next turn. */
+  onChanged?(p: Principal): void;
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -40,28 +37,6 @@ function json(res: ServerResponse, status: number, body: unknown): void {
 }
 
 const str = (v: unknown, max: number): string => (typeof v === "string" ? v.trim().slice(0, max) : "");
-
-/** MIND's provider list reduced to what the card shows. Unknown shapes are dropped, never forwarded. */
-export function normalizeProviders(payload: any): { enabled: boolean; providers: AppRow[] } {
-  const raw = Array.isArray(payload?.providers) ? payload.providers : [];
-  const providers: AppRow[] = [];
-  for (const p of raw) {
-    const id = str(p?.provider, 40);
-    if (!PROVIDER_RE.test(id)) continue;
-    const connected = p.connected === true;
-    providers.push({
-      provider: id,
-      name: str(p.display_name, 60) || id,
-      blurb: str(p.blurb, 200),
-      auth: p.auth === "credentials" ? "credentials" : "oauth",
-      configured: p.configured !== false,
-      connected,
-      needsReconnect: connected && (p.needs_reauth === true || p.reconnect_required === true || p.status === "error" || p.status === "reauth_required"),
-      account: str(p.account_label, 120) || null,
-    });
-  }
-  return { enabled: payload?.integrations_enabled !== false, providers };
-}
 
 function mapError(status: number): { status: number; body: Record<string, unknown> } {
   if (status === 401 || status === 403) return { status: 401, body: { error: "mind_key_rejected", message: "MIND did not accept your key for apps. Sign in again." } };
@@ -92,6 +67,7 @@ export function createAppsHandler(o: AppsOptions): (req: IncomingMessage, res: S
         const r = await f(`${base}/integrations`, { headers: { "X-API-Key": key!, Accept: "application/json" }, signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) });
         if (!r.ok) { const m = mapError(r.status); return json(res, m.status, m.body); }
         const j = await r.json().catch(() => ({}));
+        try { o.onChanged?.(p); } catch { /* best effort */ }
         return json(res, 200, { signedIn: true, ...normalizeProviders(j) });
       } catch { return json(res, 502, { error: "apps_failed", message: "MIND could not be reached. Try again in a moment." }); }
     }
@@ -113,6 +89,7 @@ export function createAppsHandler(o: AppsOptions): (req: IncomingMessage, res: S
       });
       if (!r.ok) { const e = mapError(r.status); return json(res, e.status, e.body); }
       const j: any = await r.json().catch(() => ({}));
+      try { o.onChanged?.(p); } catch { /* best effort */ }
       if (action === "disconnect") return json(res, 200, { ok: true, status: str(j?.status, 40) || "disconnected" });
       if (j?.auth_type === "credentials") return json(res, 200, { authType: "credentials", setupUrl: "https://www.m-i-n-d.ai/#/integrations" });
       let url = "";

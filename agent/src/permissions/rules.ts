@@ -155,7 +155,7 @@ export function allowKindsFor(cls: ToolClass, tool: string): MatcherKind[] {
     case "read": return ["any", "exact", "prefix", "glob", "domain", "recipient", "recipients", "cwd", "readonly"];
     case "write": return ["any", "exact", "prefix", "glob", "domain", "recipient", "recipients", "cwd"];
     // Apple Calendar: "any" covers adding and changing events only. A delete is irreversible and so is only ever allowed call by call.
-    case "outward": return tool === "apple_calendar" ? ["exact", "any"] : tool.includes("__") ? ["exact", "any", "recipient", "recipients", "domain"] : ["exact", "recipient", "recipients", "domain"];
+    case "outward": return tool === "apple_calendar" || tool === "mind_calendar" ? ["exact", "any"] : tool.includes("__") ? ["exact", "any", "recipient", "recipients", "domain"] : ["exact", "recipient", "recipients", "domain"];
     default: return ["exact"]; // irreversible, public
   }
 }
@@ -263,6 +263,9 @@ export function scopeOptions(f: CallFacts, effect: Effect): ScopeOption[] {
   } else if (f.tool === "apple_calendar") {
     add("Only this exact call (same arguments)", f.tool, { kind: "exact", value: exactValue(f) });
     add(effect === "allow" ? "Adding and changing events in Apple Calendar, any details (deleting still asks)" : "Everything in Apple Calendar", f.tool, { kind: "any" }, true);
+  } else if (f.tool === "mind_calendar") {
+    add("Only this exact call (same arguments)", f.tool, { kind: "exact", value: exactValue(f) });
+    add(effect === "allow" ? "Adding events to the MIND calendar, any details" : "Everything in the MIND calendar", f.tool, { kind: "any" }, true);
   } else {
     add("Only this exact call (same arguments)", f.tool, { kind: "exact", value: exactValue(f) });
     if (f.recipients.length === 1) add(`Only when it targets ${f.recipients[0]}`, f.tool, { kind: "recipient", value: f.recipients[0] });
@@ -354,6 +357,32 @@ export function describeCall(f: CallFacts, args: Record<string, unknown>): { tit
     if (text(args.location, 120)) rows.push({ label: "Where", value: text(args.location, 120) });
     if (text(args.notes, 160)) rows.push({ label: "Notes", value: text(args.notes, 160) });
     if (op === "update" || op === "delete") rows.push({ label: "Event id", value: text(args.id, 80) });
+  }
+  else if (f.tool === "mind_calendar") {
+    const op = typeof args.action === "string" ? args.action.trim().toLowerCase() : "list";
+    title = op === "create" ? "Add an event to your MIND calendar" : "Read your MIND calendar";
+    const text = (v: unknown, n: number): string => (typeof v === "string" ? clip(oneLine(v), n) : "");
+    if (op === "create") {
+      if (text(args.title, 120)) rows.push({ label: "Event", value: text(args.title, 120) });
+      const when = [text(args.start, 40), text(args.end, 40)].filter(Boolean).join(" to ");
+      if (when) rows.push({ label: "When", value: args.all_day === true ? `${when} (all day)` : when });
+      if (text(args.description, 160)) rows.push({ label: "Notes", value: text(args.description, 160) });
+    }
+  }
+  else if (f.tool === "mind_mail") {
+    // The card for a send shows exactly what goes out and to whom, in plain words.
+    const op = typeof args.action === "string" ? args.action.trim().toLowerCase() : "inbox";
+    const text = (v: unknown, n: number): string => (typeof v === "string" ? clip(oneLine(v), n) : "");
+    const addrs = (v: unknown): string => (Array.isArray(v) ? clip(v.map((x) => oneLine(String(x))).join(", "), 200) : text(v, 200));
+    title = op === "send" ? "Send an email" : op === "save_draft" ? "Save a draft reply in your mailbox" : "Read your email";
+    if (op === "send") {
+      rows.push({ label: "To", value: addrs(args.to) });
+      if (addrs(args.cc)) rows.push({ label: "Cc", value: addrs(args.cc) });
+      rows.push({ label: "Subject", value: text(args.subject, 160) }, { label: "Message", value: clip(String(args.body_text ?? "").replace(/[ \t]+/g, " ").trim(), 400) });
+      if (text(args.reply_to_message_id, 80)) rows.push({ label: "Replying to", value: text(args.reply_to_message_id, 80) });
+    } else if (op === "save_draft") {
+      rows.push({ label: "Message id", value: text(args.message_id, 80) }, { label: "Draft", value: clip(String(args.body_text ?? "").replace(/[ \t]+/g, " ").trim(), 400) });
+    }
   }
   else if (f.connector) {
     title = `Use ${f.tool.slice(f.tool.indexOf("__") + 2)} in ${f.connector}`;

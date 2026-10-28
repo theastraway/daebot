@@ -80,6 +80,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     mindBaseUrl: (str(env.MIND_BASE_URL) ?? str(file.mindBaseUrl) ?? DEFAULTS.mindBaseUrl).replace(/\/+$/, ""),
     mindApiKey,
+    ...(str(env.MIND_BACKEND_URL) ?? str(file.mindBackendUrl) ? { mindBackendUrl: (str(env.MIND_BACKEND_URL) ?? str(file.mindBackendUrl))!.replace(/\/+$/, "") } : {}),
     mindSessionApiKey: str(env.MIND_SESSION_API_KEY) ?? str(file.mindSessionApiKey) ?? mindApiKey,
     clientNames: nameList(env.MINDCLAW_CLIENT_NAMES, file.clientNames),
     openrouterKey: str(env.OPENROUTER_API_KEY) ?? str(file.openrouterKey) ?? "",
