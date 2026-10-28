@@ -273,7 +273,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   const subscribers = new Map<string, Set<WsConnection>>(); // sessionId -> ws conns
   const runs = new RunRegistry(); // server-owned turns: they outlive the request that started them
   const wsConns = new Set<WsConnection>();
-  const SESSION_ROUTE = /^\/sessions\/([^/]+)(?:\/(send|abort|violations|history|events))?$/;
+  const SESSION_ROUTE = /^\/sessions\/([^/]+)(?:\/(send|abort|violations|history|events|suggest|suggest-feedback))?$/;
   // Which LLM answers (shown in the UI). Absent when the gateway was started without a Config (tests, fakes).
   const modelInfo = (): { model?: string; provider?: string } => (opts.cfg ? { model: opts.cfg.models.default, provider: opts.cfg.billing === "mind" ? "MIND" : "openrouter" } : {});
 
@@ -597,7 +597,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     res.on("close", () => cleanup(false)); // the client left: the run does not
   }
 
-  async function streamTurn(res: ServerResponse, id: string, text: string, extraHeaders: Record<string, string> = {}, first?: Record<string, unknown>, me?: Principal): Promise<void> {
+  async function streamTurn(res: ServerResponse, id: string, text: string, extraHeaders: Record<string, string> = {}, first?: Record<string, unknown>, me?: Principal, interactive = false): Promise<void> {
     res.writeHead(200, sseHeaders(extraHeaders));
     const run = runs.start(id, text);
     // The run is detached from this request: it publishes into the run feed, the WebSocket subscribers and (via the runtime) the disk.
@@ -610,7 +610,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         await manager.turn(id, text, (ev) => {
           run.publish(ev);
           broadcast(id, ev);
-        });
+        }, undefined, "user", interactive);
       } catch (err) {
         const msg = err instanceof BusyError || err instanceof NotFoundError ? err.message : "internal error";
         run.publish({ type: "notice", level: "warn", text: msg });
@@ -726,7 +726,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/account" || path === "/ws";
+    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/ws";
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -1023,6 +1023,51 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     return undefined;
   }
 
+  // ---------- granular permissions. Every route below needs the signed-in user's own session (the same cookie/bearer check as the rest of
+  // the API) and only ever touches THAT user's runtime. A rule can only be created by decide() on a pending card, so a model, a tool
+  // result or a request without a live pending id cannot make one.
+  async function permissionsApi(req: IncomingMessage, res: ServerResponse, path: string, method: string, me: Principal): Promise<void> {
+    const svc = manager.runtimeOf(me.id).permissions;
+    if (!svc) return sendJson(res, 404, { error: "permissions are not available on this deployment" });
+    if (path === "/permissions") {
+      if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+      return sendJson(res, 200, svc.snapshot());
+    }
+    if (path === "/permissions/mode") {
+      if (method !== "PUT") return sendJson(res, 405, { error: "method not allowed" });
+      const b = await readJson(req);
+      if (!svc.setMode(b.mode)) return sendJson(res, 400, { error: "mode must be risky, writes or everything" });
+      return sendJson(res, 200, { ok: true, mode: svc.store.mode() });
+    }
+    const dm = /^\/permissions\/([^/]+)\/decide$/.exec(path);
+    if (dm) {
+      if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+      let id: string;
+      try { id = decodeURIComponent(dm[1]); } catch { return sendJson(res, 400, { error: "bad request id" }); }
+      const b = await readJson(req);
+      const r = svc.decide(id, { decision: b.decision, remember: b.remember, scope: b.scope });
+      return r.ok ? sendJson(res, 200, { ok: true, allowed: r.allow, ...(r.rule ? { rule: r.rule } : {}) }) : sendJson(res, r.status, { error: r.error });
+    }
+    const rm = /^\/permissions\/rules\/([^/]+)$/.exec(path);
+    if (rm) {
+      let id: string;
+      try { id = decodeURIComponent(rm[1]); } catch { return sendJson(res, 400, { error: "bad rule id" }); }
+      if (method === "DELETE") return svc.store.removeRule(id) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "no such rule" });
+      if (method === "PATCH") {
+        const b = await readJson(req);
+        const effect = b.effect === undefined ? undefined : b.effect === "allow" || b.effect === "deny" ? b.effect : null;
+        const value = b.value === undefined ? undefined : typeof b.value === "string" ? b.value.slice(0, 600) : null;
+        if (effect === null || value === null) return sendJson(res, 400, { error: "effect must be allow or deny; value must be text" });
+        try {
+          const rule = svc.store.updateRule(id, { effect, value });
+          return rule ? sendJson(res, 200, { ok: true, rule }) : sendJson(res, 404, { error: "no such rule" });
+        } catch (e) { return sendJson(res, 400, { error: String((e as Error).message ?? e).slice(0, 200) }); }
+      }
+      return sendJson(res, 405, { error: "method not allowed" });
+    }
+    return sendJson(res, 404, { error: "not found" });
+  }
+
   async function modelsApi(req: IncomingMessage, res: ServerResponse, path: string, method: string, me: Principal): Promise<void> {
     if (!opts.cfg) return sendJson(res, 404, { error: "models are not available here" });
     const settings = manager.runtimeOf(me.id).settings;
@@ -1077,6 +1122,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (path.startsWith("/voice/")) return voice ? voice(req, res, path, _query, me) : sendJson(res, 404, { error: "voice is not available" });
     if (path.startsWith("/apps/")) return apps ? apps(req, res, path, me) : sendJson(res, 404, { error: "apps are not available" });
     if (path === "/account") return accountApi(res, method);
+    if (path === "/permissions" || path.startsWith("/permissions/")) return permissionsApi(req, res, path, method, me);
     if (path === "/bots/caelum") return caelumApi(req, res, method, me);
     if (path === "/bots" || path.startsWith("/bots/")) return botsApi(req, res, path, method, me);
     if (path.startsWith("/mcp/")) return mcpApi(req, res, path, method, me);
@@ -1184,6 +1230,23 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
       return sendJson(res, 200, { aborted: manager.abort(id) });
     }
+    if (action === "suggest") {
+      // 1-3 replies Dae predicts the user will send next. Empty when the last message does not wait on them. Never sends anything.
+      if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+      if (ls.busy) return sendJson(res, 200, { replies: [] });
+      const rt = manager.runtimeOf(me.id);
+      return sendJson(res, 200, rt.suggestReplies ? await rt.suggestReplies(id) : { replies: [] });
+    }
+    if (action === "suggest-feedback") {
+      if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+      const b = await readJson(req);
+      const rt = manager.runtimeOf(me.id);
+      const shown = Array.isArray(b.shown) ? b.shown.filter((x): x is string => typeof x === "string").slice(0, 3) : [];
+      const action2 = b.action === "chosen" || b.action === "edited" || b.action === "ignored" ? b.action : undefined;
+      if (!action2) return sendJson(res, 400, { error: "action must be chosen, edited or ignored" });
+      const ok = rt.recordSuggestionFeedback?.(id, { shown, picked: optStr(b.picked, 600), sent: optStr(b.sent, 2000), action: action2 }) ?? false;
+      return sendJson(res, 200, { ok });
+    }
     // send
     if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
     const b = await readJson(req);
@@ -1191,7 +1254,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (!text || !text.trim()) return sendJson(res, 400, { error: "text required" });
     if (ls.busy) return sendJson(res, 409, { error: "session is busy with another turn" });
 
-    return streamTurn(res, id, text, {}, undefined, me);
+    return streamTurn(res, id, text, {}, undefined, me, true); // the web/desktop/mobile UI can answer a permission card
   }
 
   // ---------- WebSocket ----------
@@ -1254,7 +1317,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
           if (!ls) return sendFrame(c, { t: "error", message: "no such session" });
           if (ls.busy) return sendFrame(c, { t: "error", message: "session is busy with another turn" });
           subscribe(ls.id, c);
-          await manager.turn(ls.id, f.text, (ev) => broadcast(ls.id, ev));
+          await manager.turn(ls.id, f.text, (ev) => broadcast(ls.id, ev), undefined, "user", true);
           return;
         }
         case "abort": {

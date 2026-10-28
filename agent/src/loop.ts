@@ -8,6 +8,9 @@ import type {
   SessionState, SessionSync, StreamEvent, Tool, ToolCall, ToolResult, TurnState, Usage, Violation,
 } from "./types.ts";
 import { clipToolOutputs, compactMessages, estimateTokens, needsCompaction } from "./compact.ts";
+import { factsOf } from "./permissions/rules.ts";
+import type { CallFacts } from "./permissions/rules.ts";
+import type { PermissionService } from "./permissions/index.ts";
 
 export const UNVERIFIED_FOOTER = "[unverified: receipt gate]";
 const MAX_REGENERATIONS = 2;
@@ -46,6 +49,8 @@ export interface SessionDeps {
   restore?: SessionState & { violations?: Violation[] };
   /** Optional learning layer (src/learn). Absent = the loop behaves exactly as before. */
   learn?: LearnHooks;
+  /** Granular permissions (rules + paused permission cards). Absent = the loop behaves exactly as before (typed confirmations only). */
+  permissions?: PermissionService;
   /** Tools that can appear or change between turns (e.g. MCP servers the user connected mid-chat). Re-read every round; a name already in `tools` is never shadowed. */
   dynamicTools?: () => Tool[];
 }
@@ -55,6 +60,7 @@ export function emptyReplyFallback(blocked: { tool: string; gate: string }[]): s
   if (blocked.length === 0) return "I did not produce a reply to that. Please send it again.";
   const tools = [...new Set(blocked.map((b) => b.tool))].join(", ");
   const owner = blocked.some((b) => b.gate === "owner");
+  if (blocked.every((b) => b.gate === "permission")) return `I did not do that (${tools}): your permission settings or your answer said no, so nothing was changed. Tell me what you would like instead.`;
   return owner
     ? `I could not save that to MIND (${tools}): the ownership check did not pass, so nothing was written. Everything else in this chat is unchanged. Tell me whose material this is and I will try again.`
     : `I could not finish that step (${tools}): a safety check refused it, so nothing was changed. Tell me how you would like to proceed.`;
@@ -131,8 +137,9 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
   const enforced = () => !state.shadow;
   let blockedThisTurn: { tool: string; gate: string }[] = [];
   let turnOrigin: "user" | "bot" = "user";
+  let turnInteractive = false;
 
-  async function* runTurn(userMessage: string, signal?: AbortSignal, origin: "user" | "bot" = "user"): AsyncGenerator<AgentEvent> {
+  async function* runTurn(userMessage: string, signal?: AbortSignal, origin: "user" | "bot" = "user", interactive = false): AsyncGenerator<AgentEvent> {
     // ---- start of turn
     state.userMessageIndex += 1;
     state.turnIndex += 1;
@@ -141,6 +148,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     state.userMessage = origin === "bot" ? "" : userMessage;
     state.calls = [];
     turnOrigin = origin;
+    turnInteractive = interactive && origin !== "bot";
     // A granted confirmation is valid for ONE turn only (the one it was granted in); a bot-originated turn starts with none at all.
     state.confirmations = origin === "bot" ? [] : state.confirmations.filter((c) => c.grantedAtUserMsg === undefined);
     // The system prompt is rebuilt each turn (a function prompt reads fresh DAEBOT.md / roster).
@@ -366,10 +374,56 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
         return "ok";
       }
     }
+    // The user's own deny rules come first: they apply to every class and to every tool, and nothing else can lift them.
+    const perms = deps.permissions;
+    let facts: CallFacts | undefined;
+    let ruleEval: ReturnType<PermissionService["evaluate"]> = { effect: "none" };
+    if (perms) {
+      facts = safe(() => factsOf(tool.spec.name, effectiveClass(tool, args), args, cwd), undefined);
+      if (facts) ruleEval = safe(() => perms.evaluate(facts!), { effect: "none" } as typeof ruleEval);
+      if (ruleEval.effect === "deny" && ruleEval.rule) {
+        perms.noteUse(ruleEval.rule);
+        const why = `blocked by a permission rule you (the user) set: never ${ruleEval.rule.scope}.`;
+        messages.push(toolMsg(call, `${why} Do not retry this or propose it again. Tell the user in plain words what you could not do, or offer a different way.`));
+        blockedThisTurn.push({ tool: tool.spec.name, gate: "permission" });
+        yield { type: "gate", verdict: { gate: "permission", action: "block", reason: `denied by your rule: ${ruleEval.rule.scope}` }, enforced: true };
+        return "ok";
+      }
+    }
     const verdicts = safe(() => kernel.preTool(state, call, tool), [] as GateVerdict[]);
     for (const n of verdicts) if (isShadowNote(n)) yield { type: "gate", verdict: n, enforced: false };
     const v = verdicts.find((x) => x.action !== "allow");
-    if (v) {
+    // A card (or a saved allow rule) can stand in for the typed "send it" on the danger gate, and only there: every other gate still refuses.
+    const dangerAsk = !!v && v.gate === "danger" && v.action === "needs-confirmation" && enforced();
+    let permitted = false;
+    if (perms && facts && enforced() && (dangerAsk || (!v && perms.needsPrompt(facts)))) {
+      const sig = callSignature(call);
+      const dropPending = () => { state.confirmations = state.confirmations.filter((c) => !(c.forCallSignature === sig && c.grantedAtUserMsg === undefined)); };
+      if (ruleEval.effect === "allow" && ruleEval.rule) {
+        perms.noteUse(ruleEval.rule);
+        permitted = true;
+        if (dangerAsk) dropPending();
+      } else if (turnInteractive) {
+        const req = perms.open({ sessionId: id, facts, args });
+        yield req.event;
+        let res;
+        try { res = await req.wait(currentSignal); } catch (e) { req.cancel(); throw e; }
+        yield { type: "permissionResolved", id: req.id, outcome: res.allow ? "allowed" : res.expired ? "expired" : "denied", by: "user", ...(res.rule ? { remembered: res.rule.scope } : {}) };
+        if (dangerAsk) dropPending();
+        if (res.allow) permitted = true;
+        else {
+          blockedThisTurn.push({ tool: tool.spec.name, gate: "permission" });
+          messages.push(toolMsg(call, res.expired
+            ? "not executed: the user did not answer the permission card in time. Do not retry; ask in plain words if they still want it."
+            : res.rule
+              ? `not executed: the user denied this and set a rule: never ${res.rule.scope}. Do not retry it or propose it again; offer another way or ask what they want.`
+              : "not executed: the user denied this one request. Do not retry the same call; offer another way or ask what they want."));
+          return "ok";
+        }
+      }
+      // else: no UI to show a card on (bots, API, chat apps): the existing typed confirmation below still applies.
+    }
+    if (v && !permitted) {
       yield { type: "gate", verdict: v, enforced: enforced() };
       if (enforced()) {
         if (v.action === "block") {
@@ -426,7 +480,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     surface,
     send(userMessage, opts) {
       currentSignal = opts?.signal;
-      return runTurn(userMessage, opts?.signal, opts?.origin === "bot" ? "bot" : "user");
+      return runTurn(userMessage, opts?.signal, opts?.origin === "bot" ? "bot" : "user", opts?.interactive === true);
     },
     setModel(m) { model = m && m.trim() ? m.trim() : undefined; },
     violations() {

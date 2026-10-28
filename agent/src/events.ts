@@ -14,7 +14,7 @@ export function visibleText(events: Iterable<AgentEvent>): string {
     switch (ev.type) {
       case "text": cur += ev.delta; break;
       case "retract": cur = ""; break;
-      case "toolStart": case "toolEnd": case "gate": case "confirm": case "done": flush(); break;
+      case "toolStart": case "toolEnd": case "gate": case "confirm": case "permission": case "permissionResolved": case "done": flush(); break;
       default: break;
     }
   }

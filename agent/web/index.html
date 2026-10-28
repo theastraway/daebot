@@ -60,6 +60,7 @@
       <a class="plan-link" id="plan-link" href="#" target="_blank" rel="noopener noreferrer">Manage plan</a>
     </div>
     <button class="side-apps" id="btn-apps" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="apps-modal"><svg class="ic"><use href="#i-apps"/></svg><span>Apps</span><svg class="ic chev"><use href="#i-chev"/></svg></button>
+    <button class="side-apps" id="btn-perms" type="button" hidden aria-haspopup="dialog" aria-expanded="false"><svg class="ic"><use href="#i-lock"/></svg><span>Permissions</span><svg class="ic chev"><use href="#i-chev"/></svg></button>
     <div class="side-update" id="upd" hidden><span id="upd-text"></span><button class="btn-quiet" id="upd-btn" type="button"></button></div>
     <div class="side-foot"><span class="dot" id="conn-dot"></span><span id="conn-text">Connecting</span><button class="btn-quiet only-narrow" id="btn-theme-side" type="button">Theme</button><button class="btn-quiet logout" id="btn-logout" type="button" hidden>Sign out</button></div>
   </aside>
@@ -97,6 +98,7 @@
         <span class="vstatus" id="voice-status"></span>
         <button class="btn-quiet vstop" id="voice-stop" type="button">Stop <kbd>Esc</kbd></button>
       </div>
+      <div class="suggest" id="suggest" role="group" aria-label="Suggested replies" hidden></div>
       <form class="composer" id="composer" autocomplete="off">
         <textarea id="input" rows="1" placeholder="Message Daebot" aria-label="Message"></textarea>
         <button class="mic" id="btn-mic" type="button" aria-label="Talk to Daebot (hold, or tap to start)" aria-pressed="false" title="Hold to talk, or tap to start and stop"><svg class="ic"><use href="#i-mic"/></svg></button>

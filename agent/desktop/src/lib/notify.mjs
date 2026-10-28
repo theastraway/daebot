@@ -3,15 +3,18 @@
 const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 const clean = (s) => String(s).replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
 
-/** Notify only for confirm events while the user cannot see the window. */
+/** Notify only for confirm events and permission cards while the user cannot see the window. */
 export function shouldNotify(event, win) {
-  if (!event || event.type !== "confirm") return false;
+  if (!event || (event.type !== "confirm" && event.type !== "permission")) return false;
   if (!win) return true;
   return !(win.visible && win.focused);
 }
 
 export function buildConfirmNotification(event) {
   const tool = typeof event.tool === "string" ? clean(event.tool) : "an action";
+  if (event.type === "permission") {
+    return { title: clip(`Daebot is asking permission: ${tool}`, 80), body: clip(typeof event.title === "string" && event.title ? clean(event.title) : "An action is waiting for your answer.", 200) };
+  }
   const reason = typeof event.reason === "string" ? clean(event.reason) : "";
   return {
     title: clip(`Daebot needs your go: ${tool}`, 80),
