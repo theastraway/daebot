@@ -861,6 +861,30 @@ async function showDesktopWho() {
   } catch { /* shown on the next ping */ }
 }
 
+// Desktop app: the Updates bar. The shell checks on launch and every hour, downloads in the background and asks to restart;
+// this bar shows the same state inside the window and lets you check or restart from here.
+function desktopUpdates() { const u = desktopBridge()?.updates; return u && typeof u.get === "function" ? u : null; }
+function renderUpdate(s) {
+  const box = document.getElementById("upd"), text = document.getElementById("upd-text"), btn = document.getElementById("upd-btn");
+  if (!box || !s || !s.enabled) { if (box) box.hidden = true; return; }
+  box.hidden = false;
+  box.classList.toggle("ready", s.status === "downloaded");
+  const v = s.currentVersion ? `Daebot ${s.currentVersion}` : "Daebot";
+  const btnOn = (label) => { btn.textContent = label; btn.hidden = false; btn.disabled = false; };
+  btn.hidden = true;
+  if (s.status === "downloaded") { text.textContent = `Update ${s.nextVersion} ready`; btnOn("Restart to update"); btn.onclick = () => { btn.disabled = true; btn.textContent = "Restarting"; desktopUpdates()?.install(); }; }
+  else if (s.status === "available" || s.status === "downloading") text.textContent = `Downloading ${s.nextVersion || "update"}${s.percent ? ` ${s.percent}%` : ""}`;
+  else if (s.status === "checking") text.textContent = "Checking for updates";
+  else { text.textContent = s.status === "error" ? `${v} · update check failed` : `${v} · up to date`; if (s.status === "idle") text.textContent = v; btnOn("Check for updates"); btn.onclick = async () => { btn.disabled = true; renderUpdate(await desktopUpdates()?.check().catch(() => null) || s); }; }
+}
+async function initDesktopUpdates() {
+  const u = desktopUpdates();
+  if (!u) return;
+  u.onChange(renderUpdate);
+  try { renderUpdate(await u.get()); } catch { /* older shell */ }
+}
+initDesktopUpdates();
+
 // Hosted: show which MIND account this session is acting as (its own MIND, or the owner's).
 async function showWho() {
   try {

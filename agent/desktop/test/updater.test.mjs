@@ -64,7 +64,7 @@ test("start: background download + install on quit, feed set per arch, check at 
   assert.equal(timers.fires[0][1], FIRST_CHECK_DELAY_MS);
   assert.equal(FIRST_CHECK_DELAY_MS, 20_000);
   assert.equal(timers.intervals[0][1], CHECK_INTERVAL_MS);
-  assert.equal(CHECK_INTERVAL_MS, 6 * 3600 * 1000);
+  assert.equal(CHECK_INTERVAL_MS, 3600 * 1000);
   await u.start(); // idempotent
   assert.equal(timers.fires.length, 1);
   timers.fires[0][0]();

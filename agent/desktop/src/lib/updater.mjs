@@ -5,11 +5,12 @@
 //   latest-linux.yml (AppImage). Windows x64 and arm64 would both write latest.yml, so arm64 builds publish under the
 //   channel "latest-arm64" and the app picks its channel by process.arch (feedChannel()).
 // Behaviour: background download (autoDownload), install on quit (autoInstallOnAppQuit), a check ~20 s after launch and then
-// every 6 h, a "Check for updates..." menu item, and a "Restart now / Later" dialog once an update is downloaded.
+// every hour, a "Check for updates..." menu item plus the same control inside the window (preload `updates`), and a
+// "Restart now / Later" dialog once an update is downloaded.
 
 export const FEED_URL = "https://download.m-i-n-d.ai/download/daebot/";
 export const FIRST_CHECK_DELAY_MS = 20_000;
-export const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+export const CHECK_INTERVAL_MS = 60 * 60 * 1000;
 
 /** electron-updater channel for this machine: latest.yml everywhere, latest-arm64.yml for Windows on ARM. */
 export function feedChannel({ platform, arch }) {

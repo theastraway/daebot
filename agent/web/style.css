@@ -209,6 +209,11 @@ kbd { font-size: 10.5px; background: var(--surface-2); border: 1px solid var(--l
 .tool + .tool, .tool + .gate, .gate + .tool, .gate + .gate { margin-top: -12px; }
 .logout { margin-left: auto; padding: 4px 10px; font-size: 12px; border-radius: 8px; }
 .side-who { padding: 12px 8px 0; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-update { display: flex; align-items: center; gap: 8px; padding: 10px 8px 0; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-2); }
+.side-update #upd-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-update.ready { color: var(--ink); font-weight: 600; }
+.side-update.ready #upd-btn { color: var(--accent, var(--ink)); font-weight: 600; }
+.side-update + .side-who { border-top: 0; }
 .side-who + .side-foot, .side-plan + .side-foot { padding-top: 6px; border-top: 0; }
 .side-plan { display: grid; gap: 6px; padding: 4px 8px 0; font-size: 12px; color: var(--ink-3); }
 .side-plan .plan-row { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
