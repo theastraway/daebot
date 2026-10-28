@@ -1,5 +1,5 @@
-# Render Blueprint for the hosted MINDClaw agent (https://daebot.live).
-# Only the agent/ directory is deployed; the legacy wrapper at the repo root is not touched.
+# Render Blueprint for the hosted Daebot agent (https://daebot.live).
+# Only the agent/ directory is deployed.
 services:
   - type: web
     name: daebot
