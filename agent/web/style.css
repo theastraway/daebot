@@ -565,10 +565,12 @@ kbd { font-size: 10.5px; background: var(--surface-2); border: 1px solid var(--l
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .side-bar { position: relative; display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 10px 0 2px; border-top: 1px solid var(--line); }
 .side-bar .dot { flex: none; width: 8px; height: 8px; }
-.side-icon { flex: none; border: 1px solid var(--line-strong); background: var(--surface); }
-.side-icon:hover, .side-icon[aria-expanded="true"] { border-color: var(--ink-3); }
-.acct-btn { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px; height: 38px; padding: 0 12px 0 4px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 999px; color: var(--ink); text-align: left; font-weight: 550; transition: border-color .15s; }
-.acct-btn:hover, .acct-btn[aria-expanded="true"] { border-color: var(--ink-3); }
+/* Same quiet trigger family as the model picker and permissions control: no container at rest; hover, focus and open
+   show a solid surface with a 1px hairline and a 6px corner. Never a capsule. */
+.side-icon { flex: none; border: 1px solid transparent; border-radius: 6px; background: none; transition: background .12s, border-color .12s; }
+.side-icon:hover, .side-icon:focus-visible, .side-icon[aria-expanded="true"] { background: var(--surface); border-color: var(--line-strong); }
+.acct-btn { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px; height: 38px; padding: 0 10px 0 4px; background: none; border: 1px solid transparent; border-radius: 6px; color: var(--ink); text-align: left; font-weight: 550; transition: background .12s, border-color .12s; }
+.acct-btn:hover, .acct-btn:focus-visible, .acct-btn[aria-expanded="true"] { background: var(--surface); border-color: var(--line-strong); }
 .acct-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
 .avatar { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--ink); color: var(--bg); font: 650 13px var(--sans); text-transform: uppercase; overflow: hidden; }
 .avatar.lg { width: 38px; height: 38px; font-size: 16px; }
