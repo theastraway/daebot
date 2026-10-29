@@ -11,7 +11,7 @@ import type { RoutingScenario } from "./scenarios.ts";
 export function desktopTools(): Tool[] {
   const client = {} as MindClient; // only the specs are read; no tool is ever run
   return [
-    ...createBuiltinTools({ computer: true }),
+    ...createBuiltinTools({ computer: true, app: true }),
     ...createMindTools({ home: "main", roster: () => [], clientFor: () => client }, { user: "Anthony" }),
     ...createAppTools({ clientFor: () => client }),
   ];

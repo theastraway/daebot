@@ -23,6 +23,12 @@ export const ROUTING_SCENARIOS: RoutingScenario[] = [
   { id: "R13-open-terminal", prompt: "open Terminal and run npm test in ~/project", allow: ["bash", "process"] },
   { id: "R14-open-folder", prompt: "open my Downloads folder in the file explorer and tell me which file is the biggest", allow: ["bash", "glob"] },
   { id: "R15-open-browser", prompt: "open Chrome and look up the weather in Boston", allow: ["web_fetch"] },
-  { id: "R10-screen-xactimate", prompt: "Xactimate is open on my screen. Look at the estimate that's showing and tell me the first three line items.", allow: ["computer"], needsScreen: true },
+  // The background app tool and the terminal ban (Anthony 10/29): a terminal request is bash, a named control in a desktop app is `app`, never `computer`.
+  { id: "R16-open-powershell", prompt: "open powershell and run Get-Process | Sort-Object CPU -Descending | Select-Object -First 5", allow: ["bash", "process"] },
+  { id: "R17-disk-space", prompt: "check my disk space", allow: ["bash"] },
+  { id: "R18-click-save", prompt: "click Save in Notepad", allow: ["app"] },
+  { id: "R19-fill-field", prompt: "fill the Name field in the Contoso Invoice app with Dana Smith", allow: ["app"] },
+  { id: "R20-open-cmd", prompt: "open cmd and run ipconfig /all", allow: ["bash", "process"] },
+  { id: "R10-screen-xactimate", prompt: "Xactimate is open on my screen. Look at the estimate that's showing and tell me the first three line items.", allow: ["computer", "app"], needsScreen: true },
   { id: "R11-screen-watch", prompt: "Open the Calculator app and work out 1234 x 5678 on screen so I can watch you do it.", allow: ["computer"], needsScreen: true },
 ];

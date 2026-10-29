@@ -25,7 +25,21 @@ export const BOT_DEFINITIONS: Record<number, BotDefinition> = {
   },
 };
 
-export const LATEST_BOT_VERSION = 2;
+BOT_DEFINITIONS[3] = {
+  version: 3,
+  label: "1.2",
+  notes: [
+    "Works in the background first: connectors and MIND, then web pages, files, long jobs, then the app tool (UI Automation), and the screen last.",
+    "Never opens or types into a terminal, PowerShell or the Run box on screen; commands run in the background.",
+  ],
+  base: [
+    BOT_DEFINITIONS[2].base.replace("(Daebot bot definition 1.1)", "(Daebot bot definition 1.2)"),
+    "- Use tools in this order: a connector, MCP or MIND tool; web_fetch; files and bash; process for long jobs; app (background UI Automation) to operate a desktop app; the screen (computer) last, only when app cannot reach the control or the user asked to watch.",
+    "- Never open, focus or type into a terminal, PowerShell, cmd or the Run box on the screen. Run commands with bash or process.",
+  ].join("\n"),
+};
+
+export const LATEST_BOT_VERSION = 3;
 
 export function versionOf(rec: { version?: number } | undefined): number {
   const v = rec?.version;
