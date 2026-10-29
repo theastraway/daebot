@@ -88,3 +88,58 @@ export function deleteControl(row, icon, label, onDelete) {
   row.addEventListener("click", (e) => { if (row.dataset.longpress) { e.stopPropagation(); e.preventDefault(); } }, true);
   return b;
 }
+
+/** The pencil on a thread row (same hover / phone visibility as the trash). `onRename` starts the inline edit. */
+export function renameControl(row, icon, label, onRename) {
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "row-del row-ren"; b.setAttribute("aria-label", label); b.title = label;
+  b.append(icon("i-pencil"));
+  b.addEventListener("click", (e) => { e.stopPropagation(); onRename(); });
+  row.classList.add("has-ren");
+  return b;
+}
+
+/** What an inline rename should do with what was typed: save a changed non-empty title, otherwise revert. Pure, unit tested. */
+export function renameDecision(current, typed) {
+  const t = String(typed ?? "").replace(/[\t\r\n]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+  const cur = String(current ?? "").trim();
+  if (!t || t === cur) return { save: false, title: cur };
+  return { save: true, title: t };
+}
+
+let editing = null;
+/** True while a title is being edited: lists skip re-rendering so the field is not thrown away under the cursor. */
+export function isRenaming() { return !!editing; }
+
+/**
+ * Inline edit of a title. `host` (the row's button, or the header title) is hidden and an input sits in its place; the input is never
+ * inside a button. Enter saves, Escape cancels, blur saves, empty reverts. `onSave(title)` is awaited; `onEnd()` runs once the field is gone.
+ */
+export function editInline({ host, current, onSave, onEnd, className = "" }) {
+  if (!host.isConnected || !host.parentNode) return;
+  if (editing) editing.finish(false);
+  const input = document.createElement("input");
+  input.type = "text"; input.className = `title-edit ${className}`.trim(); input.value = current; input.maxLength = 80;
+  input.setAttribute("aria-label", "Thread name"); input.autocomplete = "off"; input.spellcheck = false;
+  let ended = false;
+  const finish = (save) => {
+    if (ended) return;
+    ended = true; editing = null;
+    const d = renameDecision(current, input.value);
+    input.remove(); host.hidden = false;
+    if (save && d.save) Promise.resolve(onSave(d.title)).catch(() => {}).finally(() => onEnd && onEnd());
+    else if (onEnd) onEnd();
+  };
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener("click", (e) => e.stopPropagation());
+  input.addEventListener("dblclick", (e) => e.stopPropagation());
+  input.addEventListener("blur", () => finish(true));
+  editing = { finish };
+  host.hidden = true;
+  host.parentNode.insertBefore(input, host);
+  input.focus(); input.select();
+}

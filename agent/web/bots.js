@@ -7,7 +7,7 @@
 // DOM is built with createElement + textContent only; there is no innerHTML. All requests are same-origin, through the app's
 // api()/json() helpers. The pure helpers are exported (and unit tested); everything that touches `document` lives in initBots().
 
-import { confirmDialog, deleteControl, botDeleteText, updateText } from "./manage.js";
+import { confirmDialog, deleteControl, renameControl, isRenaming, botDeleteText, updateText } from "./manage.js";
 import { FACES, faceOf, faceSvg } from "./faces.js";
 import { groupModels, shortName, LOCKED_NOTE } from "./models.js";
 
@@ -271,6 +271,7 @@ export function initBots(ctx) {
 
   // ---------------------------------------------------------------- list
   function renderList() {
+    if (isRenaming()) return; // an inline rename is open: the list is redrawn when it ends
     const box = el.botList;
     box.replaceChildren();
     if (st.botsError && !st.bots.length) { box.append(h("div", "empty-side", st.botsError)); return; }
@@ -341,7 +342,9 @@ export function initBots(ctx) {
         b.append(h("span", "sess-t", s.title || "Untitled"), m);
         b.addEventListener("click", () => app.openThread({ ...s, bot: s.bot || bot.id }));
         const tr = h("div", "sess-row");
-        tr.append(b, deleteControl(tr, icon, `Delete thread ${s.title || "Untitled"}`, () => app.threadDeleted({ ...s, bot: s.bot || bot.id })));
+        const startRename = () => app.renameThread(b, { ...s, bot: s.bot || bot.id });
+        b.addEventListener("dblclick", (e) => { e.preventDefault(); startRename(); });
+        tr.append(b, renameControl(tr, icon, `Rename thread ${s.title || "Untitled"}`, startRename), deleteControl(tr, icon, `Delete thread ${s.title || "Untitled"}`, () => app.threadDeleted({ ...s, bot: s.bot || bot.id })));
         sub.append(tr);
       }
       row.append(sub);
@@ -716,6 +719,8 @@ export function initBots(ctx) {
     drawerOpen: () => st.drawerOpen,
     cardOpen: () => !el.card.hidden,
     threads: () => st.threads,
+    /** Every cached per-bot thread list (a rename updates the thread wherever it is held). */
+    cached: () => [...st.cache.values()],
     bots: () => st.bots,
     bot: (id) => botById(id),
     selected: () => st.selected,
