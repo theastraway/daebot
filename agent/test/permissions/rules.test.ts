@@ -177,3 +177,19 @@ test("validateRule rejects malformed and over-broad allow rules", () => {
   assert.equal(isSimpleCommand("git log"), true);
   assert.equal(isSimpleCommand("git log | head"), false);
 });
+
+test("bash: every chaining form is non-simple, so it never matches a simple-prefix allow; a deny still matches any segment", () => {
+  const allow = rule("allow", "bash", "prefix", "ls");
+  const deny = rule("deny", "bash", "prefix", "rm");
+  const forms: [string, string][] = [
+    ["newline", "ls\nrm x"], ["carriage return", "ls\rrm x"], ["crlf", "ls\r\nrm x"], ["semicolon", "ls; rm x"], ["&&", "ls && rm x"], ["||", "ls || rm x"],
+    ["pipe", "ls | rm x"], ["background &", "ls & rm x"], ["backtick", "ls `rm x`"], ["$( )", "ls $(rm x)"], ["process subst", "ls <(rm x)"], ["redirect", "ls > x"],
+  ];
+  for (const [name, cmd] of forms) {
+    assert.equal(matches(allow, bash(cmd)), false, `${name}: allow prefix must not match`);
+    if (cmd.includes("rm")) assert.equal(matches(deny, bash(cmd)), true, `${name}: deny must match the rm segment`);
+  }
+  assert.equal(matches(allow, bash("ls -la\n")), true, "a trailing newline alone is still one command");
+  assert.equal(matches(allow, bash("ls -la")), true);
+  assert.equal(evaluate([allow], bash("ls\nrm x")).effect, "none");
+});
