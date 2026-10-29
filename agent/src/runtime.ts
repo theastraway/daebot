@@ -21,7 +21,7 @@ import { BOT_SKILL_PROMPT } from "./bots/skill.ts";
 import type { BotRecord, BotsContext, RosterEntry } from "./bots/types.ts";
 import { MAX_INSTRUCTIONS_BYTES } from "./bots/types.ts";
 import { createSettings, validModelId } from "./settings.ts";
-import { resolveTurnModel } from "./bots/model.ts";
+import { pickDefaultModel, resolveTurnModel } from "./bots/model.ts";
 import { botsEnabled } from "./bots/flag.ts";
 import { BootCache } from "./mind/boot-cache.ts";
 import { ConnectedApps, connectedAppsLines } from "./mind/connected.ts";
@@ -503,7 +503,9 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       const tools = tier === "admin" ? allWithMcp : allWithMcp.filter((t) => tierAllows(tier, t));
       // The model: an explicit choice (open / PATCH), else the stored one, else the user's default, else the configured default.
       const explicitModel = opts.model && validModelId(opts.model) ? opts.model : stored?.model && validModelId(stored.model) ? stored.model : undefined;
-      const userDefault = () => settings?.get().defaultModel;
+      // The user's default: a model they picked as the Daebot default, else the model chosen in their MIND account (read with the plan, cached),
+      // else undefined (Daebot's configured default). A per-bot model and a per-session pick sit above both (resolveTurnModel).
+      const userDefault = () => pickDefaultModel(settings?.get().defaultModel, mindBilled ? credits?.peek(billingKey())?.accountModel : undefined);
       let curModel: string | undefined = explicitModel;
       // This chat's permission mode: stored with the session. A stored bypass is re-checked against the waiver on every call (the loop), never trusted from the file.
       let curPerm: SessionPermMode | undefined = isSessionMode(stored?.permMode) ? stored!.permMode as SessionPermMode : undefined;
@@ -624,7 +626,10 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
           if (!botRec && appsOn()) { try { await connectedApps.refresh(false, o?.signal); } catch { /* the prompt says the read failed */ } }
           // A bot's thread runs on the bot's model, read fresh every turn (set or cleared in Bot settings, no reopen needed).
           // Main and other bots' sessions are never touched here.
+          // The MIND account's model is part of the default: read the (cached) account state first so a new thread starts on it.
+          if (mindBilled && credits) { try { await credits.get(billingKey()); } catch { /* the last known state stands */ } }
           if (botId) inner.setModel?.(resolveTurnModel({ botModel: botStore?.get(botId)?.model, sessionModel: curModel, userDefault: userDefault() }));
+          else if (mindBilled) { const m = resolveTurnModel({ sessionModel: curModel, userDefault: userDefault() }); if (m) inner.setModel?.(m); }
           for await (const ev of inner.send(messageWithQuote(messageWithPhotos(msg, photos), o?.quote), o)) {
             entry.recorder.push(ev);
             if (ev.type === "done") { entry.updatedAt = Date.now(); run.status = "done"; run.updatedAt = Date.now(); persist(id); }

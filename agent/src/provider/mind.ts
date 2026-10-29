@@ -20,7 +20,16 @@ export interface MindBilling {
   /** The plan's allowance for the period (credits_limit); null/0 = no fixed allowance (pay as you go). */
   creditsLimit: number | null;
   upgradeUrl: string;
+  /** Which key serves Daebot's calls for this MIND account: "byo" = the account's own provider key (no MIND credits used). */
+  keySource?: "byo" | "platform";
+  /** The own-key provider name (e.g. "openrouter"), never the key. */
+  provider?: string | null;
+  /** The model chosen in the MIND account (its chat model picker), null when never chosen. */
+  accountModel?: string | null;
 }
+
+/** True when the account's own key serves the call: plan tier and credits do not limit it, so the free-plan model swap must not apply. */
+export const usesOwnKey = (b: Pick<MindBilling, "keySource"> | undefined): boolean => b?.keySource === "byo";
 
 /** Percent of the plan's usage still left (0-100), or null when there is no fixed allowance to measure against. */
 export function usageLeftPct(b: Pick<MindBilling, "creditsRemaining" | "creditsLimit">): number | null {
@@ -111,7 +120,7 @@ export class MindCredits {
   peek(key: string): MindBilling | undefined { return this.cache.get(keyId(key))?.b; }
 
   /** Fold in fresher numbers (X-MIND-* headers, or a 402 body). Needs a known tier from the cache or the update itself. */
-  note(key: string, u: { tier?: string | null; creditsRemaining?: number | null; upgradeUrl?: string | null }): void {
+  note(key: string, u: { tier?: string | null; creditsRemaining?: number | null; upgradeUrl?: string | null; keySource?: string | null }): void {
     if (!key) return;
     const id = keyId(key);
     const cur = this.cache.get(id)?.b;
@@ -126,23 +135,34 @@ export class MindCredits {
         creditsRemaining: u.creditsRemaining !== undefined && u.creditsRemaining !== null ? u.creditsRemaining : cur?.creditsRemaining ?? null,
         creditsLimit: cur?.creditsLimit ?? null, // the allowance only changes with the plan; /credits refreshes it
         upgradeUrl: u.upgradeUrl || cur?.upgradeUrl || this.origin,
+        keySource: u.keySource === "byo" || u.keySource === "platform" ? u.keySource : cur?.keySource,
+        provider: cur?.provider, accountModel: cur?.accountModel,
       },
     });
   }
 
   private async fetchOne(key: string, id: string, stale?: MindBilling): Promise<MindBilling | undefined> {
     try {
-      const res = await this.doFetch(`${this.base}/credits`, { headers: { "X-API-Key": key, Accept: "application/json" }, signal: AbortSignal.timeout(10_000) });
+      const headers = { "X-API-Key": key, Accept: "application/json" };
+      // The account's key source and chosen model ride along (best effort: an older MIND answers 404 and the plain plan is used).
+      const routingP = this.doFetch(`${this.base}/llm/account`, { headers, signal: AbortSignal.timeout(10_000) })
+        .then(async (r) => (r.ok ? ((await r.json()) as Record<string, unknown>) : undefined)).catch(() => undefined);
+      const res = await this.doFetch(`${this.base}/credits`, { headers, signal: AbortSignal.timeout(10_000) });
+      const routing = await routingP;
       if (!res.ok) return stale;
       const j = (await res.json()) as Record<string, unknown>;
       const tier = typeof j.tier === "string" && j.tier.trim() ? j.tier.trim() : stale?.tier;
       if (!tier) return stale;
+      const ks = routing?.key_source === "byo" || routing?.key_source === "platform" ? routing.key_source : stale?.keySource;
       const b: MindBilling = {
         tier,
         tierName: tierDisplayName(tier, j.tier_name ?? j.tierName),
         creditsRemaining: num(j.credits_balance ?? j.credits_remaining),
         creditsLimit: num(j.credits_limit),
         upgradeUrl: typeof j.upgrade_url === "string" && j.upgrade_url ? j.upgrade_url : stale?.upgradeUrl ?? this.origin,
+        keySource: ks,
+        provider: routing ? (typeof routing.provider === "string" ? routing.provider : null) : stale?.provider,
+        accountModel: routing ? (typeof routing.model === "string" && routing.model ? routing.model : null) : stale?.accountModel,
       };
       this.cache.set(id, { b, at: this.now() });
       return b;
@@ -171,7 +191,8 @@ export function createMindProvider(cfg: Config, o: MindProviderOptions): Provide
     onResponse: (res: Response) => {
       const tier = res.headers.get("x-mind-tier");
       const left = res.headers.get("x-mind-credits-remaining");
-      if (tier || left) o.credits.note(o.getKey(), { tier, creditsRemaining: num(left) });
+      const keySource = res.headers.get("x-mind-key-source");
+      if (tier || left || keySource) o.credits.note(o.getKey(), { tier, creditsRemaining: num(left), keySource });
     },
     errorFor: (status: number, body: string): ProviderHttpError | undefined => {
       const known = o.credits.peek(o.getKey());
@@ -199,7 +220,7 @@ export function createMindProvider(cfg: Config, o: MindProviderOptions): Provide
       // fallback list (`free` has none); a billing refusal still surfaces as MindBillingError for the caller to word.
       if (req.pinModel) { yield* free.stream(req); return; }
       const b = await o.credits.get(o.getKey());
-      const onFree = b?.tier === FREE_TIER;
+      const onFree = b?.tier === FREE_TIER && !usesOwnKey(b); // an own key is not limited by the MIND plan
       let emitted = false;
       try {
         for await (const ev of (onFree ? free : paid).stream({ ...req, model: onFree ? freeModel : req.model }) as AsyncIterable<StreamEvent>) { emitted = true; yield onFree && ev.type === "done" ? { ...ev, model: freeModel } : ev; }

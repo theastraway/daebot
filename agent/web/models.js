@@ -98,7 +98,25 @@ export function normalizeModels(payload) {
     });
   }
   const open = rows.filter((r) => r.allowed), locked = rows.filter((r) => !r.allowed);
-  return { rows: [...open, ...locked], def: payload && typeof payload.default === "string" ? payload.default : "" };
+  const extra = {};
+  if (payload && typeof payload.defaultSource === "string") extra.defSource = payload.defaultSource;
+  if (payload && (payload.keySource === "byo" || payload.keySource === "platform")) extra.keySource = payload.keySource;
+  return { rows: [...open, ...locked], def: payload && typeof payload.default === "string" ? payload.default : "", ...extra };
+}
+
+/** The small label next to the model: whose key / credits the answers run on. "" when unknown (a local key, or an older MIND). */
+export function keyLabel(keySource) {
+  return keySource === "byo" ? "via your key" : keySource === "platform" ? "MIND credits" : "";
+}
+
+/** Where the model on the badge came from, in words (for the tooltip). */
+export function originOf({ pinned, chosen, stored, def, defSource, id }) {
+  if (pinned) return "set for this bot";
+  if (chosen && id === chosen) return "picked here";
+  if (stored && id === stored) return "picked here";
+  if (id && id === def && defSource === "account") return "from your MIND account";
+  if (id && id === def && defSource === "picked") return "picked here";
+  return id && id === def ? "Daebot default" : "";
 }
 
 /** What the badge says. A model chosen but not yet used wins (the next message will use it); otherwise the model that
@@ -108,10 +126,10 @@ export function badgeModel({ served, chosen, def, health }) {
 }
 
 /** Why the badge reads what it reads (for its tooltip). */
-export function badgeTitle({ label, served, chosen, servedLabel }) {
+export function badgeTitle({ label, served, chosen, servedLabel, origin = "", key = "" }) {
   if (!label) return "Choose a model";
   if (chosen && served && chosen !== served) return `${label} from the next message (last answer: ${servedLabel || served}). Click to change.`;
-  return `${label}. Click to change.`;
+  return `${label}${origin ? ` (${origin}${key ? `, ${key}` : ""})` : key ? ` (${key})` : ""}. Click to change.`;
 }
 
 export function initModels({ json, store, notify, icon, getSessionId, onPicked, onPinnedClick }) {
@@ -119,7 +137,7 @@ export function initModels({ json, store, notify, icon, getSessionId, onPicked, 
   const btn = $("model-badge"), menu = $("model-menu"), nameEl = $("mb-name"), viaEl = $("mb-via");
   if (!btn || !menu || !nameEl) return null;
 
-  const st = { rows: [], def: "", loaded: false, failed: false, served: "", health: "", chosen: new Map(), open: false, expanded: new Set(), pinned: "" };
+  const st = { rows: [], def: "", defSource: "", keySource: "", loaded: false, failed: false, served: "", health: "", chosen: new Map(), open: false, expanded: new Set(), pinned: "" };
   const stored = () => store.get("localStorage", MODEL_KEY) || "";
   const rowOf = (id) => st.rows.find((r) => r.id === id);
   const labelOf = (id) => { const r = rowOf(id); return r ? r.name : prettyModel(id); };
@@ -134,18 +152,20 @@ export function initModels({ json, store, notify, icon, getSessionId, onPicked, 
     const id = currentId();
     const label = id ? labelOf(id) : "";
     nameEl.textContent = label;
-    if (viaEl) viaEl.textContent = st.pinned ? "set by bot" : "";
+    const key = keyLabel(st.keySource);
+    if (viaEl) viaEl.textContent = [st.pinned ? "set by bot" : "", key].filter(Boolean).join(" \u00b7 ");
     btn.dataset.owned = label ? "1" : "";
     btn.dataset.pinned = st.pinned ? "1" : "";
     btn.hidden = !label;
     if (st.pinned) {
-      btn.title = `${label}. Set by this bot's settings: this bot's threads always use it. Click to open the bot's settings.`;
+      btn.title = `${label}${key ? ` (${key})` : ""}. Set by this bot's settings: this bot's threads always use it. Click to open the bot's settings.`;
       btn.setAttribute("aria-label", `Model: ${label}, set by bot. Open bot settings to change`);
       btn.removeAttribute("aria-haspopup"); btn.removeAttribute("aria-expanded");
       return;
     }
     btn.setAttribute("aria-haspopup", "menu"); btn.setAttribute("aria-expanded", String(st.open));
-    btn.title = badgeTitle({ label, served: st.served, chosen: sessionChosen(), servedLabel: st.served ? labelOf(st.served) : "" });
+    const origin = originOf({ pinned: st.pinned, chosen: sessionChosen(), stored: stored(), def: st.def, defSource: st.defSource, id });
+    btn.title = badgeTitle({ label, served: st.served, chosen: sessionChosen(), servedLabel: st.served ? labelOf(st.served) : "", origin, key });
     btn.setAttribute("aria-label", label ? `Model: ${label}. Change model` : "Choose a model");
   }
 
@@ -153,7 +173,7 @@ export function initModels({ json, store, notify, icon, getSessionId, onPicked, 
     if (st.loaded) return true;
     try {
       const n = normalizeModels(await json("/models"));
-      st.rows = n.rows; st.def = n.def; st.loaded = true; st.failed = false;
+      st.rows = n.rows; st.def = n.def; st.defSource = n.defSource || ""; st.keySource = n.keySource || ""; st.loaded = true; st.failed = false;
     } catch { st.failed = true; }
     paint();
     return st.loaded;
