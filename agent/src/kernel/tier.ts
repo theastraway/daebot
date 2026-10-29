@@ -23,6 +23,8 @@ export function tierAllows(tier: Tier, tool: Pick<Tool, "spec" | "class" | "clas
   const allowed = CLASSES[tier];
   if (!allowed) return true;
   if (tier === "public" && (tool.spec.name === "bash" || tool.spec.name === "process" || tool.spec.name === "decide")) return false; // decide spends the server's money
+  // bot_manage deletes only the user's OWN bot (local, their own data) and always asks first (irreversible class), so staff may reach it.
+  if (tier === "staff" && tool.spec.name === "bot_manage") return true;
   // With no args (listing) judge by the loosest class the tool can take: static class, then classFor({}) is not trusted.
   return allowed.includes(args === undefined ? tool.class : effectiveClass(tool, args));
 }
