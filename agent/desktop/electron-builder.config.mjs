@@ -25,6 +25,7 @@ export default {
     hardenedRuntime: true,
     // The text macOS shows in its microphone and Calendar prompts. The Calendar helper runs inside the app, so the prompt is Daebot's own.
     extendInfo: {
+      NSScreenCaptureUsageDescription: "Daebot looks at your screen only while you have Let Daebot watch my screen turned on, so it can see what you see.",
       NSMicrophoneUsageDescription: "Daebot uses the microphone when you press the mic button or turn on hands-free voice.",
       NSCalendarsUsageDescription: "Daebot reads and adds events in your Apple Calendar when you ask it to.",
       NSCalendarsFullAccessUsageDescription: "Daebot reads and adds events in your Apple Calendar when you ask it to.",

@@ -581,7 +581,8 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     const ex = result.meta?.exchange as Extract<AgentEvent, { type: "exchange" }> | undefined;
     if (ex && tool.spec.name === "bot_talk" && ex.type === "exchange") yield ex;
     const msg = toolMsg(call, `[#${receiptId} ${tool.spec.name}${result.ok ? "" : " FAILED"}] ${result.output.length > MAX_TOOL_OUTPUT ? result.output.slice(0, MAX_TOOL_OUTPUT) + "\n[truncated]" : result.output}`);
-    if (result.images?.length) msg.images = result.images.slice(0, 2);
+    // Two images by default; a tool that returns a short clip (screen clip) asks for more with meta.imageCap, never above 6.
+    if (result.images?.length) msg.images = result.images.slice(0, Math.min(6, Math.max(2, Math.floor(Number(result.meta?.imageCap)) || 2)));
     messages.push(msg);
     // Same tool, same args, again and again: not a stop, a nudge to change approach (delivered at the round boundary).
     const sig = callSignature(call);

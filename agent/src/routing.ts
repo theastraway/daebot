@@ -3,7 +3,7 @@
 // tool descriptions repeat the rule, and tools/computer.ts refuses the obvious screen-for-background-work calls.
 
 /** The "## Work in the background first" section, shaped to the tools this session actually has. Empty when there is nothing to route. */
-export function routingSection(toolNames: Iterable<string>): string[] {
+export function routingSection(toolNames: Iterable<string>, opts: { screenWatching?: boolean } = {}): string[] {
   const has = new Set(toolNames);
   const connectors = [...has].some((n) => /^mind_/.test(n) || /^[a-z0-9][a-z0-9-]{0,30}__/.test(n) || n === "apple_calendar");
   const steps: string[] = [];
@@ -27,7 +27,22 @@ export function routingSection(toolNames: Iterable<string>): string[] {
     );
   } else out.push("If a background tool fails, try another background route, then ask the user.");
   out.push("Say in the reply what you did in the background.");
+  if (opts.screenWatching && has.has("screen")) out.push(...screenWatchingLines(has.has("computer")));
   return out;
+}
+
+/** Only while the user has "Let Daebot watch my screen" on. Background tools still come first; this is what to use when the screen is the thing to read. */
+export function screenWatchingLines(hasComputer: boolean): string[] {
+  return [
+    "",
+    "## The user is letting you watch their screen",
+    "A live screen feed is ON (the user turned it on; a red dot shows in their tray while it is). Background tools still come first: connectors, web_fetch, bash, process and app are exact and need no picture. When you do need to see the screen:",
+    "- screen look: the latest frame, instant. Use it instead of a computer screenshot.",
+    "- screen wait_for_change: block until the screen changes or a timeout, then get the settled frame. Use it instead of a fixed wait or sleep (\"wait until the download finishes\", \"wait for the page to load\"); pass region to watch one part of the screen.",
+    "- screen clip: keyframes of the last seconds, for \"what just happened\".",
+    ...(hasComputer ? ["- computer actions return the live frame (one per call, taken after the screen settles) instead of a PowerShell screenshot; send a batch and read only its final frame."] : []),
+    "You are not watching between calls: you see the screen only when you call screen or computer. Never say you saw something you did not look at in this turn. Frames stay in memory and are never saved unless the user asks (screen save).",
+  ];
 }
 
 /** Console hosts and shells. Shared by the computer guard, the app tool's launch refusal and the PowerShell foreground check. */

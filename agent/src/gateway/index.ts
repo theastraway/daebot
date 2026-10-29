@@ -56,6 +56,9 @@ import { touchConnectedApps } from "../mind/connected.ts";
 import { addonWords, fetchIntegrations, providerFor } from "../mind/integrations.ts";
 import type { AppRow } from "../mind/integrations.ts";
 import { dataDir, cleanTitle } from "../persist.ts";
+import { screenApi } from "./screen.ts";
+import { screenFeed } from "../screen/feed.ts";
+import type { ScreenFeed } from "../screen/feed.ts";
 import { MAX_PHOTO_BODY, checkPhotos, cleanName, isPhotoId } from "../photos.ts";
 
 // ---------- inbound webhooks (channel adapters register here) ----------
@@ -98,6 +101,8 @@ export interface GatewayOptions {
   embeddedFiles?: Record<string, string>;
   tokenPath?: string;
   idleMs?: number; // tests
+  /** The screen feed the desktop shell fills (tests inject one; the default is the process-wide feed). Local gateways only. */
+  screenFeed?: ScreenFeed;
   /** Public deployment: login screen, Host allowlist, secure cookies, security headers. */
   hosted?: HostedOptions;
   /** Hosted multi-user sign-in (MIND OAuth / API key) and the per-user runtimes. Owner access-code login keeps working without it. */
@@ -875,7 +880,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/board" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/");
+    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/board" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/");
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -1384,6 +1389,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     const me = who(req);
+    // The desktop shell's screen feed: local gateways only. A hosted server has no desktop to feed it and must never accept frames.
+    if (path.startsWith("/screen/")) return hosted ? sendJson(res, 404, { error: "not found" }) : screenApi(req, res, path, new URLSearchParams(req.url!.includes("?") ? req.url!.slice(req.url!.indexOf("?") + 1) : ""), method, opts.screenFeed ?? screenFeed, { readBody, readJson, sendJson });
     if (path.startsWith("/voice/")) return voice ? voice(req, res, path, _query, me) : sendJson(res, 404, { error: "voice is not available" });
     if (path.startsWith("/apps/")) return apps ? apps(req, res, path, me) : sendJson(res, 404, { error: "apps are not available" });
     if (path === "/account") return accountApi(res, method);
