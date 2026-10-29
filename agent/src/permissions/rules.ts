@@ -94,7 +94,8 @@ export function extractRecipients(args: unknown): string[] {
 export function factsOf(tool: string, cls: ToolClass, args: Record<string, unknown> | undefined, cwd: string): CallFacts {
   const a = args ?? {};
   const f: CallFacts = { tool, cls, cwd: normPath(cwd), paths: [], recipients: extractRecipients(a), signature: callSignature(tool, a) };
-  if (tool === "bash" && typeof a.command === "string") f.command = canonCommand(a.command);
+  // Newlines are command separators: they become ";" BEFORE whitespace is collapsed, so a multi-line command is never one "simple" allow-listed command.
+  if (tool === "bash" && typeof a.command === "string") f.command = canonCommand(a.command.replace(/[\r\n]+$/, "").replace(/\r?\n|\r/g, " ; "));
   // terminal send: what is typed into the session is a command line. Newlines become ";" so a multi-line paste is never one "simple" allow-listed command.
   if (tool === "terminal" && a.action === "send" && typeof a.text === "string") f.command = canonCommand(a.text.replace(/\r?\n+$/, "").replace(/\r?\n/g, " ; "));
   if (FS_PATH_TOOLS.has(tool)) {
