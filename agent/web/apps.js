@@ -56,13 +56,22 @@ function openForm(e, ctl, handlers, confirm, rowBtn) {
     for (const st of e.form.steps) ol.append(el("li", "", st));
     form.append(ol);
   }
-  const inputs = [];
+  const inputs = [], revealers = [];
+  const showToken = () => { for (const x of revealers) { x.lab.hidden = false; x.link.hidden = true; x.inp.required = true; x.inp.focus({ preventScroll: true }); } };
   for (const f of e.form.fields) {
     const lab = el("label", "app-field"); lab.append(el("span", "", f.label + (f.optional ? " (optional)" : "")));
     const inp = document.createElement("input"); inp.type = f.secret ? "password" : "text"; inp.name = f.name;
     inp.placeholder = f.placeholder || ""; inp.autocomplete = f.secret ? "new-password" : "off"; inp.spellcheck = false; inp.required = !f.optional;
     inp.setAttribute("autocapitalize", "off"); inp.setAttribute("autocorrect", "off"); inp.maxLength = 5000;
     lab.append(inp); form.append(lab); inputs.push(inp);
+    // An optional box kept behind a small link ("Use an access token instead"): the connector signs in with OAuth unless the user opens it.
+    if (f.reveal) {
+      lab.hidden = true; inp.required = false; inp.dataset.reveal = "1";
+      const link = el("button", "app-link", f.reveal); link.type = "button";
+      link.addEventListener("click", () => showToken());
+      revealers.push({ lab, inp, link });
+      form.append(link);
+    }
   }
   const byName = (n) => inputs.find((i) => i.name === n);
   // One paste of a whole config block (n8n's "Configuration JSON") fills both boxes.
@@ -89,8 +98,14 @@ function openForm(e, ctl, handlers, confirm, rowBtn) {
   no.addEventListener("click", close);
   // The form's own status line and button, so the result shows where the user is looking (the row's line can be scrolled away).
   const fctl = {
-    busy(on) { go.disabled = on; no.disabled = on; go.textContent = on ? "Connecting…" : label; if (on) fsay(`Checking ${e.name} with that token…`, "off"); ctl.busy(on); },
+    busy(on) {
+      go.disabled = on; no.disabled = on; go.textContent = on ? "Connecting…" : label;
+      if (on) fsay(revealers.length && revealers.every((x) => x.lab.hidden) ? `Checking ${e.name}…` : `Checking ${e.name} with that token…`, "off");
+      ctl.busy(on);
+    },
     say(text, tone) { fsay(text, tone); ctl.say(text, tone); },
+    /** The server offers no sign-in Daebot can use: open the access-token box. */
+    needToken() { showToken(); },
   };
   form.addEventListener("submit", async (ev) => {
     ev.preventDefault();

@@ -111,11 +111,11 @@ interface Pending {
   id: string; uid: string; url: string; host: string; publisher: Publisher;
   authRequired: boolean; discovery?: Discovery; oauthOk: boolean;
   tools: ToolInfo[] | null; toolsTruncated: boolean;
-  suggestedName: string; reason?: string; source?: "catalog"; createdAt: number; expiresAt: number;
+  suggestedName: string; reason?: string; source?: "catalog"; preset?: string; createdAt: number; expiresAt: number;
 }
 interface Flow {
   uid: string; pendingId: string; state: string; verifier: string; redirectUri: string; discovery: Discovery;
-  clientId: string; clientSecret?: string; allow: string[]; name?: string; expiresAt: number;
+  clientId: string; clientSecret?: string; allow: string[]; name?: string; preset?: string; expiresAt: number;
 }
 
 export type CatalogAuth = "none" | "oauth" | "key" | "oauth_or_key" | "url_token" | "unknown";
@@ -131,30 +131,33 @@ export interface CatalogItemView {
    *  the app's, with this connector inside it. `addon` is the words for that inner part. */
   foldedInto?: string; addon?: { label: string; why: string };
   /** Present on connectors that need the user's own server address AND a token (n8n, custom). The card shows these fields inline. */
-  form?: { fields: { name: "url" | "token" | "name"; label: string; placeholder: string; secret?: boolean; optional?: boolean }[]; submitLabel: string; why?: string; steps?: string[]; help?: { label: string; url: string } };
+  form?: { fields: { name: "url" | "token" | "name"; label: string; placeholder: string; secret?: boolean; optional?: boolean; reveal?: string }[]; submitLabel: string; oauth?: boolean; why?: string; steps?: string[]; help?: { label: string; url: string } };
 }
 
 /** Daebot's own connectors, listed after MIND's. They cannot live in a fixed URL list because the address belongs to the user's own server. */
 export interface LocalConnector { id: string; name: string; blurb: string; category: string; urlLabel: string; urlPlaceholder: string; defaultPath?: string; nameBase: string; why?: string; steps?: string[]; help?: { label: string; url: string };
   /** Plain-English replacements for the generic probe errors, so the user is told what to do in THIS product. */
-  hints?: { badToken: string; notFound: string } }
+  hints?: { badToken: string; notFound: string };
+  /** Sign in with OAuth first (the standard MCP authorization flow); the access token is the fallback. */
+  oauth?: boolean }
 export const LOCAL_CONNECTORS: LocalConnector[] = [
   { id: "local:n8n", name: "n8n", blurb: "Recommended. Let Daebot search, read and run your n8n workflows, so recurring work keeps running on its own schedule, even when Daebot is closed.", category: "automation",
-    urlLabel: "Server URL", urlPlaceholder: "https://your-n8n.example.com/mcp-server/http", defaultPath: "/mcp-server/http", nameBase: "n8n",
+    urlLabel: "Server URL", urlPlaceholder: "https://your-n8n.example.com/mcp-server/http", defaultPath: "/mcp-server/http", nameBase: "n8n", oauth: true,
     why: "Daebot answers when you ask; n8n runs on a schedule or a trigger, around the clock, even when Daebot is closed. With both, Daebot can build an automation once, hand it to n8n to run, and check on your workflows for you.",
     // The labels below are n8n's own (docs.n8n.io/advanced-ai/accessing-n8n-mcp-server, checked 2026-10-28).
     steps: [
-      "In n8n, open Settings > Instance-level MCP and select Enable MCP access.",
-      "Under Connection details, select Connect, then open the API key tab.",
-      "Copy the Configuration JSON and paste it into either box below. Daebot reads the URL and the token out of it.",
+      "In n8n, open Settings > Instance-level MCP and select Enable MCP access (you need to be the instance owner or an admin).",
+      "Paste your n8n address below (the Server URL shown under Connection details works too) and select Connect.",
+      "n8n opens in a new tab: sign in if asked and approve access. This card then shows Connected.",
+      "Older n8n without OAuth: use \"Use an access token instead\", then in Connect open the API key tab and copy the token.",
     ],
     hints: {
       badToken: "n8n did not accept that token. In n8n, open Settings > Instance-level MCP, select Connect, open the API key tab and copy the token again. A new token replaces the old one.",
       notFound: "Daebot reached that address but found no n8n MCP server there. In n8n, open Settings > Instance-level MCP and select Enable MCP access, then paste the Server URL it shows.",
     },
     help: { label: "No n8n yet? Create an n8n account", url: "https://n8n.io/" } },
-  { id: "local:custom", name: "Custom MCP server", blurb: "Any remote MCP server that takes a bearer token: paste its address and token.",
-    category: "developer", urlLabel: "Server URL", urlPlaceholder: "https://example.com/mcp", nameBase: "" },
+  { id: "local:custom", name: "Custom MCP server", blurb: "Any remote MCP server: paste its address. Daebot signs in with OAuth when the server offers it, and takes an access token when it does not.",
+    category: "developer", urlLabel: "Server URL", urlPlaceholder: "https://example.com/mcp", nameBase: "", oauth: true },
 ];
 
 // ---------------------------------------------------------------- helpers
@@ -201,6 +204,30 @@ export function readConnectPaste(urlIn: string, tokenIn: string): { url: string;
   let token = unquote(tokenIn).replace(/^authorization\s*:\s*/i, "").replace(/^Bearer\s+/i, "");
   if (!token || /[\s{}]/.test(token) || /^https?:/i.test(token)) { const m = BEARER_IN_TEXT.exec(both); if (m) token = m[1]; }
   return { url, token };
+}
+
+/** The address a connector card should talk to, from whatever the user pasted: a bare n8n address gets the MCP path, and an n8n page address
+ *  (".../home/workflows") is pointed at the MCP path of the same instance. Other connectors take the address as given. */
+export function presetAddress(preset: Pick<LocalConnector, "urlLabel" | "defaultPath">, pasted: string): string {
+  let raw = pasted;
+  if (!raw) throw new McpConnectError(`Paste your ${preset.urlLabel}.`);
+  if (preset.defaultPath && /^https?:\/\/[^/?#]+\/?$/i.test(raw)) raw = raw.replace(/\/+$/, "") + preset.defaultPath;
+  else if (preset.defaultPath && /^https:\/\/[^/?#]+\//i.test(raw) && !/\/mcp/i.test(new URL(raw).pathname)) raw = new URL(raw).origin + preset.defaultPath;
+  return raw;
+}
+
+/** A pasted address that is plainly an n8n instance: its MCP path, or one of n8n's own page paths, or a host named n8n. Used to turn an n8n address
+ *  pasted into chat into the n8n connection, with the right MCP path. Anything else is left alone. */
+export function n8nAddress(raw: string): string | undefined {
+  let u: URL;
+  try { u = new URL(raw.trim()); } catch { return undefined; }
+  if (u.protocol !== "https:") return undefined;
+  const mcpPath = /^\/mcp-server\/http\/?$/i.test(u.pathname);
+  const uiPath = /^\/(home|workflow|workflows|signin|projects|settings|executions|credentials|templates)(\/|$)/i.test(u.pathname) || u.pathname === "/";
+  const named = /(^|[.-])n8n([.-]|$)/i.test(u.hostname);
+  if (mcpPath) return `${u.origin}/mcp-server/http`;
+  if (named && uiPath) return `${u.origin}/mcp-server/http`;
+  return undefined;
 }
 
 function normalizeUrl(raw: string): URL {
@@ -383,9 +410,10 @@ export class McpConnectService {
       out.push({
         id: l.id, name: l.name, blurb: l.blurb, category: l.category, publisher: "community", auth: "url_token", host: "your own server",
         connected: byPreset.has(l.id), serverId: byPreset.get(l.id),
-        form: { submitLabel: "Connect", ...(l.why ? { why: l.why } : {}), ...(l.steps ? { steps: l.steps } : {}), ...(l.help ? { help: l.help } : {}), fields: [
+        form: { submitLabel: "Connect", ...(l.oauth ? { oauth: true } : {}), ...(l.why ? { why: l.why } : {}), ...(l.steps ? { steps: l.steps } : {}), ...(l.help ? { help: l.help } : {}), fields: [
           { name: "url", label: l.urlLabel, placeholder: l.urlPlaceholder },
-          { name: "token", label: "Access token", placeholder: "paste the token", secret: true },
+          // OAuth connectors ask for the address only; the token box is behind a small link (and opens by itself when the server has no OAuth).
+          { name: "token", label: "Access token", placeholder: "paste the token", secret: true, ...(l.oauth ? { optional: true, reveal: "Use an access token instead" } : {}) },
           ...(l.id === "local:custom" ? [{ name: "name" as const, label: "Name (tools become name__tool)", placeholder: "my-server", optional: true }] : []),
         ] },
       });
@@ -431,11 +459,7 @@ export class McpConnectService {
     const token = pasted.token;
     if (!token) throw new McpConnectError("Paste the access token too.");
     if (!/^[\x21-\x7e]{1,4096}$/.test(token)) throw new McpConnectError("Paste the access token exactly as it was given (no spaces).");
-    let raw = pasted.url;
-    if (!raw) throw new McpConnectError(`Paste your ${preset.urlLabel}.`);
-    if (preset.defaultPath && /^https?:\/\/[^/?#]+\/?$/i.test(raw)) raw = raw.replace(/\/+$/, "") + preset.defaultPath; // a bare n8n address gets the MCP path
-    // The browser address of an n8n page (".../home/workflows") is still the right server: point it at the MCP path.
-    else if (preset.defaultPath && /^https:\/\/[^/?#]+\//i.test(raw) && !/\/mcp/i.test(new URL(raw).pathname)) raw = new URL(raw).origin + preset.defaultPath;
+    const raw = presetAddress(preset, pasted.url);
     const u = normalizeUrl(raw);
     const urlStr = u.toString();
     await this.prepare(uid);
@@ -463,6 +487,63 @@ export class McpConnectService {
       if (/did not answer like an MCP server/.test(e.message) || e.code === "not_mcp") throw new McpConnectError(preset.hints.notFound);
       throw e;
     }
+  }
+
+  /** The same card, OAuth first: the user gives only the server address and Daebot signs in the way Claude and Cursor do (RFC 9728 protected-resource
+   *  metadata, RFC 8414 server metadata, RFC 7591 dynamic registration, authorization code + PKCE S256). The user's click on Connect is the consent.
+   *  Answers one of: `authorize` (open this address in a new tab; the callback finishes the connection), `connected` (the server needs no sign-in),
+   *  or `token_needed` (the server offers no OAuth Daebot can use; the card shows the access-token box with `message` as its one-line reason). */
+  async connectWithOAuth(uid: string, a: { presetId: string; url: string; name?: string; redirectUri: string }):
+    Promise<{ status: "authorize"; url: string; state: string } | { status: "connected"; server: ServerView } | { status: "token_needed"; message: string }> {
+    this.requireEnabled();
+    const preset = LOCAL_CONNECTORS.find((l) => l.id === a.presetId);
+    if (!preset || !preset.oauth) throw new McpConnectError("That connector is not available.", 404);
+    const now = this.now();
+    const recent = (this.proposals.get(uid) ?? []).filter((t) => t > now - PROPOSAL_WINDOW_MS);
+    if (recent.length >= PROPOSALS_PER_WINDOW) throw new McpConnectError("Too many connection attempts in the last few minutes. Try again shortly.", 429);
+    recent.push(now);
+    this.proposals.set(uid, recent);
+    const pasted = readConnectPaste(typeof a.url === "string" ? a.url : "", "");
+    const u = normalizeUrl(presetAddress(preset, pasted.url));
+    const urlStr = u.toString();
+    await this.prepare(uid);
+    if (this.hasUrl(uid, urlStr)) throw new McpConnectError("That server is already connected.");
+    const lim = this.limitsFor(uid);
+    if (this.serverCount(uid) >= lim.maxServers) throw new McpConnectError(`You already have ${lim.maxServers} connected servers (the limit). Remove one first.`);
+    const mine = this.pendingMap(uid);
+    if (mine.size >= lim.maxPending) for (const [id, p] of mine) if (p.preset === preset.id) mine.delete(id); // a retry replaces this card's own earlier attempt
+    if (mine.size >= lim.maxPending) throw new McpConnectError("There are already several connection requests waiting. Answer or dismiss them first.");
+    const wanted = (typeof a.name === "string" && slugify(a.name)) || preset.nameBase || suggestName(u.hostname);
+    let probe;
+    try { probe = await this.probe(urlStr); } catch (e) {
+      if (preset.hints && e instanceof McpConnectError && (/did not answer like an MCP server/.test(e.message) || e.code === "not_mcp")) throw new McpConnectError(preset.hints.notFound);
+      throw e;
+    }
+    for (const [id, p] of mine) if (p.url === urlStr) mine.delete(id); // an earlier unfinished attempt at this address is replaced
+    const p: Pending = {
+      id: "mcp_" + randomBytes(9).toString("base64url"), uid, url: urlStr, host: u.host, publisher: "self", preset: preset.id,
+      authRequired: probe.authRequired, oauthOk: false, tools: probe.authRequired ? null : probe.tools, toolsTruncated: !probe.authRequired && probe.truncated,
+      suggestedName: this.uniqueName(uid, wanted), createdAt: now, expiresAt: now + PENDING_TTL_MS,
+    };
+    if (!probe.authRequired) {
+      // Nothing to sign in to: the user typed the address, which is the consent.
+      mine.set(p.id, p);
+      const r = await this.approve(uid, p.id, { mode: "none", allow: [], redirectUri: a.redirectUri });
+      if (r.status !== "connected") throw new McpConnectError("That server asked for a sign-in instead.");
+      return r;
+    }
+    try {
+      p.discovery = await discover(this.net, urlStr, probe.challenge);
+      p.oauthOk = !!p.discovery.authServer.registrationEndpoint;
+      if (!p.oauthOk) throw new OAuthError("that server needs a pre-registered app and does not let Daebot register itself");
+    } catch (e) {
+      const why = e instanceof OAuthError ? e.message : "its sign-in could not be read";
+      return { status: "token_needed", message: `${preset.name} did not offer a sign-in Daebot can use (${cleanLine(why, 120)}). Use an access token instead.` };
+    }
+    mine.set(p.id, p);
+    const r = await this.approve(uid, p.id, { mode: "oauth", allow: [], redirectUri: a.redirectUri });
+    if (r.status !== "authorize") return { status: "connected", server: r.server };
+    return { status: "authorize", url: r.url, state: r.state };
   }
 
   // ---- probe: initialize + tools/list, nothing else
@@ -500,7 +581,9 @@ export class McpConnectService {
     recent.push(now);
     this.proposals.set(uid, recent);
 
-    const u = normalizeUrl(a.url);
+    // An n8n address pasted into chat (its MCP path, or any page of the instance) becomes the n8n connection with its MCP path, signed in with OAuth like any other.
+    const n8n = n8nAddress(a.url);
+    const u = normalizeUrl(n8n ?? a.url);
     await this.prepare(uid);
     const lim = this.limitsFor(uid);
     const urlStr = u.toString();
@@ -525,8 +608,8 @@ export class McpConnectService {
       publisher: await this.publisherOf(uid, host, urlStr),
       authRequired: probe.authRequired, discovery, oauthOk,
       tools: probe.authRequired ? null : probe.tools, toolsTruncated: !probe.authRequired && probe.truncated,
-      suggestedName: this.uniqueName(uid, (a.nameHint && slugify(a.nameHint)) || suggestName(u.hostname)),
-      reason: a.reason ? cleanLine(a.reason, 200) : undefined, source: a.source,
+      suggestedName: this.uniqueName(uid, (a.nameHint && slugify(a.nameHint)) || (n8n ? "n8n" : suggestName(u.hostname))),
+      reason: a.reason ? cleanLine(a.reason, 200) : undefined, source: a.source, ...(n8n ? { preset: "local:n8n" } : {}),
       createdAt: now, expiresAt: now + PENDING_TTL_MS,
     };
     mine.set(p.id, p);
@@ -586,13 +669,13 @@ export class McpConnectService {
     if (mode === "none") {
       if (p.authRequired) throw new McpConnectError("That server needs you to sign in or give a key.");
       if (viaMind) return this.approveMind(uid, p, { mode: "none", allow: o.allow, name: o.name });
-      return { status: "connected", server: await this.finish(uid, p, { kind: "none" }, o.allow, o.name) };
+      return { status: "connected", server: await this.finish(uid, p, { kind: "none" }, o.allow, o.name, p.preset) };
     }
     if (mode === "key") {
       const key = typeof o.apiKey === "string" ? o.apiKey.trim() : "";
       if (!/^[\x21-\x7e]{1,4096}$/.test(key)) throw new McpConnectError("Enter the key exactly as the server gave it (no spaces).");
       if (viaMind) return this.approveMind(uid, p, { mode: "key", token: key, allow: o.allow, name: o.name });
-      return { status: "connected", server: await this.finish(uid, p, { kind: "key", key }, o.allow, o.name) };
+      return { status: "connected", server: await this.finish(uid, p, { kind: "key", key }, o.allow, o.name, p.preset) };
     }
     // oauth
     if (!p.authRequired) throw new McpConnectError("That server does not need a sign-in.");
@@ -606,7 +689,7 @@ export class McpConnectService {
     const now = this.now();
     for (const [s, f] of this.flows) if (f.expiresAt <= now) this.flows.delete(s);
     if (this.flows.size >= 200) throw new McpConnectError("Too many sign-ins are in progress. Try again in a few minutes.", 429);
-    this.flows.set(state, { uid, pendingId: p.id, state, verifier, redirectUri: o.redirectUri, discovery: disc, clientId: client.clientId, clientSecret: client.clientSecret, allow: o.allow ?? [], name: o.name, expiresAt: now + FLOW_TTL_MS });
+    this.flows.set(state, { uid, pendingId: p.id, state, verifier, redirectUri: o.redirectUri, discovery: disc, clientId: client.clientId, clientSecret: client.clientSecret, allow: o.allow ?? [], name: o.name, preset: p.preset, expiresAt: now + FLOW_TTL_MS });
     const url = buildAuthorizeUrl({ meta: disc.authServer, clientId: client.clientId, redirectUri: o.redirectUri, state, verifier, resource: disc.resource, scope: disc.scope });
     return { status: "authorize", url, state };
   }
@@ -624,7 +707,7 @@ export class McpConnectService {
       tok = await exchangeCode(this.net, { tokenEndpoint: f.discovery.authServer.tokenEndpoint, code, verifier: f.verifier, clientId: f.clientId, clientSecret: f.clientSecret, redirectUri: f.redirectUri, resource: f.discovery.resource }, this.now());
     } catch (e) { throw new McpConnectError(e instanceof OAuthError ? e.message : "The sign-in did not complete."); }
     const secret: Secret = { kind: "oauth", accessToken: tok.accessToken, refreshToken: tok.refreshToken, expiresAt: tok.expiresAt, clientId: f.clientId, clientSecret: f.clientSecret, tokenEndpoint: f.discovery.authServer.tokenEndpoint, resource: f.discovery.resource };
-    return this.finish(uid, p, secret, f.allow, f.name);
+    return this.finish(uid, p, secret, f.allow, f.name, f.preset);
   }
 
   private async finish(uid: string, p: Pending, secret: Secret, allowReq: string[] | undefined, nameReq: string | undefined, preset?: string): Promise<ServerView> {
@@ -655,7 +738,7 @@ export class McpConnectService {
   serverView(r: ServerRec): ServerView {
     return {
       id: r.id, name: r.name, url: r.url, host: r.host, publisher: r.publisher, auth: r.auth, enabled: r.enabled, addedAt: r.addedAt,
-      tools: this.toToolViews(r, r.tools), truncated: !!r.truncated,
+      tools: this.toToolViews(r, r.tools), truncated: !!r.truncated, ...(r.preset ? { preset: r.preset } : {}),
     };
   }
 
@@ -1200,7 +1283,7 @@ export class McpConnectService {
   private async approveMind(uid: string, p: Pending, a: { mode: "none" | "key" | "oauth"; token?: string; allow?: string[]; name?: string; returnTo?: string }):
     Promise<{ status: "connected"; server: ServerView } | { status: "authorize"; url: string; state: string }> {
     const body: MindCreateBody = {
-      mode: a.mode, url: p.url, name: this.uniqueName(uid, (a.name && slugify(a.name)) || p.suggestedName, p.id), source: p.source === "catalog" ? "catalog" : "user",
+      mode: a.mode, url: p.url, name: this.uniqueName(uid, (a.name && slugify(a.name)) || p.suggestedName, p.id), source: p.source === "catalog" ? "catalog" : "user", ...(p.preset ? { preset: p.preset } : {}),
       ...(a.token ? { token: a.token } : {}), ...(a.returnTo ? { return_to: a.returnTo } : {}),
     };
     const allow = a.allow ?? p.tools?.filter((t) => t.readOnly && !t.destructive).map((t) => t.name);

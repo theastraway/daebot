@@ -79,11 +79,56 @@ export function connectorList(providers, items, linked) {
 
 export function initConnectors({ apps, json, getMcp }) {
   const get = (path) => (apps.cached ? apps.cached(path) : json(path));
+  /** Opens the server's sign-in in a new tab (the tab is opened here, inside the click, so the browser allows it), then watches for the connection to appear. */
+  async function signInWithOAuth(e, ctl, values) {
+    let win = null;
+    try { win = window.open("about:blank", "_blank"); if (win) win.opener = null; } catch { win = null; }
+    ctl.busy(true);
+    let r;
+    try {
+      r = await json("/mcp/catalog/connect-oauth", { method: "POST", body: JSON.stringify({ id: e.id, url: values && values.url, name: values && values.name }) });
+    } catch (err) { if (win) win.close(); ctl.busy(false); ctl.say(err && err.message ? err.message : `Could not connect ${e.name}.`, "warn"); return false; }
+    if (r.status === "token_needed") {
+      if (win) win.close();
+      ctl.busy(false); if (ctl.needToken) ctl.needToken();
+      ctl.say(r.message || "This server has no OAuth sign-in. Use an access token instead.", "warn");
+      return false;
+    }
+    if (r.status === "connected") { apps.say(`Connected ${e.name}.`); const mcp = getMcp(); if (mcp) mcp.load(); apps.refresh(); return true; }
+    if (!r.url || !/^https:\/\//.test(r.url)) { if (win) win.close(); ctl.busy(false); ctl.say("The server sent back a sign-in address Daebot will not open.", "warn"); return false; }
+    if (win) win.location.href = r.url; else { location.assign(r.url); return true; }
+    ctl.say(`Finish signing in on ${e.name}'s page in the new tab. This turns to Connected when you approve.`, "off");
+    watchConnection(e, ctl, win);
+    return true;
+  }
+
+  function watchConnection(e, ctl, win) {
+    const until = Date.now() + 10 * 60_000; let closedPolls = 0;
+    const tick = async () => {
+      let found = null;
+      try { const r = await json("/mcp/servers"); found = (r.servers || []).find((s) => s.preset === e.id); } catch { /* try again */ }
+      if (found) {
+        const n = Array.isArray(found.tools) ? found.tools.length : 0;
+        apps.say(n ? `Connected ${e.name}: ${n} tool${n === 1 ? "" : "s"} ready. Ask Daebot to use them.` : `Connected ${e.name}.`);
+        const mcp = getMcp(); if (mcp) mcp.load();
+        apps.refresh();
+        return;
+      }
+      if (win && win.closed) closedPolls++;
+      if (Date.now() > until || closedPolls >= 5) { ctl.busy(false); ctl.say(`The ${e.name} sign-in did not finish. Select Connect to try again.`, "warn"); return; }
+      setTimeout(tick, 2000);
+    };
+    setTimeout(tick, 2000);
+  }
+
   const mcpHandlers = {
     readPaste,
     async onConnect(e, ctl, values) {
       if (e.form) {
-        // n8n / custom server: the address and token go straight to the gateway, which probes the server with the token before saving.
+        // OAuth first: with no token typed, the address alone starts the standard MCP sign-in (the gateway finds the server's sign-in, registers Daebot, and
+        // returns the server's own authorization page to open in a new tab). A server with no OAuth turns on the access-token box.
+        if (e.form.oauth && !(values && values.token && String(values.token).trim())) return signInWithOAuth(e, ctl, values);
+        // With a token: the address and token go straight to the gateway, which probes the server with the token before saving.
         ctl.busy(true);
         try {
           const r = await json("/mcp/catalog/connect-token", { method: "POST", body: JSON.stringify({ id: e.id, url: values && values.url, token: values && values.token, name: values && values.name }) });

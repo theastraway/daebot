@@ -91,7 +91,7 @@ export function initMcp({ json, api, h, icon, notify, mount, section, openApps, 
         oauthBtn.addEventListener("click", () => submit("oauth"));
         sec.append(oauthBtn, h("span", "mcp-or", "or"));
       }
-      const lab = h("label", "fld-label", "API key or bearer token"); lab.htmlFor = `mcp-key-${p.id}`;
+      const lab = h("label", "fld-label", p.oauth ? "Or use an access token instead" : "API key or bearer token"); lab.htmlFor = `mcp-key-${p.id}`;
       keyInput = document.createElement("input");
       keyInput.type = "password"; keyInput.id = `mcp-key-${p.id}`; keyInput.className = "fld"; keyInput.autocomplete = "off"; keyInput.spellcheck = false;
       keyInput.setAttribute("data-1p-ignore", ""); keyInput.placeholder = "Stored encrypted; Daebot's model never sees it";

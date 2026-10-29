@@ -283,7 +283,7 @@ test("web: Connect sends an id and never an address; no innerHTML anywhere in th
   const code = (f: string) => web(f).replace(/^\s*\/\/.*$/gm, "");
   for (const f of ["connectors.js", "apps.js", "mcp.js"]) assert.doesNotMatch(code(f), /innerHTML|insertAdjacentHTML|eval\(|new Function|document\.write/, f);
   assert.match(web("connectors.js"), /JSON\.stringify\(\{ id: e\.id \}\)/);
-  assert.doesNotMatch(web("connectors.js").replace("url: values && values.url", ""), /\burl\b\s*:/, "the only address the browser sends is the one typed into the n8n / custom form");
+  assert.doesNotMatch(web("connectors.js").replaceAll("url: values && values.url", ""), /\burl\b\s*:/, "the only address the browser sends is the one typed into the n8n / custom form");
   assert.doesNotMatch(web("connectors.js"), /fetch\(/);
   assert.match(web("mcp.js"), /suspendApps\(\)/, "opening the consent card steps the Apps card aside");
   assert.match(web("mcp.js"), /resumeApps\(\)/);
