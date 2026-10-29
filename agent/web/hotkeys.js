@@ -160,6 +160,7 @@ export function initHotkeys(o) {
   addEventListener("keydown", (e) => { if (listening) return; reloadIfUserChanged(); solo.keydown(e); }, true);
   addEventListener("keyup", (e) => { if (listening) return; solo.keyup(e); }, true);
   addEventListener("blur", () => solo.reset());
+  addEventListener("daebot:who", () => { reloadIfUserChanged(); paintHints(); }); // the account is known after the page loads: show ITS keys
   document.addEventListener("visibilitychange", () => { if (document.hidden) solo.reset(); });
 
   function persist(next) {
@@ -257,5 +258,5 @@ export function initHotkeys(o) {
   }
   if (o.openButton) o.openButton.addEventListener("click", open);
   paintHints();
-  return { bindings: () => bindings, open, setUser(name) { o.getUser = () => name; reloadIfUserChanged(); }, refresh: paintHints };
+  return { bindings: () => bindings, open, setUser(name) { o.getUser = () => name; reloadIfUserChanged(); }, refresh() { reloadIfUserChanged(); paintHints(); } };
 }

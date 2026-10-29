@@ -1213,7 +1213,7 @@ async function showDesktopWho() {
     if (!r.ok) return;
     const me = await r.json().catch(() => ({}));
     if (!me.signedIn || !me.username) return;
-    state.who = me.username;
+    state.who = me.username; window.dispatchEvent(new Event("daebot:who"));
     account?.setIdentity({ username: me.username, owner: false, sub: "MIND account" });
   } catch { /* shown on the next ping */ }
 }
@@ -1254,7 +1254,7 @@ async function showWho() {
     const r = await fetch("/auth/me", { credentials: "same-origin" });
     if (!r.ok) return r.status === 401 ? false : true; // 401 = not signed in; anything else is a hiccup, not a sign-out
     const me = await r.json();
-    state.who = me.username;
+    state.who = me.username; window.dispatchEvent(new Event("daebot:who"));
     showPlan(me);
     account?.setIdentity({ username: me.username, owner: me.owner, planName: me.tierName });
     return true;
