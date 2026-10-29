@@ -24,9 +24,10 @@ export function initSuggest({ json, h, wrap, input, grow, currentId, isBusy }) {
     wrap.replaceChildren();
     if (!cur.shown.length) { wrap.hidden = true; return; }
     wrap.hidden = false;
-    wrap.append(h("span", "suggest-label", "Reply as you:"));
+    wrap.append(h("span", "suggest-label", "Reply as you"));
     for (const text of cur.shown) {
-      const b = h("button", `suggest-chip${cur.picked === text ? " picked" : ""}`, text);
+      const b = h("button", `suggest-chip${cur.picked === text ? " picked" : ""}`);
+      b.append(h("span", "suggest-text", text));
       b.type = "button"; b.title = "Puts this in the box so you can edit it. It is not sent.";
       b.addEventListener("click", () => {
         cur.picked = text;
