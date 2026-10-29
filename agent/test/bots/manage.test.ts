@@ -155,3 +155,17 @@ test("end to end in a runtime: the main session offers bot_manage and the skill;
     assert.ok(!last.messages[0].content.includes("## Creating a Daebot"));
   } finally { await fake.close(); }
 });
+
+test("a staff identity (the hosted default) may use bot_manage, and its delete still stops for the user's go", async () => {
+  const { store } = memStore();
+  const t = tool(store);
+  await run(t, { action: "create", slug: "gone", name: "Gone" });
+  const provider = new FakeProvider([{ calls: [call("1", "bot_manage", { action: "delete", slug: "gone" })] }, { calls: [call("2", "bot_manage", { action: "delete", slug: "gone" })] }, { text: "ok" }]);
+  const s = createAgentSession({ id: "s1", surface: "web", provider, kernel: createKernel({ shadow: false, enabled: true, tier: "staff" }), tools: [t], sync: new FakeSync(), cfg: baseCfg(), cwd: "/", systemPrompt: "SYS", bootContext: "booted" });
+  let ev = await collect(s.send("delete the gone bot"));
+  assert.ok(ev.some((e) => e.type === "confirm"), "asked, not blocked by the tier");
+  assert.ok(!ev.some((e) => e.type === "gate" && (e as any).verdict.gate === "tier"));
+  assert.ok(store.bySlug("gone"));
+  ev = await collect(s.send("send it"));
+  assert.equal(store.bySlug("gone"), undefined);
+});
