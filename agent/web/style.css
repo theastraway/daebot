@@ -313,6 +313,45 @@ kbd { font-size: 10.5px; background: var(--surface-2); border: 1px solid var(--l
 .mm-link:hover { color: var(--ink); }
 .mm-empty { margin: 0; padding: 10px; font-size: 13px; color: var(--ink-3); }
 
+
+/* Task board drawer: the client portal's traffic-light boxes (18px square; red #D92D20, yellow #F5B800, green #12B76A with a white check). Red also means stopped. */
+.bd-list { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 20px 28px; display: grid; gap: 18px; align-content: start; }
+.bd-sess { display: grid; gap: 6px; }
+.bd-sess-title { all: unset; box-sizing: border-box; cursor: pointer; font: 650 11.5px var(--sans); letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 0; }
+.bd-sess-title:hover { color: var(--ink); text-decoration: underline; }
+.bd-sess-title:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.bd-tasks { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.bd-task { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.bd-task.red[data-status="stopped"] { border-color: color-mix(in srgb, #D92D20 55%, var(--line)); }
+.bd-row { all: unset; box-sizing: border-box; width: 100%; display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; font-size: 13.5px; }
+button.bd-row { cursor: pointer; border-radius: 10px; }
+button.bd-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.bd-box { flex: none; width: 18px; height: 18px; margin-top: 1px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid; }
+.bd-box.red { background: #D92D20; border-color: #D92D20; }
+.bd-box.yellow { background: #F5B800; border-color: #F5B800; }
+.bd-box.green { background: #12B76A; border-color: #12B76A; }
+.bd-text { flex: 1; min-width: 0; display: grid; gap: 3px; }
+.bd-title { color: var(--ink); font-weight: 560; overflow-wrap: anywhere; }
+.bd-q { color: var(--ink-2); font-size: 12.5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.bd-label { flex: none; font: 600 11px var(--sans); color: var(--ink-3); white-space: nowrap; padding-top: 3px; }
+.bd-task[data-status="stopped"] .bd-label { color: #D92D20; }
+:root[data-theme="dark"] .bd-task[data-status="stopped"] .bd-label { color: #ff6b61; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .bd-task[data-status="stopped"] .bd-label { color: #ff6b61; } }
+.bd-reply { display: grid; gap: 8px; padding: 0 12px 12px 40px; }
+.bd-qfull { margin: 0; font-size: 13px; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.bd-input { width: 100%; resize: vertical; min-height: 56px; max-height: 200px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--bg); color: var(--ink); font: 14px/1.4 var(--sans); }
+.bd-input:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.bd-submit { justify-self: end; padding: 7px 16px; border: 0; border-radius: 8px; background: var(--ink); color: var(--bg); font: 600 13px var(--sans); }
+.bd-submit:disabled { opacity: .55; cursor: default; }
+.bd-submit:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.bd-err { margin: 0; font-size: 12.5px; color: #D92D20; }
+@media (max-width: 700px) {
+  .board-drawer { width: 100vw; border-left: 0; }
+  .bd-list { padding: 12px 14px 28px; }
+  .bd-reply { padding-left: 12px; }
+  .bd-input { font-size: 16px; } /* no iOS zoom on focus */
+}
+
 /* Instructions drawer */
 .drawer-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 20px 32px; display: grid; align-content: start; gap: 26px; }
 .dsec { display: grid; gap: 8px; }

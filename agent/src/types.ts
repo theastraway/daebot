@@ -261,6 +261,8 @@ export interface Runtime {
   recordSuggestionFeedback?(id: string, fb: import("./suggest/index.ts").SuggestionFeedback): boolean;
   /** This owner's photo store (photos attached to chat messages). Absent on runtimes built without a data dir: attaching is then refused. */
   photos?: import("./photos.ts").PhotoStore;
+  /** Task board rows of this owner: tasks the model declared per session, or one derived row per session. Most recent sessions first. */
+  boardRows?(): import("./board/board.ts").BoardRow[];
 }
 
 // Wire protocol over HTTP (JSON) + WebSocket: gateway <-> surface. See agent/SPEC.md section 5.

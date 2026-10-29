@@ -143,7 +143,10 @@ test("tools in a bot session: same set as a session (+ bot_talk, mind_tenants); 
     assert.deepEqual(calls.map((c) => [c.path.split("/").pop(), c.bot ?? null]), [["query", "sales"], ["query", null], ["entries", "sales"]]);
     const main = await w.runtime.openSession({ surface: "web", identity: "admin" });
     await collect(main.send("go"));
-    assert.deepEqual(w.provider.requests.at(-1)!.tools.map((t) => t.name).sort(), [...names].sort(), "a session and a bot get the same tools");
+    // The task board is the user's own: only their plain sessions have task_board (bot threads are not on the board).
+    const mainNames = w.provider.requests.at(-1)!.tools.map((t) => t.name);
+    assert.ok(mainNames.includes("task_board") && !names.includes("task_board"));
+    assert.deepEqual(mainNames.filter((n) => n !== "task_board").sort(), [...names].sort(), "a session and a bot get the same tools");
     for (const n of ["bot_talk", "mind_tenants", "mind_query", "mind_remember"]) assert.ok(names.includes(n), n);
     assert.ok(calls.every((c) => !JSON.stringify(c.body ?? {}).includes('"mind"')));
     assert.ok(evs.filter((e) => e.type === "toolEnd").every((e: any) => e.ok), JSON.stringify(evs.filter((e) => e.type === "toolEnd")));

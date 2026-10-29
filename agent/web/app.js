@@ -13,6 +13,7 @@ import { confirmDialog, deleteControl, sessionDeleteText } from "/manage.js";
 import { compareBuild, webUpdateText, WEB_CHECK_MS } from "/webupdate.js";
 import { buildPermissionCard, initChatMode, initPermissions } from "/permissions.js";
 import { initAccount } from "/account.js";
+import { initBoard } from "/board.js";
 import { initSuggest } from "/suggest.js";
 import { initPhotos, normQueue, packQueue, queueLabel, SAYS as PHOTO_SAYS } from "/photos.js";
 import { calendarCapabilities, createDeviceCalls } from "/device-calendar.js";
@@ -781,6 +782,7 @@ async function sendMessage(text, attached = []) {
     saveTranscript(id);
     refreshSessions();
     if (!els.drawer.hidden) loadViolations(); else refreshViolCount();
+    board.refresh();
     if (id === state.currentId || id === tkey()) voice.turnDone(answerText(transcript(id), userItem));
     else voice.turnDone("");
     if (id === state.currentId) suggest.load(id); // drafts what the user will probably say next, if the reply waits on them
@@ -857,6 +859,7 @@ function onEvent(id, ev, asst, toolByReceipt) {
       const it = toolByReceipt.get(ev.receiptId);
       if (it) { it.status = ev.ok ? "ok" : "fail"; it.preview = ev.preview; if (it.parts) refreshTool(it); }
       // Daebot proposed an MCP server: put the consent card in the thread (only the card's Connect button can connect it).
+      if (ev.tool === "task_board") board.poke(); // the board changed: refresh it if it is open
       if (ev.tool === "mcp_connect" && ev.ok) mcp.newPending().then((ps) => { for (const p of ps) addItem(id, { kind: "mcp", pending: p }); }).catch(() => {});
       return asst;
     }
@@ -869,6 +872,7 @@ function onEvent(id, ev, asst, toolByReceipt) {
       addItem(id, { kind: "confirm", id: ev.id, tool: ev.tool, args: ev.args, reason: ev.reason });
       return null;
     case "permission": {
+      board.poke(); // a card is waiting on the user: that session turns red on the board
       if (asst) { asst.streaming = false; paintAssistant(asst); }
       const it = addItem(id, permissionItem(ev));
       (tr.perms ||= new Map()).set(ev.id, it);
@@ -902,6 +906,25 @@ async function abortTurn() {
   try { await api(`/sessions/${encodeURIComponent(id)}/abort`, { method: "POST" }); } catch { /* the stream will report */ }
 }
 
+// ---------- reply from the task board ----------
+// The session on screen takes the normal composer path (so the reply streams into the chat). Any other session is brought back
+// live and gets the same POST /sessions/:id/send; the turn is server-owned, so we only wait for the server to accept it.
+async function replyInto(id, text) {
+  if (id === state.currentId) {
+    if (state.busy.has(id)) { enqueue(id, text, []); return; }
+    sendMessage(text, []);
+    return;
+  }
+  const row = state.sessions.find((x) => x.id === id);
+  const opened = await json("/sessions", { method: "POST", body: JSON.stringify({ surface: "web", title: row ? row.title : "", resumeId: id }) });
+  const sid = opened.sessionId || id;
+  const res = await api(`/sessions/${encodeURIComponent(sid)}/send`, { method: "POST", body: JSON.stringify({ text, ...(calendarCapabilities().length ? { capabilities: calendarCapabilities() } : {}) }) });
+  if (!res.ok) throw new Error(res.status === 409 ? "That session is busy right now. Try again in a moment." : (await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+  try { await res.body?.cancel(); } catch { /* the run continues on the server */ }
+  state.transcripts.delete(sid); // our copy is now behind the server's; reopening the session reloads it
+  refreshSessions();
+}
+
 // ---------- violations drawer ----------
 async function loadViolations() {
   const id = state.currentId;
@@ -931,7 +954,7 @@ function setViolCount(n) { els.violCount.hidden = n === 0; els.violCount.textCon
 function toggleDrawer(open) {
   els.drawer.hidden = !open;
   els.btnViol.setAttribute("aria-expanded", String(open));
-  if (open) { bots.closeDrawer(); loadViolations(); }
+  if (open) { bots.closeDrawer(); board.close(); loadViolations(); }
 }
 
 // ---------- theme ----------
@@ -1106,6 +1129,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (state.busy.has(tkey())) { e.preventDefault(); abortTurn(); }
   else if (!els.drawer.hidden) toggleDrawer(false);
+  else if (board.isOpen()) board.close();
   else if (bots.drawerOpen()) bots.closeDrawer();
   else closeSidebar();
 });
@@ -1160,10 +1184,27 @@ const bots = initBots({
     refresh: () => refreshSessions(),
     newThread: (id) => newBotThread(id),
     openThread: (s) => selectSession(s),
-    closeViolations: () => { if (!els.drawer.hidden) toggleDrawer(false); },
+    closeViolations: () => { if (!els.drawer.hidden) toggleDrawer(false); board.close(); },
     botChanged: () => renderHeader(),
     botDeleted: (id) => { if (state.curBot === id) newSession(); refreshSessions(); },
     threadDeleted: (s) => deleteSession(s),
+  },
+});
+
+// ---------- task board (right-side drawer, sibling of the violations drawer) ----------
+const board = initBoard({
+  json, h,
+  els: { btn: $("btn-board"), count: $("board-count"), drawer: $("board-drawer"), close: $("btn-board-close"), note: $("board-note"), list: $("board-list") },
+  app: {
+    closeOthers: () => { if (!els.drawer.hidden) toggleDrawer(false); bots.closeDrawer(); },
+    openSession: async (id) => {
+      const s = state.sessions.find((x) => x.id === id);
+      if (!s) return notify("That session is not in your list any more.");
+      if (matchMedia("(max-width: 700px)").matches) board.close(); // on a phone the sheet covers the chat
+      await selectSession(s);
+    },
+    // The reply goes through the normal durable send path, into the session the question belongs to.
+    reply: (id, text) => replyInto(id, text),
   },
 });
 
@@ -1197,6 +1238,7 @@ async function boot() {
   // Prewarming a session boots MIND, so it only ever runs for a signed-in user (hosted: the session cookie must be valid).
   if (state.hosted && !(await showWho())) return location.replace("/");
   await refreshSessions();
+  board.refresh();
   mcp.load();
   permissions.probe();
   chatMode.probe();
@@ -1215,5 +1257,5 @@ async function boot() {
 }
 boot();
 setInterval(ping, 10000);
-setInterval(() => { if ((token || state.hosted) && state.online) refreshSessions(); }, 30000);
+setInterval(() => { if ((token || state.hosted) && state.online) { refreshSessions(); board.refresh(); } }, 30000);
 initUpdates();
