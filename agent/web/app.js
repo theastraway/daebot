@@ -9,7 +9,7 @@ import { initApps } from "/apps.js";
 import { initMcp } from "/mcp.js";
 import { initConnectors } from "/connectors.js";
 import { transcriptBehind } from "/sync.js";
-import { confirmDialog, deleteControl, sessionDeleteText } from "/manage.js";
+import { confirmDialog, deleteControl, renameControl, editInline, isRenaming, sessionDeleteText } from "/manage.js";
 import { compareBuild, webUpdateText, WEB_CHECK_MS } from "/webupdate.js";
 import { buildPermissionCard, initChatMode, initPermissions } from "/permissions.js";
 import { initAccount } from "/account.js";
@@ -419,7 +419,10 @@ function currentMeta() { return metaById(state.currentId); }
 function renderHeader() {
   const meta = currentMeta();
   const bot = state.curBot ? bots.bot(state.curBot) : null;
+  if (isRenaming()) return;
   els.title.textContent = meta ? meta.title || "Untitled" : bot ? "New thread" : "New session";
+  els.title.classList.toggle("renamable", !!meta);
+  els.title.title = meta ? "Click to rename" : "";
   els.subtitle.textContent = meta
     ? [bot && bot.name, meta.peer && peerLabel(meta.peer, bots.bots()), `${meta.surface}${meta.live ? " · live" : ""}`].filter(Boolean).join(" · ")
     : bot ? `${bot.name} · Not started` : "Not started";
@@ -538,6 +541,7 @@ function workingSignal(on) {
   }, 250);
 }
 function renderSessions() {
+  if (isRenaming()) return; // an inline rename is open: the list is redrawn when it ends
   els.list.replaceChildren();
   const shown = generalSessions(state.sessions); // bot threads live under their bot, in the Bots view
   if (!shown.length) { els.list.append(h("div", "empty-side", "No sessions yet.")); return; }
@@ -550,9 +554,30 @@ function renderSessions() {
     b.append(h("span", "sess-t", s.title || "Untitled"), m);
     b.addEventListener("click", () => selectSession(s));
     const row = h("div", "sess-row");
-    row.append(b, deleteControl(row, icon, `Delete session ${s.title || "Untitled"}`, () => deleteSession(s)));
+    const startRename = () => renameRow(b, s);
+    b.addEventListener("dblclick", (e) => { e.preventDefault(); startRename(); });
+    row.append(b, renameControl(row, icon, `Rename session ${s.title || "Untitled"}`, startRename), deleteControl(row, icon, `Delete session ${s.title || "Untitled"}`, () => deleteSession(s)));
     els.list.append(row);
   }
+}
+// Rename a thread (session or bot thread): PATCH the title, keep it in every cached copy, redraw. The server keeps it for good.
+async function renameThread(s, title) {
+  const prev = s.title;
+  const apply = (t) => { for (const x of [state.sessions, bots.threads(), ...bots.cached()]) for (const r of x) if (r.id === s.id) r.title = t; renderSessions(); renderHeader(); bots.renderList(); };
+  apply(title);
+  try {
+    const r = await api(`/sessions/${encodeURIComponent(s.id)}`, { method: "PATCH", body: JSON.stringify({ title }) });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+  } catch (e) { apply(prev); if (e.message !== "unauthorized") notify(`Could not rename the thread: ${e.message}`); }
+}
+function renameRow(btn, s) {
+  editInline({ host: btn, current: s.title || "", onSave: (t) => renameThread(s, t), onEnd: () => { renderSessions(); bots.renderList(); } });
+}
+// The chat title in the header renames the open thread the same way.
+function renameCurrent() {
+  const meta = currentMeta();
+  if (!meta) return;
+  editInline({ host: els.title, current: meta.title || "", className: "head-edit", onSave: (t) => renameThread(meta, t), onEnd: () => { renderHeader(); } });
 }
 // Delete a session for good: confirm (naming it), the server removes it and its messages, the list updates; if it was open, land on a new session.
 async function deleteSession(s) {
@@ -1193,6 +1218,7 @@ const models = initModels({
   onPicked: () => renderHeader(),
   onPinnedClick: () => { if (state.curBot) bots.openSettings(state.curBot); },
 });
+els.title.addEventListener("click", () => renameCurrent());
 const bots = initBots({
   json, api, store, h, icon, ago, notify,
   app: {
@@ -1206,6 +1232,7 @@ const bots = initBots({
     modelRows: async () => { if (!models) return []; await models.list(); return models.rows(); },
     botDeleted: (id) => { if (state.curBot === id) newSession(); refreshSessions(); },
     threadDeleted: (s) => deleteSession(s),
+    renameThread: (btn, s) => renameRow(btn, s),
   },
 });
 

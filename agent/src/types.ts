@@ -250,6 +250,8 @@ export interface Runtime {
   purgeBotSessions?(botId: string): Promise<number>;
   /** Permanently deletes one saved or live session of this owner (its transcript and state). false = no such session. */
   deleteSession?(id: string): Promise<boolean>;
+  /** Renames one saved or live session of this owner (the title is already cleaned). The name is kept for good: the auto title never replaces it. false = no such session. */
+  renameSession?(id: string, title: string): Promise<boolean>;
   /** The owner's per-user settings (default model). */
   settings?: { get(): { defaultModel?: string }; set(patch: { defaultModel?: string | null }): void };
   // Visible transcript of a live or persisted session (replayed after a resume or restart). Undefined = unknown id.

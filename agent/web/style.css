@@ -539,6 +539,14 @@ button.bd-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -
 .sess-row:hover .row-gear, .bot-head:hover .row-gear, .row-gear:focus-visible, .bot-head:focus-within .row-gear { opacity: 1; }
 @media (hover: none), (max-width: 900px) { .row-del { opacity: .75; } }
 .sess-row .sess { padding-right: 38px; }
+.row-ren { right: 36px; }
+.row-ren:hover { color: var(--ink); background: var(--surface-2); }
+.sess-row.has-ren .sess { padding-right: 70px; }
+.sess-row:hover .row-ren { opacity: 1; }
+.sess-row .title-edit { display: block; width: 100%; box-sizing: border-box; padding: 8px 70px 8px 10px; font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--accent); border-radius: 8px; outline: none; }
+.title-edit.head-edit { font: inherit; font-weight: inherit; letter-spacing: inherit; width: min(100%, 520px); padding: 2px 8px; margin: 0; color: var(--ink); background: var(--surface); border: 1px solid var(--accent); border-radius: 8px; outline: none; }
+#title.renamable { cursor: text; }
+#title.renamable:hover { text-decoration: underline dotted var(--ink-3); text-underline-offset: 4px; }
 .bot-head .bot-item { padding-right: 68px; }
 .bot-upd { position: absolute; right: 68px; top: 50%; transform: translateY(-50%); font: 600 11px var(--sans, inherit); padding: 3px 8px; border-radius: 999px; border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent); cursor: pointer; }
 .bot-upd:hover { background: var(--accent); color: #fff; }

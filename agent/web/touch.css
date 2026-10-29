@@ -53,6 +53,7 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; -webkit-tap-highl
   .side-icon::before { inset: -5px -6px; }
   .btn-chip::before { inset: -8px -5px; }
   .row-del::before { inset: -8px; }
+  .row-ren::before { inset: -8px -2px; }
   .copy::before { inset: -11px -4px; }
   .seg-btn::before { inset: -8px 0; }
   .queue-x::before, .queue-btn::before { inset: -9px; }

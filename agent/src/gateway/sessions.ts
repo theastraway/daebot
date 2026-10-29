@@ -216,6 +216,16 @@ export class SessionManager {
     return (await rt.deleteSession?.(id)) === true || !!ls;
   }
 
+  /** Renames one session of an owner (live and/or saved). The caller has already passed access(). false = unknown id. */
+  async rename(id: string, owner: string, title: string): Promise<boolean> {
+    const ls = this.live.get(id);
+    if (ls && ls.owner !== owner) throw new ForbiddenError("forbidden");
+    const rt = this.runtimeFor ? this.runtimeFor(owner) : this.runtime;
+    const ok = (await rt.renameSession?.(id, title)) === true;
+    if (ok && ls) ls.title = title;
+    return ok;
+  }
+
   /** Changes the model the NEXT turn of a live session runs on. */
   setModel(id: string, model: string | undefined): boolean {
     const ls = this.live.get(id);

@@ -7,7 +7,7 @@ import { tierAllows } from "./kernel/tier.ts";
 import { createAgentSession } from "./loop.ts";
 import { createLearning, resolveLearnConfig } from "./learn/index.ts";
 import { mistakeBrief } from "./gateway/mistakes.ts";
-import { dataDir } from "./persist.ts";
+import { dataDir, cleanTitle } from "./persist.ts";
 import { bootMind, createMindClient, createMindTools, createSessionSync } from "./mind/index.ts";
 import { BotStore, botMindApi } from "./bots/store.ts";
 import { createBotTalkTool } from "./bots/talk-tool.ts";
@@ -185,7 +185,7 @@ export function composeSystemPrompt(o: {
   return lines.join("\n");
 }
 
-interface Entry { session: AgentSession; surface: string; title: string; updatedAt: number; tier: Tier; recorder: HistoryRecorder; createdAt: number; bot?: string; peer?: string; model?: string; permMode?: SessionPermMode; run?: RunMark; board?: BoardTask[] }
+interface Entry { session: AgentSession; surface: string; title: string; updatedAt: number; tier: Tier; recorder: HistoryRecorder; createdAt: number; bot?: string; peer?: string; model?: string; permMode?: SessionPermMode; titleSet?: boolean; run?: RunMark; board?: BoardTask[] }
 
 export const INTERRUPTED_TEXT = "Interrupted: the server restarted while this reply was being written. Your message is saved above; send it again to retry.";
 const interruptedNotice = (): AgentEvent => ({ type: "notice", level: "warn", text: INTERRUPTED_TEXT });
@@ -369,7 +369,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     void store.save({
       v: 1, id, surface: e.surface, title: e.title, tier: e.tier, owner: ownerId, createdAt: e.createdAt, updatedAt: e.updatedAt,
       state: st, violations: e.session.violations(), history: e.recorder.events(),
-      ...(e.bot ? { bot: e.bot } : {}), ...(e.peer ? { peer: e.peer } : {}), ...(e.model ? { model: e.model } : {}), ...(e.permMode ? { permMode: e.permMode } : {}), ...(e.run ? { run: { ...e.run } } : {}), ...(e.board?.length ? { board: e.board } : {}),
+      ...(e.bot ? { bot: e.bot } : {}), ...(e.peer ? { peer: e.peer } : {}), ...(e.model ? { model: e.model } : {}), ...(e.permMode ? { permMode: e.permMode } : {}), ...(e.titleSet ? { titleSet: true } : {}), ...(e.run ? { run: { ...e.run } } : {}), ...(e.board?.length ? { board: e.board } : {}),
     }).catch((err) => process.stderr.write(`persist: could not save a session (${String((err as Error)?.message ?? err).split("\n")[0].slice(0, 120)})\n`));
   }
 
@@ -468,6 +468,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         session: inner, surface: stored?.surface ?? opts.surface, title, updatedAt: Date.now(), tier,
         recorder: new HistoryRecorder(stored?.history), createdAt: stored?.createdAt ?? Date.now(),
         bot: botRec?.id, peer, model: explicitModel, permMode: curPerm,
+        ...(stored?.titleSet ? { titleSet: true } : {}),
         ...(stored?.board?.length ? { board: loadTasks(stored.board) } : {}),
       };
       if (wasInterrupted && stored) {
@@ -499,7 +500,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
             return;
           }
           const photos = o?.photos?.length ? o.photos : undefined;
-          if (DEFAULT_TITLE.test(entry.title) && !entry.recorder.events().some((h) => h.type === "user")) entry.title = msg.trim().slice(0, 60) || (photos ? "Photo" : entry.title);
+          if (!entry.titleSet && DEFAULT_TITLE.test(entry.title) && !entry.recorder.events().some((h) => h.type === "user")) entry.title = msg.trim().slice(0, 60) || (photos ? "Photo" : entry.title);
           entry.recorder.user(msg, photos); // the transcript keeps the user's own words and the photos; the model also gets one line per photo
           const run: RunMark = entry.run = { id: randomUUID(), status: "running", startedAt: Date.now(), updatedAt: Date.now() };
           persist(id); // the message and the "running" mark reach the disk before the model is called
@@ -639,6 +640,23 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       if (live) await live.session.close("deleted").catch(() => {});
       await store?.remove?.(id);
       await photoStore?.removeSession(id);
+      return true;
+    },
+    async renameSession(id, raw) {
+      const title = cleanTitle(raw);
+      if (!title) return false;
+      const live = sessions.get(id);
+      if (live) {
+        live.title = title;
+        live.titleSet = true;
+        persist(id);
+        return true;
+      }
+      const meta = store?.meta?.(id);
+      if (!store || !meta || !mine(meta)) return false; // unknown, or another owner's: indistinguishable
+      const rec = store.load(id);
+      if (!rec || !mine(rec)) return false;
+      await store.save({ ...rec, title, titleSet: true });
       return true;
     },
     sessionInfo(id) {

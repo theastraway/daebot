@@ -51,7 +51,7 @@ import { createMindClient } from "../mind/client.ts";
 import { touchConnectedApps } from "../mind/connected.ts";
 import { addonWords, fetchIntegrations, providerFor } from "../mind/integrations.ts";
 import type { AppRow } from "../mind/integrations.ts";
-import { dataDir } from "../persist.ts";
+import { dataDir, cleanTitle } from "../persist.ts";
 import { MAX_PHOTO_BODY, checkPhotos, cleanName, isPhotoId } from "../photos.ts";
 
 // ---------- inbound webhooks (channel adapters register here) ----------
@@ -1360,6 +1360,14 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (!action && method === "PATCH") {
       // Change the model of a session (its next turn onward). A persisted session is brought back to life first.
       const b = await readJson(req);
+      // Rename: the user's own name for this thread (bot threads too). Owner-scoped by manager.access above; persisted; never replaced by the auto title.
+      if (b.title !== undefined) {
+        const t = cleanTitle(b.title);
+        if (!t) return sendJson(res, 400, { error: "title must be 1 to 80 characters" });
+        const ok = await manager.rename(id, me.id, t);
+        if (!ok) return sendJson(res, 404, { error: "no such session" });
+        return sendJson(res, 200, { ok: true, title: t });
+      }
       // This chat's permission mode (Ask for risky / Ask before changes / Ask for everything / Bypass). Bypass needs the account's recorded waiver.
       if (b.permMode !== undefined) {
         const svc = manager.runtimeOf(me.id).permissions;

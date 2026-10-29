@@ -27,6 +27,8 @@ export interface StoredSession {
   model?: string;
   /** This chat's permission mode (absent = the account default). "bypass" is only honored with the account's recorded waiver. */
   permMode?: string;
+  /** The user named this thread (rename). The auto title from the first message never overwrites it. */
+  titleSet?: boolean;
   /** The latest turn. "running" on disk with no live owner process = the server died mid-turn (shown as interrupted). */
   run?: RunMark;
   /** The task board the model keeps for this chat (task_board tool). Absent = none declared. */
@@ -36,6 +38,13 @@ export interface StoredSession {
   state: SessionState;
   violations: Violation[];
   history: HistoryEvent[];
+}
+
+/** A user-chosen thread title: tabs/newlines become spaces, other control characters are dropped, whitespace is collapsed. undefined = empty or longer than 80 characters. */
+export function cleanTitle(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const t = raw.replace(/[\t\r\n]+/g, " ").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, "").replace(/\s+/g, " ").trim();
+  return t.length >= 1 && t.length <= 80 ? t : undefined;
 }
 
 export interface StoredMeta { id: string; surface: string; title: string; updatedAt: number; owner?: string; bot?: string; peer?: string; model?: string; permMode?: string }

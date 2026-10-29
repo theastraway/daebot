@@ -23,3 +23,15 @@ test("update text", () => {
   assert.equal(u.available, "Update available: v1.1");
   assert.equal(u.done, "Updated to v1.1");
 });
+
+// @ts-expect-error plain browser module
+import { renameDecision } from "../../web/manage.js";
+
+test("inline rename: a changed non-empty title saves; empty or unchanged reverts; whitespace and length are normalised", () => {
+  assert.deepEqual(renameDecision("Old", "New name"), { save: true, title: "New name" });
+  assert.deepEqual(renameDecision("Old", "  New \t name \n"), { save: true, title: "New name" });
+  assert.deepEqual(renameDecision("Old", ""), { save: false, title: "Old" });
+  assert.deepEqual(renameDecision("Old", "   "), { save: false, title: "Old" });
+  assert.deepEqual(renameDecision("Old", "Old"), { save: false, title: "Old" });
+  assert.equal(renameDecision("Old", "z".repeat(200)).title.length, 80);
+});
