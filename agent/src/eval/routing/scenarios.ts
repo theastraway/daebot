@@ -30,5 +30,5 @@ export const ROUTING_SCENARIOS: RoutingScenario[] = [
   { id: "R19-fill-field", prompt: "fill the Name field in the Contoso Invoice app with Dana Smith", allow: ["app"] },
   { id: "R20-open-cmd", prompt: "open cmd and run ipconfig /all", allow: ["bash", "process"] },
   { id: "R10-screen-xactimate", prompt: "Xactimate is open on my screen. Look at the estimate that's showing and tell me the first three line items.", allow: ["computer", "app"], needsScreen: true },
-  { id: "R11-screen-watch", prompt: "Open the Calculator app and work out 1234 x 5678 on screen so I can watch you do it.", allow: ["computer"], needsScreen: true },
+  { id: "R11-screen-watch", prompt: "Open the Calculator app and work out 1234 x 5678 on screen so I can watch you do it.", allow: ["computer", "app"], needsScreen: true },
 ];
