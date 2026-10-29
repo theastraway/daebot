@@ -221,7 +221,18 @@ export interface PermissionOption { id: string; label: string; broad: boolean }
 export interface PhotoRef { id: string; name: string; width: number; height: number }
 
 // A persisted transcript item: live AgentEvents plus the user's own messages (which are never live events).
-export type HistoryEvent = AgentEvent | { type: "user"; text: string; photos?: PhotoRef[] };
+// id = stable message id (menu: reactions, unread, reply). rid = the run (request) that produced it. quote = the message a user reply answers.
+export type HistoryEvent = (AgentEvent & { id?: string; rid?: string }) | { type: "user"; text: string; photos?: PhotoRef[]; id?: string; rid?: string; quote?: MessageQuote };
+
+/** The earlier message a reply answers: shown above the user's bubble; the model receives the text as "Replying to: ...". */
+export interface MessageQuote { id?: string; text: string }
+
+/** Per-message extras kept with the session: emoji reactions and the user's thumbs feedback. */
+export interface MessageMeta {
+  reactions?: string[];
+  feedback?: { rating: "up" | "down"; comment?: string; reason?: string; at: number; report?: boolean };
+}
+export interface SessionMessageMeta { messages: Record<string, MessageMeta>; unreadFrom?: string }
 
 export interface AgentSession {
   readonly id: string;
@@ -231,7 +242,7 @@ export interface AgentSession {
   // interactive: a person is looking at a UI that can answer a `permission` card (web, desktop, mobile). Absent/false = typed confirmations only.
   // photos: already stored for this session (Runtime.photos); the model is told about them in the message text and reads them with view_photo.
   // capabilities/device: what the sending client can do and the relay to it, for this turn only (see DeviceBridge).
-  send(userMessage: string, opts?: { signal?: AbortSignal; origin?: "user" | "bot"; interactive?: boolean; photos?: PhotoRef[]; capabilities?: string[]; device?: DeviceBridge }): AsyncIterable<AgentEvent>;
+  send(userMessage: string, opts?: { signal?: AbortSignal; origin?: "user" | "bot"; interactive?: boolean; photos?: PhotoRef[]; quote?: MessageQuote; capabilities?: string[]; device?: DeviceBridge }): AsyncIterable<AgentEvent>;
   /** Model for the next turn (per-session model). undefined = the configured default. */
   setModel?(model: string | undefined): void;
   /** This chat's permission mode for the next call onward. undefined = the account default. The caller has already checked bypass against the waiver. */
@@ -248,7 +259,7 @@ export interface Runtime {
   // boot: runs mind_context before returning; throws only if tools are unreachable.
   // botId: open a session of that bot (home MIND = the bot's); peer: the other end of a bot-to-bot DM thread; model: per-session model.
   openSession(opts: { surface: string; title?: string; resumeId?: string; identity?: string; botId?: string; peer?: string; model?: string }): Promise<AgentSession>;
-  listSessions(): { id: string; surface: string; title: string; updatedAt: number; bot?: string; peer?: string; model?: string; permMode?: string }[];
+  listSessions(): { id: string; surface: string; title: string; updatedAt: number; bot?: string; peer?: string; model?: string; permMode?: string; unread?: boolean }[];
   /** Bots of this runtime's owner (absent on runtimes built without a bots context). */
   bots?: BotsApi;
   /** Bot / peer / model of a live or persisted session of this owner. */
@@ -259,6 +270,16 @@ export interface Runtime {
   deleteSession?(id: string): Promise<boolean>;
   /** Renames one saved or live session of this owner (the title is already cleaned). The name is kept for good: the auto title never replaces it. false = no such session. */
   renameSession?(id: string, title: string): Promise<boolean>;
+  /** Reactions / feedback of each message and the unread marker of a session of this owner. Undefined = unknown id. */
+  messageMeta?(id: string): SessionMessageMeta | undefined;
+  /** Text of one saved message (the quote of a reply). */
+  messageText?(id: string, mid: string): string | undefined;
+  /** Marks the thread unread from a message (mid) or clears the marker (null). "nomsg" = that message is not in this session. */
+  setUnread?(id: string, mid: string | null): Promise<"ok" | "nosession" | "nomsg">;
+  /** Toggles one emoji on a message. 👍 / 👎 are also the message's thumbs feedback (mutually exclusive). */
+  reactMessage?(id: string, mid: string, emoji: string): Promise<{ reactions: string[]; feedback?: MessageMeta["feedback"]; learned: boolean } | "nosession" | "nomsg">;
+  /** Saves thumbs feedback (or a Report) on a message and routes it into the learning store. */
+  feedbackMessage?(id: string, mid: string, f: { rating: "up" | "down" | null; comment?: string; reason?: string; report?: boolean }): Promise<{ feedback?: MessageMeta["feedback"]; learned: boolean; excerpt: string } | "nosession" | "nomsg">;
   /** The owner's per-user settings (default model). */
   settings?: { get(): { defaultModel?: string }; set(patch: { defaultModel?: string | null }): void };
   // Visible transcript of a live or persisted session (replayed after a resume or restart). Undefined = unknown id.

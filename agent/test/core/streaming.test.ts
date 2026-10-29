@@ -104,7 +104,7 @@ test("HistoryRecorder coalesces deltas, keeps user messages and caps its size", 
   r.user("hi");
   r.push({ type: "text", delta: "he" }); r.push({ type: "text", delta: "llo" });
   r.push({ type: "retract", reason: "x" });
-  assert.deepEqual(r.events(), [{ type: "user", text: "hi" }, { type: "text", delta: "hello" }, { type: "retract", reason: "x" }]);
+  assert.deepEqual(r.events().map(({ id, rid, ...rest }: any) => { assert.ok(id || rest.type === "retract", "user and text items carry a message id"); return rest; }), [{ type: "user", text: "hi" }, { type: "text", delta: "hello" }, { type: "retract", reason: "x" }]);
   for (let i = 0; i < 10; i++) r.push({ type: "notice", level: "info", text: String(i) });
   assert.equal(r.events().length, 5);
 });

@@ -6,7 +6,7 @@ import { rename, writeFile, mkdir, unlink } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { daebotHome } from "./home.ts";
-import type { HistoryEvent, Message, SessionState, Violation } from "./types.ts";
+import type { HistoryEvent, Message, MessageMeta, SessionState, Violation } from "./types.ts";
 import type { BoardTask } from "./board/board.ts";
 
 export interface RunMark { id: string; status: "running" | "done" | "error" | "interrupted"; startedAt: number; updatedAt: number }
@@ -29,6 +29,10 @@ export interface StoredSession {
   permMode?: string;
   /** The user named this thread (rename). The auto title from the first message never overwrites it. */
   titleSet?: boolean;
+  /** Reactions and thumbs feedback per message id (the message menu). */
+  msgMeta?: Record<string, MessageMeta>;
+  /** Mark as unread: the thread is unread from this message on, until the user opens it again. */
+  unreadFrom?: string;
   /** The latest turn. "running" on disk with no live owner process = the server died mid-turn (shown as interrupted). */
   run?: RunMark;
   /** The task board the model keeps for this chat (task_board tool). Absent = none declared. */
@@ -47,10 +51,10 @@ export function cleanTitle(raw: unknown): string | undefined {
   return t.length >= 1 && t.length <= 80 ? t : undefined;
 }
 
-export interface StoredMeta { id: string; surface: string; title: string; updatedAt: number; owner?: string; bot?: string; peer?: string; model?: string; permMode?: string }
+export interface StoredMeta { id: string; surface: string; title: string; updatedAt: number; owner?: string; bot?: string; peer?: string; model?: string; permMode?: string; unread?: boolean }
 
 function metaOf(rec: StoredSession): StoredMeta {
-  return { id: rec.id, surface: rec.surface, title: rec.title, updatedAt: rec.updatedAt, owner: rec.owner, bot: rec.bot, peer: rec.peer, model: rec.model, ...(rec.permMode ? { permMode: rec.permMode } : {}) };
+  return { id: rec.id, surface: rec.surface, title: rec.title, updatedAt: rec.updatedAt, owner: rec.owner, bot: rec.bot, peer: rec.peer, model: rec.model, ...(rec.permMode ? { permMode: rec.permMode } : {}), ...(rec.unreadFrom ? { unread: true } : {}) };
 }
 
 export interface SessionStore {

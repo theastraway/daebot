@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AgentEvent, AgentSession, DeviceBridge, PhotoRef, Runtime } from "../types.ts";
+import type { AgentEvent, AgentSession, DeviceBridge, MessageQuote, PhotoRef, Runtime } from "../types.ts";
 import type { SessionPermMode } from "../permissions/store.ts";
 
 export class BusyError extends Error {}
@@ -30,7 +30,7 @@ export interface LiveSession {
   turnNonce: string;
 }
 
-export interface SessionRow { id: string; surface: string; title: string; updatedAt: number; live: boolean; busy: boolean; bot?: string; peer?: string; model?: string; permMode?: string }
+export interface SessionRow { id: string; surface: string; title: string; updatedAt: number; live: boolean; busy: boolean; bot?: string; peer?: string; model?: string; permMode?: string; unread?: boolean }
 
 export const IDLE_MS = 6 * 60 * 60 * 1000;
 export const EMPTY_IDLE_MS = 15 * 60 * 1000; // a session nobody has written to is dropped sooner
@@ -153,13 +153,14 @@ export class SessionManager {
         ...((prev?.peer ?? ls.peer) ? { peer: prev?.peer ?? ls.peer } : {}),
         ...(prev?.model ? { model: prev.model } : {}),
         ...(prev?.permMode ? { permMode: prev.permMode } : {}),
+        ...(prev?.unread ? { unread: true } : {}),
       });
     }
     return [...out.values()].filter((r) => (filter.bot ? r.bot === filter.bot : !r.bot && !r.peer)).sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
   /** Runs one turn. Throws BusyError / NotFoundError synchronously-in-promise before any event is emitted. */
-  async turn(id: string, text: string, onEvent: (e: AgentEvent) => void, external?: AbortSignal, origin: "user" | "bot" = "user", interactive = false, photos?: PhotoRef[], client?: { capabilities?: string[]; device?: DeviceBridge }): Promise<void> {
+  async turn(id: string, text: string, onEvent: (e: AgentEvent) => void, external?: AbortSignal, origin: "user" | "bot" = "user", interactive = false, photos?: PhotoRef[], client?: { capabilities?: string[]; device?: DeviceBridge }, quote?: MessageQuote): Promise<void> {
     const ls = this.live.get(id);
     if (!ls) throw new NotFoundError("no such session");
     if (ls.busy) throw new BusyError("session is busy with another turn");
@@ -176,7 +177,7 @@ export class SessionManager {
     }
     let sawDone = false;
     try {
-      for await (const ev of ls.session.send(text, { signal: ac.signal, origin, interactive, ...(photos?.length ? { photos } : {}), ...(client?.capabilities?.length ? { capabilities: client.capabilities } : {}), ...(client?.device ? { device: client.device } : {}) })) {
+      for await (const ev of ls.session.send(text, { signal: ac.signal, origin, interactive, ...(quote ? { quote } : {}), ...(photos?.length ? { photos } : {}), ...(client?.capabilities?.length ? { capabilities: client.capabilities } : {}), ...(client?.device ? { device: client.device } : {}) })) {
         if (ev.type === "done") sawDone = true;
         onEvent(ev);
         if (sawDone) break;

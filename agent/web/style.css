@@ -829,3 +829,75 @@ select.fld { appearance: auto; }
 .xs-prev { font-size: 12px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .xs-ago { font-size: 11px; color: var(--ink-3); flex: none; }
 @media (max-width: 700px) { .xv-msg { max-width: 94%; } }
+
+/* ---- message menu (click or long-press a Daebot reply) ---- */
+.msg-asst { border-radius: 10px; }
+.msg-asst:focus-visible { outline: 2px solid var(--focus); outline-offset: 4px; }
+.msg-asst.mx-active { background: var(--surface-2); box-shadow: 0 0 0 6px var(--surface-2); }
+.msg-asst.selecting { -webkit-user-select: text; user-select: text; }
+.mx-reacts { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 0; font: 14px/1 var(--sans); }
+.mx-react { display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); color: var(--ink-2); font: 15px/1.2 var(--sans); }
+.mx-react:hover { border-color: var(--line-strong); }
+.mx-react:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.mx-offscreen { position: fixed; left: -9999px; top: 0; opacity: 0; }
+.msg-user .mx-quote, .mx-quote { display: block; margin: 0 0 6px; padding: 4px 0 4px 10px; border-left: 3px solid var(--line-strong); color: var(--ink-3); font: 13px/1.4 var(--sans); white-space: normal; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.msg-user.has-quote { display: grid; gap: 0; }
+
+.reply-chip { max-width: 740px; margin: 0 auto 6px; display: flex; align-items: center; gap: 10px; padding: 7px 8px 7px 12px; background: var(--surface); border: 1px solid var(--line-strong); border-left: 3px solid var(--accent); border-radius: 12px; color: var(--ink-2); }
+.rc-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.rc-label { font: 600 11.5px var(--sans); letter-spacing: .02em; color: var(--ink-3); }
+.rc-text { font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rc-x { width: 28px; height: 28px; display: grid; place-items: center; border: 0; background: none; border-radius: 8px; color: var(--ink-3); flex: none; }
+.rc-x:hover { background: var(--surface-2); color: var(--ink); }
+
+.sess.unread .sess-t { font-weight: 700; color: var(--ink); }
+.sess.unread::before { content: ""; position: absolute; left: 3px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%; background: var(--accent); }
+.sess-row .sess.unread { padding-left: 16px; }
+.sess-row, .bot-threads .sess-row { position: relative; }
+
+.mx-backdrop { position: fixed; inset: 0; z-index: 90; background: transparent; }
+.mx-menu { position: fixed; z-index: 91; width: 320px; max-height: calc(100dvh - 16px); overflow-y: auto; overscroll-behavior: contain; background: var(--bg-side); color: var(--ink); border: 1px solid var(--line-strong); border-radius: 18px; padding: 10px; box-shadow: var(--shadow), 0 18px 48px -12px rgba(20,18,17,.35); font: 15px/1.3 var(--sans); animation: mxIn .12s ease-out; }
+@keyframes mxIn { from { opacity: 0; transform: translateY(4px) scale(.985); } to { opacity: 1; transform: none; } }
+.mx-grab { display: none; width: 38px; height: 5px; margin: 0 auto 12px; border-radius: 3px; background: var(--line-strong); }
+.mx-ems { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px 6px; padding: 2px 2px 10px; }
+.mx-em { aspect-ratio: 1; width: 100%; max-width: 46px; justify-self: center; display: grid; place-items: center; border-radius: 50%; border: 1px solid transparent; background: var(--surface); font: 22px/1 "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", var(--sans); padding: 0; box-shadow: 0 0 0 1px var(--line); transition: transform .08s; }
+.mx-em:hover { background: var(--surface-2); }
+.mx-em:active { transform: scale(.92); }
+.mx-em.on { background: var(--accent-soft); box-shadow: 0 0 0 2px var(--accent); }
+.mx-more { color: var(--ink-2); }
+.mx-more .ic { width: 22px; height: 22px; }
+.mx-card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; margin-top: 10px; overflow: hidden; }
+.mx-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 46px; padding: 0 14px; background: none; border: 0; text-align: left; font: 500 15.5px var(--sans); color: var(--ink); }
+.mx-row + .mx-row { border-top: 1px solid var(--line); }
+.mx-row .ic { width: 20px; height: 20px; color: var(--ink-2); }
+.mx-row:hover, .mx-row:focus-visible { background: var(--surface-2); }
+.mx-menu button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.mx-em:focus-visible { outline-offset: 2px; }
+.mx-head { display: flex; align-items: center; gap: 6px; padding: 2px 2px 10px; }
+.mx-title { font: 650 15px var(--sans); flex: 1; }
+.mx-back { width: 32px; height: 32px; display: grid; place-items: center; border: 0; background: none; border-radius: 8px; color: var(--ink-2); transform: scaleX(-1); }
+.mx-back:hover { background: var(--surface-2); }
+.mx-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px 6px; max-height: 240px; overflow-y: auto; padding: 2px; }
+.mx-form { display: flex; flex-direction: column; gap: 10px; }
+.mx-reasons { display: flex; flex-direction: column; gap: 6px; }
+.mx-chip { text-align: left; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line-strong); background: var(--surface); font: 500 14.5px var(--sans); color: var(--ink); }
+.mx-chip.on { border-color: var(--accent); background: var(--accent-soft); }
+.mx-ta { width: 100%; resize: none; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font: 15px/1.4 var(--sans); }
+.mx-send { padding: 11px 14px; border-radius: 12px; border: 0; background: var(--ink); color: var(--bg); font: 600 15px var(--sans); }
+.mx-send:disabled { opacity: .4; }
+.mx-done { padding: 7px 14px; }
+.mx-selarea { width: 100%; height: 38dvh; resize: none; padding: 12px; border-radius: 12px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); font: 16px/1.5 var(--sans); -webkit-user-select: text; user-select: text; }
+.mx-toast { position: fixed; left: 50%; bottom: calc(92px + env(safe-area-inset-bottom)); transform: translate(-50%, 8px); z-index: 120; padding: 9px 16px; border-radius: 999px; background: var(--ink); color: var(--bg); font: 500 14px var(--sans); opacity: 0; pointer-events: none; transition: opacity .15s, transform .15s; max-width: 86vw; text-align: center; }
+.mx-toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+@media (max-width: 640px) {
+  .mx-backdrop { background: rgba(10,9,8,.42); animation: mxFade .15s ease-out; }
+  .mx-menu.sheet { left: 0; right: 0; top: auto; bottom: 0; width: auto; max-height: 88dvh; border-radius: 22px 22px 0 0; border-left: 0; border-right: 0; border-bottom: 0; padding: 8px 14px calc(16px + env(safe-area-inset-bottom)); animation: mxUp .2s ease-out; }
+  .mx-menu.sheet .mx-grab { display: block; margin-top: 4px; }
+  .mx-em { max-width: 52px; font-size: 25px; }
+  .mx-row { min-height: 52px; font-size: 16.5px; }
+}
+@keyframes mxUp { from { transform: translateY(40px); opacity: .6; } to { transform: none; opacity: 1; } }
+@keyframes mxFade { from { opacity: 0; } to { opacity: 1; } }
+@media (pointer: coarse) { .msg-asst { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; } .msg-asst.selecting { -webkit-user-select: text; user-select: text; } .msg-asst a { -webkit-touch-callout: default; } }
+@media (prefers-reduced-motion: reduce) { .mx-menu, .mx-backdrop { animation: none; } .mx-toast { transition: none; } }
