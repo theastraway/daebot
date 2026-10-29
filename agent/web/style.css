@@ -469,7 +469,8 @@ button.bd-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -
 .apps-count { flex: none; font-size: 12px; color: var(--ink-3); }
 .apps-sec[data-sec="connectors"] .apps-body { max-height: min(46dvh, 420px); overflow: auto; }
 .app-tags { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 3px; }
-.app-tag { font-size: 11px; line-height: 1.5; padding: 0 8px; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--ink-3); text-transform: capitalize; }
+.app-tag { font-size: 11px; line-height: 1.5; padding: 0 8px; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--ink-3); }
+.app-tag::first-letter { text-transform: uppercase; } /* "Sign in with n8n" must keep its own case */
 .app-tag.is-ok { color: var(--ok); border-color: var(--ok); }
 .app-tag.is-warn { color: var(--warn); border-color: var(--warn); }
 .app-actions { display: flex; gap: 8px; }
