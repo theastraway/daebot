@@ -13,6 +13,8 @@ import { BASE, createFakeMind } from "./fake-mind-mcp.ts";
 import { McpStore } from "../../src/mcpconnect/store.ts";
 import { LOCAL_CONNECTORS, McpConnectService, n8nAddress, presetAddress } from "../../src/mcpconnect/service.ts";
 import { createMcpConnectTool } from "../../src/mcpconnect/tool.ts";
+// @ts-ignore plain JS module
+import { entryOf } from "../../web/connectors.js";
 import type { SafeFetch } from "../../src/mcpconnect/ssrf.ts";
 
 const REDIRECT = "https://daebot.live/mcp/oauth/callback";
@@ -301,5 +303,17 @@ test("MIND holds this user's connections but refuses a host on its own hosting: 
       assert.equal(store.list("alice").length, 1);
       assert.equal(refusals, 2, "MIND was asked both times and refused both times");
     } finally { await m2.close(); }
+  } finally { await m.close(); }
+});
+
+test("the rows say sign-in first: n8n is tagged \"Sign in with n8n\", custom \"Sign in or token\", and no row tag says token-first", async () => {
+  const m = await n8nMock();
+  try {
+    const { svc } = svcFor(m.net);
+    const items = await svc.catalogItems("u1");
+    const tags = (id: string) => entryOf(items.find((i) => i.id === id)!).tags.map((t: any) => t.text);
+    assert.ok(tags("local:n8n").includes("Sign in with n8n"));
+    assert.ok(tags("local:custom").includes("Sign in or token"));
+    for (const id of ["local:n8n", "local:custom"]) assert.ok(!tags(id).some((t: string) => /URL \+ token/i.test(t)), id);
   } finally { await m.close(); }
 });

@@ -129,6 +129,8 @@ export interface CatalogItemView {
   connected: boolean; serverId?: string; pendingId?: string;
   /** Set by the gateway when this connector is the same product as an app in the user's MIND integrations list (GitHub is both): the Apps card shows ONE row,
    *  the app's, with this connector inside it. `addon` is the words for that inner part. */
+  /** The tag for the sign-in on this row, when the connector words it itself (n8n, custom). */
+  badge?: string;
   foldedInto?: string; addon?: { label: string; why: string };
   /** Present on connectors that need the user's own server address AND a token (n8n, custom). The card shows these fields inline. */
   form?: { fields: { name: "url" | "token" | "name"; label: string; placeholder: string; secret?: boolean; optional?: boolean; reveal?: string }[]; submitLabel: string; oauth?: boolean; why?: string; steps?: string[]; help?: { label: string; url: string } };
@@ -139,10 +141,12 @@ export interface LocalConnector { id: string; name: string; blurb: string; categ
   /** Plain-English replacements for the generic probe errors, so the user is told what to do in THIS product. */
   hints?: { badToken: string; notFound: string };
   /** Sign in with OAuth first (the standard MCP authorization flow); the access token is the fallback. */
-  oauth?: boolean }
+  oauth?: boolean;
+  /** The tag on the connector's row (what the sign-in is). */
+  badge?: string }
 export const LOCAL_CONNECTORS: LocalConnector[] = [
   { id: "local:n8n", name: "n8n", blurb: "Recommended. Let Daebot search, read and run your n8n workflows, so recurring work keeps running on its own schedule, even when Daebot is closed.", category: "automation",
-    urlLabel: "Server URL", urlPlaceholder: "https://your-n8n.example.com/mcp-server/http", defaultPath: "/mcp-server/http", nameBase: "n8n", oauth: true,
+    urlLabel: "Server URL", urlPlaceholder: "https://your-n8n.example.com/mcp-server/http", defaultPath: "/mcp-server/http", nameBase: "n8n", oauth: true, badge: "Sign in with n8n",
     why: "Daebot answers when you ask; n8n runs on a schedule or a trigger, around the clock, even when Daebot is closed. With both, Daebot can build an automation once, hand it to n8n to run, and check on your workflows for you.",
     // The labels below are n8n's own (docs.n8n.io/advanced-ai/accessing-n8n-mcp-server, checked 2026-10-28).
     steps: [
@@ -157,7 +161,7 @@ export const LOCAL_CONNECTORS: LocalConnector[] = [
     },
     help: { label: "No n8n yet? Create an n8n account", url: "https://n8n.io/" } },
   { id: "local:custom", name: "Custom MCP server", blurb: "Any remote MCP server: paste its address. Daebot signs in with OAuth when the server offers it, and takes an access token when it does not.",
-    category: "developer", urlLabel: "Server URL", urlPlaceholder: "https://example.com/mcp", nameBase: "", oauth: true },
+    category: "developer", urlLabel: "Server URL", urlPlaceholder: "https://example.com/mcp", nameBase: "", oauth: true, badge: "Sign in or token" },
 ];
 
 // ---------------------------------------------------------------- helpers
@@ -416,7 +420,7 @@ export class McpConnectService {
       if (mindHas(l)) continue; // MIND lists its own n8n one day: its row wins
       out.push({
         id: l.id, name: l.name, blurb: l.blurb, category: l.category, publisher: "community", auth: "url_token", host: "your own server",
-        connected: byPreset.has(l.id), serverId: byPreset.get(l.id),
+        connected: byPreset.has(l.id), serverId: byPreset.get(l.id), ...(l.badge ? { badge: l.badge } : {}),
         form: { submitLabel: "Connect", ...(l.oauth ? { oauth: true } : {}), ...(l.why ? { why: l.why } : {}), ...(l.steps ? { steps: l.steps } : {}), ...(l.help ? { help: l.help } : {}), fields: [
           { name: "url", label: l.urlLabel, placeholder: l.urlPlaceholder },
           // OAuth connectors ask for the address only; the token box is behind a small link (and opens by itself when the server has no OAuth).

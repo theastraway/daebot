@@ -10,13 +10,14 @@
 // (POST /mcp/catalog/connect). The user's click on the card is the consent; nothing here connects anything.
 // DOM is built by apps.js (createElement + textContent only). Everything in the list is third-party text.
 
-const AUTH_TEXT = { none: "No sign-in", oauth: "Sign in (OAuth)", key: "API key", oauth_or_key: "OAuth or API key", url_token: "Your URL + token" };
+const AUTH_TEXT = { none: "No sign-in", oauth: "Sign in (OAuth)", key: "API key", oauth_or_key: "OAuth or API key", url_token: "Your server address" };
 
 export function entryOf(it) {
   const tags = [];
   if (it.category) tags.push({ text: it.category.replace(/-/g, " ") });
   tags.push({ text: it.publisher === "official" ? "Official" : "Community", tone: it.publisher === "official" ? "ok" : "warn" });
-  if (AUTH_TEXT[it.auth]) tags.push({ text: AUTH_TEXT[it.auth] });
+  if (it.badge) tags.push({ text: String(it.badge) });
+  else if (AUTH_TEXT[it.auth]) tags.push({ text: AUTH_TEXT[it.auth] });
   return {
     id: it.id, logo: String(it.id || "").replace(/^mcp:/, ""), name: it.name, blurb: it.blurb, tags, connected: !!it.connected, serverId: it.serverId, waiting: !!it.pendingId,
     removeLabel: "Remove", form: it.form && Array.isArray(it.form.fields) ? it.form : undefined,
