@@ -50,6 +50,7 @@ import { handleAdmin, isAdminPath } from "./admin.ts";
 import { AdminLedger } from "./mistakes.ts";
 import { AngerLedger } from "./anger.ts";
 import { MindFeed } from "./mind-feed.ts";
+import { fetchUsage, setAdditional, UsageError } from "./usage.ts";
 import { createMindClient } from "../mind/client.ts";
 import { touchConnectedApps } from "../mind/connected.ts";
 import { addonWords, fetchIntegrations, providerFor } from "../mind/integrations.ts";
@@ -874,7 +875,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/board" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/");
+    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/board" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/");
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -969,6 +970,32 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       if (username) accountCache = { at: Date.now(), body };
       return sendJson(res, 200, body);
     } catch { return sendJson(res, 502, { error: "Could not reach MIND." }); }
+  }
+
+  // ---------- usage: the plan line and the Additional usage switch in the account menu. Always the signed-in user's own MIND key
+  // (a user's request can only ever read or change their own account); a gateway with no MIND sign-in answers "own-key".
+  async function usageApi(req: IncomingMessage, res: ServerResponse, path: string, method: string, me: Principal): Promise<void> {
+    const get = path === "/usage", put = path === "/usage/additional";
+    if ((get && method !== "GET") || (put && method !== "PUT")) return sendJson(res, 405, { error: "method not allowed" });
+    let key: string | undefined;
+    if (hosted) {
+      if (me.owner) return sendJson(res, 200, { source: "owner" }); // the access-code login is the server's own MIND, not a customer plan
+      key = billingKeyOf(me);
+    } else {
+      key = opts.cfg?.billing === "mind" ? opts.cfg.mindApiKey || undefined : undefined; // not signed in with MIND: they pay their own model provider
+    }
+    if (!key) return sendJson(res, 200, { source: "own-key" });
+    const base = auth?.mindBaseUrl ?? opts.cfg?.mindBaseUrl ?? "https://m-i-n-d.ai/developer/v1";
+    const f = opts.fetchImpl ?? auth?.fetchImpl;
+    try {
+      if (get) return sendJson(res, 200, await fetchUsage(base, key, f));
+      const b = await readJson(req);
+      if (typeof b.enabled !== "boolean") return sendJson(res, 400, { error: "enabled must be true or false" });
+      return sendJson(res, 200, await setAdditional(base, key, b.enabled, f));
+    } catch (e) {
+      if (e instanceof UsageError) return sendJson(res, e.status, { error: e.message });
+      return sendJson(res, 502, { error: "Could not reach MIND." });
+    }
   }
 
   // ---------- Ask Caelum: MIND's agent builder turns a plain-words brief into a bot (name, purpose, instructions).
@@ -1336,6 +1363,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (path.startsWith("/voice/")) return voice ? voice(req, res, path, _query, me) : sendJson(res, 404, { error: "voice is not available" });
     if (path.startsWith("/apps/")) return apps ? apps(req, res, path, me) : sendJson(res, 404, { error: "apps are not available" });
     if (path === "/account") return accountApi(res, method);
+    if (path === "/usage" || path === "/usage/additional") return usageApi(req, res, path, method, me);
     if (path === "/board") {
       // Every task across THIS signed-in user's sessions. The runtime is the user's own, so another user's sessions can never appear.
       if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });

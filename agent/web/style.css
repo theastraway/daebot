@@ -214,17 +214,7 @@ kbd { font-size: 10.5px; background: var(--surface-2); border: 1px solid var(--l
 .side-update.ready { color: var(--ink); font-weight: 600; }
 .side-update.ready #upd-btn { color: var(--accent, var(--ink)); font-weight: 600; }
 .side-update + .side-who { border-top: 0; }
-.side-who + .side-foot, .side-plan + .side-foot { padding-top: 6px; border-top: 0; }
-.side-plan { display: grid; gap: 6px; padding: 4px 8px 0; font-size: 12px; color: var(--ink-3); }
-.side-plan .plan-row { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.side-plan .plan-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); font-variant-numeric: tabular-nums; }
-.side-plan .plan-name { flex: none; font-size: 11px; letter-spacing: .02em; color: var(--ink-3); }
-.side-plan .plan-bar { height: 4px; border-radius: 999px; background: var(--line); overflow: hidden; }
-.side-plan .plan-bar i { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--ok); transition: width .4s ease; }
-.side-plan .plan-bar.low i { background: var(--warn); }
-.side-plan .plan-bar.empty i { background: var(--accent); }
-.side-plan .plan-link { justify-self: start; color: var(--ink-2); text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 2px; }
-.side-plan .plan-link:hover { color: var(--ink); text-decoration-color: currentColor; }
+.side-who + .side-foot { padding-top: 6px; border-top: 0; }
 
 /* MIND Voice */
 .mic { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px; border: 0; background: var(--surface-2); color: var(--ink-2); flex: none; position: relative; touch-action: manipulation; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
@@ -660,7 +650,37 @@ button.bd-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -
 .am-who { display: grid; min-width: 0; line-height: 1.25; }
 .am-who strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
 .am-who span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--ink-3); }
-.acct-menu .side-plan { margin: 0 4px 6px; padding: 8px 8px 6px; background: var(--surface-2); border-radius: 10px; }
+/* usage line under the name (account menu): "Pro · 62% left · resets Nov 1", a thin bar, and a detail with the Additional usage switch */
+.am-usage { display: grid; gap: 4px; margin-top: 2px; }
+.am-usage[hidden], .am-usage-detail[hidden], .u-extra[hidden], .u-rows[hidden], .am-usage .plan-bar[hidden], .am-usage-detail .plan-link[hidden] { display: none; }
+.am-usage-head { display: flex; align-items: center; gap: 4px; min-width: 0; padding: 0; background: none; border: 0; color: var(--ink-2); font: 500 12px var(--sans); text-align: left; cursor: pointer; font-variant-numeric: tabular-nums; }
+.am-usage-head:hover:not(.static), .am-usage-head:focus-visible { color: var(--ink); }
+.am-usage-head.static { cursor: default; }
+.am-usage-head span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.am-usage-head .chev { flex: none; width: 12px; height: 12px; color: var(--ink-3); transform: rotate(90deg); transition: transform .15s; }
+.am-usage-head[aria-expanded="true"] .chev { transform: rotate(-90deg); }
+.am-usage-head.static .chev { display: none; }
+.am-usage .plan-bar { height: 3px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.am-usage .plan-bar i { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--ok); transition: width .4s ease; }
+.am-usage .plan-bar.low i { background: var(--warn); }
+.am-usage .plan-bar.empty i { background: var(--accent); }
+.am-usage-detail { display: grid; gap: 8px; margin: 0 4px 6px; padding: 10px; background: var(--surface-2); border-radius: 10px; font-size: 12.5px; }
+.u-rows { display: grid; gap: 3px; margin: 0; }
+.u-rows div { display: flex; justify-content: space-between; gap: 8px; }
+.u-rows dt { color: var(--ink-3); }
+.u-rows dd { margin: 0; color: var(--ink); font-variant-numeric: tabular-nums; }
+.u-extra { display: flex; align-items: center; gap: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+.u-extra-text { flex: 1; min-width: 0; display: grid; gap: 2px; line-height: 1.3; }
+.u-extra-text strong { font-size: 13px; }
+.u-extra-text small { font-size: 11.5px; color: var(--ink-3); }
+.u-switch { flex: none; position: relative; width: 36px; height: 20px; padding: 0; border: 0; border-radius: 999px; background: var(--line-strong); cursor: pointer; transition: background .15s; }
+.u-switch i { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--bg); box-shadow: 0 1px 2px rgba(0,0,0,.3); transition: transform .15s; }
+.u-switch.on { background: var(--ok); }
+.u-switch.on i { transform: translateX(16px); }
+.u-switch:disabled { opacity: .5; cursor: default; }
+.u-switch:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.am-usage-detail .plan-link { justify-self: start; color: var(--ink-2); text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 2px; }
+.am-usage-detail .plan-link:hover { color: var(--ink); text-decoration-color: currentColor; }
 .am-update { display: flex; align-items: center; gap: 8px; margin: 2px 4px 6px; padding: 8px 10px; border-radius: 10px; background: var(--accent-soft); font-size: 12.5px; color: var(--ink); font-weight: 600; }
 .am-update #upd-text { flex: 1; min-width: 0; line-height: 1.3; }
 .am-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; background: none; border: 0; border-radius: 9px; color: var(--ink); text-align: left; font: 500 14px var(--sans); text-decoration: none; cursor: pointer; }
