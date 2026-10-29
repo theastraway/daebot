@@ -402,6 +402,7 @@ async function syncCurrent() {
     if (id !== state.currentId || state.busy.has(id) || !Array.isArray(events)) return;
     if (run && run.status === "running") { void attachRun(id, events); return; } // a reply is still being written on the server
     const tr = transcript(id);
+    applyMeta(tr, meta); // reactions made on another device (or before a reload) show up even when no new message did
     const localUsers = tr.items.filter((x) => x.kind === "user").length;
     const { behind, dones } = transcriptBehind({ events, localUsers, lastDones: tr.syncDones });
     tr.syncDones = dones;
