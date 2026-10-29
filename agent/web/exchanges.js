@@ -78,6 +78,9 @@ export function closesOnClick(el) {
   return !!el.closest("button, a, [role='button'], [role='menuitem'], [role='tab']");
 }
 
+/** The Sessions/Bots switch changes view on these keys. */
+export function closesOnArrow(key) { return key === "ArrowLeft" || key === "ArrowRight"; }
+
 /** What to do with the browser history when the exchange view opens or closes. Pure so the transitions are unit tested.
  *  state: {pushed: boolean}. open: push a history entry (or swap it when one is already ours). close by Back/Esc: pop our entry.
  *  close by navigation (the user clicked something else): neutralise our entry in place, never a back() that could land after the next open.
@@ -334,6 +337,9 @@ export function initExchanges(ctx) {
   // Clicking anything else that navigates closes the exchange and lets the click do its job: one click, one move.
   const side = document.getElementById("sidebar");
   if (side) side.addEventListener("click", (e) => { if (st.openId && closesOnClick(e.target)) close("nav"); }, true);
+  // The Sessions/Bots switch also changes view with ArrowLeft/ArrowRight (no click): that leaves the exchange too.
+  const seg = document.getElementById("seg");
+  if (seg) seg.addEventListener("keydown", (e) => { if (st.openId && closesOnArrow(e.key)) close("nav"); }, true);
   // A live exchange keeps updating while it is open (a reply landing, or the next message).
   setInterval(async () => {
     if (!st.openId || document.hidden) return;
