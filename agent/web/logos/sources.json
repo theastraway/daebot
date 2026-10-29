@@ -157,6 +157,11 @@
    "name": "MongoDB Atlas",
    "source": "https://www.mongodb.com/assets/images/global/favicon.ico"
   },
+  "n8n": {
+   "file": "n8n.png",
+   "source": "https://n8n.io/apple-touch-icon.png",
+   "fetched": "2026-10-29"
+  },
   "neon": {
    "file": "neon.png",
    "name": "Neon",
