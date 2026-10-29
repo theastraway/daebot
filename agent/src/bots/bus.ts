@@ -56,6 +56,9 @@ const wordsOf = (t: string): Set<string> => new Set(t.toLowerCase().replace(/[^\
 /** Same ask, reworded a little: at least 80% of the words in common (Jaccard). A real follow-up shares far less. */
 export function sameAsk(a: Set<string>, b: Set<string>): boolean {
   if (!a.size || !b.size) return false;
+  // Numbers are never "a little different": invoice 1041 and invoice 1042 are different asks.
+  const nums = (x: Set<string>) => [...x].filter((w) => /\d/.test(w)).sort().join(",");
+  if (nums(a) !== nums(b)) return false;
   let both = 0;
   for (const w of a) if (b.has(w)) both++;
   return both / (a.size + b.size - both) >= 0.8;

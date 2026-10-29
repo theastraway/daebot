@@ -280,11 +280,17 @@ test("a lightly reworded re-ask is a duplicate too; a genuinely new question is 
   const different = await w.talk("S", "a", "Now also add the tax of 8% to that total and tell me the figure.");
   assert.doesNotMatch(different.output, /no new message sent/);
   assert.equal(w.mgr.turnsRun.length, 2);
+  // one different number in a long message is a different ask
+  const long = (n: number) => `Please look up the total for invoice ${n} on the Acme account, check it against the payment ledger and tell me the balance still open`;
+  await w.talk("S", "a", long(1041));
+  const other = await w.talk("S", "a", long(1042));
+  assert.doesNotMatch(other.output, /no new message sent/);
+  assert.equal(w.mgr.turnsRun.length, 4);
   // the person sends another message: a fresh turn, the same question is a real ask again
   w.mgr.rows.get("S")!.turns = 2;
   const next = await w.talk("S", "a", 'Please use your bot_talk tool to message xt-ledger with exactly this question: "What is 17 times 23?" Wait for its reply and report back the exact answer.');
   assert.doesNotMatch(next.output, /no new message sent/);
-  assert.equal(w.mgr.turnsRun.length, 3);
+  assert.equal(w.mgr.turnsRun.length, 5);
 });
 
 test("a duplicate down the chain (main asks a twice, a asks b the same thing each time) reaches b once", async () => {
