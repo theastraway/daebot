@@ -338,6 +338,7 @@ export function initBots(ctx) {
       for (const s of mine) {
         const b = h("button", "sess"); b.type = "button";
         if (s.id === app.currentId()) b.setAttribute("aria-current", "true");
+        if (s.unread) { b.classList.add("unread"); b.title = "Unread"; }
         const m = h("span", "sess-m");
         const bits = [];
         if (s.peer) bits.push(peerLabel(s.peer, st.bots));

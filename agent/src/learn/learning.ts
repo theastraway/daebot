@@ -19,7 +19,12 @@ export interface LearnEvent {
   action?: string;
 }
 
+/** Explicit feedback on one reply (thumbs, emoji 👍/👎, or a Report). Written straight to the store: the user already judged it, no reflection call is needed. */
+export interface ReplyFeedback { rating: "up" | "down"; reply: string; comment?: string; reason?: string; report?: boolean }
+
 export interface Learning extends LearnHooks {
+  /** Files the user's verdict on a reply as a lesson (down = failure, up = win). Returns whether a lesson was written or reinforced. Never throws. */
+  feedback(f: ReplyFeedback): Promise<boolean>;
   readonly store: LearnStore;
   readonly events: LearnEvent[];
   readonly stats: { reflections: number; injections: number; cost: number };
@@ -159,6 +164,36 @@ export function createLearning(d: LearningDeps): Learning {
     }
   }
 
+  async function feedback(f: ReplyFeedback): Promise<boolean> {
+    try {
+      if (!d.learn.enabled) return false;
+      const co = { clientNames: d.cfg.clientNames };
+      const clean = (t: string | undefined, max: number): string => {
+        const x = (t ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+        return x && !contentProblem(x, co) ? x : "";
+      };
+      const comment = clean(f.comment, 140), reason = clean(f.reason, 60), gist = clean(f.reply, 100);
+      const down = f.rating === "down";
+      const behavior = down ? (f.report ? "Reply reported wrong" : "Reply rated down") : "Reply rated up";
+      const trigger = down
+        ? `The user ${f.report ? "reported" : "gave a thumbs down to"} a reply${reason ? ` (${reason})` : ""}${gist ? `: "${gist}"` : ""}`
+        : `The user gave a thumbs up to a reply${gist ? `: "${gist}"` : ""}`;
+      const rule = down
+        ? (comment ? `Do not repeat this. The user said: ${comment}` : "Do not repeat this kind of reply; when unsure why it missed, ask the user what was wrong before trying again.")
+        : (comment ? `Keep doing this. The user said: ${comment}` : "Keep this approach: the user liked a reply like this one.");
+      const evidence = comment || reason || (down ? "thumbs down" : "thumbs up");
+      const lesson = { kind: down ? "failure" as const : "win" as const, trigger: trigger.slice(0, 180), behavior, rule: rule.slice(0, 260), evidence: evidence.slice(0, 220) };
+      const problem = lengthProblem(lesson) ?? contentProblem(`${lesson.trigger} ${lesson.rule}`, co);
+      if (problem) { log({ type: "refused", detail: `feedback: ${problem}` }); return false; }
+      const r = await store.upsertLesson(lesson);
+      log({ type: "lesson", action: r.action, key: r.item?.key, detail: r.why ?? r.item?.title ?? "" });
+      return r.action !== "rejected";
+    } catch (e) {
+      log({ type: "error", detail: `feedback: ${String((e as Error)?.message ?? e).slice(0, 160)}` });
+      return false;
+    }
+  }
+
   async function idle(): Promise<void> {
     while (inflight.size) await Promise.allSettled([...inflight]);
   }
@@ -169,5 +204,5 @@ export function createLearning(d: LearningDeps): Learning {
     } catch { /* best effort */ }
   }
 
-  return { beforeTurn, afterTurn, idle, close, store, events, stats };
+  return { beforeTurn, afterTurn, idle, close, feedback, store, events, stats };
 }

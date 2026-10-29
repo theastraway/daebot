@@ -18,6 +18,7 @@ import { initExchanges } from "/exchanges.js";
 import { initSuggest } from "/suggest.js";
 import { initPhotos, normQueue, packQueue, queueLabel, SAYS as PHOTO_SAYS } from "/photos.js";
 import { calendarCapabilities, createDeviceCalls } from "/device-calendar.js";
+import { initMessageMenu, copyText } from "/msgmenu.js";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -223,10 +224,11 @@ function buildItem(it, tr) {
   let node;
   switch (it.kind) {
     case "user":
-      node = h("div", it.photos?.length ? "msg-user has-photos" : "msg-user", it.text || undefined);
+      node = h("div", (it.photos?.length ? "msg-user has-photos" : "msg-user") + (it.quote ? " has-quote" : ""), it.text || undefined);
       if (it.photos?.length) node.prepend(photos.thumbs(it.photos, tkey()));
+      if (it.quote?.text) node.prepend(h("div", "mx-quote", oneLine(it.quote.text, 200)));
       break;
-    case "assistant": node = h("div", "msg-asst"); updateAssistant(node, it); break;
+    case "assistant": node = h("div", "msg-asst"); node.tabIndex = 0; node.setAttribute("aria-haspopup", "menu"); updateAssistant(node, it); break;
     case "tool": node = buildTool(it); break;
     case "gate": node = buildGate(it); break;
     case "confirm": node = buildConfirm(it); break;
@@ -243,6 +245,16 @@ function buildItem(it, tr) {
 function updateAssistant(node, it) {
   node.replaceChildren(renderMarkdown(it.text));
   node.classList.toggle("streaming", !!it.streaming);
+  // Emoji reactions sit under the message; tapping one toggles your own.
+  if (it.reactions?.length && !it.streaming) {
+    const row = h("div", "mx-reacts");
+    for (const e of it.reactions) {
+      const b = h("button", "mx-react", e); b.type = "button"; b.setAttribute("aria-label", `Remove reaction ${e}`);
+      b.addEventListener("click", () => msgReact(it, e));
+      row.append(b);
+    }
+    node.append(row);
+  }
 }
 function buildTool(it) {
   const d = document.createElement("details"); d.className = `tool ${it.status}`;
@@ -310,6 +322,7 @@ function renderThread() {
   if (!tr.items.length) renderEmpty();
   for (const it of tr.items) els.thread.append(buildItem(it, tr));
   renderHeader();
+  paintReplyChip();
   toBottom(true);
 }
 
@@ -332,9 +345,9 @@ function itemsFromHistory(events) {
   let asst = null, model = "";
   for (const ev of events) {
     switch (ev.type) {
-      case "user": asst = null; items.push({ kind: "user", text: ev.text, ...(ev.photos?.length ? { photos: ev.photos } : {}) }); break;
+      case "user": asst = null; items.push({ kind: "user", text: ev.text, ...(ev.id ? { mid: ev.id } : {}), ...(ev.rid ? { rid: ev.rid } : {}), ...(ev.quote ? { quote: ev.quote } : {}), ...(ev.photos?.length ? { photos: ev.photos } : {}) }); break;
       case "text":
-        if (!asst) { asst = { kind: "assistant", text: "", streaming: false }; items.push(asst); }
+        if (!asst) { asst = { kind: "assistant", text: "", streaming: false, ...(ev.id ? { mid: ev.id } : {}), ...(ev.rid ? { rid: ev.rid } : {}) }; items.push(asst); }
         asst.text += ev.delta; break;
       case "retract": {
         const note = { kind: "notice", level: "info", text: `rewriting: ${ev.reason}` };
@@ -367,10 +380,11 @@ async function loadHistory(id) {
   const tr = transcript(id);
   if (tr.items.length) return;
   try {
-    const { events } = await json(`/sessions/${encodeURIComponent(id)}/history`);
+    const { events, meta } = await json(`/sessions/${encodeURIComponent(id)}/history`);
     if (!events || !events.length || tr.items.length) return;
     const r = itemsFromHistory(events);
     tr.items.push(...r.items);
+    applyMeta(tr, meta);
     tr.usage = r.usage;
     if (r.model) tr.model = r.model;
   } catch { /* no saved history: the session starts empty */ }
@@ -384,10 +398,11 @@ async function syncCurrent() {
   if (!id || syncing || document.hidden || state.busy.has(id) || !state.online) return;
   syncing = true;
   try {
-    const { events, run } = await json(`/sessions/${encodeURIComponent(id)}/history`);
+    const { events, run, meta } = await json(`/sessions/${encodeURIComponent(id)}/history`);
     if (id !== state.currentId || state.busy.has(id) || !Array.isArray(events)) return;
     if (run && run.status === "running") { void attachRun(id, events); return; } // a reply is still being written on the server
     const tr = transcript(id);
+    applyMeta(tr, meta); // reactions made on another device (or before a reload) show up even when no new message did
     const localUsers = tr.items.filter((x) => x.kind === "user").length;
     const { behind, dones } = transcriptBehind({ events, localUsers, lastDones: tr.syncDones });
     tr.syncDones = dones;
@@ -395,6 +410,7 @@ async function syncCurrent() {
     const r = itemsFromHistory(events);
     const top = els.scroll.scrollTop, pinned = stick;
     tr.items.length = 0; tr.items.push(...r.items);
+    applyMeta(tr, meta);
     tr.usage = r.usage; if (r.model) tr.model = r.model;
     renderThread();
     if (!pinned) els.scroll.scrollTop = top;
@@ -415,6 +431,112 @@ function addItem(sessionId, it) {
   }
   return it;
 }
+
+// ---------- message menu: react, reply, mark unread, copy, select, request id, report ----------
+const enc = encodeURIComponent;
+// The server's per-message extras (reactions, feedback) and unread marker, kept on the transcript and painted onto the messages.
+function applyMeta(tr, meta) {
+  if (!meta) return;
+  tr.meta = meta;
+  for (const it of tr.items) {
+    if (it.kind !== "assistant" || !it.mid) continue;
+    const next = meta.messages?.[it.mid]?.reactions || [];
+    if (JSON.stringify(next) === JSON.stringify(it.reactions || [])) continue;
+    it.reactions = next;
+    if (it.node && !it.streaming) updateAssistant(it.node, it);
+  }
+}
+// Messages streamed in this tab have no server id yet. Read the saved thread and match the two lists from the end (same kind, same words).
+async function resolveIds(id) {
+  const tr = transcript(id);
+  if (!tr.items.some((x) => (x.kind === "assistant" || x.kind === "user") && !x.mid)) return true;
+  try {
+    const { events, meta, run } = await json(`/sessions/${enc(id)}/history`);
+    if (run && run.status === "running") return false; // the saved thread stops before the turn still being written
+    const srv = itemsFromHistory(events || []).items.filter((x) => x.kind === "assistant" || x.kind === "user");
+    const loc = tr.items.filter((x) => x.kind === "assistant" || x.kind === "user");
+    const norm = (t) => String(t || "").replace(/\s+/g, " ").trim();
+    for (let i = 1; i <= Math.min(srv.length, loc.length); i++) {
+      const a = srv[srv.length - i], b = loc[loc.length - i];
+      if (a.kind !== b.kind || norm(a.text) !== norm(b.text)) break;
+      if (!b.mid) { b.mid = a.mid; if (a.rid) b.rid = a.rid; }
+    }
+    applyMeta(tr, meta);
+    saveTranscript(id);
+    return true;
+  } catch { return false; }
+}
+const itemOfNode = (node) => (node ? transcript(tkey()).items.find((x) => x.node === node) : undefined);
+const replies = new Map(); // chat id -> the message being replied to { mid, text }
+const chipEl = $("reply-chip"), chipText = $("reply-chip-text");
+function paintReplyChip() {
+  const q = replies.get(tkey());
+  chipEl.hidden = !q;
+  chipText.textContent = q ? q.text : "";
+}
+$("reply-chip-x").addEventListener("click", () => { replies.delete(tkey()); paintReplyChip(); els.input.focus(); });
+const plain = (md) => String(md || "").replace(/```[a-z]*\n?/gi, "").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/[*`#]+/g, "");
+const oneLine = (t, n) => { const x = plain(t).replace(/\s+/g, " ").trim(); return x.length > n ? x.slice(0, n - 1) + "…" : x; };
+
+async function msgReact(it, emoji) {
+  const id = state.currentId;
+  if (!id || !it.mid) return;
+  try {
+    const r = await json(`/sessions/${enc(id)}/messages/${enc(it.mid)}/react`, { method: "POST", body: JSON.stringify({ emoji }) });
+    it.reactions = r.reactions || [];
+    const tr = transcript(id);
+    if (tr.meta) { const m = (tr.meta.messages ||= {}); if (it.reactions.length || r.feedback) m[it.mid] = { reactions: it.reactions, ...(r.feedback ? { feedback: r.feedback } : {}) }; else delete m[it.mid]; }
+    if (it.node) updateAssistant(it.node, it);
+    saveTranscript(id);
+    if (r.feedback && (emoji === "👍" || emoji === "👎")) menu.toast("Thanks, Daebot will learn from this");
+  } catch (e) { if (e.message !== "unauthorized") menu.toast(`Could not react: ${e.message}`); }
+}
+function setUnreadLocal(id, unread) {
+  for (const list of [state.sessions, bots.threads(), ...bots.cached()]) for (const r of list) if (r.id === id) { if (unread) r.unread = true; else delete r.unread; }
+  renderSessions(); bots.renderList();
+}
+async function msgUnread(it) {
+  const id = state.currentId;
+  if (!id || !it.mid) return;
+  try {
+    await json(`/sessions/${enc(id)}`, { method: "PATCH", body: JSON.stringify({ unreadFrom: it.mid }) });
+    setUnreadLocal(id, true);
+    menu.toast("Marked as unread");
+  } catch (e) { if (e.message !== "unauthorized") menu.toast(`Could not mark unread: ${e.message}`); }
+}
+async function clearUnread(s) {
+  if (!s.unread) return;
+  setUnreadLocal(s.id, false);
+  try { await api(`/sessions/${enc(s.id)}`, { method: "PATCH", body: JSON.stringify({ unreadFrom: null }) }); } catch { /* the next list refresh shows the truth */ }
+}
+async function openMessageMenu(node, point) {
+  const id = state.currentId;
+  const it = itemOfNode(node);
+  if (!id || !it || it.kind !== "assistant" || it.streaming || state.busy.has(id) && !it.mid) return menu.toast("Daebot is still replying");
+  if (!it.mid && !(await resolveIds(id))) return menu.toast("Could not open the menu, try again in a moment");
+  if (!it.mid) return menu.toast("Could not open the menu for this message");
+  menu.open({
+    node, point, reactions: it.reactions || [],
+    act: {
+      react: (e) => msgReact(it, e),
+      reply: () => { replies.set(id, { mid: it.mid, text: oneLine(it.text, 160), full: it.text }); paintReplyChip(); els.input.focus(); },
+      unread: () => msgUnread(it),
+      copy: async () => menu.toast((await copyText(it.text)) ? "Copied" : "Could not copy"),
+      select: () => { if (menu.phone() || matchMedia("(pointer: coarse)").matches) menu.selectSheet(it.text); else menu.selectDesktop(node); },
+      copyId: async () => menu.toast(it.rid ? ((await copyText(it.rid)) ? "Request ID copied" : "Could not copy") : "No request ID for this message"),
+      report: async (reason, comment) => {
+        try {
+          await json(`/sessions/${enc(id)}/messages/${enc(it.mid)}/report`, { method: "POST", body: JSON.stringify({ reason, ...(comment ? { comment } : {}) }) });
+          it.reactions = [...new Set([...(it.reactions || []).filter((x) => x !== "👍"), "👎"])];
+          if (it.node) updateAssistant(it.node, it);
+          menu.toast("Thanks, reported");
+          return true;
+        } catch (e) { if (e.message !== "unauthorized") menu.toast(`Could not send the report: ${e.message}`); return false; }
+      },
+    },
+  });
+}
+const menu = initMessageMenu({ h, icon, host: els.thread, pick: (n) => (n && itemOfNode(n) ? n : null), onRequest: (node, point) => { void openMessageMenu(node, point); } });
 
 // ---------- header / sessions ----------
 function metaById(id) { return state.sessions.find((s) => s.id === id) || bots.threads().find((s) => s.id === id); }
@@ -454,7 +576,7 @@ function saveQueue() {
   } catch { /* private mode */ }
 }
 function queueFor(key) { if (!queue) queue = {}; return queue[key]; }
-function enqueue(key, text, attached = []) { (queue[key] ||= []).push({ text: text.trim(), photos: attached, lost: 0 }); saveQueue(); renderQueue(); }
+function enqueue(key, text, attached = [], quote) { (queue[key] ||= []).push({ text: text.trim(), photos: attached, lost: 0, ...(quote ? { quote } : {}) }); saveQueue(); renderQueue(); }
 // Send one queued message now. If Dae is still working, stop that turn first, then send it the moment the turn ends.
 var queueSendWanted = null;
 async function sendQueued(i) {
@@ -463,14 +585,14 @@ async function sendQueued(i) {
   const item = q.splice(i, 1)[0];
   if (!q.length) delete queue[key];
   saveQueue(); renderQueue();
-  if (!state.busy.has(key)) return sendMessage(item.text, item.photos);
+  if (!state.busy.has(key)) return sendMessage(item.text, item.photos, item.quote);
   queueSendWanted = { key, item };
   await abortTurn();
   const t0 = Date.now();
   const wait = () => {
     if (!queueSendWanted || queueSendWanted.key !== key) return;
-    if (!state.busy.has(key)) { const w = queueSendWanted; queueSendWanted = null; sendMessage(w.item.text, w.item.photos); return; }
-    if (Date.now() - t0 > 15000) { enqueue(key, queueSendWanted.item.text, queueSendWanted.item.photos); queueSendWanted = null; notify("Dae did not stop in time; the message is back in the queue."); return; }
+    if (!state.busy.has(key)) { const w = queueSendWanted; queueSendWanted = null; sendMessage(w.item.text, w.item.photos, w.item.quote); return; }
+    if (Date.now() - t0 > 15000) { enqueue(key, queueSendWanted.item.text, queueSendWanted.item.photos, queueSendWanted.item.quote); queueSendWanted = null; notify("Dae did not stop in time; the message is back in the queue."); return; }
     setTimeout(wait, 150);
   };
   wait();
@@ -484,7 +606,7 @@ function drainQueue(key) {
     const item = q.shift();
     if (!q.length) delete queue[key];
     saveQueue(); renderQueue();
-    sendMessage(item.text, item.photos);
+    sendMessage(item.text, item.photos, item.quote);
   }, 0);
 }
 function renderQueue() {
@@ -551,11 +673,12 @@ function renderSessions() {
   for (const s of shown) {
     const b = h("button", "sess"); b.type = "button";
     if (s.id === state.currentId) b.setAttribute("aria-current", "true");
+    if (s.unread) { b.classList.add("unread"); b.title = "Unread"; }
     const m = h("span", "sess-m");
     m.append(h("span", "", s.surface), h("span", "", "·"), h("span", "", ago(s.updatedAt)));
     if (s.live) { m.append(h("span", "", "·"), h("span", "live", s.busy ? "working" : "live")); }
     b.append(h("span", "sess-t", s.title || "Untitled"), m);
-    b.addEventListener("click", () => selectSession(s));
+    b.addEventListener("click", () => selectSession(s, { userClick: true }));
     const row = h("div", "sess-row");
     const startRename = () => renameRow(b, s);
     b.addEventListener("dblclick", (e) => { e.preventDefault(); startRename(); });
@@ -605,7 +728,7 @@ async function refreshSessions() {
   renderSessions(); renderHeader();
 }
 
-async function selectSession(s) {
+async function selectSession(s, opts = {}) {
   closeSidebar();
   suggest.clear();
   if (!s.live) {
@@ -621,6 +744,7 @@ async function selectSession(s) {
     state.curBot = s.bot || "";
     await loadHistory(s.id);
   }
+  if (opts.userClick) await clearUnread(s); // opening the thread yourself reads it; a reload that lands back on it does not
   await refreshSessions();
   renderThread();
   if (!els.drawer.hidden) loadViolations();
@@ -713,10 +837,11 @@ async function pumpRun(id, ctx, res) {
 // Replace the visible transcript with the server's saved one (the truth after a restart or a lost run).
 async function resyncFromServer(id) {
   try {
-    const { events } = await json(`/sessions/${encodeURIComponent(id)}/history`);
+    const { events, meta } = await json(`/sessions/${encodeURIComponent(id)}/history`);
     if (!Array.isArray(events)) return;
     const tr = transcript(id), r = itemsFromHistory(events);
     tr.items.length = 0; tr.items.push(...r.items); tr.usage = r.usage; if (r.model) tr.model = r.model;
+    applyMeta(tr, meta);
     if (id === tkey()) renderThread();
   } catch { /* offline: the next sync tick retries */ }
 }
@@ -744,7 +869,7 @@ async function attachRun(id, baseEvents) {
   finally {
     if (ctx.asst) { ctx.asst.streaming = false; if (ctx.asst.node) updateAssistant(ctx.asst.node, ctx.asst); }
     if (ctx.lost || !ctx.sawDone) await resyncFromServer(id);
-    state.busy.delete(id); attached.delete(id); setBusyUi(); markInflight(id, false);
+    state.busy.delete(id); attached.delete(id); void resolveIds(id); setBusyUi(); markInflight(id, false);
     renderQueue();
     drainQueue(id);
     transcript(id).syncDones = undefined;
@@ -752,13 +877,13 @@ async function attachRun(id, baseEvents) {
   }
 }
 
-async function sendMessage(text, attached = []) {
+async function sendMessage(text, attached = [], quote) {
   text = text.trim();
   if (!text && !attached.length) return;
   suggest.onSend(text); // tells Dae whether the suggested replies were taken, edited or ignored, and clears them
   // Show the message immediately; opening a session can take several seconds while MIND boots.
   const startKey = tkey();
-  const userItem = addItem(startKey, { kind: "user", text, ...(attached.length ? { photos: attached.map((p) => ({ name: p.name, dataUrl: p.dataUrl, width: p.width, height: p.height })) } : {}) });
+  const userItem = addItem(startKey, { kind: "user", text, ...(quote ? { quote: { id: quote.mid, text: quote.text } } : {}), ...(attached.length ? { photos: attached.map((p) => ({ name: p.name, dataUrl: p.dataUrl, width: p.width, height: p.height })) } : {}) });
   voice.turnStart();
   const waiting = addItem(startKey, { kind: "notice", level: "info", text: "Thinking…" });
   state.busy.add(startKey); setBusyUi(); stick = true; toBottom(true);
@@ -795,7 +920,7 @@ async function sendMessage(text, attached = []) {
   let refused = false; // the server turned the message away before any turn started
   try {
     const capabilities = calendarCapabilities(); // ["apple_calendar"] inside the iPhone and Mac apps, [] anywhere else
-    const body = { text, ...(attached.length ? { photos: attached.map(({ name, dataUrl }) => ({ name, dataUrl })) } : {}), ...(capabilities.length ? { capabilities } : {}) };
+    const body = { text, ...(quote ? { quote: { id: quote.mid, text: (quote.full || quote.text).slice(0, 600) } } : {}), ...(attached.length ? { photos: attached.map(({ name, dataUrl }) => ({ name, dataUrl })) } : {}), ...(capabilities.length ? { capabilities } : {}) };
     const res = await api(`/sessions/${encodeURIComponent(id)}/send`, { method: "POST", body: JSON.stringify(body) });
     if (res.status === 409) throw new Error("This session is busy with another turn.");
     if (!res.ok) { refused = true; throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`); }
@@ -822,6 +947,7 @@ async function sendMessage(text, attached = []) {
     if (ctx.lost) await resyncFromServer(id); // the run is gone from the server (restart): show what it saved, including the interrupted note
     transcript(id).syncDones = undefined; // this tab just ran the turn itself: re-baseline instead of re-rendering it
     saveTranscript(id);
+    void resolveIds(id); // so the message menu works on this turn without a wait
     refreshSessions();
     if (!els.drawer.hidden) loadViolations(); else refreshViolCount();
     board.refresh();
@@ -1171,8 +1297,10 @@ els.composer.addEventListener("submit", (e) => {
   els.input.value = ""; grow();
   photos.say("");
   const attached = photos.take();
-  if (state.busy.has(tkey())) { enqueue(tkey(), t, attached); return; } // never refuse: hold it and send when the turn ends
-  sendMessage(t, attached);
+  const quote = replies.get(tkey());
+  replies.delete(tkey()); paintReplyChip();
+  if (state.busy.has(tkey())) { enqueue(tkey(), t, attached, quote); return; } // never refuse: hold it and send when the turn ends
+  sendMessage(t, attached, quote);
 });
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
@@ -1237,7 +1365,7 @@ const bots = initBots({
     currentId: () => state.currentId,
     refresh: () => refreshSessions(),
     newThread: (id) => newBotThread(id),
-    openThread: (s) => selectSession(s),
+    openThread: (s) => selectSession(s, { userClick: true }),
     closeViolations: () => { if (!els.drawer.hidden) toggleDrawer(false); board.close(); },
     botChanged: () => renderHeader(),
     modelRows: async () => { if (!models) return []; await models.list(); return models.rows(); },
