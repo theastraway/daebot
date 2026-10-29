@@ -1048,6 +1048,25 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         // `linked`: connections that ride on a MIND app (GitHub through the user's GitHub connection). They show under that app's one row, never as a second row.
         return sendJson(res, 200, { items, counts: { official: items.filter((i) => i.publisher === "official").length, community: items.filter((i) => i.publisher === "community").length }, linked: mcp.integrationServers(me.id) });
       }
+      // The connector page: accounts, tools and the user's own switches for one card id. Everything is per signed-in user.
+      if (path === "/mcp/connector") {
+        if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+        const providers = await providersOf(me).catch(() => [] as AppRow[]);
+        const id = new URL(req.url ?? "/", "http://x").searchParams.get("id") ?? "";
+        const d = id.length <= 80 ? await mcp.connectorDetail(me.id, id, providers) : undefined;
+        return d ? sendJson(res, 200, { connector: d }) : sendJson(res, 404, { error: "That connector is not in your list." });
+      }
+      if (path === "/mcp/connector/tool") {
+        if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+        const b = await readJson(req);
+        mcp.setToolEnabled(me.id, optStr(b.server, 40) ?? "", optStr(b.tool, 80) ?? "", b.enabled === true);
+        return sendJson(res, 200, { ok: true });
+      }
+      if (path === "/mcp/connector/label") {
+        if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+        const b = await readJson(req);
+        return sendJson(res, 200, { label: mcp.setAccountLabel(me.id, optStr(b.key, 60) ?? "", optStr(b.label, 80) ?? "") });
+      }
       // "Add tools" on a connected MIND app (GitHub): MIND tries the vendor's MCP server with the app's own token right now and says what happened.
       if (path === "/mcp/integrations/link") {
         if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });

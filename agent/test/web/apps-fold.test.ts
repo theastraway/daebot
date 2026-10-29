@@ -197,3 +197,11 @@ test("a connected MIND app with no tool connection never reads as plain Connecte
   assert.equal((mindEntry({ ...p, connected: false }, undefined, folded) as any).addTools, undefined, "not connected: plain Connect");
   assert.equal((mindEntry(p, undefined, undefined) as any).addTools, undefined, "no tool connector exists for this app: nothing to add");
 });
+
+test("the connector page is wired: rows open it, it is built without innerHTML, and its switches go to the per-user routes", () => {
+  const detail = readFileSync(join(WEB, "connector-detail.js"), "utf8");
+  assert.doesNotMatch(detail.replace(/\/\/.*$/gm, ""), /innerHTML|insertAdjacentHTML|eval\(|new Function|document\.write/);
+  for (const piece of ["Accounts", "Add Another Account", "Reconnect", "Uninstall", "Share", "enabled", "Information", "Capabilities", "Developer", "/mcp/connector/tool", "/mcp/connector/label"]) assert.ok(detail.includes(piece), piece);
+  assert.match(readFileSync(join(WEB, "apps.js"), "utf8"), /onOpen/);
+  assert.match(readFileSync(join(WEB, "app.js"), "utf8"), /openDetail: openConnectorDetail/);
+});

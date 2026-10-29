@@ -8,6 +8,7 @@
 // the gateway (GET /mcp/catalog), which fetches MIND's list server-side. Connecting an App Store server never sends a URL: it sends the
 // connector's id, the gateway looks the address up itself and creates the SAME pending request the consent card is built from
 // (POST /mcp/catalog/connect). The user's click on the card is the consent; nothing here connects anything.
+// Selecting a connector opens its page (connector-detail.js): accounts, tools with switches, Share, Uninstall.
 // DOM is built by apps.js (createElement + textContent only). Everything in the list is third-party text.
 
 const AUTH_TEXT = { none: "No sign-in", oauth: "Sign in (OAuth)", key: "API key", oauth_or_key: "OAuth or API key", url_token: "Your server address" };
@@ -90,7 +91,7 @@ export function connectorList(providers, items, linked) {
   return orderRows(appEntries(providers, (p) => mindEntry(p, byProvider[p.provider], foldedBy[p.provider])), connectorRows(items).map((it) => ({ ...entryOf(it), kind: "mcp" })));
 }
 
-export function initConnectors({ apps, json, getMcp }) {
+export function initConnectors({ apps, json, getMcp, openDetail }) {
   const get = (path) => (apps.cached ? apps.cached(path) : json(path));
   /** Opens the server's sign-in in a new tab (the tab is opened here, inside the click, so the browser allows it), then watches for the connection to appear. */
   async function signInWithOAuth(e, ctl, values) {
@@ -173,12 +174,18 @@ export function initConnectors({ apps, json, getMcp }) {
     confirmText: (e) => `Remove ${e.name}? Daebot stops using it and its stored sign-in is deleted.`,
   };
   const mind = apps.mind;
+  // A shared link (/?connector=github) opens the Apps card on that connector's page.
+  let wantId = "";
+  try {
+    const u = new URL(location.href), c = u.searchParams.get("connector");
+    if (c && /^[A-Za-z0-9_:.-]{1,60}$/.test(c) && openDetail) { wantId = c; u.searchParams.delete("connector"); history.replaceState(null, "", u.pathname + (u.search || "") + u.hash); setTimeout(() => apps.open && apps.open(), 600); }
+  } catch { /* no location: tests */ }
   /** "Add tools" / "Re-authenticate" on a connected MIND app: first ask MIND to link the vendor's MCP server with the app's own token; when it will not, start the connector's own sign-in (the consent card). */
   async function addTools(e, ctl) {
     const at = e.addTools; if (!at) return;
     ctl.busy(true);
     try {
-      if (at.stale) { try { await json(`/mcp/servers/${encodeURIComponent(at.stale)}`, { method: "DELETE" }); } catch { /* the link below says what is true */ } }
+      if (at.stale) { await mind.handlers.onConnect(e, ctl); return; } // the tool connection rides on the app's sign-in: sign the app in again
       const r = await json("/mcp/integrations/link", { method: "POST", body: JSON.stringify({ provider: e.provider }) });
       if ((r.status === "linked" || r.status === "already") && r.tools > 0) {
         apps.say(`${e.name}: ${r.tools} tool${r.tools === 1 ? "" : "s"} ready. Ask Daebot to use them.`);
@@ -200,8 +207,40 @@ export function initConnectors({ apps, json, getMcp }) {
     onDisconnect: (e, ctl) => (e.kind === "mind" ? mind.handlers.onDisconnect(e, ctl) : mcpHandlers.onDisconnect(e, ctl)),
     onManage: (e) => { if (e.kind !== "mind" || e.serverId) mcpHandlers.onManage(e); },
     onAddTools: (e, ctl) => addTools(e, ctl),
+    onOpen: openDetail ? (e) => showConnector(e) : undefined,
     confirmText: (e) => (e.kind === "mind" ? `Disconnect ${e.name}? Anything already synced to MIND stays.` : mcpHandlers.confirmText(e)),
   };
+  /** Everything the connector page can do, built from the same handlers the list rows use (no new sign-in flow). */
+  const connectorActions = (e) => ({
+    /** Re-run the sign-in for one account and replace its token. A MIND app goes back through MIND's own OAuth; a server is removed and signed in again. */
+    async reconnect(d, account, ctl) {
+      ctl.busy(true);
+      try {
+        if (account.kind === "mind") { await mind.handlers.onConnect({ ...e, kind: "mind", id: d.id }, { busy: () => {}, say: ctl.say }); ctl.say(`Approve ${d.name} in the new tab, then come back here.`, "off"); }
+        else {
+          if (account.serverId) await json(`/mcp/servers/${encodeURIComponent(account.serverId)}`, { method: "DELETE" });
+          apps.hideDetail();
+          await mcpHandlers.onConnect(e, { busy: () => {}, say: (t, tone) => apps.say(t) });
+        }
+      } catch (err) { ctl.say(err && err.message ? err.message : `Could not reconnect ${d.name}.`, "warn"); }
+      finally { ctl.busy(false); }
+    },
+    addAccount() { if (e.form) apps.connectForm(e); },
+    /** Disconnects every account and removes the connector. */
+    async uninstall(d, say) {
+      const problems = [];
+      for (const a of d.accounts) {
+        try {
+          if (a.kind === "mind") await json(`/apps/integrations/${encodeURIComponent(d.id)}/disconnect`, { method: "POST", body: "{}" });
+          else if (a.serverId) await json(`/mcp/servers/${encodeURIComponent(a.serverId)}`, { method: "DELETE" });
+        } catch (err) { problems.push(err && err.message ? err.message : "one account would not disconnect"); }
+      }
+      const mcp = getMcp(); if (mcp) mcp.load();
+      if (problems.length) { say(`${d.name}: ${problems[0]}`, "warn"); return; }
+      apps.hideDetail(); apps.say(`Uninstalled ${d.name}.`); apps.refresh();
+    },
+  });
+  function showConnector(e) { if (openDetail) openDetail({ apps, json, entry: e, actions: connectorActions(e) }); }
   apps.addSection({
     id: "connectors", title: "Connectors", search: "Search connectors",
     note: "Your MIND apps and the MIND App Store, in one list. What is connected comes first. Pick a connector and Daebot shows you what it can do before anything connects.",
@@ -220,6 +259,7 @@ export function initConnectors({ apps, json, getMcp }) {
       if (m.status === "rejected" && c.status === "rejected" && !storeOff) throw c.reason;
       if (m.status === "rejected" && !providers.length) message = "Your MIND apps could not be loaded right now. Try again in a moment.";
       const entries = connectorList(providers, items, linked);
+      if (wantId) { const hit = entries.find((x) => x.id === wantId); wantId = ""; if (hit) setTimeout(() => showConnector(hit), 0); }
       if (!entries.length) return storeOff ? { entries: [], hidden: true } : { entries: [], message: message || "The MIND App Store list is not available right now. Try again in a moment." };
       return message ? { entries, message } : { entries };
     },

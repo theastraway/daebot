@@ -170,6 +170,13 @@ function rowFor(e, handlers) {
     }
     actions.append(btn);
     row.append(logoFor(e), main, actions);
+    if (handlers.onOpen) {
+      // Selecting a connector opens its page (accounts, tools, switches). The buttons keep their own jobs.
+      row.classList.add("is-openable");
+      main.tabIndex = 0; main.setAttribute("role", "button"); main.setAttribute("aria-label", `Open ${e.name}`);
+      row.addEventListener("click", (ev) => { if (ev.target.closest("button, a, input")) return; handlers.onOpen(e); });
+      main.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); handlers.onOpen(e); } });
+    }
     const confirm = el("div", "app-confirm"); confirm.hidden = true;
     const ctl = {
       busy(on) { btn.disabled = on; if (on) { btn.dataset.label = btn.textContent; btn.textContent = "Working…"; } else if (btn.dataset.label) { btn.textContent = btn.dataset.label; delete btn.dataset.label; } },
@@ -214,8 +221,15 @@ export function initApps(ctx) {
   };
   const $ = (id) => document.getElementById(id);
   const q = { open: $("btn-apps"), card: $("apps-modal"), close: $("apps-close"), list: $("apps-sections"), live: $("apps-live") };
-  if (!q.open || !q.card) return { open() {}, close() {}, refresh() {}, addSection() {}, say() {}, suspend() { return false; }, resume() {}, cached, mind: { handlers: {} } };
+  if (!q.open || !q.card) return { open() {}, close() {}, refresh() {}, addSection() {}, say() {}, suspend() { return false; }, resume() {}, cached, mind: { handlers: {} }, showDetail() {}, hideDetail() {}, inDetail() { return false; }, connectForm() {} };
   const sections = new Map();
+  // The connector page lives in this same card: opening it hides the list, the back arrow shows the list again, and closing the card closes it.
+  const detailHost = el("div", "apps-detail"); detailHost.hidden = true;
+  const cardEl = q.card.querySelector(".apps-card");
+  if (cardEl) cardEl.append(detailHost);
+  const inDetail = () => !detailHost.hidden;
+  function showDetail(node) { detailHost.replaceChildren(node); detailHost.hidden = false; if (cardEl) { cardEl.classList.add("is-detail"); cardEl.scrollTop = 0; } }
+  function hideDetail() { if (detailHost.hidden) return; detailHost.hidden = true; detailHost.replaceChildren(); if (cardEl) cardEl.classList.remove("is-detail"); if (isOpen) refresh(); }
   let isOpen = false, suspended = false, lastFocus = null, token = 0;
   const bc = typeof BroadcastChannel === "function" ? new BroadcastChannel("daebot-apps") : null;
 
@@ -285,6 +299,15 @@ export function initApps(ctx) {
     if (isOpen) loadSection(s);
   }
 
+  /** Opens an entry's connect form (the URL and token box) in its section, e.g. to add a second n8n address. Leaves the connector page first. */
+  function connectForm(e, secId = "connectors") {
+    const s = sections.get(secId); if (!s || !e.form) return;
+    hideDetail();
+    const ctl = { busy() {}, say() {} };
+    const btn = el("button"); btn.type = "button"; const conf = el("div"); conf.hidden = true;
+    openForm({ ...e, connected: false }, ctl, { ...(s.def.handlers || {}), formHost: s.formHost }, conf, btn);
+  }
+
   function refresh() { if (suspended) return; memo.clear(); for (const s of sections.values()) loadSection(s); }
 
   function open() {
@@ -298,6 +321,7 @@ export function initApps(ctx) {
   function resume() { if (!suspended) return; suspended = false; if (!isOpen) return; q.card.hidden = false; refresh(); q.close.focus(); }
   function close() {
     if (!isOpen) return;
+    if (inDetail()) { detailHost.hidden = true; detailHost.replaceChildren(); if (cardEl) cardEl.classList.remove("is-detail"); }
     suspended = false;
     isOpen = false; q.card.hidden = true; q.open.setAttribute("aria-expanded", "false");
     if (lastFocus && lastFocus.focus) lastFocus.focus();
@@ -308,7 +332,7 @@ export function initApps(ctx) {
   q.card.addEventListener("click", (e) => { if (e.target === q.card) close(); });
   document.addEventListener("keydown", (e) => {
     if (!isOpen || suspended) return;
-    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); return; }
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); if (inDetail()) hideDetail(); else close(); return; }
     if (e.key === "Tab") { // keep focus inside the card
       const f = [...q.card.querySelectorAll("button:not([disabled]), a[href]")].filter((n) => n.offsetParent !== null);
       if (!f.length) return;
@@ -366,5 +390,5 @@ export function initApps(ctx) {
     },
   };
 
-  return { open, close, refresh, addSection, say, renderEntries, suspend, resume, cached, mind };
+  return { open, close, refresh, addSection, say, renderEntries, suspend, resume, cached, mind, showDetail, hideDetail, inDetail, connectForm };
 }
