@@ -119,7 +119,7 @@ export function createProcessTool(registry?: ProcessRegistry): Tool {
     receipt: "surface",
     spec: {
       name: "process",
-      description: "Run a long job, dev server or app in the background and poll it, on this machine. Actions: start {command, cwd?} returns an id at once; " +
+      description: "Run a long job in the background and poll it, on this machine: builds, test suites, downloads, watchers, long conversions, dev servers. Use it instead of a foreground bash or a screen session for anything over about a minute, or when the user says watch, keep going, tell me when done. Start it, tell the user it is running, then check status/tail on later turns. Actions: start {command, cwd?} returns an id at once; " +
         "status {id?} (no id lists all); tail {id, lines?} shows recent stdout/stderr; kill {id} stops it and its children. " +
         "Background processes keep running while the chat window is hidden or the screen is locked, and stop when Daebot's gateway quits. Use bash for short one-shot commands.",
       parameters: {
