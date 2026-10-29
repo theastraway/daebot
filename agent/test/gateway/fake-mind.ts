@@ -33,6 +33,8 @@ export interface FakeMind {
   integrations: Map<string, Map<string, string>>;
   /** when set, /integrations answers this HTTP status */
   integrationsStatus?: number;
+  /** GET/PUT /developer/v1/usage, per username: plan, percent used, switch state. A user missing here answers a free plan at 2% used. */
+  usage: Map<string, { plan: string; percentUsed: number; unlimited?: boolean; resetAt?: string; available: boolean; enabled: boolean; automatic?: boolean; rateNote?: string; putStatus?: number }>;
   newKey(username: string): string;
   close(): Promise<void>;
 }
@@ -49,7 +51,7 @@ const json = (res: ServerResponse, status: number, v: unknown, extra: Record<str
 export async function startFakeMind(initial: Record<string, string> = {}): Promise<FakeMind> {
   const m: FakeMind = {
     url: "", base: "", seen: [], keys: new Map(Object.entries(initial)), registered: [], consentUser: "", codes: new Map(), refreshTokens: new Map(),
-    bots: new Map(), integrations: new Map(),
+    bots: new Map(), integrations: new Map(), usage: new Map(),
     newKey(username) { const k = "mind_" + randomBytes(24).toString("base64url"); m.keys.set(k, username); return k; },
     close: () => new Promise((r) => { server.close(() => r()); server.closeAllConnections(); }),
   };
@@ -143,6 +145,20 @@ export async function startFakeMind(initial: Record<string, string> = {}): Promi
         if (rest === "/context") return json(res, 200, { sections: [{ section: "soul", items: [{ text: `MIND of ${username} / bot ${botHdr}` }] }] });
         if (rest === "/query") return json(res, 200, { response: `bot ${botHdr} of ${username} says hello` });
         return json(res, 200, { ok: true, bot: botHdr });
+      }
+      if (rest === "/usage" || rest === "/usage/additional") {
+        const u = m.usage.get(username) ?? m.usage.set(username, { plan: "free", percentUsed: 2, available: false, enabled: false }).get(username)!;
+        if (rest === "/usage/additional") {
+          if (req.method !== "PUT") return json(res, 405, { detail: "method" });
+          if (u.putStatus) return json(res, u.putStatus, { detail: "x" });
+          if (!u.available) return json(res, 403, { detail: "paid plans only" });
+          u.enabled = parsed?.enabled === true;
+        } else if (req.method !== "GET") return json(res, 405, { detail: "method" });
+        return json(res, 200, {
+          plan: u.plan, unlimited: !!u.unlimited, percent_used: u.percentUsed, percent_left: Math.max(0, 100 - u.percentUsed), reset_at: u.resetAt ?? "2026-11-01T00:00:00+00:00",
+          credits_balance: 123, credits_limit: 400,
+          additional_usage: { available: u.available, eligible: u.available, enabled: u.enabled, active: u.enabled && u.available, automatic: !!u.automatic, rate_note: u.available ? u.rateNote ?? null : null, overflow_usd: 0 },
+        });
       }
       if (rest === "/integrations" || rest.startsWith("/integrations/")) {
         if (m.integrationsStatus) return json(res, m.integrationsStatus, { detail: "x" });

@@ -37,7 +37,7 @@ export function updateBanner(s) {
   return null;
 }
 
-export function initAccount({ json, h, icon, notify, desktop, isHosted, closeSidebar, openApps, openPermissions }) {
+export function initAccount({ json, h, icon, notify, desktop, isHosted, closeSidebar, openApps, openPermissions, onOpen }) {
   const $ = (id) => document.getElementById(id);
   const bar = $("side-bar"), btn = $("acct-btn"), menu = $("acct-menu"), sub = $("am-accounts"), switchBtn = $("am-switch");
   if (!bar || !btn || !menu) return { setIdentity() {}, setOnline() {}, setUpdate() {} };
@@ -107,6 +107,7 @@ export function initAccount({ json, h, icon, notify, desktop, isHosted, closeSid
     if (!on) toggleSub(false);
     if (on) {
       paintLinks();
+      if (onOpen) onOpen();
       // Switching accounts needs hosted sign-in or the desktop app's account store; a plain local browser has one gateway token.
       const canSwitch = !!(isHosted() || desktop());
       switchBtn.hidden = !canSwitch;

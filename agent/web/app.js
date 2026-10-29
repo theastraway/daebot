@@ -14,6 +14,7 @@ import { confirmDialog, deleteControl, renameControl, editInline, isRenaming, se
 import { compareBuild, webUpdateText, WEB_CHECK_MS } from "/webupdate.js";
 import { buildPermissionCard, initChatMode, initPermissions } from "/permissions.js";
 import { initAccount } from "/account.js";
+import { initUsage } from "/usage.js";
 import { initBoard } from "/board.js";
 import { initExchanges } from "/exchanges.js";
 import { initSuggest } from "/suggest.js";
@@ -1178,32 +1179,8 @@ async function ping() {
   } catch { setOnline(false); }
 }
 
-// DAEBOT_BILLING=mind: a usage meter ("Plan usage · 62% left", small plan name, Manage plan link). Usage language only, never the billing unit.
-function showPlan(me) {
-  const box = document.getElementById("plan");
-  if (!box) return;
-  if (!me || !me.tierName) { box.hidden = true; return; }
-  const pct = typeof me.usageLeftPct === "number" && isFinite(me.usageLeftPct) ? Math.max(0, Math.min(100, me.usageLeftPct)) : null;
-  const bar = document.getElementById("plan-bar");
-  document.getElementById("plan-text").textContent = pct === null ? "Usage billed as you go" : `Plan usage · ${pct}% left`;
-  document.getElementById("plan-name").textContent = me.tierName;
-  bar.hidden = pct === null;
-  bar.classList.toggle("low", pct !== null && pct <= 20 && pct > 5);
-  bar.classList.toggle("empty", pct !== null && pct <= 5);
-  if (pct !== null) { bar.setAttribute("aria-valuenow", String(pct)); document.getElementById("plan-fill").style.width = `${pct}%`; }
-  box.title = pct === null ? `${me.tierName} plan, usage billed as you go` : `${me.tierName} plan, ${pct}% of this period's usage left`;
-  const a = document.getElementById("plan-link");
-  let href = "";
-  try { const u = new URL(me.upgradeUrl || ""); if (u.protocol === "https:" || u.protocol === "http:") href = u.href; } catch { /* no link */ }
-  a.hidden = !href; if (href) a.href = href;
-  box.hidden = false;
-}
-
-// Re-read the plan after a turn: the gateway already holds the X-MIND-Credits-Remaining value from that turn's calls, else it re-fetches.
-async function refreshPlan() {
-  if (!state.hosted || document.getElementById("plan").hidden) return; // only when a plan is shown (mind billing)
-  try { const r = await fetch("/auth/me?fresh=1", { credentials: "same-origin" }); if (r.ok) showPlan(await r.json()); } catch { /* keep what is shown */ }
-}
+// Re-read the usage line after a turn (and whenever the account menu opens). The gateway holds the plan; MIND answers GET /usage.
+function refreshPlan() { usage?.refresh(); }
 
 // Desktop app: the shell exposes signOut(); the gateway answers /account with the MIND account the app signed in as.
 function desktopBridge() { return typeof window.mindclawDesktop?.signOut === "function" ? window.mindclawDesktop : null; }
@@ -1215,6 +1192,7 @@ async function showDesktopWho() {
     if (!me.signedIn || !me.username) return;
     state.who = me.username; window.dispatchEvent(new Event("daebot:who"));
     account?.setIdentity({ username: me.username, owner: false, sub: "MIND account" });
+    usage?.refresh();
   } catch { /* shown on the next ping */ }
 }
 
@@ -1255,8 +1233,8 @@ async function showWho() {
     if (!r.ok) return r.status === 401 ? false : true; // 401 = not signed in; anything else is a hiccup, not a sign-out
     const me = await r.json();
     state.who = me.username; window.dispatchEvent(new Event("daebot:who"));
-    showPlan(me);
     account?.setIdentity({ username: me.username, owner: me.owner, planName: me.tierName });
+    usage?.refresh();
     return true;
   } catch { return true; /* network blip: not a sign-out */ }
 }
@@ -1348,8 +1326,10 @@ chatMode = initChatMode({
   getRow: () => state.sessions.find((s) => s.id === state.currentId),
   onRowMode: (id, mode) => { const r = state.sessions.find((s) => s.id === id); if (r) { if (mode) r.permMode = mode; else delete r.permMode; } },
 });
+const usage = initUsage({ json, notify });
 account = initAccount({
   json, h, icon, notify,
+  onOpen: () => usage.refresh(),
   desktop: () => desktopBridge(),
   isHosted: () => state.hosted,
   closeSidebar,

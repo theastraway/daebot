@@ -75,12 +75,19 @@
       <div class="acct-menu" id="acct-menu" role="menu" aria-label="Account" hidden>
         <div class="am-head">
           <span class="avatar lg" id="am-avatar" aria-hidden="true">D</span>
-          <div class="am-who"><strong id="am-name">Account</strong><span id="am-sub"></span></div>
+          <div class="am-who"><strong id="am-name">Account</strong><span id="am-sub"></span>
+            <div class="am-usage" id="usage" hidden>
+              <button class="am-usage-head" id="usage-head" type="button" aria-expanded="false" aria-controls="usage-detail"><span id="usage-line"></span><svg class="ic chev"><use href="#i-chev"/></svg></button>
+              <div class="plan-bar" id="usage-bar" role="progressbar" aria-label="Plan usage left" aria-valuemin="0" aria-valuemax="100" hidden><i id="usage-fill"></i></div>
+            </div></div>
         </div>
-        <div class="side-plan" id="plan" hidden>
-          <div class="plan-row"><span class="plan-text" id="plan-text"></span><span class="plan-name" id="plan-name"></span></div>
-          <div class="plan-bar" id="plan-bar" role="progressbar" aria-label="Plan usage left" aria-valuemin="0" aria-valuemax="100" hidden><i id="plan-fill"></i></div>
-          <a class="plan-link" id="plan-link" href="#" target="_blank" rel="noopener noreferrer">Manage plan</a>
+        <div class="am-usage-detail" id="usage-detail" hidden>
+          <dl class="u-rows" id="usage-rows"></dl>
+          <div class="u-extra" id="usage-extra" hidden>
+            <div class="u-extra-text"><strong id="usage-extra-title">Additional usage</strong><small id="usage-extra-note"></small></div>
+            <button class="u-switch" id="usage-switch" type="button" role="switch" aria-checked="false" aria-labelledby="usage-extra-title" aria-describedby="usage-extra-note"><i></i></button>
+          </div>
+          <a class="plan-link" id="plan-link" href="#" target="_blank" rel="noopener noreferrer" hidden>Manage plan</a>
         </div>
         <div class="am-update" id="upd" hidden><span id="upd-text"></span><button class="btn-primary sm" id="upd-btn" type="button" role="menuitem"></button></div>
         <button class="am-item" id="btn-perms" type="button" role="menuitem" hidden aria-haspopup="dialog" aria-expanded="false"><svg class="ic"><use href="#i-lock"/></svg><span>Permissions</span></button>
