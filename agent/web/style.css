@@ -584,8 +584,8 @@ button.bd-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -
 .app-form-status.is-warn { color: var(--warn); }
 .app-confirm p.app-why, .app-confirm p.app-form-status { padding: 0; background: none; }
 
-.queue { display: grid; gap: 4px; margin: 0 0 6px; padding-right: 76px; } /* clear of the floating M (bot dock) */
-.queue-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 10px; border: 1px dashed var(--line-strong); border-radius: 10px; background: var(--surface); font-size: 13px; color: var(--ink-2); }
+.queue { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; margin: 0 0 6px; padding-right: 76px; max-width: 100%; } /* clear of the floating M (bot dock); minmax(0,1fr) keeps a long queued message from widening the column past the screen */
+.queue-item { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; box-sizing: border-box; padding: 6px 8px 6px 10px; border: 1px dashed var(--line-strong); border-radius: 10px; background: var(--surface); font-size: 13px; color: var(--ink-2); }
 .queue-tag { flex: none; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); }
 .queue-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .queue-x { flex: none; font-size: 16px; line-height: 1; padding: 2px 6px; }
