@@ -47,7 +47,7 @@ export function connectableApp(p) { return !!(p.connected || p.configured !== fa
 /** A MIND app as a connector row. It shows the real state MIND reports: connected, on which account, needs reconnect.
  *  `linked` is the connection that rides on this app (MIND links GitHub's own MCP server with the app's token): it is the SAME row, with a tag saying how many tools
  *  Daebot has through it and a Manage button for them. It never becomes a second row. */
-export function mindEntry(p, linked) {
+export function mindEntry(p, linked, folded) {
   const e = {
     id: p.provider, kind: "mind", provider: p.provider, logo: p.provider, name: p.name, blurb: p.blurb, connected: !!p.connected,
     needsReconnect: !!p.needsReconnect, account: p.account, auth: p.auth, manageable: false,
@@ -56,7 +56,18 @@ export function mindEntry(p, linked) {
     const n = Number(linked.tools) || 0;
     e.serverId = linked.serverId;
     e.manageable = true;
-    e.tags = [{ text: linked.enabled === false ? `Actions off (${n} tool${n === 1 ? "" : "s"})` : `Actions on: ${n} tool${n === 1 ? "" : "s"}`, tone: linked.enabled === false ? undefined : "ok" }];
+    const broken = linked.status === "reauth_required" || linked.status === "error";
+    if (broken) {
+      // "Connected" must never hide that Daebot has no tools through this app.
+      e.toolsNote = linked.status === "reauth_required" ? "tools unavailable, sign in again" : "tools unavailable, MIND reports an error";
+      e.tags = [{ text: "Tools unavailable", tone: "warn" }];
+      if (folded) e.addTools = { id: folded.id, name: folded.name || p.name, label: "Re-authenticate", stale: linked.serverId };
+    } else e.tags = [{ text: linked.enabled === false ? `Actions off (${n} tool${n === 1 ? "" : "s"})` : `Actions on: ${n} tool${n === 1 ? "" : "s"}`, tone: linked.enabled === false ? undefined : "ok" }];
+  } else if (p.connected && folded) {
+    // Connected at MIND (it syncs data) but Daebot has no tool connection for this product yet: say so, and give the way to add one.
+    e.toolsNote = "no tools yet";
+    e.tags = [{ text: "Tools not connected", tone: "warn" }];
+    e.addTools = { id: folded.id, name: folded.name || p.name, label: "Add tools" };
   }
   return e;
 }
@@ -73,9 +84,10 @@ export function orderRows(mind, mcp) {
 /** Builds the unified list from MIND's providers and the gateway's App Store items (either may be empty). `linked` (optional) are the connections that ride on a MIND app:
  *  each one is shown inside that app's one row, never as its own. */
 export function connectorList(providers, items, linked) {
-  const byProvider = {};
+  const byProvider = {}, foldedBy = {};
+  for (const it of Array.isArray(items) ? items : []) if (it && it.foldedInto && !foldedBy[it.foldedInto]) foldedBy[it.foldedInto] = it;
   for (const l of Array.isArray(linked) ? linked : []) if (l && l.provider && !byProvider[l.provider]) byProvider[l.provider] = l;
-  return orderRows(appEntries(providers, (p) => mindEntry(p, byProvider[p.provider])), connectorRows(items).map((it) => ({ ...entryOf(it), kind: "mcp" })));
+  return orderRows(appEntries(providers, (p) => mindEntry(p, byProvider[p.provider], foldedBy[p.provider])), connectorRows(items).map((it) => ({ ...entryOf(it), kind: "mcp" })));
 }
 
 export function initConnectors({ apps, json, getMcp }) {
@@ -161,12 +173,33 @@ export function initConnectors({ apps, json, getMcp }) {
     confirmText: (e) => `Remove ${e.name}? Daebot stops using it and its stored sign-in is deleted.`,
   };
   const mind = apps.mind;
+  /** "Add tools" / "Re-authenticate" on a connected MIND app: first ask MIND to link the vendor's MCP server with the app's own token; when it will not, start the connector's own sign-in (the consent card). */
+  async function addTools(e, ctl) {
+    const at = e.addTools; if (!at) return;
+    ctl.busy(true);
+    try {
+      if (at.stale) { try { await json(`/mcp/servers/${encodeURIComponent(at.stale)}`, { method: "DELETE" }); } catch { /* the link below says what is true */ } }
+      const r = await json("/mcp/integrations/link", { method: "POST", body: JSON.stringify({ provider: e.provider }) });
+      if ((r.status === "linked" || r.status === "already") && r.tools > 0) {
+        apps.say(`${e.name}: ${r.tools} tool${r.tools === 1 ? "" : "s"} ready. Ask Daebot to use them.`);
+        const mcp = getMcp(); if (mcp) mcp.load();
+        apps.refresh();
+        return;
+      }
+      const c = await json("/mcp/catalog/connect", { method: "POST", body: JSON.stringify({ id: at.id }) });
+      const mcp = getMcp();
+      if (mcp && c.pending) mcp.review(c.pending);
+      else ctl.say(`${e.name} did not link its tools${r.reason ? `: ${r.reason}` : ""}`, "warn");
+    } catch (err) { ctl.say(err && err.message ? err.message : `Could not add ${e.name} tools.`, "warn"); }
+    finally { ctl.busy(false); }
+  }
   // One list, two kinds of row: a MIND app is connected and disconnected at MIND (apps.mind), an App Store server through the gateway's MCP routes.
   const handlers = {
     readPaste, // the n8n / custom server form fills both boxes from one pasted config block
     onConnect: (e, ctl, values) => (e.kind === "mind" ? mind.handlers.onConnect(e, ctl) : mcpHandlers.onConnect(e, ctl, values)),
     onDisconnect: (e, ctl) => (e.kind === "mind" ? mind.handlers.onDisconnect(e, ctl) : mcpHandlers.onDisconnect(e, ctl)),
     onManage: (e) => { if (e.kind !== "mind" || e.serverId) mcpHandlers.onManage(e); },
+    onAddTools: (e, ctl) => addTools(e, ctl),
     confirmText: (e) => (e.kind === "mind" ? `Disconnect ${e.name}? Anything already synced to MIND stays.` : mcpHandlers.confirmText(e)),
   };
   apps.addSection({

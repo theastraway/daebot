@@ -1145,10 +1145,27 @@ export class McpConnectService {
   }
 
   /** The connections that ride on a MIND app, for the Apps card's one row per product (GitHub: the app's row says how many tools Daebot has through it). */
-  integrationServers(uid: string): { provider: string; serverId: string; name: string; tools: number; enabled: boolean }[] {
+  integrationServers(uid: string): { provider: string; serverId: string; name: string; tools: number; enabled: boolean; status: "ok" | "error" | "reauth_required"; lastError?: string }[] {
     const st = this.active(uid);
     if (!st) return [];
-    return st.servers.filter((s) => s.auth === "integration" && s.integration).map((s) => ({ provider: s.integration as string, serverId: s.id, name: s.name, tools: s.toolCount, enabled: s.enabled }));
+    return st.servers.filter((s) => s.auth === "integration" && s.integration).map((s) => ({ provider: s.integration as string, serverId: s.id, name: s.name, tools: s.toolCount, enabled: s.enabled, status: s.status, ...(s.lastError ? { lastError: cleanLine(s.lastError, 200) } : {}) }));
+  }
+
+  /** The Apps card's "Add tools" on a connected MIND app (GitHub): ask MIND now to link the vendor's MCP server with the app's own token (the hourly background link may have
+   *  said no, or not run yet). The answer says plainly what happened, so the card never shows "Connected" with no tools and no reason. */
+  async linkIntegration(uid: string, provider: string): Promise<{ status: "linked" | "already" | "rejected" | "unavailable"; tools: number; reason: string }> {
+    this.requireEnabled();
+    if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(provider)) throw new McpConnectError("That app name is not valid.", 400);
+    await this.prepare(uid);
+    const st = this.active(uid);
+    const b = this.backendOn();
+    if (!st || !b) return { status: "unavailable", tools: 0, reason: "MIND is not holding your connections right now. Try again in a moment." };
+    const rs = await this.mindCall(uid, st, () => b.linkIntegrations(uid, [provider]));
+    const r = rs.find((x) => x.provider === provider) ?? { provider, status: "unavailable" as const, serverId: null, reason: "MIND did not answer for that app." };
+    st.serversDueAt = 0; st.linkDueAt = this.now() + LINK_TTL_MS;
+    await this.prepare(uid);
+    const srv = this.active(uid)?.servers.find((x) => x.auth === "integration" && x.integration === provider);
+    return { status: r.status, tools: srv?.toolCount ?? 0, reason: cleanLine(r.reason, 300) };
   }
 
   // ---- the move of local servers into MIND

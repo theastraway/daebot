@@ -684,3 +684,25 @@ test("the MIND client: contract errors become McpConnectError with MIND's plain 
   assert.equal(parseMindServer({ id: "bad id!", name: "x", url: "https://h.example" }), undefined);
   assert.equal(parseMindServer({ id: "srv_1", name: "x" }), undefined);
 });
+
+test("linkIntegration: Add tools asks MIND now; a vendor that rejects the app's token is reported plainly, one that accepts it brings the tools in at once (existing sessions too)", async () => {
+  const mind = newMind();
+  mind.addIntegrationVendor("github", vendor("https://api.githubcopilot.com/mcp", [{ name: "list_issues", read_only: true }, { name: "create_issue" }], { bearer: "gho_ok", official: true }));
+  mind.connectIntegration("bob", "github", "gho_wrong"); // connected at MIND, but the vendor does not take that token
+  const g = gateway(mind, { catalog: async () => [] });
+  await g.svc.prepare("bob");
+  assert.equal(g.svc.integrationServers("bob").length, 0);
+  assert.equal(g.svc.tools("bob").length, 0);
+  const no = await g.svc.linkIntegration("bob", "github");
+  assert.equal(no.status, "rejected");
+  assert.equal(no.tools, 0);
+  assert.ok(no.reason.length > 0, "a reason, not silence");
+  await assert.rejects(g.svc.linkIntegration("bob", "../x"), /not valid/);
+  mind.connectIntegration("bob", "github", "gho_ok"); // the user re-authenticated: the token is good now
+  g.advance?.(2 * 60 * 60_000);
+  const yes = await g.svc.linkIntegration("bob", "github");
+  assert.ok(yes.status === "linked" || yes.status === "already", yes.status);
+  assert.equal(yes.tools, 2);
+  await until(() => g.svc.tools("bob").length === 2);
+  assert.deepEqual(g.svc.integrationServers("bob").map((s) => [s.provider, s.tools, s.status]), [["github", 2, "ok"]]);
+});
