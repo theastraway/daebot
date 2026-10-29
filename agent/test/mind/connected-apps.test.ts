@@ -263,7 +263,7 @@ function runtime(handler: Parameters<typeof fakeFetch>[0], o: { servers?: unknow
   const provider = new FakeProvider([{ text: "ok" }]);
   const rt = createRuntime(baseCfg({ mindBaseUrl: BASE, mindApiKey: SERVER_KEY }), {
     provider, fetchImpl: f.fetch, mcpConnect, owner: "u_" + Math.random().toString(36).slice(2),
-    hosted: { dailyUsdCap: 50, mindClient: { getKey: () => o.key ?? USER_KEY }, username: "anthonyjconti" },
+    hosted: { dailyUsdCap: 50, mindClient: { getKey: () => o.key ?? USER_KEY }, username: "owner_test" },
   });
   return { rt, provider, seen: f.seen };
 }

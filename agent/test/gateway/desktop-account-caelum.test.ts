@@ -16,7 +16,7 @@ const rnd = () => randomBytes(18).toString("hex");
 
 async function desktopRig(withKey = true) {
   const key = "mind_" + rnd();
-  const fake = await startFakeMind({ [key]: "anthonyjconti" });
+  const fake = await startFakeMind({ [key]: "owner_test" });
   const cfg = baseCfg({ mindBaseUrl: fake.base, mindApiKey: withKey ? key : undefined });
   const runtime = createRuntime(cfg, { provider: new FakeProvider([]) });
   const gw = await startGateway({ runtime, cfg, port: 0, host: "127.0.0.1", staticDir: tmpStatic().dir, botsEnabled: () => true });
@@ -30,7 +30,7 @@ test("desktop /account: the MIND account the app signed in as; needs the gateway
     assert.equal((await http(r.gw.url, "GET", "/account")).status, 401);
     const a = await http(r.gw.url, "GET", "/account", { headers: r.auth });
     assert.equal(a.status, 200);
-    assert.deepEqual(JSON.parse(a.body), { signedIn: true, username: "anthonyjconti", name: "" });
+    assert.deepEqual(JSON.parse(a.body), { signedIn: true, username: "owner_test", name: "" });
     assert.doesNotMatch(a.body, /mind_/);
   } finally { await r.close(); }
   const none = await desktopRig(false);

@@ -1,7 +1,7 @@
 // Wires hosted multi-user sign-in from the environment.
 //   DAEBOT_SECRET_KEY            AES-256-GCM data key for stored user credentials (32+ chars). Without it only the owner code works.
 //   DATA_DIR                     the one data dir (/data on Render); the encrypted user store is DATA_DIR/users/daebot-users.json
-//   DAEBOT_ADMINS                comma list of MIND usernames that get the unrestricted tier (e.g. anthonyjconti)
+//   DAEBOT_ADMINS                comma list of MIND usernames that get the unrestricted tier (e.g. owner_test)
 //   DAEBOT_ALLOWED_USERS         optional comma list; empty = any MIND account may sign in
 //   MINDCLAW_USER_DAILY_USD_CAP  per-user daily spend cap, default 1 (admins and the owner login are exempt from this and the global cap).
 //                                Ignored when DAEBOT_BILLING=mind: the user's MIND plan and credits are the cap.
