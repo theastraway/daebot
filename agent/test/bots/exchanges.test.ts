@@ -333,6 +333,7 @@ test("end to end: main asks a bot -> card event in the stream, exchange listed a
     const mainDmTools = provider.requests[4].tools.map((t) => t.name);
     assert.ok(!mainDmTools.includes("bot_manage"), "bot_manage is not offered on a peer-driven main thread");
     assert.ok(mainDmTools.includes("bot_talk"));
+    await new Promise((res) => setTimeout(res, 150)); // session files are written just after the turn
     const dm = store.list().find((m) => m.peer === bot.id && !m.bot);
     assert.ok(dm, "main's DM thread is stored with peer = the bot id and no bot");
 
