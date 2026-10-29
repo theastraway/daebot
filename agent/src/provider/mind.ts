@@ -196,7 +196,15 @@ export function createMindProvider(cfg: Config, o: MindProviderOptions): Provide
     },
     errorFor: (status: number, body: string): ProviderHttpError | undefined => {
       const known = o.credits.peek(o.getKey());
-      if (status === 404) return new MindBillingError("endpoint_disabled", { tier: known?.tier ?? "", creditsRemaining: null, upgradeUrl: o.credits.defaultUpgradeUrl }, 404);
+      // A 404 is "MIND's LLM route is off" only when it is MIND's own Not Found. An OpenRouter 404 relayed by the proxy
+      // ({"error":{"message":"No endpoints found for <model>"...}}) is one model being unavailable: take the normal error
+      // path so the fallback models get a turn and the real reason is shown.
+      if (status === 404) {
+        let upstream = false;
+        try { const j = JSON.parse(body); upstream = !!j && typeof j.error === "object" && j.error !== null && typeof j.error.message === "string"; } catch { /* plain text: MIND's own 404 */ }
+        if (upstream) return undefined;
+        return new MindBillingError("endpoint_disabled", { tier: known?.tier ?? "", creditsRemaining: null, upgradeUrl: o.credits.defaultUpgradeUrl }, 404);
+      }
       if (status !== 402 && status !== 400) return undefined;
       let j: any;
       try { j = JSON.parse(body); } catch { return undefined; }
