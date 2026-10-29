@@ -33,6 +33,8 @@ export interface FakeMind {
   integrations: Map<string, Map<string, string>>;
   /** when set, /integrations answers this HTTP status */
   integrationsStatus?: number;
+  /** when set, /referral answers this HTTP status */
+  referralStatus?: number;
   /** GET/PUT /developer/v1/usage, per username: plan, percent used, switch state. A user missing here answers a free plan at 2% used. */
   usage: Map<string, { plan: string; percentUsed: number; unlimited?: boolean; resetAt?: string; available: boolean; enabled: boolean; automatic?: boolean; rateNote?: string; putStatus?: number }>;
   newKey(username: string): string;
@@ -159,6 +161,10 @@ export async function startFakeMind(initial: Record<string, string> = {}): Promi
           credits_balance: 123, credits_limit: 400,
           additional_usage: { available: u.available, eligible: u.available, enabled: u.enabled, active: u.enabled && u.available, automatic: !!u.automatic, rate_note: u.available ? u.rateNote ?? null : null, overflow_usd: 0 },
         });
+      }
+      if (rest === "/referral") {
+        if (m.referralStatus) return json(res, m.referralStatus, { detail: "x" });
+        return json(res, 200, { code: "REF" + username.toUpperCase(), url: `https://m-i-n-d.ai/register?ref=REF${username.toUpperCase()}`, referrer_credits: 100, referee_credits: 50 });
       }
       if (rest === "/integrations" || rest.startsWith("/integrations/")) {
         if (m.integrationsStatus) return json(res, m.integrationsStatus, { detail: "x" });
