@@ -6,6 +6,7 @@ import { initScreen } from "/screen.js";
 import { initHotkeys } from "/hotkeys.js";
 import { initUpdates } from "/updates.js";
 import { initBots, generalSessions, peerLabel } from "/bots.js";
+import { initScrollbars } from "/scrollbars.js";
 import { initModels } from "/models.js";
 import { initApps } from "/apps.js";
 import { initMcp } from "/mcp.js";
@@ -23,6 +24,7 @@ import { initSuggest } from "/suggest.js";
 import { initPhotos, normQueue, packQueue, queueLabel, SAYS as PHOTO_SAYS } from "/photos.js";
 import { calendarCapabilities, createDeviceCalls } from "/device-calendar.js";
 import { initMessageMenu, copyText } from "/msgmenu.js";
+initScrollbars(); // scrollbars stay hidden until the user scrolls
 
 const $ = (id) => document.getElementById(id);
 const els = {
