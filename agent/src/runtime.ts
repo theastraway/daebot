@@ -28,6 +28,8 @@ import { PhotoStore, messageWithPhotos } from "./photos.ts";
 import { HistoryRecorder } from "./events.ts";
 import { createMcpLoader, parseMcpServers } from "./mcp/client.ts";
 import { createMcpConnectTool } from "./mcpconnect/tool.ts";
+import { BOARD_PROMPT, createTaskBoardTool, loadTasks, resumeStopped, rowsFor } from "./board/board.ts";
+import type { BoardRow, BoardTask } from "./board/board.ts";
 import type { McpConnectService } from "./mcpconnect/service.ts";
 import type { McpServerConfig } from "./mcp/client.ts";
 import { repairMessages } from "./persist.ts";
@@ -101,6 +103,8 @@ export function composeSystemPrompt(o: {
   appleCalendar?: boolean;
   /** The "## Connected apps" section (see mind/connected.ts), already composed. Empty/absent = none (bot sessions, or no MIND key). */
   connectedApps?: string[];
+  /** The task_board tool is offered: adds the "## Task board" section. */
+  board?: boolean;
 }): string {
   const lines = [
     o.identity ?? "You are Daebot (Dae), Anthony Conti's own agent. MIND is your memory and the only source of truth about his world.",
@@ -155,6 +159,7 @@ export function composeSystemPrompt(o: {
     );
   }
   if (o.photos) lines.push("", ...PHOTOS_SECTION);
+  if (o.board) lines.push("", BOARD_PROMPT);
   if (o.appleCalendar === true) {
     lines.push(
       "",
@@ -174,10 +179,14 @@ export function composeSystemPrompt(o: {
   return lines.join("\n");
 }
 
-interface Entry { session: AgentSession; surface: string; title: string; updatedAt: number; tier: Tier; recorder: HistoryRecorder; createdAt: number; bot?: string; peer?: string; model?: string; permMode?: SessionPermMode; run?: RunMark }
+interface Entry { session: AgentSession; surface: string; title: string; updatedAt: number; tier: Tier; recorder: HistoryRecorder; createdAt: number; bot?: string; peer?: string; model?: string; permMode?: SessionPermMode; run?: RunMark; board?: BoardTask[] }
 
 export const INTERRUPTED_TEXT = "Interrupted: the server restarted while this reply was being written. Your message is saved above; send it again to retry.";
 const interruptedNotice = (): AgentEvent => ({ type: "notice", level: "warn", text: INTERRUPTED_TEXT });
+
+/** The board shows sessions touched in the last two weeks, newest 40. */
+const BOARD_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+const BOARD_MAX_SESSIONS = 40;
 
 const DEFAULT_TITLE = /^(New session|Daebot .+ session)$/;
 
@@ -267,6 +276,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       })
     : undefined;
   const suggestCache = new Map<string, { key: string; replies: string[] }>();
+  const boardCache = new Map<string, { updatedAt: number; rows: BoardRow[] }>();
   // One client per bot MIND, all on the MAIN key (the bot is addressed by the X-MIND-Bot header, never by a key of its own).
   const botClients = new Map<string, MindClient>();
   const clientForMind = (mind: string): MindClient => {
@@ -293,6 +303,11 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     serversVersion: () => (mcpSvc?.enabled() ? mcpSvc.version(ownerKey) : 0),
   });
   const appsOn = (): boolean => (overrides.env ?? process.env).MINDCLAW_CONNECTED_APPS?.trim() !== "0";
+  // The model's task board for a chat lives on the live entry and is saved with the session (persist), so it survives restarts.
+  const boardTool = createTaskBoardTool({
+    get: (sid) => sessions.get(sid)?.board ?? [],
+    set: (sid, tasks) => { const e = sessions.get(sid); if (!e) return; e.board = tasks; e.updatedAt = Date.now(); persist(sid); },
+  });
   const toolsFor = (home: string, selfBot: string | undefined): Tool[] => {
     const on = botsOn();
     const talk = on && botStore && botsCtx ? [createBotTalkTool({ bus: botsCtx.bus, owner: ownerKey, selfBot })] : [];
@@ -304,7 +319,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       ...(appsOn() ? createAppTools({ clientFor: clientForMind, readOnly: !!selfBot, connected: connectedApps, servers: serverLites }) : []),
       ...talk];
     // mcp_connect is the user's own session only: a bot never proposes connections (and its turns could be peer-driven).
-    const withMcp = overrides.mcpConnect && !selfBot ? [...every, createMcpConnectTool(overrides.mcpConnect, ownerKey)] : every;
+    const withMcp = [...(overrides.mcpConnect && !selfBot ? [...every, createMcpConnectTool(overrides.mcpConnect, ownerKey)] : every), ...(selfBot ? [] : [boardTool])];
     const all = hosted ? filterHostedTools(withMcp) : withMcp;
     return selfBot ? botSessionTools(all) : all;
   };
@@ -339,7 +354,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     void store.save({
       v: 1, id, surface: e.surface, title: e.title, tier: e.tier, owner: ownerId, createdAt: e.createdAt, updatedAt: e.updatedAt,
       state: st, violations: e.session.violations(), history: e.recorder.events(),
-      ...(e.bot ? { bot: e.bot } : {}), ...(e.peer ? { peer: e.peer } : {}), ...(e.model ? { model: e.model } : {}), ...(e.permMode ? { permMode: e.permMode } : {}), ...(e.run ? { run: { ...e.run } } : {}),
+      ...(e.bot ? { bot: e.bot } : {}), ...(e.peer ? { peer: e.peer } : {}), ...(e.model ? { model: e.model } : {}), ...(e.permMode ? { permMode: e.permMode } : {}), ...(e.run ? { run: { ...e.run } } : {}), ...(e.board?.length ? { board: e.board } : {}),
     }).catch((err) => process.stderr.write(`persist: could not save a session (${String((err as Error)?.message ?? err).split("\n")[0].slice(0, 120)})\n`));
   }
 
@@ -423,6 +438,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
             roster: botsOn() ? botStore?.roster() : undefined,
             mcp: !!overrides.mcpConnect?.enabled() && !botId,
             photos: tools.some((t) => t.spec.name === "view_photo"),
+            board: tools.some((t) => t.spec.name === "task_board"),
             appleCalendar: botId ? undefined : curCaps.includes("apple_calendar"),
             connectedApps: botId || !appsOn() ? undefined : connectedAppsLines(connectedApps.state(), { servers: serverLites(), tools: new Set(tools.map((t) => t.spec.name)), deviceCalendar: curCaps.includes("apple_calendar") }),
             permissions: permissions?.preferencesText(),
@@ -435,6 +451,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         session: inner, surface: stored?.surface ?? opts.surface, title, updatedAt: Date.now(), tier,
         recorder: new HistoryRecorder(stored?.history), createdAt: stored?.createdAt ?? Date.now(),
         bot: botRec?.id, peer, model: explicitModel, permMode: curPerm,
+        ...(stored?.board?.length ? { board: loadTasks(stored.board) } : {}),
       };
       if (wasInterrupted && stored) {
         entry.recorder.push(interruptedNotice());
@@ -457,6 +474,8 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         async *send(msg, o) {
           curCaps = Array.isArray(o?.capabilities) ? o!.capabilities! : [];
           entry.updatedAt = Date.now();
+          // The user is replying: whatever was stopped waiting on them goes back to in progress.
+          if (o?.origin !== "bot" && entry.board?.some((t) => t.status === "stopped")) entry.board = resumeStopped(entry.board, Date.now());
           if (userCap?.exceeded() || costCap?.exceeded()) {
             yield { type: "notice", level: "warn", text: userCap?.exceeded() ? userCap.notice() : costCap!.notice() };
             yield { type: "done", finalText: "" };
@@ -526,6 +545,30 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       for (const m of store?.list() ?? []) if (mine(m)) out.set(m.id, row(m));
       for (const [id, e] of sessions) if (out.has(id) || e.recorder.events().some((h) => h.type === "user")) out.set(id, row({ id, surface: e.surface, title: e.title, updatedAt: e.updatedAt, bot: e.bot, peer: e.peer, model: e.model, ...(e.permMode ? { permMode: e.permMode } : {}) }));
       return [...out.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+    },
+    boardRows() {
+      const cutoff = Date.now() - BOARD_WINDOW_MS;
+      const picks = new Map<string, { id: string; title: string; updatedAt: number }>();
+      for (const m of store?.list() ?? []) if (mine(m) && !m.bot && !m.peer && m.updatedAt >= cutoff) picks.set(m.id, { id: m.id, title: m.title, updatedAt: m.updatedAt });
+      for (const [id, e] of sessions) {
+        if (e.bot || e.peer || e.updatedAt < cutoff) continue;
+        if (picks.has(id) || e.recorder.events().some((h) => h.type === "user")) picks.set(id, { id, title: e.title, updatedAt: e.updatedAt });
+      }
+      const rows: BoardRow[] = [];
+      for (const s of [...picks.values()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, BOARD_MAX_SESSIONS)) {
+        const live = sessions.get(s.id);
+        if (live) { rows.push(...rowsFor(s, live.board ?? [], { history: live.recorder.events(), run: live.run, live: true })); continue; }
+        // A saved session only changes when it is written, so its rows are cached by updatedAt (no file read on every poll).
+        const hit = boardCache.get(s.id);
+        if (hit && hit.updatedAt === s.updatedAt) { rows.push(...hit.rows); continue; }
+        const rec = store?.load(s.id);
+        if (!rec || !mine(rec)) continue;
+        const made = rowsFor(s, loadTasks(rec.board), { history: rec.history, run: rec.run, live: false });
+        boardCache.set(s.id, { updatedAt: s.updatedAt, rows: made });
+        if (boardCache.size > 200) boardCache.delete(boardCache.keys().next().value as string);
+        rows.push(...made);
+      }
+      return rows;
     },
     bots: botStore,
     settings,

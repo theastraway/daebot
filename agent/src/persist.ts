@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { daebotHome } from "./home.ts";
 import type { HistoryEvent, Message, SessionState, Violation } from "./types.ts";
+import type { BoardTask } from "./board/board.ts";
 
 export interface RunMark { id: string; status: "running" | "done" | "error" | "interrupted"; startedAt: number; updatedAt: number }
 
@@ -28,6 +29,8 @@ export interface StoredSession {
   permMode?: string;
   /** The latest turn. "running" on disk with no live owner process = the server died mid-turn (shown as interrupted). */
   run?: RunMark;
+  /** The task board the model keeps for this chat (task_board tool). Absent = none declared. */
+  board?: BoardTask[];
   createdAt: number;
   updatedAt: number;
   state: SessionState;
