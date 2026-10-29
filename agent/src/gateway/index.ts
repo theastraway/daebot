@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { existsSync } from "node:fs";
 import type { AddressInfo } from "node:net";
-import type { AgentEvent, AgentSession, ClientFrame, Config, MindClient, PhotoRef, Runtime, ServerFrame } from "../types.ts";
+import type { AgentEvent, AgentSession, ClientFrame, Config, MessageQuote, MindClient, PhotoRef, Runtime, ServerFrame } from "../types.ts";
 import { COOKIE_NAME, hostnameOf, isLocalHost, isLocalOrigin, loadOrCreateToken, parseCookies, presentedToken, safeEqual } from "./auth.ts";
 import { HostedConfigError, LoginLimiter, MIN_TOKEN_LEN, SESSION_TTL_MS, issueSession, parseSession } from "../hosted.ts";
 import type { HostedOptions } from "../hosted.ts";
@@ -322,6 +322,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   const deviceRelay = new DeviceRelay(); // tool -> the user's own device (Apple Calendar in the iPhone and Mac apps) and back
   const wsConns = new Set<WsConnection>();
   const SESSION_ROUTE = /^\/sessions\/([^/]+)(?:\/(send|abort|violations|history|events|suggest|suggest-feedback|device-result))?$/;
+  const MSG_ROUTE = /^\/sessions\/([^/]+)\/messages\/([^/]+)\/(react|feedback|report)$/;
   const PHOTO_ROUTE = /^\/sessions\/([^/]+)\/photos\/([^/]+)$/;
   let photoBodies = 0; // sends with a body over MAX_BODY being read or decoded right now: each holds tens of MB briefly
   // Which LLM answers (shown in the UI). Absent when the gateway was started without a Config (tests, fakes).
@@ -732,7 +733,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     res.on("close", () => cleanup(false)); // the client left: the run does not
   }
 
-  async function streamTurn(res: ServerResponse, id: string, text: string, extraHeaders: Record<string, string> = {}, first?: Record<string, unknown>, me?: Principal, interactive = false, photos?: PhotoRef[], capabilities: string[] = []): Promise<void> {
+  async function streamTurn(res: ServerResponse, id: string, text: string, extraHeaders: Record<string, string> = {}, first?: Record<string, unknown>, me?: Principal, interactive = false, photos?: PhotoRef[], capabilities: string[] = [], quote?: MessageQuote): Promise<void> {
     res.writeHead(200, sseHeaders(extraHeaders));
     const run = runs.start(id, text, photos);
     // A client that listed a capability (e.g. the iPhone or Mac app's Apple Calendar bridge) gets a relay for this turn: tools ask the device through the run feed.
@@ -749,7 +750,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         await manager.turn(id, text, (ev) => {
           run.publish(ev);
           broadcast(id, ev);
-        }, undefined, "user", interactive, photos, device ? { capabilities, device } : undefined);
+        }, undefined, "user", interactive, photos, device ? { capabilities, device } : undefined, quote);
       } catch (err) {
         const msg = err instanceof BusyError || err instanceof NotFoundError ? err.message : "internal error";
         run.publish({ type: "notice", level: "warn", text: msg });
@@ -1378,6 +1379,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
 
     const pm = PHOTO_ROUTE.exec(path);
     if (pm) return photoApi(res, method, pm[1], pm[2], me);
+    const mm = MSG_ROUTE.exec(path);
+    if (mm) return messageApi(req, res, method, mm, me);
     const m = SESSION_ROUTE.exec(path);
     if (!m) return sendJson(res, 404, { error: "not found" });
     let id: string;
@@ -1402,9 +1405,9 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       if (run) {
         let cut = events.length;
         for (let i = events.length - 1; i >= 0; i--) if (events[i].type === "user") { cut = i; break; }
-        return sendJson(res, 200, { events: events.slice(0, cut), run: { id: run.id, status: "running", startedAt: run.startedAt } });
+        return sendJson(res, 200, { events: events.slice(0, cut), run: { id: run.id, status: "running", startedAt: run.startedAt }, meta: manager.runtimeOf(me.id).messageMeta?.(id) ?? { messages: {} } });
       }
-      return sendJson(res, 200, { events });
+      return sendJson(res, 200, { events, meta: manager.runtimeOf(me.id).messageMeta?.(id) ?? { messages: {} } });
     }
     if (action === "events") {
       // Re-attach to the latest run of this session: replays what the client missed (?after=<seq>, or Last-Event-ID) and streams the rest.
@@ -1426,6 +1429,17 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         const ok = await manager.rename(id, me.id, t);
         if (!ok) return sendJson(res, 404, { error: "no such session" });
         return sendJson(res, 200, { ok: true, title: t });
+      }
+      // Mark as unread: the thread is unread from this message on (a message id), or unreadFrom: null marks it read. Per user, saved with the thread.
+      if (b.unreadFrom !== undefined) {
+        const mid = b.unreadFrom === null ? null : optStr(b.unreadFrom, 80);
+        if (mid === undefined) return sendJson(res, 400, { error: "unreadFrom must be a message id or null" });
+        const rt = manager.runtimeOf(me.id);
+        if (!rt.setUnread) return sendJson(res, 404, { error: "not available on this deployment" });
+        const r = await rt.setUnread(id, mid);
+        if (r === "nosession") return sendJson(res, 404, { error: "no such session" });
+        if (r === "nomsg") return sendJson(res, 404, { error: "no such message" });
+        return sendJson(res, 200, { ok: true, unreadFrom: mid });
       }
       // This chat's permission mode (Ask for risky / Ask before changes / Ask for everything / Bypass). Bypass needs the account's recorded waiver.
       if (b.permMode !== undefined) {
@@ -1529,10 +1543,65 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       }
       // The first SSE event of a photo send names the stored photos, so the client can show them from the server after a reload.
       // capabilities: what THIS client can do (the iPhone or Mac app lists "apple_calendar"); the agent offers a device tool only to a client that says so.
-      return streamTurn(res, id, text, {}, refs ? { type: "photos", photos: refs } : undefined, me, true, refs, parseCapabilities(b.capabilities)); // the web/desktop/mobile UI can answer a permission card
+      // Reply: the earlier message this one answers. Its text is read from the saved thread (a client can only quote this user's own session); the client's copy is the fallback.
+      let quote: MessageQuote | undefined;
+      const qb = b.quote;
+      if (qb && typeof qb === "object" && !Array.isArray(qb)) {
+        const qid = optStr((qb as any).id, 80);
+        const saved = qid ? manager.runtimeOf(me.id).messageText?.(id, qid) : undefined;
+        const qtext = (saved ?? optStr((qb as any).text, 600) ?? "").trim().slice(0, 600);
+        if (qtext) quote = { ...(qid ? { id: qid } : {}), text: qtext };
+      }
+      return streamTurn(res, id, text, {}, refs ? { type: "photos", photos: refs } : undefined, me, true, refs, parseCapabilities(b.capabilities), quote); // the web/desktop/mobile UI can answer a permission card
     } finally {
       if (big) photoBodies--;
     }
+  }
+
+  // POST /sessions/:id/messages/:mid/react {emoji} | /feedback {rating: "up"|"down"|null, comment?} | /report {reason, comment?}
+  // Per-message extras of THIS owner's session. 👍/👎 reactions are also the message's thumbs feedback; both reach the learning store.
+  // A report is negative feedback plus a row in the admin Mistake Log (type "Reply reported by user").
+  async function messageApi(req: IncomingMessage, res: ServerResponse, method: string, m: RegExpExecArray, me: Principal): Promise<void> {
+    if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+    let id: string, mid: string;
+    try { id = decodeURIComponent(m[1]); mid = decodeURIComponent(m[2]); } catch { return sendJson(res, 400, { error: "bad id" }); }
+    if (manager.access(id, me.id) === "forbidden") return sendJson(res, 403, { error: "forbidden" });
+    const rt = manager.runtimeOf(me.id);
+    const b = await readJson(req);
+    const kind = m[3];
+    const miss = (r: unknown): boolean => {
+      if (r === "nosession") { sendJson(res, 404, { error: "no such session" }); return true; }
+      if (r === "nomsg") { sendJson(res, 404, { error: "no such message" }); return true; }
+      return false;
+    };
+    if (kind === "react") {
+      const emoji = typeof b.emoji === "string" ? b.emoji.trim() : "";
+      if (!emoji || emoji.length > 16 || /[\u0000-\u001f<>]/.test(emoji) || !/\p{Extended_Pictographic}|[\u{1F1E6}-\u{1F1FF}]|^[#*0-9]\uFE0F?\u20E3$/u.test(emoji)) return sendJson(res, 400, { error: "emoji must be a single emoji" });
+      const r = await rt.reactMessage?.(id, mid, emoji) ?? "nosession";
+      if (miss(r)) return;
+      return sendJson(res, 200, { ok: true, ...(r as object) });
+    }
+    if (kind === "feedback") {
+      const rating = b.rating === null ? null : b.rating === "up" || b.rating === "down" ? b.rating : undefined;
+      if (rating === undefined) return sendJson(res, 400, { error: "rating must be up, down or null" });
+      const r = await rt.feedbackMessage?.(id, mid, { rating, comment: optStr(b.comment, 500) }) ?? "nosession";
+      if (miss(r)) return;
+      return sendJson(res, 200, { ok: true, ...(r as object) });
+    }
+    const reason = optStr(b.reason, 80);
+    const comment = optStr(b.comment, 500);
+    if (!reason) return sendJson(res, 400, { error: "reason required" });
+    const r = await rt.feedbackMessage?.(id, mid, { rating: "down", reason, comment, report: true }) ?? "nosession";
+    if (miss(r)) return;
+    const done = r as { excerpt: string; learned: boolean };
+    try {
+      ledger().logMistake({
+        type: "Reply reported by user", definition: "A user reported a Daebot reply from the message menu (Report).",
+        what: `Reported (${reason}): "${done.excerpt}"`, quote: comment ?? "", agent: "Daebot", product: "Daebot",
+        source: `report:${me.username ?? me.id}`, source_key: `report:${id}:${mid}`,
+      });
+    } catch { /* the report itself is saved with the message even if the ledger is unavailable */ }
+    return sendJson(res, 200, { ok: true, reported: true, learned: done.learned });
   }
 
   // GET /sessions/:id/photos/:pid -> the stored image of THIS owner's session. Same auth as the session; per-user data is never cached.

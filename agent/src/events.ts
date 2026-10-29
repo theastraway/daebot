@@ -1,5 +1,6 @@
 // Helpers over the AgentEvent stream that need to understand `retract`. Pure, no I/O.
-import type { AgentEvent, HistoryEvent, PhotoRef } from "./types.ts";
+import { randomBytes } from "node:crypto";
+import type { AgentEvent, HistoryEvent, MessageQuote, PhotoRef } from "./types.ts";
 
 /**
  * The assistant text a user actually ended up seeing: text deltas minus every block a later `retract` withdrew.
@@ -26,19 +27,22 @@ export function visibleText(events: Iterable<AgentEvent>): string {
 export class HistoryRecorder {
   private items: HistoryEvent[];
   private cap: number;
+  private runId?: string;
   constructor(initial: HistoryEvent[] = [], cap = 1500) {
-    this.items = initial.slice();
+    this.items = withMessageIds(initial);
     this.cap = cap;
   }
-  user(text: string, photos?: PhotoRef[]): void {
-    this.items.push({ type: "user", text, ...(photos?.length ? { photos } : {}) });
+  /** The run (request) the next items belong to; stamped on user and text items as `rid`. */
+  setRun(id: string | undefined): void { this.runId = id; }
+  user(text: string, photos?: PhotoRef[], quote?: MessageQuote): void {
+    this.items.push({ type: "user", text, id: newMessageId(), ...(this.runId ? { rid: this.runId } : {}), ...(photos?.length ? { photos } : {}), ...(quote ? { quote } : {}) });
     this.trim();
   }
   push(ev: AgentEvent): void {
     if (ev.type === "text") {
       const last = this.items[this.items.length - 1];
       if (last && last.type === "text") last.delta += ev.delta;
-      else this.items.push({ type: "text", delta: ev.delta });
+      else this.items.push({ type: "text", delta: ev.delta, id: newMessageId(), ...(this.runId ? { rid: this.runId } : {}) });
       return;
     }
     this.items.push(ev);
@@ -48,4 +52,18 @@ export class HistoryRecorder {
   private trim(): void {
     if (this.items.length > this.cap) this.items.splice(0, this.items.length - this.cap);
   }
+}
+
+export const newMessageId = (): string => "m" + randomBytes(5).toString("hex");
+
+/** Saved transcripts from before message ids existed get a stable positional id (l<index>) the first time they are read; new items already carry one. */
+export function withMessageIds(items: HistoryEvent[]): HistoryEvent[] {
+  return items.map((it, i) => ((it.type === "text" || it.type === "user") && !it.id ? { ...it, id: `l${i}` } : it));
+}
+
+/** The model-facing form of a reply: the quoted message first, then what the user wrote. */
+export function messageWithQuote(text: string, quote: MessageQuote | undefined): string {
+  const q = quote?.text?.trim();
+  if (!q) return text;
+  return `Replying to: "${q.length > 600 ? q.slice(0, 600) + "..." : q}"\n\n${text}`;
 }

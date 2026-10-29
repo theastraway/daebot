@@ -6,6 +6,7 @@ import type { Tier } from "./kernel/index.ts";
 import { tierAllows } from "./kernel/tier.ts";
 import { createAgentSession } from "./loop.ts";
 import { createLearning, resolveLearnConfig } from "./learn/index.ts";
+import type { Learning } from "./learn/index.ts";
 import { mistakeBrief } from "./gateway/mistakes.ts";
 import { dataDir, cleanTitle } from "./persist.ts";
 import { bootMind, createMindClient, createMindTools, createSessionSync } from "./mind/index.ts";
@@ -32,7 +33,7 @@ import { FREE_TIER, MindCredits } from "./provider/mind.ts";
 import { createBuiltinTools } from "./tools/index.ts";
 import { createViewPhotoTool, DEFAULT_VISION } from "./tools/photo.ts";
 import { PhotoStore, messageWithPhotos } from "./photos.ts";
-import { HistoryRecorder } from "./events.ts";
+import { HistoryRecorder, messageWithQuote, withMessageIds } from "./events.ts";
 import { createMcpLoader, parseMcpServers } from "./mcp/client.ts";
 import { createMcpConnectTool } from "./mcpconnect/tool.ts";
 import { BOARD_PROMPT, checkTask, createTaskBoardTool, loadTasks, resumeStopped, rowsFor } from "./board/board.ts";
@@ -46,9 +47,9 @@ import type { SessionPermMode } from "./permissions/index.ts";
 import { SuggestionStore, awaitsUser, generateReplies, tailOf } from "./suggest/index.ts";
 import type { SuggestionFeedback } from "./suggest/index.ts";
 import { facePersonality, faceOf } from "./bots/faces.ts";
-import type { RunMark, SessionStore } from "./persist.ts";
+import type { RunMark, SessionStore, StoredSession } from "./persist.ts";
 import { routingSection } from "./routing.ts";
-import type { AgentEvent, AgentSession, Config, HistoryEvent, Message, MindClient, Provider, Runtime, SessionSync, Tool } from "./types.ts";
+import type { AgentEvent, AgentSession, Config, HistoryEvent, Message, MessageMeta, MindClient, Provider, Runtime, SessionSync, Tool } from "./types.ts";
 
 const noSync: SessionSync = { async open() {}, async append() {}, async pendingReplies() { return []; }, async close() {} };
 
@@ -193,7 +194,7 @@ export function composeSystemPrompt(o: {
   return lines.join("\n");
 }
 
-interface Entry { session: AgentSession; surface: string; title: string; updatedAt: number; tier: Tier; recorder: HistoryRecorder; createdAt: number; bot?: string; peer?: string; model?: string; permMode?: SessionPermMode; titleSet?: boolean; run?: RunMark; board?: BoardTask[] }
+interface Entry { session: AgentSession; surface: string; title: string; updatedAt: number; tier: Tier; recorder: HistoryRecorder; createdAt: number; bot?: string; peer?: string; model?: string; permMode?: SessionPermMode; titleSet?: boolean; run?: RunMark; board?: BoardTask[]; msgMeta?: Record<string, MessageMeta>; unreadFrom?: string; learn?: Learning }
 
 export const INTERRUPTED_TEXT = "Interrupted: the server restarted while this reply was being written. Your message is saved above; send it again to retry.";
 const interruptedNotice = (): AgentEvent => ({ type: "notice", level: "warn", text: INTERRUPTED_TEXT });
@@ -434,8 +435,33 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       v: 1, id, surface: e.surface, title: e.title, tier: e.tier, owner: ownerId, createdAt: e.createdAt, updatedAt: e.updatedAt,
       state: st, violations: e.session.violations(), history: e.recorder.events(),
       ...(e.bot ? { bot: e.bot } : {}), ...(e.peer ? { peer: e.peer } : {}), ...(e.model ? { model: e.model } : {}), ...(e.permMode ? { permMode: e.permMode } : {}), ...(e.titleSet ? { titleSet: true } : {}), ...(e.run ? { run: { ...e.run } } : {}), ...(e.board?.length ? { board: e.board } : {}),
+      ...(e.msgMeta && Object.keys(e.msgMeta).length ? { msgMeta: e.msgMeta } : {}), ...(e.unreadFrom ? { unreadFrom: e.unreadFrom } : {}),
     }).catch((err) => process.stderr.write(`persist: could not save a session (${String((err as Error)?.message ?? err).split("\n")[0].slice(0, 120)})\n`));
   }
+
+  /** Applies a change to one session's per-message data and unread marker, live or saved. false = unknown id or not this owner's. */
+  async function updateRecord(id: string, fn: (m: { messages: Record<string, MessageMeta>; unreadFrom?: string }) => void): Promise<boolean> {
+    const live = sessions.get(id);
+    if (live) {
+      const m = { messages: { ...(live.msgMeta ?? {}) }, unreadFrom: live.unreadFrom };
+      fn(m);
+      live.msgMeta = m.messages; live.unreadFrom = m.unreadFrom;
+      persist(id);
+      return true;
+    }
+    const rec = store?.load(id);
+    if (!store || !rec || !mine(rec)) return false;
+    const m = { messages: { ...(rec.msgMeta ?? {}) }, unreadFrom: rec.unreadFrom };
+    fn(m);
+    const next = { ...rec, msgMeta: m.messages } as StoredSession;
+    if (m.unreadFrom) next.unreadFrom = m.unreadFrom; else delete next.unreadFrom;
+    await store.save(next);
+    return true;
+  }
+  const findMessage = (h: HistoryEvent[] | undefined, mid: string): { text: string } | undefined => {
+    const it = h?.find((x) => (x.type === "text" || x.type === "user") && x.id === mid);
+    return it ? { text: it.type === "text" ? it.delta : it.type === "user" ? it.text : "" } : undefined;
+  };
 
   const runtime: Runtime = {
     async openSession(opts) {
@@ -538,6 +564,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         bot: botRec?.id, peer, model: explicitModel, permMode: curPerm,
         ...(stored?.titleSet ? { titleSet: true } : {}),
         ...(stored?.board?.length ? { board: loadTasks(stored.board) } : {}),
+        ...(stored?.msgMeta ? { msgMeta: stored.msgMeta } : {}), ...(stored?.unreadFrom ? { unreadFrom: stored.unreadFrom } : {}), ...(learn ? { learn } : {}),
       };
       if (wasInterrupted && stored) {
         entry.recorder.push(interruptedNotice());
@@ -569,8 +596,10 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
           }
           const photos = o?.photos?.length ? o.photos : undefined;
           if (!entry.titleSet && DEFAULT_TITLE.test(entry.title) && !entry.recorder.events().some((h) => h.type === "user")) entry.title = msg.trim().slice(0, 60) || (photos ? "Photo" : entry.title);
-          entry.recorder.user(msg, photos); // the transcript keeps the user's own words and the photos; the model also gets one line per photo
-          const run: RunMark = entry.run = { id: randomUUID(), status: "running", startedAt: Date.now(), updatedAt: Date.now() };
+          const runId = randomUUID();
+          entry.recorder.setRun(runId);
+          entry.recorder.user(msg, photos, o?.quote?.text ? { ...(o.quote.id ? { id: o.quote.id } : {}), text: o.quote.text.slice(0, 600) } : undefined); // the transcript keeps the user's own words and the photos; the model also gets one line per photo
+          const run: RunMark = entry.run = { id: runId, status: "running", startedAt: Date.now(), updatedAt: Date.now() };
           persist(id); // the message and the "running" mark reach the disk before the model is called
           let lastCheckpoint = Date.now();
           try {
@@ -582,7 +611,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
           // A bot's thread runs on the bot's model, read fresh every turn (set or cleared in Bot settings, no reopen needed).
           // Main and other bots' sessions are never touched here.
           if (botId) inner.setModel?.(resolveTurnModel({ botModel: botStore?.get(botId)?.model, sessionModel: curModel, userDefault: userDefault() }));
-          for await (const ev of inner.send(messageWithPhotos(msg, photos), o)) {
+          for await (const ev of inner.send(messageWithQuote(messageWithPhotos(msg, photos), o?.quote), o)) {
             entry.recorder.push(ev);
             if (ev.type === "done") { entry.updatedAt = Date.now(); run.status = "done"; run.updatedAt = Date.now(); persist(id); }
             else if (Date.now() - lastCheckpoint > 1500) { lastCheckpoint = Date.now(); run.updatedAt = lastCheckpoint; persist(id); } // partial reply survives a crash
@@ -628,11 +657,11 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       return session;
     },
     listSessions() {
-      type Row = { id: string; surface: string; title: string; updatedAt: number; bot?: string; peer?: string; model?: string; permMode?: string };
+      type Row = { id: string; surface: string; title: string; updatedAt: number; bot?: string; peer?: string; model?: string; permMode?: string; unread?: boolean };
       const out = new Map<string, Row>();
-      const row = (m: Row): Row => ({ id: m.id, surface: m.surface, title: m.title, updatedAt: m.updatedAt, ...(m.bot ? { bot: m.bot } : {}), ...(m.peer ? { peer: m.peer } : {}), ...(m.model ? { model: m.model } : {}), ...(m.permMode ? { permMode: m.permMode } : {}) });
+      const row = (m: Row): Row => ({ id: m.id, surface: m.surface, title: m.title, updatedAt: m.updatedAt, ...(m.bot ? { bot: m.bot } : {}), ...(m.peer ? { peer: m.peer } : {}), ...(m.model ? { model: m.model } : {}), ...(m.permMode ? { permMode: m.permMode } : {}), ...(m.unread ? { unread: true } : {}) });
       for (const m of store?.list() ?? []) if (mine(m)) out.set(m.id, row(m));
-      for (const [id, e] of sessions) if (out.has(id) || e.recorder.events().some((h) => h.type === "user")) out.set(id, row({ id, surface: e.surface, title: e.title, updatedAt: e.updatedAt, bot: e.bot, peer: e.peer, model: e.model, ...(e.permMode ? { permMode: e.permMode } : {}) }));
+      for (const [id, e] of sessions) if (out.has(id) || e.recorder.events().some((h) => h.type === "user")) out.set(id, row({ id, surface: e.surface, title: e.title, updatedAt: e.updatedAt, bot: e.bot, peer: e.peer, model: e.model, ...(e.permMode ? { permMode: e.permMode } : {}), ...(e.unreadFrom ? { unread: true } : {}) }));
       return [...out.values()].sort((a, b) => b.updatedAt - a.updatedAt);
     },
     boardRows() {
@@ -751,8 +780,77 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       if (live) return live.recorder.events();
       const rec = store?.load(id);
       if (!mine(rec) || !rec) return undefined;
+      const hist = withMessageIds(rec.history);
       // Saved mid-turn by a process that is gone (this one has no live session for it): say so instead of showing a cut-off reply.
-      return rec.run?.status === "running" ? [...rec.history, interruptedNotice()] : rec.history;
+      return rec.run?.status === "running" ? [...hist, interruptedNotice()] : hist;
+    },
+    messageMeta(id) {
+      const live = sessions.get(id);
+      if (live) return { messages: live.msgMeta ?? {}, ...(live.unreadFrom ? { unreadFrom: live.unreadFrom } : {}) };
+      const rec = store?.load(id);
+      if (!rec || !mine(rec)) return undefined;
+      return { messages: rec.msgMeta ?? {}, ...(rec.unreadFrom ? { unreadFrom: rec.unreadFrom } : {}) };
+    },
+    messageText(id, mid) {
+      return findMessage(runtime.history?.(id), mid)?.text;
+    },
+    async setUnread(id, mid) {
+      if (mid !== null && !findMessage(runtime.history?.(id), mid)) return runtime.history?.(id) ? "nomsg" : "nosession";
+      const done = await updateRecord(id, (m) => { if (mid) m.unreadFrom = mid; else delete m.unreadFrom; });
+      return done ? "ok" : "nosession";
+    },
+    async reactMessage(id, mid, emoji) {
+      const msg = findMessage(runtime.history?.(id), mid);
+      if (!msg) return runtime.history?.(id) ? "nomsg" : "nosession";
+      let reactions: string[] = [];
+      let feedback: MessageMeta["feedback"];
+      let rated: "up" | "down" | undefined;
+      const done = await updateRecord(id, (m) => {
+        const cur = m.messages[mid] ?? {};
+        reactions = cur.reactions ?? [];
+        feedback = cur.feedback;
+        if (reactions.includes(emoji)) {
+          reactions = reactions.filter((x) => x !== emoji);
+          if ((emoji === "👍" && feedback?.rating === "up") || (emoji === "👎" && feedback?.rating === "down")) feedback = undefined;
+        } else {
+          reactions = [...reactions, emoji].slice(0, 12);
+          // 👍 / 👎 are the message's thumbs feedback too, and exclude each other.
+          if (emoji === "👍") { reactions = reactions.filter((x) => x !== "👎"); feedback = { rating: "up", at: Date.now() }; rated = "up"; }
+          if (emoji === "👎") { reactions = reactions.filter((x) => x !== "👍"); feedback = { rating: "down", at: Date.now() }; rated = "down"; }
+        }
+        const next: MessageMeta = { ...(reactions.length ? { reactions } : {}), ...(feedback ? { feedback } : {}) };
+        if (Object.keys(next).length) m.messages[mid] = next; else delete m.messages[mid];
+      });
+      if (!done) return "nosession";
+      let learned = false;
+      if (rated) learned = await sessions.get(id)?.learn?.feedback({ rating: rated, reply: msg.text }) ?? false;
+      return { reactions, feedback, learned };
+    },
+    async feedbackMessage(id, mid, f) {
+      const msg = findMessage(runtime.history?.(id), mid);
+      if (!msg) return runtime.history?.(id) ? "nomsg" : "nosession";
+      const comment = typeof f.comment === "string" ? f.comment.replace(/\s+/g, " ").trim().slice(0, 500) || undefined : undefined;
+      const reason = typeof f.reason === "string" ? f.reason.replace(/\s+/g, " ").trim().slice(0, 80) || undefined : undefined;
+      let fb: MessageMeta["feedback"];
+      const done = await updateRecord(id, (m) => {
+        const cur = m.messages[mid] ?? {};
+        let reactions = cur.reactions ?? [];
+        if (f.rating) {
+          fb = { rating: f.rating, ...(comment ? { comment } : {}), ...(reason ? { reason } : {}), at: Date.now(), ...(f.report ? { report: true } : {}) };
+          // The thumb shows as a reaction too, and the two never disagree.
+          const mine = f.rating === "up" ? "👍" : "👎", other = f.rating === "up" ? "👎" : "👍";
+          reactions = [...reactions.filter((x) => x !== other && x !== mine), mine];
+        } else {
+          fb = undefined;
+          reactions = reactions.filter((x) => x !== "👍" && x !== "👎");
+        }
+        const next: MessageMeta = { ...(reactions.length ? { reactions } : {}), ...(fb ? { feedback: fb } : {}) };
+        if (Object.keys(next).length) m.messages[mid] = next; else delete m.messages[mid];
+      });
+      if (!done) return "nosession";
+      let learned = false;
+      if (f.rating) learned = await sessions.get(id)?.learn?.feedback({ rating: f.rating, reply: msg.text, comment, reason, report: f.report }) ?? false;
+      return { feedback: fb, learned, excerpt: msg.text.slice(0, 240) };
     },
   };
   self.rt = runtime;
