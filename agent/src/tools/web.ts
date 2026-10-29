@@ -31,7 +31,7 @@ export function createWebFetchTool(fetchImpl: typeof fetch = fetch): Tool {
     receipt: "surface",
     spec: {
       name: "web_fetch",
-      description: "HTTP GET a URL and return its text (HTML is stripped to plain text). Capped at 50k chars.",
+      description: "Read any public web page or JSON API in the background: HTTP GET a URL and return its text (HTML is stripped to plain text). Capped at 50k chars. Use this for what is on a site, weather, prices, docs; never open a browser on the screen to read a page.",
       parameters: { type: "object", properties: { url: { type: "string" } }, required: ["url"] },
     },
     async run(args, ctx) {
