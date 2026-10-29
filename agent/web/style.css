@@ -1054,3 +1054,11 @@ body.xv-open .top-title, body.xv-open .model-wrap, body.xv-open .top-meta, body.
 .xv-decisions, .bd-decisions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .xv-decision, .bd-decision { display: inline-flex; align-items: center; font-size: 11px; line-height: 1; padding: 3px 7px; border-radius: 999px; border: 1px solid var(--ok); color: var(--ok); background: transparent; text-decoration: none; white-space: nowrap; }
 .xv-decision:hover, .bd-decision:hover { text-decoration: underline; }
+
+/* ---- scrollbars: invisible at rest, a thin thumb only while scrolling (scrollbars.js toggles .is-scrolling) ---- */
+* { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+.is-scrolling { scrollbar-color: color-mix(in srgb, var(--ink-3) 55%, transparent) transparent; }
+::-webkit-scrollbar { width: 8px; height: 8px; background: transparent; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb { background: transparent; border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+.is-scrolling::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--ink-3) 55%, transparent); }
