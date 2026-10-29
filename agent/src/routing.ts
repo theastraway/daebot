@@ -11,6 +11,7 @@ export function routingSection(toolNames: Iterable<string>): string[] {
   if (has.has("web_fetch")) steps.push("web_fetch for anything on a public URL: read a page, call a JSON API, weather, prices, docs. Never open a browser to read a page, even if the user says go to, open or look up a site.");
   if (has.has("bash")) steps.push("bash, read_file, write_file, edit_file, glob, grep for files, folders, scripts, git, tests, conversions (ffmpeg, pandoc, libreoffice, imagemagick), installs. Never open a terminal or a file explorer on the screen to run a command or look at files, even if the user says open Terminal or open the folder.");
   if (has.has("process")) steps.push("process for anything that takes more than about a minute or must keep running (builds, test suites, downloads, watchers, servers, long conversions): process start, then process status or tail on later turns. Tell the user it is running in the background and check back; do not wait on a foreground command or on the screen.");
+  if (has.has("terminal")) steps.push("terminal for an interactive session you must type into and read back: answer a y/n prompt, an ssh session, a Python or node REPL, a dev server you tail, a shell where cd and variables persist. terminal open, then send {session, text, wait_ms or until} and read; close it when done. It is hidden: you type into it with the tool, never into a terminal window. bash is for one-shot commands, process for a long background job you only poll, terminal for back-and-forth.");
   if (has.has("app")) steps.push("app (background UI Automation): operate a desktop app WITHOUT touching the user's mouse, keyboard or screen. list_windows, tree, find, invoke (click a button or menu item by name), set_value (fill a field), get_text, select, toggle, expand, collapse, launch, close. Give it several steps in ONE call (steps:[...]); no screenshot unless you pass screenshot:true. Not for when the user asks to watch it happen on screen: that is computer. \"Click Save in Notepad\" and \"fill the Name field in <app>\" are app calls, not computer calls.");
   if (!steps.length) return [];
   const out = [
@@ -18,7 +19,7 @@ export function routingSection(toolNames: Iterable<string>): string[] {
     "You are a background agent. Do the work with the first of these that can do it, in this order:",
     ...steps.map((s, i) => `${i + 1}. ${s}`),
   ];
-  if (has.has("bash")) out.push("\"Open PowerShell\", \"open cmd or Terminal\", \"press Win+R\" or \"run this in a terminal\" all mean: run that command with bash (short) or process (long). Never open, focus, click into or type into a terminal, console or Run box on the screen" + (has.has("computer") ? ", with computer or any other tool, even if the user asks for it or says to watch." : "."));
+  if (has.has("bash")) out.push("\"Open PowerShell\", \"open cmd or Terminal\", \"press Win+R\" or \"run this in a terminal\" all mean: run that command with bash (short), process (long) or, if it needs back-and-forth, the terminal tool (a hidden session). Never open, focus, click into or type into a terminal, console or Run box on the screen" + (has.has("computer") ? ", with computer or any other tool, even if the user asks for it or says to watch." : "."));
   if (has.has("computer")) {
     out.push(
       `${steps.length + 1}. computer, LAST. It takes over the user's screen, mouse and keyboard, so they cannot use their PC while you do, and every step is slow (move, screenshot, think). Use it only when the job is in a desktop app that has no API, CLI or connector${has.has("app") ? " AND app cannot reach it (a canvas or custom-drawn window with no UI Automation tree)" : ""}, or the user asked to watch you do it on screen. When the user asks you to do something on screen so they can watch ("so I can watch", "on screen", "show me"), that IS the reason: use computer, do not substitute a shell command or the app tool. Before the first computer action, say in one line why no background tool can do this. "The app is open", "it is faster" and "I am not sure" are not reasons. Never use it to open a terminal, run a command, read a URL or file, or click through something a tool above already does. Send several actions in ONE call (actions:[...]) with one screenshot at the end.`,
@@ -42,7 +43,7 @@ const CLI_LINE = /^(npm|npx|pnpm|yarn|git|node|python3?|pip3?|curl|wget|dir|ls|c
 const URL_ONLY = /^(https?:\/\/\S+|www\.\S+\.\S+)$/i;
 const TERMINAL_HOTKEYS = new Set(["win+r", "windows+r", "win+x", "windows+x", "ctrl+alt+t"]);
 
-const TERMINAL_HARD_TAIL = "This rule has no override, not even screen_required. Run the command with the bash tool (short) or the process tool (long, background). Never on screen.";
+const TERMINAL_HARD_TAIL = "This rule has no override, not even screen_required. Run the command with the bash tool (short), the process tool (long, background) or the terminal tool (interactive, hidden). Never on screen.";
 
 /**
  * HARD RULE, no override: `computer` never opens, focuses, clicks into or types into a terminal, console or Run box.
