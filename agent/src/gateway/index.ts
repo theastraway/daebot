@@ -22,7 +22,7 @@ import { WAIVER_TEXT, WAIVER_VERSION, isSessionMode } from "../permissions/index
 import { AppHandoff, appRedirect, isValidChallenge } from "../auth/app-handoff.ts";
 import { AGENT_SURFACE_RE, AGENT_TURN_PATH, KeyIdentityCache, TurnRateLimiter } from "./agent-api.ts";
 import { userIdFor } from "../auth/users.ts";
-import { FREE_TIER, usageLeftPct } from "../provider/mind.ts";
+import { FREE_TIER, usageLeftPct, usesOwnKey } from "../provider/mind.ts";
 import { createBotBus } from "../bots/bus.ts";
 import { ExchangeHub, MAIN as EX_MAIN } from "../bots/exchanges.ts";
 import { createRoutineGateway } from "./routines.ts";
@@ -1234,7 +1234,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (!auth?.credits || !key) return { free: false };
     try {
       const b = await auth.credits.get(key, false);
-      return { free: b?.tier === FREE_TIER, upgradeUrl: b?.upgradeUrl };
+      return { free: b?.tier === FREE_TIER && !usesOwnKey(b), upgradeUrl: b?.upgradeUrl };
     } catch {
       return { free: false };
     }
@@ -1316,9 +1316,17 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
       const plan = await planOf(me);
       const cat = await catalog.list(billingKeyOf(me), plan.free);
+      // The default for new threads, and where it comes from: a model picked here as the Daebot default, else the model chosen in the
+      // user's MIND account (when it is on their plan / own key), else Daebot's configured default. keySource says whose key serves calls.
+      const picked = settings?.get().defaultModel;
+      const key = billingKeyOf(me);
+      const acct = auth?.credits && key ? await auth.credits.get(key, false).catch(() => undefined) : undefined;
+      const acctModel = acct?.accountModel && cat.models.some((m) => m.id === acct.accountModel && m.allowed) ? acct.accountModel : undefined;
+      const defaultSource = picked ? "picked" : acctModel ? "account" : "default";
       return sendJson(res, 200, {
         models: cat.models, source: cat.source, plan: auth?.credits ? (plan.free ? "free" : "paid") : null,
-        default: settings?.get().defaultModel ?? opts.cfg.models.default, freeModel: opts.cfg.freeModel ?? null,
+        default: picked ?? acctModel ?? opts.cfg.models.default, defaultSource,
+        keySource: acct?.keySource ?? null, keyProvider: acct?.provider ?? null, freeModel: opts.cfg.freeModel ?? null,
       });
     }
     if (path === "/models/default") {

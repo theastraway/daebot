@@ -35,7 +35,7 @@ const text = (ev: StreamEvent[]) => ev.filter((e) => e.type === "text").map((e: 
 interface LlmCall { url: string; key: string; auth: string | undefined; model: string; body: any }
 
 /** A fake MIND LLM + credits surface behind one fetch. `script` answers the Nth LLM call; `tiers` maps a MIND key to its plan. */
-function fakeMindFetch(o: { script?: (n: number, model: string, key: string) => Response; tiers?: Record<string, string>; credits?: Record<string, number>; limit?: number | null; passthrough?: typeof fetch } = {}) {
+function fakeMindFetch(o: { script?: (n: number, model: string, key: string) => Response; tiers?: Record<string, string>; credits?: Record<string, number>; limit?: number | null; routing?: Record<string, Record<string, unknown>>; passthrough?: typeof fetch } = {}) {
   const llm: LlmCall[] = [];
   const creditGets: string[] = [];
   const other: string[] = [];
@@ -52,6 +52,7 @@ function fakeMindFetch(o: { script?: (n: number, model: string, key: string) => 
       const tier = o.tiers?.[h["X-API-Key"]] ?? "starter";
       return new Response(JSON.stringify({ tier, credits_balance: o.credits?.[h["X-API-Key"]] ?? 412, credits_limit: o.limit === undefined ? 500 : o.limit, upgrade_url: UPGRADE }), { status: 200, headers: { "content-type": "application/json" } });
     }
+    if (url.endsWith("/llm/account") && o.routing?.[h["X-API-Key"]]) return new Response(JSON.stringify(o.routing[h["X-API-Key"]]), { status: 200, headers: { "content-type": "application/json" } });
     other.push(url);
     if (o.passthrough) return o.passthrough(input as never, init);
     throw new Error(`unexpected fetch ${url}`);
@@ -228,12 +229,12 @@ test("config: DAEBOT_BILLING defaults to openrouter; mind only on an explicit va
 });
 
 // ---------- hosted multi-tenancy ----------
-async function world(o: { limit?: number | null; script?: NonNullable<Parameters<typeof fakeMindFetch>[0]>["script"]; userCap?: string; globalCap?: number; credits?: Record<string, number> } = {}) {
+async function world(o: { limit?: number | null; script?: NonNullable<Parameters<typeof fakeMindFetch>[0]>["script"]; userCap?: string; globalCap?: number; credits?: Record<string, number>; routing?: (keys: { alice: string; boss: string }) => Record<string, Record<string, unknown>> } = {}) {
   const keys = { alice: "mind_" + rnd(), boss: "mind_" + rnd() };
   const serverKey = "mind_server_" + rnd();
   const fake = await startFakeMind({ [keys.alice]: "alice", [keys.boss]: "boss", [serverKey]: "anthony" });
   const tiers = { [keys.alice]: "starter", [keys.boss]: "professional", [serverKey]: "scale" };
-  const llm = fakeMindFetch({ script: o.script, tiers, credits: o.credits, limit: o.limit, passthrough: (u, i) => fetch(u as never, i) });
+  const llm = fakeMindFetch({ script: o.script, tiers, credits: o.credits, limit: o.limit, routing: o.routing?.(keys), passthrough: (u, i) => fetch(u as never, i) });
   const cfg = baseCfg({ mindBaseUrl: fake.base, mindApiKey: serverKey, openrouterKey: "", billing: "mind", freeModel: "m/free" });
   const credits = new MindCredits({ mindBaseUrl: cfg.mindBaseUrl, fetchImpl: llm.f });
   const globalCap = new DailyCostCap(o.globalCap ?? 50);
@@ -383,4 +384,93 @@ test("a paid user's call that retried on the free model shows 'Answered on the f
       assert.ok(!(await collect(s2.send("hello"))).some((e) => e.type === "notice" && /free model/.test((e as any).text)));
     } finally { await ok.close(); }
   } finally { await w.close(); }
+});
+
+// ---------- the MIND account's own key and chosen model ----------
+function routingFetch(routing: Record<string, unknown> | undefined, tier = "starter") {
+  const gets: string[] = [];
+  const f = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    gets.push(url);
+    if (url.endsWith("/llm/account")) return routing ? new Response(JSON.stringify(routing), { status: 200 }) : new Response("{}", { status: 404 });
+    if (url.endsWith("/credits")) return new Response(JSON.stringify({ tier, credits_balance: 10, credits_limit: 100, upgrade_url: UPGRADE }), { status: 200 });
+    throw new Error(`unexpected fetch ${url}`);
+  }) as typeof fetch;
+  return { f, gets };
+}
+
+test("MindCredits reads the account's chosen model and key source from GET /llm/account; an older MIND (404) just has none", async () => {
+  const a = routingFetch({ model: "anthropic/claude-haiku-5.5", model_source: "account", key_source: "byo", provider: "openrouter" });
+  const c = new MindCredits({ mindBaseUrl: "https://mind.test/developer/v1", fetchImpl: a.f });
+  const b = await c.get("k1");
+  assert.equal(b?.accountModel, "anthropic/claude-haiku-5.5");
+  assert.equal(b?.keySource, "byo");
+  assert.equal(b?.provider, "openrouter");
+  const old = routingFetch(undefined);
+  const b2 = await new MindCredits({ mindBaseUrl: "https://mind.test/developer/v1", fetchImpl: old.f }).get("k2");
+  assert.equal(b2?.tier, "starter");
+  assert.ok(!b2?.accountModel);
+  assert.equal(b2?.keySource, undefined);
+});
+
+test("the X-MIND-Key-Source header updates the cached key source after a call", async () => {
+  const w = provider({}, "mind_user_key");
+  await w.credits.get("mind_user_key");
+  w.credits.note("mind_user_key", { keySource: "byo" });
+  assert.equal(w.credits.peek("mind_user_key")?.keySource, "byo");
+});
+
+test("an account on its own key is NOT forced onto the free model even on the MIND free tier; a platform free account still is", async () => {
+  const own = provider({ tiers: { mind_user_key: "free" } }, "mind_user_key");
+  own.credits.note("mind_user_key", { tier: "free", keySource: "byo" });
+  await own.credits.get("mind_user_key"); // cached (byo) state stands
+  await ask(own.p, "m/default");
+  assert.equal(own.llm[0].model, "m/default", "own key: the requested model runs");
+  const plat = provider({ tiers: { mind_user_key: "free" } }, "mind_user_key");
+  await ask(plat.p, "m/default");
+  assert.equal(plat.llm[0].model, "m/free", "platform free tier: the free model");
+});
+
+test("model precedence end to end: session pick > the MIND account's model > Daebot's configured default", async () => {
+  const w = await world({ routing: (k) => ({ [k.alice]: { model: "acct/model-x", model_source: "account", key_source: "platform", provider: null } }) });
+  try {
+    const rt = w.auth.runtimeFor(w.principal("alice"));
+    // 1. never touched the picker: the MIND account's model
+    w.llm.llm.length = 0;
+    await collect((await rt.openSession({ surface: "web" })).send("hi"));
+    assert.equal(w.llm.llm[0].model, "acct/model-x");
+    // 2/3. a model picked for this very thread beats both
+    w.llm.llm.length = 0;
+    await collect((await rt.openSession({ surface: "web", model: "thread/pick-z" })).send("hi"));
+    assert.equal(w.llm.llm[0].model, "thread/pick-z");
+    // an account with no routing (older MIND / no choice) keeps Daebot's configured default
+    const boss = w.auth.runtimeFor(w.principal("boss"));
+    w.llm.llm.length = 0;
+    await collect((await boss.openSession({ surface: "web" })).send("hi"));
+    assert.equal(w.llm.llm[0].model, w.cfg.models.default);
+  } finally { await w.close(); }
+});
+
+test("an own-key free-tier account runs the requested model end to end, not the free model", async () => {
+  const w = await world({ routing: (k) => ({ [k.alice]: { model: "acct/model-x", key_source: "byo", provider: "openrouter" } }) });
+  try {
+    await w.credits.get(w.keys.alice); // reads the plan and the own-key routing together
+    w.credits.note(w.keys.alice, { tier: "free", creditsRemaining: 0 });
+    w.llm.llm.length = 0;
+    await collect((await w.auth.runtimeFor(w.principal("alice")).openSession({ surface: "web" })).send("hello"));
+    assert.equal(w.llm.llm[0].model, "acct/model-x");
+  } finally { await w.close(); }
+});
+
+test("pickDefaultModel: the default the user picked in Daebot beats the MIND account's model; resolveTurnModel puts bot and session picks above both", async () => {
+  const { pickDefaultModel, resolveTurnModel } = await import("../../src/bots/model.ts");
+  assert.equal(pickDefaultModel("picked/y", "acct/x"), "picked/y");
+  assert.equal(pickDefaultModel(undefined, "acct/x"), "acct/x");
+  assert.equal(pickDefaultModel(undefined, null), undefined);
+  assert.equal(pickDefaultModel("bad id", "acct/x"), "acct/x");
+  const d = pickDefaultModel(undefined, "acct/x");
+  assert.equal(resolveTurnModel({ botModel: "bot/m", sessionModel: "sess/m", userDefault: d }), "bot/m");
+  assert.equal(resolveTurnModel({ sessionModel: "sess/m", userDefault: d }), "sess/m");
+  assert.equal(resolveTurnModel({ userDefault: d }), "acct/x");
+  assert.equal(resolveTurnModel({}), undefined);
 });

@@ -245,3 +245,19 @@ test("dev fake: the REST contract the UI is built against (shapes, 402 bot_limit
     assert.equal((await call("PATCH", "/sessions/s1", { model: ms.body.default })).status, 200);
   } finally { srv.close(); srv.closeAllConnections(); }
 });
+
+test("badge: key label and where the model came from (tooltip)", () => {
+  assert.equal(models.keyLabel("byo"), "via your key");
+  assert.equal(models.keyLabel("platform"), "MIND credits");
+  assert.equal(models.keyLabel(null), "");
+  assert.equal(models.originOf({ pinned: "b/m", id: "b/m" }), "set for this bot");
+  assert.equal(models.originOf({ chosen: "t/m", id: "t/m", def: "d/m", defSource: "account" }), "picked here");
+  assert.equal(models.originOf({ stored: "s/m", id: "s/m", def: "s/m", defSource: "account" }), "picked here");
+  assert.equal(models.originOf({ id: "a/m", def: "a/m", defSource: "account" }), "from your MIND account");
+  assert.equal(models.originOf({ id: "c/m", def: "c/m", defSource: "default" }), "Daebot default");
+  assert.equal(models.badgeTitle({ label: "Haiku", origin: "from your MIND account", key: "via your key" }), "Haiku (from your MIND account, via your key). Click to change.");
+  assert.equal(models.badgeTitle({ label: "Haiku" }), "Haiku. Click to change.");
+  const n = models.normalizeModels({ models: [{ id: "a/m" }], default: "a/m", defaultSource: "account", keySource: "byo" });
+  assert.equal(n.defSource, "account");
+  assert.equal(n.keySource, "byo");
+});

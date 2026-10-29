@@ -770,9 +770,10 @@ button.bd-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -
 @media (max-width: 560px) { .msg-photo img { height: 112px; } .msg-photo.loading, .msg-photo.gone { width: 112px; height: 112px; } .attach-thumb { width: 56px; height: 56px; } }
 
 /* a bot thread whose bot has its own model: the header badge shows it, with a small note (models.js setPinned) */
-#model-badge[data-pinned="1"] .mb-via { font-size: 10.5px; color: var(--ink-3); margin-left: 4px; white-space: nowrap; }
+#model-badge .mb-via:empty { display: none; }
+#model-badge .mb-via { font-size: 10.5px; color: var(--ink-3); margin-left: 4px; white-space: nowrap; }
 #model-badge[data-pinned="1"] .mb-chev { display: none; }
-@media (max-width: 520px) { #model-badge[data-pinned="1"] .mb-via { display: none; } }
+@media (max-width: 520px) { #model-badge .mb-via { display: none; } }
 select.fld { appearance: auto; }
 
 /* Routines (bot settings) */
