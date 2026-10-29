@@ -199,7 +199,7 @@ test("CSP safety: no innerHTML, eval, confirm(), inline script or style in the p
 
 test("mascot: the accent attribute only tints the lit LEDs; the head image is untouched", () => {
   const m = web("brand/mbot.js");
-  assert.match(m, /observedAttributes\(\) \{ return \["mood", "accent"\]/);
+  assert.match(m, /observedAttributes\(\) \{ return \["mood", "accent", "face"\]/);
   assert.match(m, /\^#\[0-9a-f\]\{6\}\$/i, "accent must be #rrggbb");
   assert.match(m, /v === 2 \? LED_RED : v === 3 \? LED_HOT : accent/, "alert red and the white twinkle keep their colours");
   assert.match(m, /HEAD_SRC = "\/brand\/daebot-head\.webp"/);

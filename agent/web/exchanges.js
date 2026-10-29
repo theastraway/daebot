@@ -8,7 +8,7 @@
 //
 // DOM is built with createElement + textContent only; there is no innerHTML. The pure helpers are exported and unit tested.
 
-import { faceSvg } from "./faces.js";
+import { mascotFor } from "./mbadge.js";
 
 /** MIND has no per-document deep link; /documents is its real documents route (MINDapp App.tsx). The chip copies the id so it can be found there. */
 export const MIND_DOCS_URL = "https://m-i-n-d.ai/documents";
@@ -106,8 +106,7 @@ export function initExchanges(ctx) {
   function face(p, cls = "") {
     const b = h("span", `xf ${p && p.kind === "main" ? "xf-main" : "bot-badge has-face"} ${cls}`.trim());
     b.setAttribute("aria-hidden", "true");
-    const svg = p && p.kind === "bot" ? faceSvg(p.face) : null;
-    if (svg) b.append(svg);
+    if (p && p.kind === "bot") { const m = mascotFor(p); m.removeAttribute("calm"); m.setAttribute("still", ""); b.classList.add("has-mbot"); b.append(m); }
     else b.textContent = (String((p && p.name) || "?").match(/[\p{L}\p{N}]/u) || ["?"])[0].toUpperCase();
     if (p && p.kind === "bot") b.style.setProperty("--bot", safeColor(p.color));
     return b;

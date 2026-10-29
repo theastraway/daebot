@@ -10,7 +10,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { COOKIE_NAME, parseCookies, safeEqual } from "./auth.ts";
 import { isFaceId } from "../bots/faces.ts";
 
-export interface FakeBot { id: string; slug: string; name: string; purpose: string; color: string; face?: string | null; model?: string | null; updatedAt: number; live: boolean; busy: boolean }
+export interface FakeBot { id: string; slug: string; name: string; purpose: string; color: string; face?: string | null; model?: string | null; pinned?: boolean; pinnedAt?: number | null; updatedAt: number; live: boolean; busy: boolean }
 
 const MAX_INSTRUCTIONS = 8 * 1024;
 const COLORS = ["#ffd25a", "#ff9a3d", "#7dff9a", "#5ee0ff", "#a98bff", "#ff7ad9"];
@@ -154,7 +154,11 @@ export function createBotsFake(opts: { token: string; backendPort: number; botLi
             if (b.model === null || b.model === "") bot.model = null;
             else { const row = MODELS.find((x) => x.id === b.model); if (!row) { json(res, 400, { error: "unknown_model" }); return true; } if (!row.allowed) { json(res, 403, { error: "model_locked" }); return true; } bot.model = row.id; }
           }
-          bot.updatedAt = Date.now();
+          if (b.pinned !== undefined) {
+            if (typeof b.pinned !== "boolean") { json(res, 400, { error: "bad_pinned" }); return true; }
+            bot.pinned = b.pinned; bot.pinnedAt = b.pinned ? (bot.pinnedAt ?? Date.now()) : null;
+          }
+          if (Object.keys(b).some((k) => k !== "pinned")) bot.updatedAt = Date.now();
           json(res, 200, bot);
           return true;
         }
