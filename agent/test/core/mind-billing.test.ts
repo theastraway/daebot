@@ -474,3 +474,8 @@ test("pickDefaultModel: the default the user picked in Daebot beats the MIND acc
   assert.equal(resolveTurnModel({ userDefault: d }), "acct/x");
   assert.equal(resolveTurnModel({}), undefined);
 });
+
+test("404 relayed from OpenRouter (one model unavailable) falls through to the fallback model, not the route-off message", async () => {
+  const w = provider({ script: (_n, model) => (model === "m/default" ? new Response('{"error":{"message":"No endpoints found for m/default.","code":404}}', { status: 404 }) : okStream("fb")) });
+  assert.equal(text(await ask(w.p)), "fb");
+});
