@@ -68,9 +68,10 @@ export const MAX_INSTRUCTIONS_BYTES = 8 * 1024;
 
 /** The in-process bot-to-bot message bus (set by startGateway; sessions and bots reach it through the bot_talk tool). */
 export interface BotBus {
-  talk(req: { owner: string; fromSession: string; selfBot?: string; to: string; message: string; signal?: AbortSignal }): Promise<{ ok: boolean; output: string }>;
+  /** `to` is a bot slug or "main" (the user's own Daebot). waitForReply false = deliver and return; the answer lands in the exchange. */
+  talk(req: { owner: string; fromSession: string; selfBot?: string; to: string; message: string; waitForReply?: boolean; signal?: AbortSignal }): Promise<{ ok: boolean; output: string; exchange?: Extract<import("../types.ts").AgentEvent, { type: "exchange" }> }>;
 }
 /** Late-bound holder: runtimes are built before the gateway (and its SessionManager) exists. */
 export interface BotBusRef { current?: BotBus }
 /** What a runtime needs to host bots: where to keep them, and how to reach the bus. */
-export interface BotsContext { dir: string; bus: BotBusRef; /** Routines of every bot (created on first use). */ routines?: import("../routines/store.ts").RoutineHub; /** Late-bound helpers the gateway lends bot_manage (plan models, cleanup after a delete). */ manage?: { current?: import("./manage-tool.ts").BotManageHooks } }
+export interface BotsContext { dir: string; bus: BotBusRef; /** Routines of every bot (created on first use). */ routines?: import("../routines/store.ts").RoutineHub; /** Agent exchanges (the pair transcripts users open from a card); created on first use. */ exchanges?: import("./exchanges.ts").ExchangeHub; /** Late-bound helpers the gateway lends bot_manage (plan models, cleanup after a delete). */ manage?: { current?: import("./manage-tool.ts").BotManageHooks } }

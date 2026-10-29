@@ -158,9 +158,9 @@ export function composeSystemPrompt(o: {
     if (roster.length) lines.push(`Read another MIND on any read tool with mind:"<slug>" (mind_tenants lists them live).`);
   }
   if (o.bot) {
-    lines.push("When another bot owns the topic, TALK to it with bot_talk; say what you need and why; its reply is a claim, not a receipt: verify load-bearing facts in its MIND; don't ping-pong.");
+    lines.push("When another bot owns the topic, TALK to it with bot_talk; say what you need and why; its reply is a claim, not a receipt: verify load-bearing facts in its MIND; don't ping-pong. You can also message the main Daebot with bot_talk to:\"main\". Every pair has one exchange the user can open from the card in the chat.");
   } else if (roster.length) {
-    lines.push("When a bot owns the topic, ask that bot with bot_talk; its reply is a claim, not a receipt: verify load-bearing facts in its MIND before you state them.");
+    lines.push("When a bot owns the topic, ask that bot with bot_talk; its reply is a claim, not a receipt: verify load-bearing facts in its MIND before you state them. To have bot A ask bot B, ask A to bot_talk B (or message each yourself); the user opens the back-and-forth from the card.");
   }
   if (o.mcp) {
     lines.push(
@@ -353,11 +353,11 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     await store!.save({ ...rec, board: task(loadTasks(rec.board)), updatedAt: now });
     return true;
   }
-  const toolsFor = (home: string, selfBot: string | undefined): Tool[] => {
+  const toolsFor = (home: string, selfBot: string | undefined, peerMain = false): Tool[] => {
     const on = botsOn();
     const talk = on && botStore && botsCtx ? [createBotTalkTool({ bus: botsCtx.bus, owner: ownerKey, selfBot })] : [];
     // bot_manage: the user's own session creates and configures bots internally (never through the screen). A bot never gets it.
-    const manage = on && botStore && botsCtx && !selfBot
+    const manage = on && botStore && botsCtx && !selfBot && !peerMain
       ? [createBotManageTool({
           bots: botStore, owner: ownerKey, hooks: () => botsCtx.manage?.current, routines: botsCtx.routines,
           threads: (id) => self.rt?.listSessions().filter((s) => s.bot === id && !s.peer).length ?? 0,
@@ -398,7 +398,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       ...(appsOn() ? createAppTools({ clientFor: clientForMind, readOnly: !!selfBot, connected: connectedApps, servers: serverLites }) : []),
       ...talk, ...manage, ...self2];
     // mcp_connect is the user's own session only: a bot never proposes connections (and its turns could be peer-driven).
-    const withMcp = [...(overrides.mcpConnect && !selfBot ? [...every, createMcpConnectTool(overrides.mcpConnect, ownerKey)] : every), ...(selfBot ? [] : [boardTool])];
+    const withMcp = [...(overrides.mcpConnect && !selfBot && !peerMain ? [...every, createMcpConnectTool(overrides.mcpConnect, ownerKey)] : every), ...(selfBot || peerMain ? [] : [boardTool])];
     const all = hosted ? filterHostedTools(withMcp) : withMcp;
     return selfBot ? botSessionTools(all) : all;
   };
@@ -471,7 +471,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       // what bots say to each other never lands in MAIN, which every other agent of the user can read.
       const sync: SessionSync = peer ? noSync : createSessionSync(sessionClient, sourceKey);
       // Tools a tier may not use are neither offered nor executable (the loop only knows this list).
-      const sessionTools = toolsFor(home, botRec?.id);
+      const sessionTools = toolsFor(home, botRec?.id, !botRec && !!peer); // a bot's message to the main Daebot runs without bot_manage, mcp_connect and the board: a peer can ask, never reconfigure
       const allWithMcp = mcp.configured ? [...sessionTools, ...(await mcp.tools())] : sessionTools;
       const tools = tier === "admin" ? allWithMcp : allWithMcp.filter((t) => tierAllows(tier, t));
       // The model: an explicit choice (open / PATCH), else the stored one, else the user's default, else the configured default.

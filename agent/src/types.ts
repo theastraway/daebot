@@ -183,6 +183,9 @@ export interface Config {
   compactAt?: number;        // fraction of contextWindow that triggers compaction (env MINDCLAW_COMPACT_AT); default 0.6
 }
 
+/** One end of an agent exchange: the user's own Daebot ("main") or one of their bots. */
+export interface ExchangeParty { id: string; kind: "main" | "bot"; name: string; slug?: string; face?: string; color?: string }
+
 // ---------- agent session + gateway (all surfaces speak this) ----------
 // Every surface (terminal, web, desktop, Telegram, Discord, iMessage...) is a thin client of the
 // gateway. The gateway owns AgentSessions. Surfaces never touch the provider, tools or kernel.
@@ -202,6 +205,9 @@ export type AgentEvent =
   // Relay-only: published into the run feed, never part of the saved transcript.
   | { type: "device_call"; id: string; tool: string; op: string; args: Record<string, unknown> }
   | { type: "notice"; level: "info" | "warn"; text: string }          // e.g. pending MIND reply surfaced
+  // A bot_talk call just happened in this turn: shown as a small "Messaged <agent>" card with the message and (when it answered) the reply.
+  // `exchangeId` opens the read-only two-sided transcript of that pair of agents (GET /exchanges/:id).
+  | { type: "exchange"; exchangeId: string; from: ExchangeParty; to: ExchangeParty; message: string; reply?: { text: string; ok: boolean }; at: number }
   | { type: "usage"; usage: Usage; totalCostUsd: number; model?: string } // model = the model that produced this call
   // The draft just streamed (the text since the last tool/gate/confirm boundary) was withheld by a gate.
   // Clients replace that assistant block with a "rewriting: <reason>" note; the regenerated text streams after it.
