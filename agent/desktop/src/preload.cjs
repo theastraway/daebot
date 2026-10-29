@@ -7,6 +7,9 @@
 //   window.mindclawDesktop.shortcuts.get() / set(accelerator)   the global Summon shortcut (main validates, registers, saves to desktop.json)
 //   window.mindclawDesktop.updates.get() / check() / install() / onChange(cb)   the in-window update control (main only
 //                                                      answers the gateway origin; install() restarts into the new version)
+//   window.mindclawDesktop.screen.get() / set(on) / openSettings() / onChange(cb)   the "Let Daebot watch my screen" switch (off by default). get/set return
+//                                                      { watching, permission, error, platform, canOpenSettings }; openSettings() opens the macOS Screen Recording pane (the USER grants
+//                                                      the permission there); onChange(cb) fires on every change, including a stop from the tray.
 //   window.mindclawDesktop.calendar.call(op, args)    Mac only: Apple Calendar through the bundled EventKit helper -> { ok, result | error }.
 //                                                      Absent on Windows and Linux, so the web UI sees no Calendar bridge there.
 //   window.mindclawDesktop.platform / version         read-only strings
@@ -36,6 +39,15 @@ contextBridge.exposeInMainWorld("mindclawDesktop", Object.freeze({
     onChange(cb) {
       if (typeof cb !== "function") return;
       ipcRenderer.on("desktop:update-state", (_e, s) => { try { cb(s); } catch { /* UI bug must not break updates */ } });
+    },
+  }),
+  screen: Object.freeze({
+    get: () => ipcRenderer.invoke("desktop:screen-get"),
+    set: (on) => ipcRenderer.invoke("desktop:screen-set", on === true),
+    openSettings: () => ipcRenderer.invoke("desktop:screen-open-settings"),
+    onChange(cb) {
+      if (typeof cb !== "function") return;
+      ipcRenderer.on("desktop:screen-state", (_e, s) => { try { cb(s); } catch { /* UI bug must not break the feed */ } });
     },
   }),
   ...(process.platform === "darwin" ? {

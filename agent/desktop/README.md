@@ -42,6 +42,14 @@ Everything Daebot keeps on the machine (config, sign-in, accounts, chats) lives 
 `shortcut` is the global Summon Daebot shortcut, an Electron accelerator (`null` disables it); the default is Cmd+Shift+Space on a Mac and Ctrl+Shift+Space elsewhere, and it is rebindable in the app under Keyboard shortcuts. The hold-to-talk keys (Right Option/Alt = Dictation, Right Command/Ctrl = Voice) work while the Daebot window is focused: Electron has no global solo-modifier hook without native modules. Window bounds live in `~/.daebot/desktop-state.json`.
 Credentials: see Sign-in below. Without any usable key the gateway child reports why and the window shows a plain error page.
 
+## Screen watching ("Let Daebot watch my screen")
+
+Off by default. The user turns it on in the account menu (or the tray); `watchScreen` in `desktop.json` remembers the choice. While it is on the tray icon is a red dot and the first tray item stops it; the window shows a red "Daebot is watching your screen" pill with a Stop button.
+
+- Capture runs in the main process (`lib/screen-capture.mjs`, Electron `desktopCapturer`): the primary display at 2 fps (configurable, max 5), downscaled to at most 1366 wide, JPEG q60, plus a 64x36 luma signature for change detection. Each frame is POSTed to the local gateway's `/screen/frame` and kept in an in-memory ring buffer (last 30 s). Nothing is written to disk unless the user asks Daebot to `screen save`; turning the switch off clears the buffer. A hosted server never mounts these routes.
+- macOS Screen Recording permission is the user's to grant. `systemPreferences.getMediaAccessStatus('screen')` is read; if it is not granted the window shows a card with an Open System Settings button (`x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture`). Daebot never changes an OS permission. After the user allows it, macOS may ask to quit and reopen Daebot. Windows needs no permission.
+- The agent side is `src/screen/feed.ts`, the `screen` tool (`look`, `wait_for_change`, `clip`, `status`, `save`) and the `computer` tool, which uses the live frame instead of a PowerShell screenshot while the feed is on.
+
 ## Sign-in (first run)
 No OpenRouter key is needed. On first launch the app shows a small window asking for a MIND API key (m-i-n-d.ai, Settings, Developer,
 API Keys). It checks the key against MIND (`GET <MIND_BASE_URL>/profile`), then stores it in `~/.daebot/mind-key` (mode 0600, inside a

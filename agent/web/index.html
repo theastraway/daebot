@@ -29,6 +29,7 @@
   <symbol id="i-speaker" viewBox="0 0 20 20"><path d="M3.5 8v4h2.8l4.2 3.5v-11L6.3 8z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M13.3 7.4a3.6 3.6 0 010 5.2M15.4 5.3a6.5 6.5 0 010 9.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
   <symbol id="i-speaker-off" viewBox="0 0 20 20"><path d="M3.5 8v4h2.8l4.2 3.5v-11L6.3 8z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M13.5 8l4 4M17.5 8l-4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
   <symbol id="i-voice" viewBox="0 0 20 20"><path d="M4 4.5h12a1.5 1.5 0 011.5 1.5v6a1.5 1.5 0 01-1.5 1.5H9.5L6 17v-3.5H4A1.5 1.5 0 012.5 12V6A1.5 1.5 0 014 4.5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M7 7.5v3M10 6.5v5M13 7.5v3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 20 20"><path d="M2 10s3-5.5 8-5.5S18 10 18 10s-3 5.5-8 5.5S2 10 2 10z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><circle cx="10" cy="10" r="2.5" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
   <symbol id="i-keys" viewBox="0 0 20 20"><rect x="2.5" y="5" width="15" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 8.5h1M9.5 8.5h1M13.5 8.5h1M6 11.5h8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
   <symbol id="i-wave" viewBox="0 0 20 20"><path d="M3.5 8.5v3M7 5.5v9M10.5 7.5v5M14 4v12M17 8v4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
   <symbol id="i-stop" viewBox="0 0 20 20"><rect x="5.5" y="5.5" width="9" height="9" rx="1.8" fill="currentColor"/></symbol>
@@ -57,6 +58,7 @@
   <symbol id="i-copy" viewBox="0 0 20 20"><rect x="7" y="7" width="9" height="9" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M13 7V5.5A1.5 1.5 0 0011.5 4h-6A1.5 1.5 0 004 5.5v6A1.5 1.5 0 005.5 13H7" fill="none" stroke="currentColor" stroke-width="1.4"/></symbol>
 </svg>
 
+<div class="screen-pill" id="screen-pill" role="status" aria-live="polite" hidden><i class="rec-dot" aria-hidden="true"></i><span>Daebot is watching your screen</span><button type="button" aria-label="Stop watching my screen">Stop</button></div>
 <div class="app" id="app">
   <aside class="sidebar" id="sidebar" aria-label="Sessions">
     <div class="brand">
@@ -92,6 +94,7 @@
         <div class="am-update" id="upd" hidden><span id="upd-text"></span><button class="btn-primary sm" id="upd-btn" type="button" role="menuitem"></button></div>
         <button class="am-item" id="btn-perms" type="button" role="menuitem" hidden aria-haspopup="dialog" aria-expanded="false"><svg class="ic"><use href="#i-lock"/></svg><span>Permissions</span></button>
         <button class="am-item" id="am-keys" type="button" role="menuitem" aria-haspopup="dialog" aria-expanded="false"><svg class="ic"><use href="#i-keys"/></svg><span>Keyboard shortcuts</span></button>
+        <button class="am-item am-screen" id="am-screen" type="button" role="menuitemcheckbox" aria-checked="false" hidden><svg class="ic"><use href="#i-eye"/></svg><span class="am-screen-text"><b>Let Daebot watch my screen</b><small>Off. Daebot cannot see your screen.</small></span><i class="u-switch" aria-hidden="true"><i></i></i></button>
         <button class="am-item" id="am-apps" type="button" role="menuitem" aria-haspopup="dialog"><svg class="ic"><use href="#i-apps"/></svg><span>Apps &amp; connectors</span></button>
         <a class="am-item" id="am-mobile" href="/download/" target="_blank" rel="noopener" role="menuitem" hidden><svg class="ic"><use href="#i-phone"/></svg><span>Get Daebot for mobile</span></a>
         <a class="am-item" id="am-desktop" href="/download/" target="_blank" rel="noopener" role="menuitem" hidden><svg class="ic"><use href="#i-desktop"/></svg><span>Get the desktop app</span></a>

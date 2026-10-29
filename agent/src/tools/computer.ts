@@ -3,6 +3,8 @@ import { fail } from "./util.ts";
 import { backgroundGuard } from "../routing.ts";
 import { CONSOLE_CHECK_PS, blockedMessage, parseBlocked, psq, runPowerShell as makeRunner } from "./ps.ts";
 import type { ScriptRunner } from "./ps.ts";
+import { frameDataUrl, screenFeed } from "../screen/feed.ts";
+import type { Frame, ScreenFeed } from "../screen/feed.ts";
 export type { ScriptRunner } from "./ps.ts";
 
 // Screen control for desktop apps with no API (Xactimate is the first). Windows only: every action is one short PowerShell
@@ -17,6 +19,7 @@ const MAX_BATCH = 20;
 const MAX_SHOTS = 4;
 const MAX_TEXT = 2000;
 const MAX_WAIT_S = 10;
+const LIVE_FRAME_WAIT_MS = 3000; // how long a live-feed action waits for a frame captured AFTER the settle before it falls back to a PowerShell screenshot
 
 const ACTIONS = ["screenshot", "click", "double_click", "right_click", "move", "drag", "type", "key", "scroll", "wait"] as const;
 type Action = (typeof ACTIONS)[number];
@@ -239,7 +242,25 @@ const describeStep = (action: Action, a: Record<string, unknown>): string => {
   return action;
 };
 
-export function createComputerTool(run?: ScriptRunner): Tool {
+const describeHead = (steps: BatchStep[]): string => {
+  const what = steps.map((s) => describeStep(s.action, s.args)).join("; ");
+  return steps.length === 1 && steps[0].action === "screenshot" ? "Screenshot taken" : steps.length === 1 ? `Did ${what}` : `Did ${steps.length} actions (${what})`;
+};
+
+function liveResult(head: string, frames: Frame[], note?: string): ToolResult {
+  const f = frames[frames.length - 1];
+  return {
+    ok: true,
+    output: f
+      ? `${head}. Frame ${f.width}x${f.height} (screen ${f.screenWidth}x${f.screenHeight}), cursor at ${f.cursorX},${f.cursorY}. Use coordinates in this frame.`
+      : `${head}. ${note ?? "No screenshot was taken."}`,
+    images: frames.map(frameDataUrl),
+    meta: f ? { width: f.width, height: f.height, live: true } : { live: true },
+  };
+}
+
+export function createComputerTool(run?: ScriptRunner, feed: ScreenFeed = screenFeed, opts: { settleMs?: number } = {}): Tool {
+  const settleMs = opts.settleMs ?? SETTLE_MS;
   return {
     class: "write",
     receipt: "surface",
@@ -253,6 +274,7 @@ export function createComputerTool(run?: ScriptRunner): Tool {
         "Before your first computer action in a task, say in one line why no background tool can do it. A call that types a URL or a shell command is refused unless you pass screen_required:true (only when the user asked to watch it on screen). " +
         "BATCH: send many actions in ONE call with actions:[{action,...},...] (up to 20). They run back to back in one process with one screenshot at the end; add screenshot:true to a step to also see the screen after it, or screenshot:false at the top level to get no screenshot. Do not call once per mouse move. " +
         "A single action returns a fresh screenshot of the primary display. x/y are pixels in the LATEST screenshot (top-left is 0,0). Start with action=screenshot, then batch what you can see. " +
+        "When the user has Let Daebot watch my screen ON, a screenshot is the latest frame of the live feed (instant, no PowerShell), actions return the live frame taken after the screen settles, and a batch returns only its final frame; the `screen` tool also has wait_for_change and clip. " +
         "Actions: screenshot | click | double_click | right_click | move | drag (x,y -> to_x,to_y) | type (text) | " +
         'key (keys, e.g. "enter", "tab", "ctrl+s", "alt+f4") | scroll (amount, negative = down, optional x,y) | wait (seconds, max 10).',
       parameters: {
@@ -282,7 +304,16 @@ export function createComputerTool(run?: ScriptRunner): Tool {
       }
       const wantFinal = args.screenshot !== false && !(raw.length === 1 && raw[0].screenshot === false);
       if (steps.filter((s, i) => s.shot && i < steps.length - 1).length + (wantFinal ? 1 : 0) > MAX_SHOTS) return fail(`computer: at most ${MAX_SHOTS} screenshots per call`);
-      const built = batch || !wantFinal ? buildBatchScript(steps, wantFinal) : buildScript(steps[0].action, steps[0].args);
+      // Live feed on (and fresh): the user turned on "Let Daebot watch my screen", so the picture comes from the feed, not from a PowerShell
+      // screenshot. A batch returns only its final frame. Feed off or stale: everything below is exactly the old path.
+      const live = feed.live();
+      if (live) for (const st of steps) st.shot = false;
+      if (live && steps.every((s) => s.action === "screenshot")) {
+        const f = wantFinal ? feed.latest() : undefined;
+        return liveResult(steps.length === 1 ? "Screenshot taken from the live feed" : `Looked ${steps.length} times (live feed)`, f ? [f] : [], f ? undefined : "No screenshot was taken.");
+      }
+      const scriptShot = wantFinal && !live;
+      const built = batch || !scriptShot || live ? buildBatchScript(steps, scriptShot) : buildScript(steps[0].action, steps[0].args);
       if ("error" in built) return fail(`computer: ${built.error}`);
       if (ctx.signal?.aborted) return fail("computer: aborted before start");
       const runner = run ?? makeRunner(Math.min(120_000, SCRIPT_TIMEOUT_MS + steps.length * 3000));
@@ -290,15 +321,25 @@ export function createComputerTool(run?: ScriptRunner): Tool {
       const done = Math.max(0, ...[...r.stdout.matchAll(/^DAEBOT_STEP (\d+)/gm)].map((m) => Number(m[1])));
       const refused = parseBlocked(r.stdout);
       if (refused) return fail(`${blockedMessage("computer", refused)} Completed ${done} of ${steps.length} actions before it.`);
-      const shots = parseShots(r.stdout);
+      let shots = parseShots(r.stdout);
       const finished = /^DAEBOT_DONE/m.test(r.stdout);
-      if (r.code !== 0 || !(finished || (wantFinal && shots.length)) || (wantFinal && !shots.length)) {
+      if (r.code !== 0 || !(finished || (scriptShot && shots.length)) || (scriptShot && !shots.length)) {
         const why = (r.stderr || r.stdout.replace(/DAEBOT_SHOT[^\n]*\n[A-Za-z0-9+/=\s]*/g, "")).replace(/\s+/g, " ").trim().slice(0, 400) || `exit code ${r.code}`;
         return fail(`computer: ${steps.length > 1 ? `stopped after ${done} of ${steps.length} actions: ` : `${steps[0].action} failed: `}${why}`);
       }
-      const what = steps.map((s) => describeStep(s.action, s.args)).join("; ");
+      if (live && wantFinal) {
+        // The frame must be captured AFTER the screen settled from these actions, not one that was already in the buffer.
+        const f = await feed.next({ afterT: Date.now() + settleMs, timeoutMs: settleMs + LIVE_FRAME_WAIT_MS, signal: ctx.signal });
+        if (f) return liveResult(describeHead(steps) + " (live feed)", [f]);
+        // The feed went quiet (switched off, or capture stalled): take the screenshot the old way so the model still sees the result.
+        const fb = buildScript("screenshot", {});
+        if ("script" in fb) shots = parseShots((await runner(fb.script, ctx.signal)).stdout);
+        if (!shots.length) return fail("computer: the actions ran, but the live feed stopped delivering frames and a fallback screenshot failed. Call screenshot again.");
+      } else if (live) {
+        return liveResult(describeHead(steps), [], "No screenshot was taken.");
+      }
       const last = shots[shots.length - 1];
-      const head = steps.length === 1 && steps[0].action === "screenshot" ? "Screenshot taken" : steps.length === 1 ? `Did ${what}` : `Did ${steps.length} actions (${what})`;
+      const head = describeHead(steps);
       return {
         ok: true,
         output: last

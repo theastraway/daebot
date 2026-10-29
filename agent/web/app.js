@@ -2,6 +2,7 @@
 // All dynamic text goes through textContent / createTextNode. No innerHTML anywhere.
 
 import { initVoice } from "/voice.js";
+import { initScreen } from "/screen.js";
 import { initHotkeys } from "/hotkeys.js";
 import { initUpdates } from "/updates.js";
 import { initBots, generalSessions, peerLabel } from "/bots.js";
@@ -1313,6 +1314,8 @@ const hotkeys = initHotkeys({
   hintEl: $("hotkey-hint"), buttons: { dictate: $("btn-mic"), voice: $("btn-voice") }, openButton: $("am-keys"),
 });
 $("am-keys").addEventListener("click", closeSidebar);
+// "Let Daebot watch my screen" (desktop app only; hidden everywhere else): the menu switch, the red pill with Stop, the permission card.
+initScreen({ h, item: $("am-screen"), pill: $("screen-pill") });
 
 // ---------- suggested replies + permissions ----------
 const suggest = initSuggest({

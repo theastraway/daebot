@@ -1,6 +1,6 @@
 // Daebot desktop shell (Electron main process). Thin: it starts the gateway as a child, waits for /health,
 // and shows the existing web UI. All decisions live in src/lib/* (unit-tested); this file is glue.
-import { app, BrowserWindow, Tray, Menu, powerSaveBlocker, globalShortcut, Notification, ipcMain, shell, nativeImage, nativeTheme, screen, session, dialog, systemPreferences } from "electron";
+import { app, BrowserWindow, Tray, Menu, powerSaveBlocker, globalShortcut, Notification, ipcMain, shell, nativeImage, nativeTheme, screen, session, dialog, systemPreferences, desktopCapturer } from "electron";
 import { createRequire } from "node:module";
 import { spawn, execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -13,7 +13,7 @@ import { clearKey, readConfigJson, readKey, resolveSignIn, saveKey, looksLikeMin
 import { AccountStore, accountsPath, dataDirFor } from "./lib/accounts.mjs";
 import { buildSignInPage } from "./lib/signin-page.mjs";
 import { signInWithMind } from "./lib/mind-signin.mjs";
-import { loadConfig, saveKernelMode, saveKeepWorking, saveShortcut, isValidAccelerator, configPath, statePath, loadState, writeJson, resolveBounds, desktopHome } from "./lib/config.mjs";
+import { loadConfig, saveKernelMode, saveKeepWorking, saveShortcut, saveWatchScreen, isValidAccelerator, configPath, statePath, loadState, writeJson, resolveBounds, desktopHome } from "./lib/config.mjs";
 import { isKernelMode } from "./lib/kernel.mjs";
 import { migrateHome } from "./lib/home.mjs";
 import { applyKeepWorking } from "./lib/keepworking.mjs";
@@ -23,6 +23,9 @@ import { buildLoadUrl, classifyUrl, originOf, redactUrl } from "./lib/allowlist.
 import { buildConfirmNotification, createRateLimiter, shouldNotify, validateNotifyPayload } from "./lib/notify.mjs";
 import { ConfirmWatcher } from "./lib/watcher.mjs";
 import { createUpdater } from "./lib/updater.mjs";
+import { ScreenCapture } from "./lib/screen-capture.mjs";
+import { screenAccess, permissionSettingsUrl } from "./lib/screen-permission.mjs";
+import { frameQuery, redDotBitmap } from "./lib/screen-frame.mjs";
 import { CALENDAR_CHANNEL, createCalendarBridge, createCalendarHandler, findCalendarHelper } from "./lib/calendar.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -189,6 +192,7 @@ async function startGateway() {
   await waitForHealth(info.url);
   gatewayInfo = { ...info, origin: originOf(info.url) };
   startWatcher();
+  void resumeScreenAfterGateway();
   return gatewayInfo;
 }
 
@@ -387,6 +391,7 @@ async function registerAccount(key, { legacy = false } = {}) {
 /** Restarts the gateway child as the (new) active account and reloads the window. Nothing of the previous account stays loaded. */
 async function restartAsActive() {
   stopWatcher();
+  screenCapture.stop(); // no gateway to feed: stop capturing (the saved switch is kept; it resumes when the next gateway is up)
   gatewayInfo = null;
   await gateway.stop();
   if (win && !win.isDestroyed()) await loadUi();
@@ -438,6 +443,7 @@ async function signOut(opts = {}) {
   clearKey();
   mindKey = null;
   stopWatcher();
+  screenCapture.stop(); // no gateway to feed: stop capturing (the saved switch is kept; it resumes when the next gateway is up)
   gatewayInfo = null;
   await gateway.stop();
   if (win && !win.isDestroyed()) win.hide();
@@ -451,6 +457,7 @@ async function setKernelMode(mode) {
   config = { ...config, kernelMode: mode };
   if (!SMOKE) { try { saveKernelMode(mode); } catch (e) { log("could not save kernel mode:", String(e?.message ?? e)); } }
   stopWatcher();
+  screenCapture.stop(); // no gateway to feed: stop capturing (the saved switch is kept; it resumes when the next gateway is up)
   gatewayInfo = null;
   try {
     await gateway.stop();
@@ -460,6 +467,72 @@ async function setKernelMode(mode) {
   await loadUi();
 }
 
+// ---------- screen watching ("Let Daebot watch my screen") ----------
+// OFF by default; only the user turns it on (account menu in the window, or the tray). While it is on the tray icon is a red dot and the first tray
+// item stops it. Capture runs here in the main process (desktopCapturer); frames go to the local gateway's in-memory ring buffer and nowhere else.
+// macOS Screen Recording permission is the USER's to grant in System Settings; we only read its state and open that pane when they click the button.
+let screenState = { watching: false, permission: "unknown", error: undefined };
+const screenGatewayPut = async (body) => {
+  if (!gatewayInfo) return;
+  try {
+    await fetch(new URL("/screen/state", gatewayInfo.url), { method: "PUT", headers: { authorization: `Bearer ${gatewayInfo.token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+  } catch (e) { log("could not tell the gateway about the screen feed:", String(e?.message ?? e)); }
+};
+const screenCapture = new ScreenCapture({
+  desktopCapturer, screen,
+  getAccess: () => screenAccess({ platform: process.platform, status: process.platform === "darwin" ? systemPreferences.getMediaAccessStatus("screen") : undefined }),
+  post: async (f) => {
+    if (!gatewayInfo) return;
+    const r = await fetch(new URL(`/screen/frame?${frameQuery(f)}`, gatewayInfo.url), { method: "POST", headers: { authorization: `Bearer ${gatewayInfo.token}`, "content-type": "image/jpeg" }, body: f.jpeg });
+    if (!r.ok && r.status !== 409) throw new Error(`gateway refused the frame (${r.status})`);
+  },
+  report: (s) => {
+    screenState = { watching: s.watching, permission: s.permission, error: s.error };
+    void screenGatewayPut({ watching: s.watching, permission: s.permission, fps: s.fps, error: s.error ?? "" });
+    applyScreenIndicator();
+  },
+  log,
+});
+function applyScreenIndicator() {
+  if (!SMOKE && tray && !tray.isDestroyed()) {
+    const watching = screenState.watching && screenState.permission === "granted";
+    if (watching) {
+      const dot = nativeImage.createFromBitmap(redDotBitmap(32), { width: 32, height: 32, scaleFactor: 2 });
+      tray.setImage(dot);
+      tray.setToolTip("Daebot is watching your screen. Click the menu to stop.");
+    } else {
+      tray.setImage(trayIdleImage());
+      tray.setToolTip("Daebot");
+    }
+  }
+  refreshTray();
+  if (win && !win.isDestroyed()) win.webContents.send("desktop:screen-state", publicScreenState());
+}
+const publicScreenState = () => ({
+  watching: screenState.watching, permission: screenState.permission, error: screenState.error ?? null,
+  platform: process.platform, canOpenSettings: !!permissionSettingsUrl(process.platform) && screenState.permission === "needs-permission",
+});
+async function setWatchScreen(on) {
+  on = !!on;
+  config = { ...config, watchScreen: on };
+  if (!SMOKE) { try { saveWatchScreen(on); } catch (e) { log("could not save the screen switch:", String(e?.message ?? e)); } }
+  if (on) await screenCapture.start(); else screenCapture.stop();
+  applyScreenIndicator();
+  return publicScreenState();
+}
+/** The gateway (re)started: it has no memory of the switch, so tell it, and resume capture if the user left it on. */
+async function resumeScreenAfterGateway() {
+  if (SMOKE) return;
+  if (config.watchScreen) { screenCapture.stop(); await screenCapture.start(); } else await screenGatewayPut({ watching: false, permission: screenState.permission });
+}
+ipcMain.handle("desktop:screen-get", (e) => (fromOurUi(e) ? publicScreenState() : null));
+ipcMain.handle("desktop:screen-set", (e, on) => (fromOurUi(e) && typeof on === "boolean" ? setWatchScreen(on) : null));
+ipcMain.handle("desktop:screen-open-settings", async (e) => {
+  const url = permissionSettingsUrl(process.platform);
+  if (!fromOurUi(e) || !url) return { ok: false };
+  try { await shell.openExternal(url); return { ok: true }; } catch { return { ok: false }; }
+});
+
 // ---------- tray + menus ----------
 let keepWorkingId = null;
 function setKeepWorking(on) {
@@ -468,7 +541,7 @@ function setKeepWorking(on) {
   keepWorkingId = applyKeepWorking({ powerSaveBlocker, enabled: config.keepWorking, current: keepWorkingId });
   refreshTray();
 }
-const handlers = { toggle: toggleWindow, newSession, setKernelMode, setKeepWorking, signOut, quit: () => app.quit(), hideWindow };
+const handlers = { toggle: toggleWindow, newSession, setKernelMode, setKeepWorking, setWatchScreen, signOut, quit: () => app.quit(), hideWindow };
 
 // Auto-update (electron-updater, generic feed; see lib/updater.mjs). Off in --mindclaw-smoke and in unpackaged runs.
 const updater = createUpdater({
@@ -498,16 +571,22 @@ function refreshTray() {
   tray.setContextMenu(Menu.buildFromTemplate(buildTrayTemplate({
     windowVisible: !!win && !win.isDestroyed() && win.isVisible(),
     kernelMode: config.kernelMode, shortcut: config.shortcut, handlers, update: updater.menuItem(), keepWorking: config.keepWorking,
+    watchingScreen: screenState.watching,
   })));
 }
 
-function createTray() {
+function trayIdleImage() {
   const img = nativeImage.createFromPath(join(here, "assets", "trayTemplate.png"));
   img.setTemplateImage(true);
-  tray = new Tray(img);
+  return img;
+}
+
+function createTray() {
+  tray = new Tray(trayIdleImage());
   tray.setToolTip("Daebot");
   tray.on("click", toggleWindow);
   refreshTray();
+  applyScreenIndicator();
 }
 
 /** Rebind the global summon shortcut from the web UI's Keyboard shortcuts card. Keeps the old one if the new one is invalid or taken. */
@@ -545,6 +624,7 @@ gateway.on("crashed", async ({ code, signal }) => {
   if (quitting) return;
   log(`gateway exited unexpectedly (${code ?? signal}); restarting`);
   stopWatcher();
+  screenCapture.stop(); // no gateway to feed: stop capturing (the saved switch is kept; it resumes when the next gateway is up)
   gatewayInfo = null;
   await loadUi();
 });
@@ -557,6 +637,7 @@ app.on("before-quit", (e) => {
   if (quitting) return;
   quitting = true;
   e.preventDefault();
+  screenCapture.stop();
   stopWatcher();
   saveBounds();
   // A downloaded update is applied on the way out (electron-updater's quit hook may not run after app.exit).

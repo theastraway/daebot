@@ -1,8 +1,10 @@
 // Menu templates (plain data; main.mjs feeds them to Menu.buildFromTemplate). Handlers are injected so this is testable.
 import { KERNEL_MODES } from "./kernel.mjs";
 
-export function buildTrayTemplate({ windowVisible, kernelMode, shortcut, handlers, update = null, keepWorking = true }) {
+export function buildTrayTemplate({ windowVisible, kernelMode, shortcut, handlers, update = null, keepWorking = true, watchingScreen = false }) {
   return [
+    // While the screen feed is on this is the first item, in red-dot wording: one click stops it.
+    ...(watchingScreen ? [{ label: "● Daebot is watching your screen. Click to stop", click: () => handlers.setWatchScreen?.(false) }, { type: "separator" }] : []),
     { label: windowVisible ? "Hide Daebot" : "Show Daebot", accelerator: shortcut || undefined, registerAccelerator: false, click: handlers.toggle },
     { label: "New Session", click: handlers.newSession },
     { type: "separator" },
@@ -12,6 +14,7 @@ export function buildTrayTemplate({ windowVisible, kernelMode, shortcut, handler
         label: m.label, type: "radio", checked: id === kernelMode, click: () => handlers.setKernelMode(id),
       })),
     },
+    { label: "Let Daebot watch my screen", type: "checkbox", checked: !!watchingScreen, click: () => handlers.setWatchScreen?.(!watchingScreen) },
     { label: "Keep working in the background", type: "checkbox", checked: !!keepWorking, click: () => handlers.setKeepWorking?.(!keepWorking) },
     { type: "separator" },
     ...(update ? [update, { type: "separator" }] : []),

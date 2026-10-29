@@ -4,8 +4,9 @@ import { dirname, join } from "node:path";
 import { daebotHome } from "./home.mjs";
 
 // keepWorking: keep the gateway running and the machine awake while the window is closed/hidden (see keepworking.mjs).
+// watchScreen: the "Let Daebot watch my screen" switch. OFF by default; only the user turns it on (account menu or tray); the tray shows a red dot while it is on.
 // idleTrimSeconds: after the window has been hidden this long, its renderer is destroyed to cut idle RAM (0 = never).
-export const DEFAULT_CONFIG = Object.freeze({ shortcut: "CommandOrControl+Shift+Space", kernelMode: "enforced", idleTrimSeconds: 300, keepWorking: true });
+export const DEFAULT_CONFIG = Object.freeze({ shortcut: "CommandOrControl+Shift+Space", kernelMode: "enforced", idleTrimSeconds: 300, keepWorking: true, watchScreen: false });
 export const KERNEL_MODE_NAMES = Object.freeze(["enforced", "shadow", "off"]);
 
 /** Daebot's home folder (~/.daebot). DAEBOT_HOME or the older MINDCLAW_DESKTOP_HOME override it; see home.mjs. */
@@ -40,6 +41,7 @@ export function normalizeConfig(raw) {
     if (typeof raw.kernelMode === "string" && KERNEL_MODE_NAMES.includes(raw.kernelMode.toLowerCase())) out.kernelMode = raw.kernelMode.toLowerCase();
     if (Number.isInteger(raw.idleTrimSeconds) && raw.idleTrimSeconds >= 0 && raw.idleTrimSeconds <= 86400) out.idleTrimSeconds = raw.idleTrimSeconds;
     if (typeof raw.keepWorking === "boolean") out.keepWorking = raw.keepWorking;
+    if (raw.watchScreen === true) out.watchScreen = true;
     if (raw.shortcut === null || raw.shortcut === "") out.shortcut = null; // explicit opt-out
   }
   return out;
@@ -89,6 +91,16 @@ export function saveKeepWorking(on, path = configPath(), io) {
     if (p && typeof p === "object" && !Array.isArray(p)) existing = p;
   } catch { /* new file */ }
   writeJson(path, { ...existing, keepWorking: !!on }, io);
+}
+
+/** Persist just watchScreen, preserving other user keys in desktop.json. */
+export function saveWatchScreen(on, path = configPath(), io) {
+  let existing = {};
+  try {
+    const p = JSON.parse(readFileSync(path, "utf8"));
+    if (p && typeof p === "object" && !Array.isArray(p)) existing = p;
+  } catch { /* new file */ }
+  writeJson(path, { ...existing, watchScreen: !!on }, io);
 }
 
 // ---- window bounds ----
