@@ -6,6 +6,9 @@
 // `completeOAuth` are only reachable from gateway routes that need the signed-in user's session cookie.
 // Credentials live sealed in the McpStore, are only ever put into HTTP headers, and are redacted from anything a model reads.
 // Everything a connected server says (tool descriptions, tool results, errors) is untrusted data.
+import { ConnectorPrefs } from "./prefs.ts";
+import { providerFor } from "../mind/integrations.ts";
+import type { AppRow } from "../mind/integrations.ts";
 import { randomBytes } from "node:crypto";
 import { McpError, McpHttpClient, McpHttpStatusError } from "../mcp/client.ts";
 import { escapeBotText } from "../bots/bus.ts";
@@ -99,6 +102,14 @@ export interface ServerView {
   /** The MIND app this connection rides on (auth "integration"), e.g. "github". */
   integration?: string;
   status?: "ok" | "error" | "reauth_required"; lastError?: string; preset?: string;
+}
+export interface ConnectorAccount { key: string; kind: "mind" | "mcp"; serverId?: string; label: string; account: string; status: "connected" | "reauth" | "off"; note?: string; addedAt?: number }
+export interface ConnectorToolView { server: string; name: string; description: string; readOnly: boolean; destructive: boolean; enabled: boolean }
+export interface ConnectorDetail {
+  id: string; kind: "mind" | "mcp"; name: string; description: string; developer: string;
+  accounts: ConnectorAccount[]; addAccount: { supported: boolean; note: string };
+  tools: ConnectorToolView[]; enabledTools: number; toolsNote?: string;
+  apps: { name: string; subtitle: string }[]; capabilities: number; serverIds: string[]; host?: string; publisher?: string;
 }
 export interface PendingView {
   id: string; url: string; host: string; publisher: Publisher;
@@ -311,6 +322,8 @@ export interface McpConnectOptions {
   mind?: MindMcpOptions;
   /** One plain line per notable event (the move of local servers into MIND). Names and counts only, never a secret. Default: stderr. */
   log?: (line: string) => void;
+  /** Where connector preferences (switched-off tools, account labels) are saved. Default: next to the store. */
+  prefsDir?: string;
 }
 
 // ---------------------------------------------------------------- MIND mode (MIND holds the connections)
@@ -348,6 +361,7 @@ interface MindState {
 
 export class McpConnectService {
   readonly store: McpStore;
+  readonly prefs: ConnectorPrefs;
   private net: SafeFetch;
   private env: NodeJS.ProcessEnv;
   private now: () => number;
@@ -365,6 +379,7 @@ export class McpConnectService {
 
   constructor(o: McpConnectOptions) {
     this.store = o.store;
+    this.prefs = new ConnectorPrefs({ dir: o.prefsDir ?? o.store.dir });
     this.env = o.env ?? process.env;
     this.net = o.net ?? createSafeFetch();
     this.now = o.now ?? Date.now;
@@ -810,6 +825,8 @@ export class McpConnectService {
   }
 
   remove(uid: string, id: string): boolean {
+    const nm = this.store.get(uid, id)?.name;
+    if (nm) this.prefs.forgetServer(uid, nm, `srv:${id}`);
     this.dropClient(uid, id);
     return this.store.remove(uid, id);
   }
@@ -824,8 +841,70 @@ export class McpConnectService {
       throw new McpConnectError(`${cleanLine(srv.name, 40)} comes from your ${cleanLine(app, 40)} connection in MIND. Switch it off here, or disconnect ${cleanLine(app, 40)} in the Connectors list to remove it.`, 409, "integration");
     }
     const ok = await this.mindCall(uid, st, () => this.backend!.remove(uid, id));
+    this.prefs.forgetServer(uid, srv.name, `srv:${id}`);
     this.dropMindServer(uid, st, id);
     return ok;
+  }
+
+  // ---------------------------------------------------------------- connector page (accounts, tools, switches)
+
+  /** Everything the connector page shows, for one card id: a MIND app (github), an App Store connector (mcp:linear) or a local one (local:n8n). Per user, no secret. */
+  async connectorDetail(uid: string, id: string, providers: AppRow[]): Promise<ConnectorDetail | undefined> {
+    this.requireEnabled();
+    await this.prepare(uid);
+    const views = this.list(uid);
+    const label = (key: string, dflt: string) => this.prefs.label(uid, key) ?? dflt;
+    const toolsOf = (vs: ServerView[]): ConnectorToolView[] => vs.flatMap((v) => v.tools.map((t) => ({ server: v.name, name: t.name, description: cleanLine(t.description, 160), readOnly: t.readOnly, destructive: t.destructive, enabled: !this.prefs.toolOff(uid, v.name, t.name) })));
+    const prov = providers.find((p) => p.provider === id);
+    if (prov && (prov.connected || prov.configured !== false)) {
+      const rides = views.filter((v) => v.auth === "integration" && v.integration === prov.provider);
+      const key = `mind:${prov.provider}`;
+      const accounts: ConnectorAccount[] = prov.connected ? [{
+        key, kind: "mind", label: label(key, prov.account ?? "primary"), account: prov.account ?? "", status: prov.needsReconnect ? "reauth" : "connected",
+      }] : [];
+      for (const v of rides) if (v.status && v.status !== "ok" && accounts[0]) { accounts[0].status = "reauth"; accounts[0].note = v.status === "reauth_required" ? "Its tool connection needs you to sign in again." : (v.lastError ?? "MIND reports an error with its tool connection."); }
+      const tools = toolsOf(rides);
+      return {
+        id, kind: "mind", name: prov.name, description: prov.blurb || `${prov.name} through MIND.`, developer: prov.name,
+        accounts,
+        addAccount: { supported: false, note: `MIND connects one ${prov.name} account for your login. To use a different one, Uninstall and connect again.` },
+        tools, enabledTools: tools.filter((t) => t.enabled).length,
+        toolsNote: prov.connected && !rides.length ? `${prov.name} is connected to MIND for syncing only, so Daebot has no ${prov.name} tools yet. Select Add tools on the card.` : undefined,
+        apps: [{ name: prov.name, subtitle: "Connector" }], capabilities: 1,
+        serverIds: rides.map((v) => v.id),
+      };
+    }
+    const items = await this.catalogItems(uid);
+    const item = items.find((i) => i.id === id);
+    if (!item) return undefined;
+    const mine = views.filter((v) => (v.preset && v.preset === item.id) || (item.serverId && v.id === item.serverId));
+    const accounts: ConnectorAccount[] = mine.map((v) => {
+      const key = `srv:${v.id}`;
+      return { key, kind: "mcp", serverId: v.id, label: label(key, v.name), account: v.host, status: v.status && v.status !== "ok" ? "reauth" : v.enabled ? "connected" : "off", ...(v.lastError ? { note: v.lastError } : {}), addedAt: v.addedAt };
+    });
+    const tools = toolsOf(mine);
+    const multi = id.startsWith("local:");
+    return {
+      id, kind: "mcp", name: item.name, description: item.blurb || `${item.name} connector.`, developer: item.publisher === "official" ? item.name : item.publisher === "community" ? "Community" : "You",
+      accounts,
+      addAccount: multi ? { supported: true, note: "Add another server address for this connector." } : { supported: false, note: `Daebot connects one ${item.name} account per sign-in. To use a different one, Uninstall and connect again.` },
+      tools, enabledTools: tools.filter((t) => t.enabled).length,
+      apps: [{ name: item.name, subtitle: "Connector" }], capabilities: 1,
+      serverIds: mine.map((v) => v.id), host: item.host, publisher: item.publisher,
+    };
+  }
+
+  setToolEnabled(uid: string, server: string, tool: string, enabled: boolean): void {
+    if (!/^[a-z0-9][a-z0-9-]{0,30}$/.test(server) || !/^[A-Za-z0-9_.-]{1,64}$/.test(tool)) throw new McpConnectError("That tool name is not valid.", 400);
+    const known = this.list(uid).some((v) => v.name === server && v.tools.some((t) => t.name === tool));
+    if (!known) throw new McpConnectError("That tool is not part of a connector you have.", 404);
+    this.prefs.setTool(uid, server, tool, enabled);
+  }
+
+  setAccountLabel(uid: string, key: string, label: string): string {
+    if (!/^(mind:[a-z0-9-]{1,40}|srv:[A-Za-z0-9_-]{1,40})$/.test(key)) throw new McpConnectError("That account is not valid.", 400);
+    this.prefs.setLabel(uid, key, label);
+    return this.prefs.label(uid, key) ?? "";
   }
 
   /** Re-reads the server's tool list. A tool that is new or whose description changed loses any allow it had (a server cannot quietly swap a tool).
@@ -900,7 +979,7 @@ export class McpConnectService {
     if (b) void this.prepare(uid).catch(() => {}); // a due read starts now; this round uses the last good one
     const st = this.active(uid);
     if (st) return this.mindTools(uid, st);
-    const version = this.store.version(uid);
+    const version = this.store.version(uid) * 1_000_003 + this.prefs.version(uid);
     const hit = this.toolCache.get(uid);
     if (hit && hit.version === version) return hit.tools;
     const out = this.localToolObjects(uid, new Set<string>(), { n: this.limits().maxTools });
@@ -913,6 +992,7 @@ export class McpConnectService {
     for (const rec of this.store.list(uid)) {
       if (!rec.enabled || skipUrls?.has(canonUrl(rec.url))) continue;
       for (const t of rec.tools) {
+        if (this.prefs.toolOff(uid, rec.name, t.name)) continue; // the user switched this tool off in the connector's page
         if (budget.n-- <= 0) break;
         out.push(this.buildTool(uid, rec, t, toolSafeName(rec.name, t.name, used)));
       }
@@ -987,7 +1067,8 @@ export class McpConnectService {
   /** Changes whenever this user's connections or their tools change, wherever they are held. */
   version(uid: string): number {
     const st = this.active(uid);
-    return st ? this.store.version(uid) + 1 + st.version * 1_000_003 : this.store.version(uid);
+    const pv = this.prefs.version(uid) * 7_919;
+    return st ? this.store.version(uid) + 1 + st.version * 1_000_003 + pv : this.store.version(uid) + pv;
   }
 
   /** Every connection this user has, wherever it is held, reduced to what name, address and preset checks need. A local copy of an address MIND holds is not counted twice. */
@@ -1239,7 +1320,7 @@ export class McpConnectService {
   }
 
   private mindTools(uid: string, st: MindState): Tool[] {
-    const sig = `${st.version}|${this.store.version(uid)}`;
+    const sig = `${st.version}|${this.store.version(uid)}|${this.prefs.version(uid)}`;
     const hit = this.mindToolCache.get(uid);
     if (hit && hit.sig === sig) return hit.tools;
     const used = new Set<string>();
@@ -1250,6 +1331,7 @@ export class McpConnectService {
       const set = st.toolSets.get(srv.id);
       if (!set) continue; // its tool list has not been read yet; the read is under way
       for (const t of set.tools) {
+        if (this.prefs.toolOff(uid, srv.name, t.name)) continue; // the user switched this tool off in the connector's page
         if (budget.n-- <= 0) break;
         out.push(this.buildMindTool(uid, srv, t, toolSafeName(srv.name, t.name, used)));
       }

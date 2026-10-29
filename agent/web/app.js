@@ -10,6 +10,7 @@ import { initModels } from "/models.js";
 import { initApps } from "/apps.js";
 import { initMcp } from "/mcp.js";
 import { initConnectors } from "/connectors.js";
+import { openConnectorDetail } from "/connector-detail.js";
 import { transcriptBehind } from "/sync.js";
 import { confirmDialog, deleteControl, renameControl, editInline, isRenaming, sessionDeleteText } from "/manage.js";
 import { compareBuild, webUpdateText, WEB_CHECK_MS } from "/webupdate.js";
@@ -1408,7 +1409,7 @@ $("btn-apps").addEventListener("click", closeSidebar); // phones: the drawer ste
 // "Connected MCP servers" is a section of the Apps card (hidden when the deployment has the feature off).
 // "Connectors" (the MIND App Store's MCP servers) is registered first so it sits above the connected-servers list.
 let mcp; // assigned just below; the Connectors section only uses it after the user clicks
-initConnectors({ apps, json, getMcp: () => mcp });
+initConnectors({ apps, json, getMcp: () => mcp, openDetail: openConnectorDetail });
 const mcpSec = h("section", "apps-sec"); mcpSec.dataset.sec = "mcp"; mcpSec.hidden = true;
 const mcpHead = h("h3", "", "Connected MCP servers"); mcpHead.id = "apps-h-mcp";
 const mcpBody = h("div", "apps-body mcp-panel"); mcpBody.setAttribute("role", "group"); mcpBody.setAttribute("aria-labelledby", "mcpHead");

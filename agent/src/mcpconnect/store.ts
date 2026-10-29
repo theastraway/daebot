@@ -49,7 +49,10 @@ export class McpStore {
   /** Records on disk that this process could not decrypt (wrong key or tampered). */
   unreadable = 0;
 
+  /** The folder the store lives in (connector preferences sit next to it). */
+  readonly dir: string;
   constructor(o: { dir: string; secretKey?: string }) {
+    this.dir = o.dir;
     this.path = join(o.dir, "daebot-mcp.json");
     if (o.secretKey !== undefined && o.secretKey.trim() !== "") {
       try { this.key = deriveDataKey(o.secretKey); } catch (e) { throw new HostedConfigError((e as Error).message); }

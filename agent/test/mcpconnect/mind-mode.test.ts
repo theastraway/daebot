@@ -706,3 +706,55 @@ test("linkIntegration: Add tools asks MIND now; a vendor that rejects the app's 
   await until(() => g.svc.tools("bob").length === 2);
   assert.deepEqual(g.svc.integrationServers("bob").map((s) => [s.provider, s.tools, s.status]), [["github", 2, "ok"]]);
 });
+
+test("connector page: accounts and tools per user; a switched-off tool leaves the agent's list, survives a restart, and never touches another user", async () => {
+  const mind = newMind();
+  n8n(mind);
+  const g = gateway(mind);
+  await g.svc.prepare("alice");
+  await g.svc.connectWithToken("alice", { presetId: "local:n8n", url: N8N_URL, token: N8N_TOKEN });
+  await until(() => g.svc.tools("alice").length === 3);
+  const d = await g.svc.connectorDetail("alice", "local:n8n", []);
+  assert.ok(d);
+  assert.equal(d!.accounts.length, 1);
+  assert.equal(d!.accounts[0].status, "connected");
+  assert.equal(d!.addAccount.supported, true, "a second n8n address is allowed");
+  assert.deepEqual([d!.tools.length, d!.enabledTools], [3, 3]);
+  const server = d!.tools[0].server;
+  g.svc.setToolEnabled("alice", server, "execute_workflow", false);
+  assert.equal(g.svc.tools("alice").length, 2);
+  assert.equal(g.svc.tools("alice").some((t) => t.spec.name.endsWith("execute_workflow")), false);
+  const d2 = await g.svc.connectorDetail("alice", "local:n8n", []);
+  assert.deepEqual([d2!.enabledTools, d2!.tools.find((t) => t.name === "execute_workflow")!.enabled], [2, false]);
+  // saved on the server: a fresh service on the same disk keeps the switch
+  const again = gateway(mind, { dir: g.dir });
+  await again.svc.prepare("alice");
+  await until(() => again.svc.tools("alice").length === 2);
+  // another user has none of it, and cannot switch a tool of a connector they do not have
+  assert.deepEqual(await again.svc.connectorDetail("bob", "local:n8n", []).then((x) => x!.accounts), []);
+  assert.throws(() => again.svc.setToolEnabled("bob", server, "execute_workflow", false), /not part of a connector you have/);
+  assert.equal(again.svc.prefs.toolOff("bob", server, "execute_workflow"), false);
+  // switching back on restores it; the account label is saved too
+  again.svc.setToolEnabled("alice", server, "execute_workflow", true);
+  assert.equal(again.svc.tools("alice").length, 3);
+  const key = d!.accounts[0].key;
+  assert.equal(again.svc.setAccountLabel("alice", key, "  work  n8n "), "work n8n");
+  assert.equal((await again.svc.connectorDetail("alice", "local:n8n", []))!.accounts[0].label, "work n8n");
+  assert.throws(() => again.svc.setAccountLabel("alice", "../x", "a"), /not valid/);
+  assert.equal(await again.svc.connectorDetail("alice", "mcp:nothing", []), undefined);
+});
+
+test("connector page: a MIND app shows its account, says plainly when it has no tool connection, and one account only", async () => {
+  const mind = newMind();
+  const g = gateway(mind, { catalog: async () => [] });
+  const providers: any[] = [{ provider: "github", name: "GitHub", blurb: "Repos", auth: "oauth", configured: true, connected: true, needsReconnect: false, account: "octo", caps: ["files"] }];
+  await g.svc.prepare("alice");
+  const d = await g.svc.connectorDetail("alice", "github", providers);
+  assert.ok(d);
+  assert.deepEqual([d!.kind, d!.accounts[0].account, d!.accounts[0].status, d!.tools.length], ["mind", "octo", "connected", 0]);
+  assert.match(d!.toolsNote ?? "", /no GitHub tools yet/);
+  assert.equal(d!.addAccount.supported, false);
+  assert.match(d!.addAccount.note, /one GitHub account/);
+  providers[0].needsReconnect = true;
+  assert.equal((await g.svc.connectorDetail("alice", "github", providers))!.accounts[0].status, "reauth");
+});
