@@ -5,7 +5,7 @@ import { daebotHome } from "./home.mjs";
 
 // keepWorking: keep the gateway running and the machine awake while the window is closed/hidden (see keepworking.mjs).
 // idleTrimSeconds: after the window has been hidden this long, its renderer is destroyed to cut idle RAM (0 = never).
-export const DEFAULT_CONFIG = Object.freeze({ shortcut: "Alt+Space", kernelMode: "enforced", idleTrimSeconds: 300, keepWorking: true });
+export const DEFAULT_CONFIG = Object.freeze({ shortcut: "CommandOrControl+Shift+Space", kernelMode: "enforced", idleTrimSeconds: 300, keepWorking: true });
 export const KERNEL_MODE_NAMES = Object.freeze(["enforced", "shadow", "off"]);
 
 /** Daebot's home folder (~/.daebot). DAEBOT_HOME or the older MINDCLAW_DESKTOP_HOME override it; see home.mjs. */
@@ -69,6 +69,16 @@ export function saveKernelMode(mode, path = configPath(), io) {
     if (p && typeof p === "object" && !Array.isArray(p)) existing = p;
   } catch { /* new file */ }
   writeJson(path, { ...existing, kernelMode: mode }, io);
+}
+
+/** Persist just the summon shortcut (an accelerator, or null to turn it off), preserving other user keys in desktop.json. */
+export function saveShortcut(accelerator, path = configPath(), io) {
+  let existing = {};
+  try {
+    const p = JSON.parse(readFileSync(path, "utf8"));
+    if (p && typeof p === "object" && !Array.isArray(p)) existing = p;
+  } catch { /* new file */ }
+  writeJson(path, { ...existing, shortcut: accelerator }, io);
 }
 
 /** Persist just keepWorking, preserving other user keys in desktop.json. */

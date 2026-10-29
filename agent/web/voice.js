@@ -1,5 +1,9 @@
-// MIND Voice for Daebot (web). Mic button (hold, or click to start and click to stop), spoken answers, and a hands-free
-// conversation mode. Speech to text and text to speech both go through the gateway (/voice/stt, /voice/tts), which bills the
+// MIND Voice for Daebot (web). Two distinct ways to talk, never mixed up:
+//   DICTATION  (mic button / Right Option): speech to text only. The words are typed into the message box at the cursor.
+//              Nothing is sent and nothing is read aloud.
+//   VOICE      (wave-in-bubble button / Right Command, and the hands-free wave button): you talk to Daebot. The words are
+//              SENT when you let go (or stop talking) and the answer is read aloud.
+// Each is hold-to-talk, or click to start and click to stop. Also: spoken answers, and a hands-free conversation mode. Speech to text and text to speech both go through the gateway (/voice/stt, /voice/tts), which bills the
 // signed-in user's own MIND credits. The mascot (m-bot) shows what voice is doing: eyes wide while listening, spinning while
 // transcribing, mouth moving with the audio while speaking. No innerHTML; no third-party code; audio never leaves this
 // origin except through the gateway.
@@ -57,6 +61,30 @@ function silentWav() {
   return new Blob([buf], { type: "audio/wav" });
 }
 
+/** Text of a box after typing `text` at the cursor (or over the selection), with a space on either side only where one is needed. */
+export function insertAt(value, start, end, text) {
+  const v = String(value || "");
+  const a = Math.max(0, Math.min(Number.isInteger(start) ? start : v.length, v.length));
+  const b = Math.max(a, Math.min(Number.isInteger(end) ? end : a, v.length));
+  const t = String(text || "").trim();
+  if (!t) return { value: v, caret: a };
+  const before = v.slice(0, a), after = v.slice(b);
+  const lead = before && !/\s$/.test(before) ? " " : "";
+  const trail = after && !/^\s/.test(after) ? " " : "";
+  const ins = lead + t + trail;
+  return { value: before + ins + after, caret: before.length + lead.length + t.length };
+}
+
+/**
+ * The ONE place a transcript is routed. Dictation inserts and never sends; voice sends. Anything else is treated as dictation
+ * (the safe side: words in a box, nothing leaves).
+ */
+export function deliverTranscript(mode, text, { insert, send }) {
+  if (mode === "voice") { send(text); return "sent"; }
+  insert(text);
+  return "inserted";
+}
+
 const rms = (buf) => { let s = 0; for (let i = 0; i < buf.length; i++) s += buf[i] * buf[i]; return Math.sqrt(s / buf.length); };
 
 /**
@@ -81,6 +109,9 @@ export function initVoice(o) {
   let rec = null;                   // active recording { mr, stream, ctx, chunks, timer, ... }
   let abortFetch = null;            // in-flight stt/tts fetch
   let pendingTurn = false;          // a voice message is out; its answer should be spoken
+  let voiceTurn = false;            // that message was a VOICE-mode turn: speak the answer even when spoken answers are off
+  let mode = "voice";               // dictate | voice: what the mic is doing now (or did last)
+  let keyHeld = false;              // a hotkey is currently held down
   const audio = new Audio();
   audio.preload = "auto";
   let playCtx = null, playAn = null, playBuf = null, playSrc = null, playUrl = "", unlocked = false;
@@ -91,8 +122,22 @@ export function initVoice(o) {
   function paint() {
     const live = state !== "idle" || convo;
     els.dock.hidden = !live;
-    els.mic.setAttribute("aria-pressed", String(state === "listening"));
-    els.mic.classList.toggle("on", state === "listening");
+    const dictating = live && mode === "dictate";
+    els.mic.setAttribute("aria-pressed", String(state === "listening" && mode === "dictate"));
+    els.mic.classList.toggle("on", state === "listening" && mode === "dictate");
+    if (els.voiceBtn) {
+      els.voiceBtn.setAttribute("aria-pressed", String(state === "listening" && mode === "voice"));
+      els.voiceBtn.classList.toggle("on", state === "listening" && mode === "voice");
+    }
+    els.dock.dataset.mode = live ? mode : "";
+    if (els.pill) {
+      els.pill.hidden = !live;
+      els.pill.dataset.mode = mode;
+      const lab = els.pill.querySelector(".vpill-text"); if (lab) lab.textContent = dictating ? "Dictating…" : "Voice";
+      const use = els.pill.querySelector("use"); if (use) use.setAttribute("href", dictating ? "#i-mic" : "#i-voice");
+    }
+    els.composer.classList.toggle("vm-dictate", dictating);
+    els.composer.classList.toggle("vm-voice", live && mode === "voice");
     els.speak.setAttribute("aria-pressed", String(speakOn));
     els.speak.classList.toggle("on", speakOn);
     els.speak.querySelector("use").setAttribute("href", speakOn ? "#i-speaker" : "#i-speaker-off");
@@ -104,8 +149,8 @@ export function initVoice(o) {
     els.dock.dataset.state = state;
     const text = {
       idle: convo ? "Your turn. Say something." : "",
-      listening: convo ? "Listening… just talk" : "Listening… release or tap to send",
-      transcribing: "Transcribing…",
+      listening: convo ? "Listening… just talk" : mode === "dictate" ? "Listening… release to insert, nothing is sent" : "Listening… release to send",
+      transcribing: mode === "dictate" ? "Typing out what you said…" : "Transcribing…",
       thinking: "Thinking…",
       speaking: "Speaking… Esc to stop",
     }[state];
@@ -127,6 +172,7 @@ export function initVoice(o) {
   if (!canRecord) {
     els.mic.disabled = true;
     els.mic.title = "Voice input is not supported in this browser";
+    if (els.voiceBtn) { els.voiceBtn.disabled = true; els.voiceBtn.title = "Voice input is not supported in this browser"; }
     els.convo.disabled = true;
     els.convo.title = "Hands-free needs microphone support";
   }
@@ -164,9 +210,10 @@ export function initVoice(o) {
     return "Microphone is off for Daebot. Allow it in your system privacy settings, then try again.";
   }
 
-  async function startListening(how) {
+  async function startListening(how, as = "voice") {
     if (!canRecord || unavailable || state === "listening" || state === "transcribing") return;
     stopSpeaking();
+    mode = as === "dictate" ? "dictate" : "voice";
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
@@ -183,12 +230,13 @@ export function initVoice(o) {
     let mr;
     try { mr = recType ? new MediaRecorder(stream, { mimeType: recType }) : new MediaRecorder(stream); }
     catch { stream.getTracks().forEach((t) => t.stop()); ctx.close?.(); convo = false; setState("idle"); return o.notify("This browser could not start recording."); }
-    const r = { mr, stream, ctx, chunks: [], how, t0: performance.now(), heard: false, lastVoice: 0, floor: 0, samples: 0, discard: false, timer: 0 };
+    const r = { mr, stream, ctx, chunks: [], how, mode, t0: performance.now(), heard: false, lastVoice: 0, floor: 0, samples: 0, discard: false, timer: 0 };
     rec = r;
     mr.ondataavailable = (e) => { if (e.data && e.data.size) r.chunks.push(e.data); };
     mr.onstop = () => { stopTracks(r); if (rec === r) rec = null; finish(r); };
     mr.start(250);
     setState("listening");
+    if (how === "key" && !keyHeld) setTimeout(() => stopListening(), 0); // the key was let go while the mic was opening
     if (how === "hold" && !press.down) { if (press.upT - press.t >= HOLD_MS) setTimeout(() => stopListening(), 0); else r.how = "click"; } // released while the mic was opening
     r.timer = setInterval(() => {
       an.getFloatTimeDomainData(buf);
@@ -198,7 +246,7 @@ export function initVoice(o) {
       const gate = Math.max(MIN_RMS, r.floor * 2.5);
       if (lvl > gate) { r.heard = true; r.lastVoice = now; }
       if (now - r.t0 > MAX_REC_MS) return stopListening();
-      if (r.how !== "hold") {
+      if (r.how !== "hold" && r.how !== "key") {
         if (r.heard && now - r.lastVoice > SILENCE_MS) return stopListening();
         if (!r.heard && now - r.t0 > NO_SPEECH_MS) { r.discard = true; if (convo) { convo = false; o.notify("Hands-free paused: I did not hear anything. Tap the wave button to continue."); } return stopListening(); }
       }
@@ -230,8 +278,8 @@ export function initVoice(o) {
       const j = await res.json().catch(() => ({}));
       o.creditsChanged();
       const text = (j.text || "").trim();
-      if (!text) { setState("idle"); bots().forEach((b) => b.flash?.("sad", 1400)); o.notify("I could not make out any words. Try again a little closer to the mic."); return convoNext(); }
-      submit(text);
+      if (!text) { setState("idle"); bots().forEach((b) => b.flash?.("sad", 1400)); o.notify("I could not make out any words. Try again a little closer to the mic."); return r.mode === "voice" ? convoNext() : undefined; }
+      deliverTranscript(r.mode, text, { insert: dictateInto, send: submit });
     } catch (e) {
       abortFetch = null;
       if (e && e.name === "AbortError") return setState("idle");
@@ -261,11 +309,22 @@ export function initVoice(o) {
     return false;
   }
 
+  /** Dictation: type the words into the message box at the cursor. Never sends, never speaks. */
+  function dictateInto(text) {
+    const box = els.input;
+    const r = insertAt(box.value, box.selectionStart, box.selectionEnd, text);
+    box.value = r.value;
+    try { box.setSelectionRange(r.caret, r.caret); } catch { /* not focusable */ }
+    box.dispatchEvent(new Event("input"));
+    setState("idle");
+    try { box.focus({ preventScroll: true }); } catch { box.focus?.(); }
+  }
+
   function submit(text) {
     if (o.isBusy()) { setState("idle"); els.input.value = text; els.input.dispatchEvent(new Event("input")); return o.notify("Daebot is still answering. Your words are in the box; press Enter to send when it finishes."); }
     els.input.value = text;
     els.input.dispatchEvent(new Event("input"));
-    pendingTurn = true;
+    pendingTurn = true; voiceTurn = true;
     setState("thinking");
     els.composer.requestSubmit();
   }
@@ -327,27 +386,47 @@ export function initVoice(o) {
   function convoNext() { if (convo && state === "idle") setTimeout(() => { if (convo && state === "idle" && !o.isBusy()) startListening("convo"); }, 350); }
 
   // ---------- controls ----------
-  // Mic: press and hold to talk (release sends); tap to start, silence or a second tap ends it. Keyboard: Enter/Space toggles.
+  // Mic = DICTATION, voice button = VOICE. Each: press and hold to talk (release ends it); tap to start, silence or a second tap ends it.
+  // Keyboard: Enter/Space toggles. The hotkeys (hotkeys.js) call holdStart(mode) / holdEnd().
   const press = { down: false, t: 0, upT: 0, swallow: false };
-  els.mic.addEventListener("pointerdown", (e) => {
-    if (e.button !== 0 || els.mic.disabled) return;
-    unlock();
-    if (state === "listening") { press.swallow = true; return stopListening(); } // second tap: send now
-    press.down = true; press.t = performance.now(); press.swallow = false;
-    startListening("hold");
-  });
+  function wirePress(btn, as) {
+    btn.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || btn.disabled) return;
+      unlock();
+      if (state === "listening") { press.swallow = true; return stopListening(); } // second tap: finish now
+      press.down = true; press.t = performance.now(); press.swallow = false;
+      startListening("hold", as);
+    });
+    btn.addEventListener("pointerup", release);
+    btn.addEventListener("pointercancel", release);
+    btn.addEventListener("click", (e) => {
+      if (e.detail !== 0) return; // pointer clicks are handled above
+      unlock();
+      if (state === "listening") stopListening(); else startListening("click", as);
+    });
+  }
   const release = () => {
     if (!press.down) return;
     press.down = false; press.upT = performance.now();
     if (rec && rec.how === "hold") { if (press.upT - press.t >= HOLD_MS) stopListening(); else rec.how = "click"; }
   };
-  els.mic.addEventListener("pointerup", release);
-  els.mic.addEventListener("pointercancel", release);
-  els.mic.addEventListener("click", (e) => {
-    if (e.detail !== 0) return; // pointer clicks are handled above
+  wirePress(els.mic, "dictate");
+  if (els.voiceBtn) wirePress(els.voiceBtn, "voice");
+
+  /** Hotkey down: open the mic in `as` mode ("dictate" | "voice") until holdEnd(). */
+  function holdStart(as) {
+    if (!canRecord || unavailable) return;
+    if (state === "speaking") stopSpeaking(); // talking over Daebot cuts it off
+    else if (state !== "idle") return;       // already listening, transcribing or waiting for an answer
     unlock();
-    if (state === "listening") stopListening(); else startListening("click");
-  });
+    keyHeld = true;
+    startListening("key", as);
+  }
+  /** Hotkey up: stop and deliver (dictation inserts, voice sends). */
+  function holdEnd() {
+    keyHeld = false;
+    if (rec && rec.how === "key") stopListening();
+  }
 
   els.speak.addEventListener("click", () => {
     unlock();
@@ -358,7 +437,7 @@ export function initVoice(o) {
   els.convo.addEventListener("click", () => {
     unlock();
     if (convo) return endConvo();
-    convo = true; speakOn = true; prefs.set("daebot:speak", "1");
+    convo = true; speakOn = true; mode = "voice"; prefs.set("daebot:speak", "1");
     paint();
     startListening("convo");
   });
@@ -366,7 +445,7 @@ export function initVoice(o) {
 
   function endConvo() { convo = false; cancel(); }
   function cancel() {
-    pendingTurn = false;
+    pendingTurn = false; voiceTurn = false; keyHeld = false;
     if (abortFetch) { abortFetch.abort(); abortFetch = null; }
     stopListening(true);
     stopSpeaking();
@@ -386,16 +465,20 @@ export function initVoice(o) {
 
   return {
     /** A typed message was sent: do not read it back as a voice turn. */
-    turnStart(viaVoice) { if (!viaVoice && !pendingTurn) { stopSpeaking(); if (convo) { convo = false; cancel(); } } },
+    turnStart(viaVoice) { if (!viaVoice && !pendingTurn) { voiceTurn = false; stopSpeaking(); if (convo) { convo = false; cancel(); } } },
     /** The answer finished streaming. Speak it when spoken answers are on (or this turn came from the mic in a convo). */
     turnDone(text) {
       const wasVoice = pendingTurn; pendingTurn = false;
+      const forced = voiceTurn && wasVoice; voiceTurn = false; // a VOICE-mode turn is always answered aloud
       if (state === "thinking") setState("idle");
-      if (!(speakOn || convo) || unavailable) { if (convo) convoNext(); return; }
+      if (!(speakOn || convo || forced) || unavailable) { if (convo) convoNext(); return; }
       if (!wasVoice && !speakOn) return;
       if (text && text.trim()) speak(text); else convoNext();
     },
     cancel,
+    holdStart,
+    holdEnd,
+    mode: () => mode,
     state: () => state,
     isConvo: () => convo,
   };

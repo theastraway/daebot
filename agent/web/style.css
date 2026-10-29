@@ -240,6 +240,19 @@ kbd { font-size: 10.5px; background: var(--surface-2); border: 1px solid var(--l
 .voice-dock .vbars i { display: block; width: 4px; height: 22px; border-radius: 2px; background: var(--ink-3); transform: scaleY(.2); transition: transform .06s linear; }
 .voice-dock[data-state="listening"] .vbars i { background: var(--accent); }
 .voice-dock[data-state="speaking"] .vbars i { background: var(--led-deep); }
+.voice-dock .vpill { display: inline-flex; align-items: center; gap: 5px; flex: none; padding: 3px 10px 3px 7px; border-radius: 999px; font: 600 12.5px var(--sans); background: var(--surface-2); color: var(--ink-2); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.voice-dock .vpill[hidden] { display: none; }
+.voice-dock .vpill .ic { width: 15px; height: 15px; }
+/* Dictation = the accent (a mic typing into the box). Voice = its own colour (a conversation with Daebot). */
+.voice-dock[data-mode="dictate"] .vpill { background: var(--accent); color: #fff; box-shadow: none; }
+.voice-dock[data-mode="voice"] .vpill { background: #1f7a5a; color: #fff; box-shadow: none; }
+.voice-dock[data-mode="voice"][data-state="listening"] .vbars i { background: #1f7a5a; }
+.mic.voice { color: #1f7a5a; }
+.mic.voice:hover { color: #176148; }
+.mic.voice.on { background: #1f7a5a; color: #fff; }
+.mic.voice.on::after { border-color: #1f7a5a; }
+.composer.vm-dictate { box-shadow: var(--shadow), 0 0 0 2px var(--accent); }
+.composer.vm-voice { box-shadow: var(--shadow), 0 0 0 2px #1f7a5a; }
 .voice-dock .vstop { padding: 5px 10px; font-size: 12.5px; border-radius: 8px; display: inline-flex; align-items: center; gap: 6px; }
 .voice-dock .vstop kbd { font-size: 10.5px; padding: 1px 5px; border: 1px solid var(--line-strong); border-radius: 4px; color: var(--ink-3); }
 /* the docked mascot stays visible while voice is live, whatever the transcript looks like */
@@ -901,3 +914,13 @@ select.fld { appearance: auto; }
 @keyframes mxFade { from { opacity: 0; } to { opacity: 1; } }
 @media (pointer: coarse) { .msg-asst { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; } .msg-asst.selecting { -webkit-user-select: text; user-select: text; } .msg-asst a { -webkit-touch-callout: default; } }
 @media (prefers-reduced-motion: reduce) { .mx-menu, .mx-backdrop { animation: none; } .mx-toast { transition: none; } }
+
+/* ---------- Keyboard shortcuts card ---------- */
+.keys-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.keys-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 8px; align-items: center; padding: 10px 12px; background: var(--surface-2); border-radius: 12px; }
+.keys-text { display: grid; gap: 2px; min-width: 0; }
+.keys-text strong { font-size: 14px; }
+.keys-text span { font-size: 12.5px; color: var(--ink-3); }
+.keys-key { font: 600 13px var(--mono, ui-monospace, monospace); padding: 4px 9px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); color: var(--ink); white-space: nowrap; }
+.keys-msg { min-height: 1.3em; }
+@media (max-width: 560px) { .keys-row { grid-template-columns: 1fr 1fr; } .keys-text { grid-column: 1 / -1; } }
