@@ -137,7 +137,7 @@ async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promis
   // MIND billing: one tier + credits cache shared by the owner runtime, every user runtime and the gateway.
   const credits = cfg.billing === "mind" ? new (await import("./provider/mind.ts")).MindCredits({ mindBaseUrl: cfg.mindBaseUrl }) : undefined;
   // Bots: one data dir + one late-bound bus shared by the owner runtime, every user runtime and the gateway (which sets bus.current).
-  const bots = { dir: dataDir(), bus: {} };
+  const bots = { dir: dataDir(), bus: {}, manage: {} };
   // Connected MCP servers: sealed per-user store under DATA_DIR/mcp. Hosted: sealed with DAEBOT_SECRET_KEY. Desktop/CLI: sealed with a
   // random per-install secret kept next to the data (0600), so the 60-connector Apps list works there too.
   let mcpConnect: import("./mcpconnect/service.ts").McpConnectService | undefined;

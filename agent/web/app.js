@@ -875,6 +875,7 @@ function onEvent(id, ev, asst, toolByReceipt) {
       if (it) { it.status = ev.ok ? "ok" : "fail"; it.preview = ev.preview; if (it.parts) refreshTool(it); }
       // Daebot proposed an MCP server: put the consent card in the thread (only the card's Connect button can connect it).
       if (ev.tool === "task_board") board.poke(); // the board changed: refresh it if it is open
+      if (ev.tool === "bot_manage") bots.refresh(); // Daebot just made, changed or deleted a bot: the Bots tab shows it without a reload
       if (ev.tool === "mcp_connect" && ev.ok) mcp.newPending().then((ps) => { for (const p of ps) addItem(id, { kind: "mcp", pending: p }); }).catch(() => {});
       return asst;
     }
