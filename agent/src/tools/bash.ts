@@ -39,8 +39,8 @@ export const bashTool: Tool = {
   spec: {
     name: "bash",
     description: process.platform === "win32"
-      ? "Run a shell command in the working directory (bash if installed, otherwise Windows PowerShell; the output's first line says which). 120s default timeout, output capped at 30k chars. Prefer read_file/grep/glob for reading."
-      : "Run a shell command (bash -c) in the working directory. 120s default timeout, output capped at 30k chars. Prefer read_file/grep/glob for reading.",
+      ? "Run a shell command in the working directory (bash if installed, otherwise Windows PowerShell; the output's first line says which). 120s default timeout, output capped at 30k chars. Prefer read_file/grep/glob for reading. This is how you run commands, scripts, tests, git and file conversions: never type them into a terminal on the screen (the computer tool). A job over about a minute goes to the process tool instead."
+      : "Run a shell command (bash -c) in the working directory. 120s default timeout, output capped at 30k chars. Prefer read_file/grep/glob for reading. This is how you run commands, scripts, tests, git and file conversions: never type them into a terminal on the screen (the computer tool). A job over about a minute goes to the process tool instead.",
     parameters: {
       type: "object",
       properties: {

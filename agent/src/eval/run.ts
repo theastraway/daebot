@@ -30,6 +30,7 @@ function arg(name: string): string | undefined {
 }
 
 async function main(): Promise<void> {
+  if (process.argv.includes("--routing")) { await (await import("./routing/live.ts")).main(); return; }
   if (process.argv.includes("--learning")) {
     const { renderLearning, runLearningSuite } = await import("./learning/suite.ts");
     const { runChecks } = await import("./learning/checks.ts");

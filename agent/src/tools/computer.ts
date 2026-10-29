@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import type { Tool, ToolResult } from "../types.ts";
 import { fail } from "./util.ts";
+import { backgroundGuard } from "../routing.ts";
 
 // Screen control for desktop apps with no API (Xactimate is the first). Windows only: every action is one short PowerShell
 // script (System.Windows.Forms + user32), so the compiled gateway needs no native module. Coordinates are always in the
@@ -199,7 +200,9 @@ export function createComputerTool(run: ScriptRunner = runPowerShell): Tool {
     spec: {
       name: "computer",
       description:
-        "See and operate this Windows PC's screen, for desktop apps that have no API (for example Xactimate). " +
+        "LAST RESORT. Takes over the user's screen, mouse and keyboard: they cannot use their PC while you do. Use it ONLY for a desktop app that has no API, CLI or connector (for example Xactimate), or when the user asked to watch you do it on screen. " +
+        "NEVER for: reading a web page or URL (use web_fetch), running a command or opening a terminal (use bash; process for long jobs), files (read_file, write_file, glob, grep), or mail, calendar, contacts, bots and anything a connector or mind_* tool covers. " +
+        "Before your first computer action in a task, say in one line why no background tool can do it. A call that types a URL or a shell command is refused unless you pass screen_required:true (only when the user asked to watch it on screen). " +
         "Every action returns a fresh screenshot of the primary display. x/y are pixels in the LATEST screenshot (top-left is 0,0). " +
         "Start with action=screenshot, act, then read the new screenshot before the next step. " +
         "Actions: screenshot | click | double_click | right_click | move | drag (x,y -> to_x,to_y) | type (text) | " +
@@ -214,6 +217,7 @@ export function createComputerTool(run: ScriptRunner = runPowerShell): Tool {
           keys: { type: "string" },
           amount: { type: "number" },
           seconds: { type: "number" },
+          screen_required: { type: "boolean", description: "true only when the user asked to watch this on screen or no background tool can do it" },
         },
         required: ["action"],
       },
@@ -221,6 +225,8 @@ export function createComputerTool(run: ScriptRunner = runPowerShell): Tool {
     async run(args, ctx): Promise<ToolResult> {
       const action = args.action as Action;
       if (!ACTIONS.includes(action)) return fail(`computer: action must be one of ${ACTIONS.join(", ")}`);
+      const blocked = backgroundGuard(args);
+      if (blocked) return fail(blocked);
       const built = buildScript(action, args);
       if ("error" in built) return fail(`computer: ${built.error}`);
       if (ctx.signal?.aborted) return fail("computer: aborted before start");

@@ -150,7 +150,7 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
       const b = await d.readJson(req);
       try {
         const tz = typeof b.tz === "string" && b.tz ? b.tz : "America/New_York";
-        if (!validTz(tz)) return d.sendJson(res, 200, { ok: false, error: `"${tz.slice(0, 40)}" is not a time zone name` }), true;
+        if (!validTz(tz)) return d.sendJson(res, 200, { ok: false, error: `"${String(tz).slice(0, 40)}" is not a time zone name` }), true;
         const spec = parseTiming(b.expression);
         return d.sendJson(res, 200, { ok: true, expression: spec.text, tz, human: describeTiming(spec.text, tz), next: nextRuns(spec, tz, Date.now(), 3) }), true;
       } catch (e) {
