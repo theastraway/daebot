@@ -16,6 +16,20 @@
   var inApp = iosApp || /DaebotApp\//.test(ua);
   var ios = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 
+  // Daebot for Windows and Linux: no native title bar, so the page owns the top edge (html.win-overlay) and the OS draws only
+  // the minimize / maximize / close buttons over it. --wco-right is the width of that button block.
+  var desk = w.mindclawDesktop;
+  if (desk && (desk.platform === "win32" || desk.platform === "linux") && desk.titleBar) {
+    root.classList.add("win-overlay");
+    var wco = navigator.windowControlsOverlay;
+    var fitWco = function () {
+      var r = wco && wco.getTitlebarAreaRect ? wco.getTitlebarAreaRect() : null;
+      if (r && r.width > 0) root.style.setProperty("--wco-right", Math.max(0, Math.round(w.innerWidth - r.x - r.width)) + "px");
+    };
+    fitWco();
+    if (wco && wco.addEventListener) wco.addEventListener("geometrychange", fitWco);
+  }
+
   if (inApp) root.classList.add("in-app");
   if (iosApp) {
     root.classList.add("ios-app");

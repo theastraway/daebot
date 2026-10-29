@@ -1146,6 +1146,7 @@ function applyTheme(t) {
   if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
   const dark = effectiveDark();
   els.themeIc.firstElementChild.setAttribute("href", dark ? "#i-sun" : "#i-moon");
+  try { window.mindclawDesktop?.titleBar?.setTheme(dark); } catch { /* not the desktop app */ } // Windows/Linux window buttons follow the page
 }
 const effectiveDark = () => {
   const t = document.documentElement.dataset.theme;
