@@ -12,6 +12,11 @@ export function feedbackAction(picked, sent) {
 export function initSuggest({ json, h, wrap, input, grow, currentId, isBusy }) {
   let cur = { id: null, shown: [], picked: "" };
   let seq = 0;
+  // Collapsed by default on phones so the replies never cover the conversation; the choice is remembered per device.
+  const KEY = "daebot.suggest.collapsed";
+  let collapsed;
+  try { const v = localStorage.getItem(KEY); collapsed = v === null ? !!(globalThis.matchMedia && matchMedia("(max-width: 640px)").matches) : v === "1"; }
+  catch { collapsed = false; }
 
   function clear() {
     seq++;
@@ -24,7 +29,20 @@ export function initSuggest({ json, h, wrap, input, grow, currentId, isBusy }) {
     wrap.replaceChildren();
     if (!cur.shown.length) { wrap.hidden = true; return; }
     wrap.hidden = false;
-    wrap.append(h("span", "suggest-label", "Reply as you"));
+    wrap.classList.toggle("collapsed", collapsed);
+    const head = h("button", "suggest-label");
+    head.type = "button";
+    head.setAttribute("aria-expanded", String(!collapsed));
+    head.append(h("span", "", "Reply as you"), h("span", "suggest-count", String(cur.shown.length)), h("span", "suggest-caret", ""));
+    head.addEventListener("click", () => {
+      collapsed = !collapsed;
+      try { localStorage.setItem(KEY, collapsed ? "1" : "0"); } catch { /* private mode */ }
+      paint();
+    });
+    wrap.append(head);
+    if (collapsed) return;
+    const list = h("div", "suggest-list");
+    wrap.append(list);
     for (const text of cur.shown) {
       const b = h("button", `suggest-chip${cur.picked === text ? " picked" : ""}`);
       b.append(h("span", "suggest-text", text));
@@ -35,7 +53,7 @@ export function initSuggest({ json, h, wrap, input, grow, currentId, isBusy }) {
         try { input.setSelectionRange(text.length, text.length); } catch { /* not focusable yet */ }
         paint();
       });
-      wrap.append(b);
+      list.append(b);
     }
   }
 
