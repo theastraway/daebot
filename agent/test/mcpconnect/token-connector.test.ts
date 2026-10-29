@@ -121,7 +121,7 @@ test("custom MCP server card: any address, optional name for the tool prefix; MI
 test("web: the form entry carries its fields to the card", () => {
   const e = entryOf({ id: "local:n8n", name: "n8n", blurb: "b", category: "automation", publisher: "community", auth: "url_token", form: { submitLabel: "Connect", fields: [{ name: "url", label: "n8n URL", placeholder: "https://x" }] } });
   assert.equal(e.form.fields[0].name, "url");
-  assert.ok(e.tags.some((t: any) => t.text === "Your URL + token"));
+  assert.ok(e.tags.some((t: any) => t.text === "Your server address"));
   assert.equal(entryOf({ id: "mcp:x", name: "X", publisher: "official", auth: "oauth" }).form, undefined);
 });
 
