@@ -73,4 +73,4 @@ export interface BotBus {
 /** Late-bound holder: runtimes are built before the gateway (and its SessionManager) exists. */
 export interface BotBusRef { current?: BotBus }
 /** What a runtime needs to host bots: where to keep them, and how to reach the bus. */
-export interface BotsContext { dir: string; bus: BotBusRef; /** Late-bound helpers the gateway lends bot_manage (plan models, cleanup after a delete). */ manage?: { current?: import("./manage-tool.ts").BotManageHooks } }
+export interface BotsContext { dir: string; bus: BotBusRef; /** Routines of every bot (created on first use). */ routines?: import("../routines/store.ts").RoutineHub; /** Late-bound helpers the gateway lends bot_manage (plan models, cleanup after a delete). */ manage?: { current?: import("./manage-tool.ts").BotManageHooks } }

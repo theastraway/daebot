@@ -266,6 +266,8 @@ export interface Runtime {
   photos?: import("./photos.ts").PhotoStore;
   /** Task board rows of this owner: tasks the model declared per session, or one derived row per session. Most recent sessions first. */
   boardRows?(): import("./board/board.ts").BoardRow[];
+  /** Task board rows of ONE bot's own threads (the Heartbeat's cheap check reads these). */
+  botBoardRows?(botId: string): import("./board/board.ts").BoardRow[];
 }
 
 // Wire protocol over HTTP (JSON) + WebSocket: gateway <-> surface. See agent/SPEC.md section 5.

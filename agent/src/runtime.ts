@@ -12,6 +12,10 @@ import { bootMind, createMindClient, createMindTools, createSessionSync } from "
 import { BotStore, botMindApi } from "./bots/store.ts";
 import { createBotTalkTool } from "./bots/talk-tool.ts";
 import { createBotManageTool } from "./bots/manage-tool.ts";
+import { createBotSelfTool } from "./bots/self-tool.ts";
+import type { ThreadView } from "./bots/self-tool.ts";
+import { botRecall, recordBotLesson } from "./bots/lessons.ts";
+import { RoutineHub } from "./routines/store.ts";
 import { BOT_SKILL_PROMPT } from "./bots/skill.ts";
 import type { BotRecord, BotsContext, RosterEntry } from "./bots/types.ts";
 import { MAX_INSTRUCTIONS_BYTES } from "./bots/types.ts";
@@ -31,7 +35,7 @@ import { PhotoStore, messageWithPhotos } from "./photos.ts";
 import { HistoryRecorder } from "./events.ts";
 import { createMcpLoader, parseMcpServers } from "./mcp/client.ts";
 import { createMcpConnectTool } from "./mcpconnect/tool.ts";
-import { BOARD_PROMPT, createTaskBoardTool, loadTasks, resumeStopped, rowsFor } from "./board/board.ts";
+import { BOARD_PROMPT, checkTask, createTaskBoardTool, loadTasks, resumeStopped, rowsFor } from "./board/board.ts";
 import type { BoardRow, BoardTask } from "./board/board.ts";
 import type { McpConnectService } from "./mcpconnect/service.ts";
 import type { McpServerConfig } from "./mcp/client.ts";
@@ -267,6 +271,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
   const botsCtx = overrides.bots;
   const ownerKey = overrides.owner ?? "owner";
   const botStore = botsCtx ? new BotStore({ dir: botsCtx.dir, owner: ownerKey, mind: botMindApi(client) }) : undefined;
+  if (botsCtx) botsCtx.routines ??= new RoutineHub(botsCtx.dir); // routines of every bot, shared by all runtimes and the gateway
   const settings = botsCtx ? createSettings(botsCtx.dir, ownerKey) : undefined;
   // Granular permissions + suggested-reply feedback: per owner, under the data dir (hosted: the Render disk).
   const stateDir = overrides.stateDir ?? botsCtx?.dir;
@@ -315,24 +320,79 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     set: (sid, tasks) => { const e = sessions.get(sid); if (!e) return; e.board = tasks; e.updatedAt = Date.now(); persist(sid); },
   });
   const self: { rt?: Runtime } = {};
+  const clipText = (t: string, n: number): string => t.replace(/\s+/g, " ").trim().slice(0, n);
+  /** Threads of one bot the user talks in (not routine runs, not bot DMs), newest first, for the Heartbeat. */
+  function botThreadViews(botId: string): ThreadView[] {
+    const rows = (self.rt?.listSessions() ?? []).filter((r) => r.bot === botId && !r.peer && r.surface !== "routine").slice(0, 15);
+    const board = new Map<string, BoardRow[]>();
+    for (const b of runtime.botBoardRows?.(botId) ?? []) board.set(b.sessionId, [...(board.get(b.sessionId) ?? []), b]);
+    return rows.map((r) => {
+      const hist = self.rt?.history?.(r.id) ?? [];
+      let lastUser = "", lastBot = "", lastUserAt = -1, lastBotAt = -1;
+      hist.forEach((h, i) => { if (h.type === "user") { lastUser = h.text; lastUserAt = i; } else if (h.type === "text") { lastBot = h.delta; lastBotAt = i; } });
+      const run = sessions.get(r.id)?.run ?? store?.load(r.id)?.run;
+      const state = run?.status === "running" ? "running" : run?.status === "interrupted" ? "interrupted by a restart" : run?.status === "error" ? "last run failed" : lastUserAt > lastBotAt ? "user message not answered" : "answered";
+      return { id: r.id, title: r.title || "Untitled", updatedAt: r.updatedAt, state, ...(lastUser ? { lastUser: clipText(lastUser, 240) } : {}), ...(lastBot ? { lastBot: clipText(lastBot, 240) } : {}), tasks: (board.get(r.id) ?? []).map((b) => ({ id: b.id, title: b.title, status: b.status, ...(b.question ? { question: b.question } : {}) })) };
+    });
+  }
+  /** Marks a thread of the bot stopped on the task board, with the question the user must answer. */
+  async function declareStop(tid: string, botId: string, question: string): Promise<boolean> {
+    const now = Date.now();
+    const task = (prev: BoardTask[]): BoardTask[] => {
+      const c = checkTask({ id: "heartbeat", title: "Needs your answer", status: "stopped", question }, now);
+      return c.ok ? [...prev.filter((t) => t.id !== "heartbeat"), c.value] : prev;
+    };
+    const live = sessions.get(tid);
+    if (live) { if (live.bot !== botId) return false; live.board = task(live.board ?? []); live.updatedAt = now; persist(tid); return true; }
+    const rec = store?.load(tid);
+    if (!rec || !mine(rec) || rec.bot !== botId) return false;
+    await store!.save({ ...rec, board: task(loadTasks(rec.board)), updatedAt: now });
+    return true;
+  }
   const toolsFor = (home: string, selfBot: string | undefined): Tool[] => {
     const on = botsOn();
     const talk = on && botStore && botsCtx ? [createBotTalkTool({ bus: botsCtx.bus, owner: ownerKey, selfBot })] : [];
     // bot_manage: the user's own session creates and configures bots internally (never through the screen). A bot never gets it.
     const manage = on && botStore && botsCtx && !selfBot
       ? [createBotManageTool({
-          bots: botStore, owner: ownerKey, hooks: () => botsCtx.manage?.current,
+          bots: botStore, owner: ownerKey, hooks: () => botsCtx.manage?.current, routines: botsCtx.routines,
           threads: (id) => self.rt?.listSessions().filter((s) => s.bot === id && !s.peer).length ?? 0,
           purge: (id) => self.rt?.purgeBotSessions?.(id) ?? Promise.resolve(),
         })]
       : [];
+    // bot_self: a bot's own tool for the Heartbeat (see its threads, push work along, record lessons). Bots only.
+    const self2 = on && botStore && botsCtx && selfBot ? [createBotSelfTool({
+      threads: async () => botThreadViews(selfBot),
+      isHeartbeat: (sid) => { const e = sessions.get(sid); return !!e && e.bot === selfBot && e.surface === "routine" && e.title === "Heartbeat"; },
+      continueThread: async (tid, note) => {
+        const e = sessions.get(tid);
+        const st = e ?? undefined;
+        if (st && st.bot !== selfBot) throw new Error("that is not one of your threads");
+        if (!st && !(store?.meta?.(tid) && mine(store.meta(tid)) && store.meta(tid)!.bot === selfBot)) throw new Error("no such thread");
+        const h = botsCtx.manage?.current?.continueThread;
+        if (!h) throw new Error("continuing a thread is not available here");
+        return h(ownerKey, selfBot, tid, note);
+      },
+      stopThread: async (tid, question) => {
+        const ok = await declareStop(tid, selfBot, question);
+        if (!ok) throw new Error("no such thread");
+        return "thread marked stopped on the task board with your question";
+      },
+      learn: async (l) => {
+        const rec = botStore.get(selfBot);
+        if (!rec) return { ok: false, text: "no such bot" };
+        const r = await recordBotLesson(clientForMind(rec.slug), cfg, { ...learnCfg, user: learnCfg.user }, l);
+        if (r.ok) botsCtx.routines?.book(ownerKey, selfBot).noteLesson();
+        return r;
+      },
+    })] : [];
     const every = [...builtinTools, ...(photoTool ? [photoTool] : []), ...createMindTools({
       home, clientFor: clientForMind, roster: () => botStore?.roster() ?? [],
       refresh: botStore ? async () => { await botStore.list(); } : undefined,
     }, { user: hosted?.username }).filter((t) => on || t.spec.name !== "mind_tenants"),
       // mail, calendar, contacts (the apps' synced data) + mind_apps. A bot reads them as the user's main account (like mind:"main") and can change nothing.
       ...(appsOn() ? createAppTools({ clientFor: clientForMind, readOnly: !!selfBot, connected: connectedApps, servers: serverLites }) : []),
-      ...talk, ...manage];
+      ...talk, ...manage, ...self2];
     // mcp_connect is the user's own session only: a bot never proposes connections (and its turns could be peer-driven).
     const withMcp = [...(overrides.mcpConnect && !selfBot ? [...every, createMcpConnectTool(overrides.mcpConnect, ownerKey)] : every), ...(selfBot ? [] : [boardTool])];
     const all = hosted ? filterHostedTools(withMcp) : withMcp;
@@ -429,7 +489,10 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       const bootContext = [boot.ok ? boot.context : "", brief].filter(Boolean).join("\n\n");
       // Learning (src/learn): admin-tier sessions only. Public/staff identities neither read nor write lessons,
       // so nothing from the owner's private MIND can reach them and nothing they say can reach it.
-      const learn = learnCfg.enabled && tier === "admin" && !botRec // bots never learn
+      const learn = botRec
+        // A bot does not reflect on every turn. Once its Heartbeat has recorded a lesson, the bot recalls its own lessons (read-only, its own MIND).
+        ? (botsCtx?.routines?.book(ownerKey, botRec.id).lessons ? botRecall(clientForMind(botRec.slug), cfg, learnCfg) : undefined)
+        : learnCfg.enabled && tier === "admin"
         ? createLearning({ client, provider, cfg, learn: hosted?.username ? { ...learnCfg, user: learnUserName(hosted.username) } : learnCfg, tier, onCost: (usd) => costCap?.add(usd) })
         : undefined;
       const wasInterrupted = stored?.run?.status === "running"; // a process died with this turn in flight
@@ -588,6 +651,19 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         boardCache.set(s.id, { updatedAt: s.updatedAt, rows: made });
         if (boardCache.size > 200) boardCache.delete(boardCache.keys().next().value as string);
         rows.push(...made);
+      }
+      return rows;
+    },
+    botBoardRows(botId) {
+      const rows: BoardRow[] = [];
+      const picks = new Map<string, { id: string; title: string; updatedAt: number }>();
+      for (const m of store?.list() ?? []) if (mine(m) && m.bot === botId && !m.peer && m.surface !== "routine") picks.set(m.id, { id: m.id, title: m.title, updatedAt: m.updatedAt });
+      for (const [id, e] of sessions) if (e.bot === botId && !e.peer && e.surface !== "routine" && (picks.has(id) || e.recorder.events().some((h) => h.type === "user"))) picks.set(id, { id, title: e.title, updatedAt: e.updatedAt });
+      for (const s of [...picks.values()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 15)) {
+        const live = sessions.get(s.id);
+        if (live) { rows.push(...rowsFor(s, live.board ?? [], { history: live.recorder.events(), run: live.run, live: true })); continue; }
+        const rec = store?.load(s.id);
+        if (rec && mine(rec)) rows.push(...rowsFor(s, loadTasks(rec.board), { history: rec.history, run: rec.run, live: false }));
       }
       return rows;
     },

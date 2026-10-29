@@ -30,6 +30,8 @@ export interface BotBusOptions {
   perMinute?: number;         // per-user bot messages per minute, default 30
   limiter?: TurnRateLimiter;
   now?: () => number;
+  /** Called once for every bot_talk message that is delivered to a bot (bot_message routines listen here). */
+  onBotMessage?(m: { owner: string; to: string; from: string; text: string }): void;
   /** The identity tier of an owner's sessions (default admin). A recipient never runs above its caller's tier. */
   tierOf?(owner: string): string | undefined;
 }
@@ -122,6 +124,7 @@ export function createBotBus(o: BotBusOptions): BotBus & { _stats(): { chains: n
 
       budget.used++;
       budget.at = now();
+      try { o.onBotMessage?.({ owner: req.owner, to: recipient.id, from: req.selfBot ? bots.get(req.selfBot)?.slug ?? "bot" : "main", text: req.message }); } catch { /* a routine hook never blocks bot_talk */ }
       budgets.set(chain.root, budget);
       chains.set(dm.id, { root: chain.root, depth: chain.depth + 1, path: [...chain.path, recipient.id] });
 

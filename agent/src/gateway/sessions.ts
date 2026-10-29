@@ -41,6 +41,8 @@ export class SessionManager {
   private idleMs: number;
   private timer: NodeJS.Timeout | null = null;
 
+  /** Called once for every user message accepted in a bot's own thread (not routine runs, not bot-to-bot DMs). Used by thread_message routines. */
+  onUserMessage?: (ls: LiveSession, text: string) => void;
   private runtimeFor?: (owner: string) => Runtime;
   /** Owner of a persisted (not live) session, from the shared store; undefined = unknown id. */
   private storedOwner?: (id: string) => string | undefined;
@@ -163,6 +165,7 @@ export class SessionManager {
     if (ls.busy) throw new BusyError("session is busy with another turn");
     ls.busy = true; // set synchronously: no await between check and set
     ls.turns++;
+    if (origin === "user" && ls.bot && !ls.peer && ls.surface !== "routine" && this.onUserMessage) { try { this.onUserMessage(ls, text); } catch { /* a routine hook never blocks a message */ } }
     ls.turnNonce = randomUUID();
     const ac = new AbortController();
     ls.abort = ac;

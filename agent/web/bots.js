@@ -10,6 +10,7 @@
 import { confirmDialog, deleteControl, renameControl, isRenaming, botDeleteText, updateText } from "./manage.js";
 import { FACES, faceOf, faceSvg } from "./faces.js";
 import { groupModels, shortName, LOCKED_NOTE } from "./models.js";
+import { initRoutines } from "./routines.js";
 
 export const VIEW_KEY = "mc_view";
 export const SELECTED_KEY = "mc_bot";
@@ -130,6 +131,7 @@ export function initBots(ctx) {
     bnBrief: $("bn-brief"), bnAsk: $("bn-ask"), bnAskState: $("bn-ask-state"),
   };
   if (!el.tabBots || !el.botList) return null;
+  const routines = initRoutines({ json, api, h, ago, notify, confirmDialog, openThread: (s) => app.openThread(s) });
 
   const st = {
     updating: new Set(), updated: new Map(),
@@ -591,6 +593,7 @@ export function initBots(ctx) {
     el.btnInstr.setAttribute("aria-expanded", "true");
     el.drawerTitle.textContent = `${bot.name} settings`;
     paintDetails(bot);
+    if (routines) routines.open(id);
     renderList();
     st.loadingInstr = true; delete el.stateEl.dataset.saved;
     el.text.disabled = true; el.text.value = ""; el.stateEl.textContent = "Loading…"; paintEditor();
@@ -610,6 +613,7 @@ export function initBots(ctx) {
   function closeDrawer() {
     if (!st.drawerOpen) return;
     st.drawerOpen = false; st.pinned = false;
+    if (routines) routines.close();
     el.drawer.hidden = true;
     el.btnInstr.setAttribute("aria-expanded", "false");
     if (!el.btnInstr.hidden) el.btnInstr.focus();

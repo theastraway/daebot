@@ -24,6 +24,8 @@ import { AGENT_SURFACE_RE, AGENT_TURN_PATH, KeyIdentityCache, TurnRateLimiter } 
 import { userIdFor } from "../auth/users.ts";
 import { FREE_TIER, usageLeftPct } from "../provider/mind.ts";
 import { createBotBus } from "../bots/bus.ts";
+import { createRoutineGateway } from "./routines.ts";
+import { RoutineHub } from "../routines/store.ts";
 import { BotError, safeUpgradeUrl } from "../bots/types.ts";
 import type { BotRecord, BotsContext } from "../bots/types.ts";
 import { botsEnabled } from "../bots/flag.ts";
@@ -247,7 +249,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   const mcpOn = (): boolean => !!mcp?.enabled();
   const mcpField = (): { mcp?: boolean } => (mcp ? { mcp: mcpOn() } : {}); // only reported where the feature is wired in
   // ---- Bots: the bus runs a recipient bot's turn in-process through this same SessionManager.
-  if (opts.bots) opts.bots.bus.current = createBotBus({ manager, botsFor: (owner) => manager.runtimeOf(owner).bots, tierOf: (owner) => (owner === OWNER.id ? OWNER.tier : auth?.store.principal(owner)?.tier) });
+  const routinesLate: { fire?: (m: { owner: string; to: string; from: string; text: string }) => void } = {};
+  if (opts.bots) opts.bots.bus.current = createBotBus({ manager, botsFor: (owner) => manager.runtimeOf(owner).bots, tierOf: (owner) => (owner === OWNER.id ? OWNER.tier : auth?.store.principal(owner)?.tier), onBotMessage: (m) => routinesLate.fire?.(m) });
   const catalog = createModelCatalog({ cfg: opts.cfg ?? ({ mindBaseUrl: "", models: { default: "", cheap: "", fallback: [] } } as unknown as Config), fetchImpl: opts.fetchImpl ?? opts.auth?.fetchImpl });
 
   // ---- bot_manage (Daebot makes its own bots): lend the runtimes the user's plan models and the cleanup after a delete.
@@ -262,7 +265,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         const cat = await catalog.list(billingKeyOf(p), plan.free);
         return { models: cat.models.map((m) => ({ id: m.id, name: m.name, allowed: m.allowed })), default: manager.runtimeOf(owner).settings?.get().defaultModel ?? opts.cfg.models.default };
       },
-      async removed(owner, botId) { await manager.closeBotSessions(owner, botId); },
+      async removed(owner, botId) { opts.bots?.routines?.drop(owner, botId); await manager.closeBotSessions(owner, botId); },
     };
   }  // ---- MIND Voice: billed to the caller's own MIND key (owner: the server key). Off when there is no MIND base URL.
   const voiceBase = opts.voice?.baseUrl ?? opts.cfg?.mindBaseUrl;
@@ -331,6 +334,24 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     const frame: ServerFrame = { t: "event", sessionId: id, event: ev };
     const text = JSON.stringify(frame);
     for (const c of subscribers.get(id) ?? []) c.send(text);
+  }
+
+  // ---- Routines (built in): per-bot timed and triggered work, one timer loop in this process, durable server-side turns.
+  const routineHub = opts.bots ? (opts.bots.routines ??= new RoutineHub(opts.bots.dir)) : undefined;
+  const routines = routineHub
+    ? createRoutineGateway({
+        hub: routineHub, manager, runs, broadcast,
+        principalOf: (owner) => (owner === OWNER.id ? OWNER : auth?.store.principal(owner)),
+        ownerOk: (seg) => (seg === OWNER.id ? OWNER.id : auth?.store.principal(seg) ? seg : undefined),
+        enforceModel: (me, id) => enforceModel(me, id),
+        publicBase: () => (process.env.DAEBOT_PUBLIC_URL ?? "").trim().replace(/\/+$/, "") || (hosted?.allowedHosts?.[0] && hosted.allowedHosts[0] !== "localhost" ? `https://${hosted.allowedHosts[0]}` : undefined),
+        readBody, readJson, sendJson, clientIp: (r) => clientIp(r),
+      })
+    : undefined;
+  if (routines && opts.bots) {
+    routinesLate.fire = (m) => { if (botsOn()) routines.runner.trigger(m.owner, m.to, "bot_message", { text: m.text, from: m.from }); };
+    opts.bots.manage ??= {};
+    opts.bots.manage.current = { ...(opts.bots.manage.current ?? {}), ...routines.hooks };
   }
 
   // Who is this request? Hosted: the signed session cookie names the owner (access code) or one stored MIND user.
@@ -762,6 +783,10 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
 
     if (hosted && path === AGENT_TURN_PATH) return agentTurn(req, res);
 
+    // A routine's webhook: authenticated by the secret in the URL alone (a service calling in has no login), so it is answered before the cookie checks.
+    const routineHook = /^\/hooks\/(r_[0-9a-f]{12})\/([A-Za-z0-9_-]{16,64})$/.exec(path);
+    if (routineHook && routines && botsOn()) return routines.webhook(req, res, routineHook[1], routineHook[2]);
+
     const hookMatch = /^\/hooks\/([^/]+)$/.exec(path);
     const hook = hookMatch ? webhooks.get(decodeURIComponent(hookMatch[1]).toLowerCase()) : undefined;
     const openHook = hook?.auth === "none";
@@ -846,7 +871,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/board" || path === "/ws";
+    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/board" || path === "/ws" || path.startsWith("/routines/");
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -1285,6 +1310,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       return sendJson(res, 200, { tasks, stopped: tasks.filter((t) => t.status === "stopped").length });
     }
     if (path === "/permissions" || path.startsWith("/permissions/")) return permissionsApi(req, res, path, method, me);
+    if (routines && botsOn() && (path === "/routines/preview" || /^\/bots\/[^/]+\/routines(\/|$)/.test(path))) { if (await routines.api(req, res, path, method, me)) return; }
     if (path === "/bots/caelum") return caelumApi(req, res, method, me);
     if (path === "/bots" || path.startsWith("/bots/")) return botsApi(req, res, path, method, me);
     if (path.startsWith("/mcp/")) return mcpApi(req, res, path, method, me);
@@ -1596,6 +1622,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     server.once("error", reject);
     server.listen(opts.port ?? 7777, host, () => resolve());
   });
+  routines?.runner.start(); // the one timer loop (unref'd; stopped in close)
   const addr = server.address() as AddressInfo;
   const shownHost = host === "::1" ? "[::1]" : host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
   const url = `http://${shownHost}:${addr.port}`;
@@ -1609,6 +1636,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     },
     async close() {
       clearInterval(pinger);
+      routines?.runner.stop();
       mindFeed?.stop();
       for (const c of wsConns) c.close(1001, "server shutting down");
       await manager.closeAll();
