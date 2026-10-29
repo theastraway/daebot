@@ -8,7 +8,7 @@ export const LOGO_EXT = {
   airtable: "png", apple: "png", asana: "png", atlassian: "png", aws: "png", box: "png", calendly: "svg", clickup: "png", cloudflare: "png",
   datadog: "png", digitalocean: "png", dropbox: "png", evernote: "png", figma: "png", fireflies: "png", github: "png", gitlab: "png",
   gong: "png", google: "png", heroku: "png", hubspot: "png", huggingface: "png", intercom: "png", klaviyo: "png", linear: "svg",
-  make: "png", "meta-ads": "png", microsoft: "png", miro: "png", monday: "png", mongodb: "png", neon: "png", netlify: "png",
+  make: "png", "meta-ads": "png", microsoft: "png", miro: "png", monday: "png", mongodb: "png", n8n: "png", neon: "png", netlify: "png",
   notion: "png", otter: "png", pagerduty: "svg", paypal: "png", posthog: "png", render: "svg", salesforce: "png", sentry: "png",
   slack: "png", square: "png", stripe: "png", supabase: "png", todoist: "png", trello: "png", vercel: "png", webflow: "png",
   wix: "png", zapier: "png", zoom: "png",
