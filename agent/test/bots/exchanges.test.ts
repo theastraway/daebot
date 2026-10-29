@@ -253,6 +253,64 @@ test("wait_for_reply:false delivers and returns at once; the reply lands in the 
   assert.equal(w.hub.list("u1")[0].unread, 1, "the late reply is unread: nobody was watching");
 });
 
+// ---------------------------------------------------------------- one ask = one message + one reply
+
+test("a repeated ask in the same user turn is not sent again: one message, one reply, the first answer is handed back (the 17x23 double)", async () => {
+  const w = await world();
+  w.mgr.run = async () => "391.";
+  const first = await w.talk("S", "a", "What is 17 times 23?");
+  assert.equal(first.ok, true);
+  // the model is made to rewrite its answer (receipt gate) and asks again: same words
+  const again = await w.talk("S", "a", "What is 17 times 23?");
+  assert.equal(again.ok, true);
+  assert.match(again.output, /no new message sent/);
+  assert.match(again.output, /> 391\./, "the earlier reply is handed back");
+  assert.equal(again.exchange, undefined, "no second card");
+  assert.equal(w.mgr.turnsRun.length, 1, "the recipient ran once");
+  const rec = w.hub.get("u1", w.hub.list("u1")[0].id)!;
+  assert.deepEqual(rec.messages.map((m) => m.kind), ["message", "reply"], "one message + one reply");
+});
+
+test("a lightly reworded re-ask is a duplicate too; a genuinely new question is not; a new user turn may ask again", async () => {
+  const w = await world();
+  w.mgr.run = async () => "ok";
+  await w.talk("S", "a", 'Please use your bot_talk tool to message xt-ledger with exactly this question: "What is 17 times 23?" Wait for its reply and report back the exact answer.');
+  const reworded = await w.talk("S", "a", 'Please use your bot_talk tool to message xt-ledger with exactly this question: "What is 17 times 23?" Wait for its reply and report back the exact answer word for word.');
+  assert.match(reworded.output, /no new message sent/);
+  const different = await w.talk("S", "a", "Now also add the tax of 8% to that total and tell me the figure.");
+  assert.doesNotMatch(different.output, /no new message sent/);
+  assert.equal(w.mgr.turnsRun.length, 2);
+  // the person sends another message: a fresh turn, the same question is a real ask again
+  w.mgr.rows.get("S")!.turns = 2;
+  const next = await w.talk("S", "a", 'Please use your bot_talk tool to message xt-ledger with exactly this question: "What is 17 times 23?" Wait for its reply and report back the exact answer.');
+  assert.doesNotMatch(next.output, /no new message sent/);
+  assert.equal(w.mgr.turnsRun.length, 3);
+});
+
+test("a duplicate down the chain (main asks a twice, a asks b the same thing each time) reaches b once", async () => {
+  const w = await world();
+  w.mgr.run = async (id) => {
+    const row = w.mgr.rows.get(id)!;
+    if (row.bot === w.ids.a) { await w.talk(id, "b", "What is 17 times 23?", w.ids.a); return "asked b"; }
+    return "391.";
+  };
+  await w.talk("S", "a", "ask b what 17 times 23 is");
+  await w.talk("S", "a", "please ask b: what is 17 times 23, and tell me b's answer");  // reworded: a is asked again, so a asks b the identical text
+  const toB = w.mgr.turnsRun.filter((t) => w.mgr.rows.get(t.id)!.bot === w.ids.b);
+  assert.equal(toB.length, 1, "b was asked exactly once");
+});
+
+test("a failed ask is not remembered: it can be tried again", async () => {
+  const w = await world();
+  let boom = true;
+  w.mgr.run = async () => { if (boom) { boom = false; throw new Error("provider down"); } return "fine"; };
+  const bad = await w.talk("S", "a", "What is 17 times 23?");
+  assert.equal(bad.ok, false);
+  const retry = await w.talk("S", "a", "What is 17 times 23?");
+  assert.equal(retry.ok, true, retry.output);
+  assert.doesNotMatch(retry.output, /no new message sent/);
+});
+
 // ---------------------------------------------------------------- the card event
 
 test("bot_talk leaves an `exchange` card event in the sender's turn (right after its toolEnd), and the tool takes wait_for_reply and `main`", async () => {

@@ -46,7 +46,8 @@ async function world(over: Partial<Parameters<typeof createBotBus>[0]> = {}) {
   const mgr = new FakeMgr();
   mgr.rows.set("S", { owner: "u1", busy: true, turns: 1 }); // the human's session, mid-turn
   const bus = createBotBus({ manager: mgr, botsFor: (o) => (o === "u1" ? store : o === "u2" ? other : undefined), ...over });
-  const talk = (from: string, to: string, message = "ping", selfBot?: string, signal?: AbortSignal, owner = "u1") =>
+  let n = 0; // every default message is distinct: the bus drops a repeat of the same ask inside one user turn
+  const talk = (from: string, to: string, message = `ping ${++n}`, selfBot?: string, signal?: AbortSignal, owner = "u1") =>
     bus.talk({ owner, fromSession: from, selfBot, to, message, signal });
   return { bus, mgr, store, other, ids, talk };
 }
@@ -180,9 +181,10 @@ test("at most 5 bot_talk calls per turn; a new turn of the caller starts a fresh
 test("budget: 10 bot turns per ROOT user message across the whole chain; a new root message resets it", async () => {
   const w = await world();
   // S asks a five times; each a-turn asks b twice: 5 + 10 would be 15 bot turns, only 10 may run
+  let k = 0; // distinct questions: the bus drops a repeat of the same ask inside one user turn
   w.mgr.run = async (id) => {
     const row = w.mgr.rows.get(id)!;
-    if (row.bot === w.ids.a) { await w.talk(id, "b", "x", row.bot); await w.talk(id, "b", "y", row.bot); }
+    if (row.bot === w.ids.a) { await w.talk(id, "b", `question ${++k}`, row.bot); await w.talk(id, "b", `other ${++k}`, row.bot); }
     return "r";
   };
   for (let i = 0; i < 5; i++) await w.talk("S", "a");

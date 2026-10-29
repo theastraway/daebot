@@ -38,7 +38,7 @@ test("every bot lists a Heartbeat that cannot be deleted; routines are added, ed
     const l = await r.j("GET", `/bots/${r.bot.id}/routines`);
     assert.equal(l.status, 200);
     assert.deepEqual(l.json.routines.map((x: any) => [x.name, x.builtin, x.enabled]), [["Heartbeat", "heartbeat", true]]);
-    assert.match(l.json.routines[0].when, /every hour at :\d\d/);
+    assert.match(l.json.routines[0].when, /^every hour(, on the hour| at :\d\d)$/);
     const hb = l.json.routines[0].id;
     assert.equal((await r.j("DELETE", `/bots/${r.bot.id}/routines/${hb}`)).status, 400);
     assert.equal((await r.j("PATCH", `/bots/${r.bot.id}/routines/${hb}`, { name: "x" })).status, 400);

@@ -16,7 +16,7 @@ test("hosted: the offered tool set is web_fetch plus mind_* only; no shell or fi
   await collect(s.send("hello"));
   const names = provider.requests[0].tools.map((t) => t.name);
   for (const banned of ["bash", "read_file", "write_file", "edit_file", "glob", "grep"]) assert.ok(!names.includes(banned), `${banned} must not be offered`);
-  assert.ok(names.every((n) => n === "web_fetch" || n.startsWith("mind_")), names.join(","));
+  assert.ok(names.every((n) => hostedToolAllowed(n)), names.join(",")); // web_fetch, mind_*, and the few hosted-safe tools (decide, task_board, ...) listed in hosted.ts
   // before boot the kernel narrows further, so assert on the pure filter too
   const all = filterHostedTools(createBuiltinTools()).map((t) => t.spec.name);
   assert.deepEqual(all, ["web_fetch", "apple_calendar"]); // apple_calendar runs on the user's device through the relay, never on this host
