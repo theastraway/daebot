@@ -102,7 +102,7 @@ test("reply: the quoted message reaches the model as context and is saved above 
     assert.equal(u.text, "what about step two?", "the saved bubble shows only what the user wrote");
     assert.deepEqual(u.quote, { id: mid, text: "The plan has three steps." });
     await settle();
-    assert.equal(g.sessionStore.load(sid)!.history.filter((e: any) => e.type === "user").at(-1).quote.id, mid);
+    assert.equal((g.sessionStore.load(sid)!.history as any[]).filter((e) => e.type === "user").at(-1).quote.id, mid);
     // an unknown id falls back to the client's text; no quote at all is a plain message
     await post(g, jar, `/sessions/${sid}/send`, { text: "third", quote: { id: "nope", text: "from the client" } });
     assert.match(g.provider.requests.at(-1)!.messages.filter((m: any) => m.role === "user").at(-1)!.content as string, /^Replying to: "from the client"/);
