@@ -559,7 +559,7 @@ test("the prompt and mind_apps list the connected servers with tool counts and s
   const provider = new FakeProvider([{ calls: [call("t1", "n8n__search_workflows", { query: "nightly" }), call("t2", "mind_apps", {})] }, { text: "done" }]);
   const rt = createRuntime(baseCfg({ mindBaseUrl: BASE, mindApiKey: KEY_A }), {
     provider, fetchImpl: f, mcpConnect: g.svc, owner: "alice",
-    hosted: { dailyUsdCap: 50, mindClient: { getKey: () => KEY_A }, username: "anthonyjconti" },
+    hosted: { dailyUsdCap: 50, mindClient: { getKey: () => KEY_A }, username: "owner_test" },
   });
   const s = await rt.openSession({ surface: "web", title: "t" });
   const events = await collect(s.send("what is connected?"));

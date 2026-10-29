@@ -36,7 +36,7 @@ services:
         sync: false
       - key: MINDCLAW_CHEAP_MODEL
         sync: false
-      # ---- plain values
+      # ---- plain values (admins, caps and hosts are set in the Render dashboard: sync: false)
       - key: NODE_VERSION
         value: "24"
       - key: MINDCLAW_HOSTED
@@ -44,10 +44,10 @@ services:
       - key: MINDCLAW_KERNEL
         value: "1"
       - key: MINDCLAW_DAILY_USD_CAP
-        value: "5"
+        sync: false
       - key: ALLOWED_HOSTS        # RENDER_EXTERNAL_HOSTNAME (<service>.onrender.com) is added automatically
-        value: "daebot.live,www.daebot.live"
+        sync: false
       - key: DAEBOT_ADMINS        # MIND usernames that get the unrestricted tier; everyone else is staff
-        value: "anthonyjconti"
+        sync: false
       - key: MINDCLAW_USER_DAILY_USD_CAP   # per signed-in user per UTC day (admins exempt); the global cap above still applies
-        value: "1"
+        sync: false

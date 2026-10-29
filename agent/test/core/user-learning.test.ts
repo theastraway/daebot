@@ -19,12 +19,12 @@ const brevity = CLASSES[0];
 async function world() {
   const keys = { boss: "mind_" + rnd(), boss2: "mind_" + rnd(), alice: "mind_" + rnd() };
   const serverKey = "server-owner-key-" + rnd();
-  const fake = await startFakeMind({ [serverKey]: "anthonyjconti", [keys.boss]: "boss", [keys.boss2]: "boss2", [keys.alice]: "alice" });
+  const fake = await startFakeMind({ [serverKey]: "owner_test", [keys.boss]: "boss", [keys.boss2]: "boss2", [keys.alice]: "alice" });
   // The reflector is shared by every runtime; it writes the same lesson wherever it is asked.
   const provider = reflectorFor(CLASSES);
   const cfg = baseCfg({ mindBaseUrl: fake.base, mindApiKey: serverKey });
   const globalCap = new DailyCostCap(50);
-  const ownerRuntime = createRuntime(cfg, { provider, hosted: { dailyUsdCap: 50, sharedCap: globalCap, exempt: true, username: "anthonyjconti" } });
+  const ownerRuntime = createRuntime(cfg, { provider, hosted: { dailyUsdCap: 50, sharedCap: globalCap, exempt: true, username: "owner_test" } });
   const env = { DATA_DIR: mkdtempSync(join(tmpdir(), "daebot-learn-")), DAEBOT_SECRET_KEY: rnd() + rnd(), DAEBOT_ADMINS: "boss,boss2", MIND_OAUTH_BASE_URL: fake.url };
   const auth = createAuthContext({ env, cfg, hosted: { token: rnd(), allowedHosts: ["daebot.live"] }, ownerRuntime, globalCap, provider });
   const principal = (name: keyof typeof keys) => {
@@ -77,11 +77,11 @@ test("learning is admin-only for now: a staff user's corrections write nothing a
   } finally { await w.close(); }
 });
 
-test("owner-code runtime learns as anthonyjconti on the server key", async () => {
+test("owner-code runtime learns as owner_test on the server key", async () => {
   const w = await world();
   try {
     await w.learnIn(w.ownerRuntime);
     const serverWrites = w.fake.seen.filter((x) => x.key.startsWith("server-owner-key-") && x.method !== "GET" && JSON.stringify(x.body ?? "").includes("daebot-learning"));
-    assert.ok(serverWrites.some((x) => /user: anthonyjconti\b/.test(JSON.stringify(x.body))), "user model uses the owner's MIND username");
+    assert.ok(serverWrites.some((x) => /user: owner_test\b/.test(JSON.stringify(x.body))), "user model uses the owner's MIND username");
   } finally { await w.close(); }
 });
