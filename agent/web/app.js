@@ -433,8 +433,8 @@ function renderHeader() {
   setBusyUi();
   chatMode?.render();
 }
-// Messages sent while Dae is working wait here (per chat) until the user picks one: Send now (stops the running turn first),
-// Copy, or remove. Nothing sends itself. Kept in sessionStorage so a reload does not drop them.
+// Messages sent while Dae is working wait here (per chat) and go out in order, one per turn, when Dae finishes (drainQueue).
+// Each one also has Send now (stops the running turn first), Copy, and remove. Kept in sessionStorage so a reload does not drop them.
 var QKEY = "daebot.queue";
 // A queued message is { text, photos: [{ name, dataUrl, width, height }], lost }. Photos stay in memory; a reload restores them only
 // while they fit the sessionStorage budget (packQueue), and says how many it could not keep.
@@ -467,6 +467,18 @@ async function sendQueued(i) {
     setTimeout(wait, 150);
   };
   wait();
+}
+// The turn in this chat ended: send the next queued message. Runs after the turn's own cleanup, never while a Send now is pending.
+function drainQueue(key) {
+  setTimeout(() => {
+    if (key !== tkey() || state.busy.has(key) || queueSendWanted) return;
+    const q = queueFor(key);
+    if (!q || !q.length) return;
+    const item = q.shift();
+    if (!q.length) delete queue[key];
+    saveQueue(); renderQueue();
+    sendMessage(item.text, item.photos);
+  }, 0);
 }
 function renderQueue() {
   let box = document.getElementById("queue");
@@ -705,6 +717,7 @@ async function attachRun(id, baseEvents) {
     if (ctx.lost || !ctx.sawDone) await resyncFromServer(id);
     state.busy.delete(id); attached.delete(id); setBusyUi(); markInflight(id, false);
     renderQueue();
+    drainQueue(id);
     transcript(id).syncDones = undefined;
     saveTranscript(id); refreshSessions();
   }
@@ -776,7 +789,7 @@ async function sendMessage(text, attached = []) {
     const asst = ctx.asst;
     if (asst) { asst.streaming = false; if (asst.node) updateAssistant(asst.node, asst); }
     state.busy.delete(id); setBusyUi(); markInflight(id, false);
-    renderQueue(); // queued messages wait for the user: Send now or Copy on each
+    renderQueue();
     if (ctx.lost) await resyncFromServer(id); // the run is gone from the server (restart): show what it saved, including the interrupted note
     transcript(id).syncDones = undefined; // this tab just ran the turn itself: re-baseline instead of re-rendering it
     saveTranscript(id);
@@ -786,6 +799,7 @@ async function sendMessage(text, attached = []) {
     if (id === state.currentId || id === tkey()) voice.turnDone(answerText(transcript(id), userItem));
     else voice.turnDone("");
     if (id === state.currentId) suggest.load(id); // drafts what the user will probably say next, if the reply waits on them
+    drainQueue(id); if (startKey !== id) drainQueue(startKey); // the next queued message goes out now
   }
 }
 
