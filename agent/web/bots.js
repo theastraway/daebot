@@ -349,7 +349,9 @@ export function initBots(ctx) {
     const item = h("button", "bot-item"); item.type = "button";
     if (activeBotId() === bot.id) item.setAttribute("aria-current", "true");
     const text = h("span", "bot-text");
-    text.append(h("span", "bot-name", bot.name), h("span", "bot-purpose", bot.purpose || "No purpose yet"));
+    const nameEl = h("span", "bot-name", bot.name);
+    if (bot.pinned || bot.pinnedAt) { const pm = icon("i-pin"); pm.classList.add("bot-pinmark"); nameEl.append(pm); } // a quiet mark that stays visible; the pin button shows on hover
+    text.append(nameEl, h("span", "bot-purpose", bot.purpose || "No purpose yet"));
     const ds = dotState(bot);
     const dot = h("span", `bot-dot ${ds}`);
     dot.setAttribute("role", "img"); dot.setAttribute("aria-label", DOT_LABEL[ds]); dot.title = DOT_LABEL[ds];
