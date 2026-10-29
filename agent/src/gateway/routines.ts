@@ -9,10 +9,15 @@ import type { AgentEvent } from "../types.ts";
 import { TurnRateLimiter } from "./agent-api.ts";
 import { RunRegistry } from "./runs.ts";
 import type { SessionManager } from "./sessions.ts";
-import { describeTiming, nextRuns, parseTiming, TimingError, validTz } from "../routines/clock.ts";
+import { checkFilter, describeTiming, filterWords, nextRuns, parseTiming, summarizeTiming, TimingError, validTz } from "../routines/clock.ts";
 import { RoutineRunner } from "../routines/runner.ts";
 import type { FireResult, TurnResult } from "../routines/runner.ts";
 import { RoutineError, RoutineHub, secretMatches } from "../routines/store.ts";
+import { catalogFor } from "../routines/triggers.ts";
+import { pollSource } from "../routines/poll.ts";
+import type { MindCall } from "../routines/poll.ts";
+import { LocalSources } from "../routines/watchers.ts";
+import type { ScreenFeed } from "../screen/feed.ts";
 
 export const WEBHOOK_MAX_BODY = 64 * 1024;
 
@@ -31,6 +36,11 @@ export interface RoutineGatewayDeps {
   readJson(req: IncomingMessage): Promise<Record<string, unknown>>;
   sendJson(res: ServerResponse, status: number, body: unknown): void;
   clientIp(req: IncomingMessage): string;
+  /** Reads one MIND list with the owner's own key (the polled triggers). Absent = polled triggers are not offered. */
+  mindCall?: MindCall;
+  /** The gateway runs on the user's own computer (desktop app): folder, wake, app-open and screen triggers exist. */
+  desktop?: boolean;
+  screen?: ScreenFeed;
   runner?: { tickMs?: number; scanMs?: number; jitterMs?: number; runTimeoutMs?: number; maxRunsPerOwnerHour?: number; now?: () => number };
 }
 
@@ -74,8 +84,13 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
     return r.failed ? { ok: false, threadId: id, finalText: r.final, error: r.failed } : { ok: true, threadId: id, finalText: r.final };
   }
 
-  const runner = new RoutineRunner({
+  d.hub.caps.desktop = d.desktop === true;
+  const local = d.desktop ? new LocalSources({ fire: (owner, botId, id, text) => runner.fireRoutine(owner, botId, id, text), screen: d.screen }) : undefined;
+  const runner: RoutineRunner = new RoutineRunner({
     hub: d.hub,
+    desktop: d.desktop === true,
+    local,
+    poll: d.mindCall ? (owner, _botId, trigger, now, signal) => pollSource(d.mindCall!, owner, trigger, now, signal) : undefined,
     runTurn,
     ownerOk: d.ownerOk,
     state(owner, botId) {
@@ -89,8 +104,12 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
     ...d.runner,
   });
 
+  // Folder and screen watches follow the routines at once (the runner also re-checks them every tick).
+  if (local) d.hub.onChange(() => { try { local.sync(d.hub.all()); } catch { /* the next tick tries again */ } });
   // A user message in a bot's thread fires thread_message routines (once per message).
   manager.onUserMessage = (ls, text) => { if (ls.bot) runner.trigger(ls.owner, ls.bot, "thread_message", { text }); };
+  // A finished (or failed) reply in a bot's thread fires turn_done routines. Routine threads never do, so a routine cannot start itself.
+  manager.onTurnDone = (ls, r) => { if (ls.bot) runner.trigger(ls.owner, ls.bot, "turn_done", { text: r.text.slice(0, 2000) || (r.ok ? "(no reply)" : "the turn failed"), ok: r.ok }); };
 
   /** The hooks the runtime lends bot_manage and bot_self. */
   const hooks: Pick<BotManageHooks, "runRoutine" | "continueThread" | "publicBase"> = {
@@ -145,6 +164,10 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
 
   async function api(req: IncomingMessage, res: ServerResponse, path: string, method: string, me: Principal): Promise<boolean> {
     const rt = manager.runtimeOf(me.id);
+    if (path === "/routines/triggers") {
+      if (method !== "GET") return d.sendJson(res, 405, { error: "method not allowed" }), true;
+      return d.sendJson(res, 200, { triggers: catalogFor({ desktop: d.desktop === true }).filter((t) => !t.poll || !!d.mindCall).map((t) => ({ ...t, desktopOnly: t.desktopOnly === true })), desktop: d.desktop === true }), true;
+    }
     if (path === "/routines/preview") {
       if (method !== "POST") return d.sendJson(res, 405, { error: "method not allowed" }), true;
       const b = await d.readJson(req);
@@ -152,7 +175,12 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
         const tz = typeof b.tz === "string" && b.tz ? b.tz : "America/New_York";
         if (!validTz(tz)) return d.sendJson(res, 200, { ok: false, error: `"${String(tz).slice(0, 40)}" is not a time zone name` }), true;
         const spec = parseTiming(b.expression);
-        return d.sendJson(res, 200, { ok: true, expression: spec.text, tz, human: describeTiming(spec.text, tz), next: nextRuns(spec, tz, Date.now(), 3) }), true;
+        const filter = checkFilter(b.filter);
+        return d.sendJson(res, 200, {
+          ok: true, expression: spec.text, tz, filter: filter ?? null,
+          human: describeTiming(spec.text, tz) + filterWords(filter), summary: summarizeTiming(spec.text, filter),
+          next: nextRuns(spec, tz, Date.now(), 3, filter),
+        }), true;
       } catch (e) {
         return d.sendJson(res, 200, { ok: false, error: e instanceof TimingError ? e.message : "bad timing" }), true;
       }

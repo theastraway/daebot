@@ -43,6 +43,8 @@ export class SessionManager {
 
   /** Called once for every user message accepted in a bot's own thread (not routine runs, not bot-to-bot DMs). Used by thread_message routines. */
   onUserMessage?: (ls: LiveSession, text: string) => void;
+  /** Called once when a turn in a bot's own thread ends (not routine runs, not bot-to-bot DMs, not an abort). Used by turn_done routines. */
+  onTurnDone?: (ls: LiveSession, r: { ok: boolean; text: string }) => void;
   private runtimeFor?: (owner: string) => Runtime;
   /** Owner of a persisted (not live) session, from the shared store; undefined = unknown id. */
   private storedOwner?: (id: string) => string | undefined;
@@ -175,17 +177,19 @@ export class SessionManager {
       if (external.aborted) ac.abort();
       else external.addEventListener("abort", onExternal, { once: true });
     }
-    let sawDone = false;
+    let sawDone = false, failedMsg = "", finalText = "";
     try {
       for await (const ev of ls.session.send(text, { signal: ac.signal, origin, interactive, ...(quote ? { quote } : {}), ...(photos?.length ? { photos } : {}), ...(client?.capabilities?.length ? { capabilities: client.capabilities } : {}), ...(client?.device ? { device: client.device } : {}), ...(origin === "bot" && client?.peerReceipt ? { peerReceipt: client.peerReceipt } : {}) })) {
-        if (ev.type === "done") sawDone = true;
+        if (ev.type === "done") { sawDone = true; finalText = ev.finalText; }
+        if (ev.type === "notice" && /^Turn failed/.test(ev.text)) failedMsg = ev.text;
         onEvent(ev);
         if (sawDone) break;
       }
     } catch (err) {
       if (!ac.signal.aborted) {
         const msg = err instanceof Error ? err.message : String(err);
-        onEvent({ type: "notice", level: "warn", text: `Turn failed: ${msg.slice(0, 300)}` });
+        failedMsg = `Turn failed: ${msg.slice(0, 300)}`;
+        onEvent({ type: "notice", level: "warn", text: failedMsg });
       }
     } finally {
       if (!sawDone) {
@@ -193,9 +197,11 @@ export class SessionManager {
         onEvent({ type: "done", finalText: "" });
       }
       external?.removeEventListener("abort", onExternal);
+      const aborted = ac.signal.aborted;
       ls.busy = false;
       ls.abort = null;
       ls.lastUsed = Date.now();
+      if (!aborted && ls.bot && !ls.peer && ls.surface !== "routine" && this.onTurnDone) { try { this.onTurnDone(ls, { ok: !failedMsg, text: failedMsg || finalText }); } catch { /* a routine hook never breaks a turn */ } }
     }
   }
 

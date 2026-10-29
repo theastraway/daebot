@@ -251,20 +251,32 @@
           <select class="fld" id="rt-type"><option value="timed">On a clock</option><option value="trigger">When something happens</option></select>
           <div id="rt-clock" class="rt-grp">
             <label class="fld-label" for="rt-preset">How often</label>
-            <select class="fld" id="rt-preset"><option value="minutes">Every few minutes</option><option value="hourly">Every hour</option><option value="daily">Every day at…</option><option value="weekdays">Weekdays at…</option><option value="custom">Custom (5 fields)</option></select>
-            <div><label class="fld-label" for="rt-n">Every how many minutes</label><input class="fld" id="rt-n" type="number" min="1" max="59" value="15"></div>
-            <div><label class="fld-label" for="rt-minute">At minute</label><input class="fld" id="rt-minute" type="number" min="0" max="59" value="0"></div>
-            <div><label class="fld-label" for="rt-time">Time</label><input class="fld" id="rt-time" type="time" value="09:00"></div>
-            <div><label class="fld-label" for="rt-expr">Minute Hour Day Month Weekday</label><input class="fld" id="rt-expr" type="text" value="0 9 * * 1-5" spellcheck="false"></div>
-            <label class="fld-label" for="rt-tz">Time zone</label>
-            <input class="fld" id="rt-tz" type="text" list="rt-tz-list" placeholder="America/New_York" spellcheck="false">
-            <p class="drawer-fine" id="rt-preview" role="status" aria-live="polite"></p>
+            <select class="fld" id="rt-preset"><option value="m15">Every 15 minutes</option><option value="m30">Every 30 minutes</option><option value="hourly">Every hour</option><option value="nhours">Every few hours</option><option value="daily">Every day</option><option value="multi">Several times a day</option><option value="weekly">Weekly, on chosen days</option><option value="monthly">Monthly, on a day</option><option value="minutes">Every N minutes</option><option value="custom">Custom (advanced, cron)</option></select>
+            <div data-for="n"><label class="fld-label" for="rt-n">Every how many minutes</label><input class="fld" id="rt-n" type="number" min="1" max="59" value="15"></div>
+            <div data-for="hours"><label class="fld-label" for="rt-hours">Every</label><select class="fld" id="rt-hours"><option value="2">2 hours</option><option value="3">3 hours</option><option value="4">4 hours</option><option value="6">6 hours</option><option value="8">8 hours</option><option value="12">12 hours</option></select></div>
+            <div data-for="minute"><label class="fld-label" for="rt-minute">Minutes past the hour</label><input class="fld" id="rt-minute" type="number" min="0" max="59" value="0"></div>
+            <div data-for="time"><label class="fld-label" for="rt-time">Time of day</label><input class="fld rt-timeinp" id="rt-time" type="time" value="09:00"></div>
+            <div data-for="multi"><span class="fld-label">Times of day</span><div id="rt-times" class="rt-times"></div><button class="btn-quiet rt-btn" id="rt-addtime" type="button">Add a time</button></div>
+            <div data-for="days"><span class="fld-label" id="rt-days-l">On these days</span><div id="rt-days" class="rt-days" role="group" aria-labelledby="rt-days-l"></div></div>
+            <div data-for="dom"><label class="fld-label" for="rt-dom">Day of the month</label><input class="fld" id="rt-dom" type="number" min="1" max="31" value="1"><p class="drawer-fine">A month without that day is skipped.</p></div>
+            <div data-for="custom"><label class="fld-label" for="rt-expr">Minute Hour Day Month Weekday</label><input class="fld" id="rt-expr" type="text" value="0 * * * *" spellcheck="false"><p class="drawer-fine">Five fields, like 0 9 * * 1-5. Join several with a semicolon.</p></div>
           </div>
           <div id="rt-trig" class="rt-grp" hidden>
             <label class="fld-label" for="rt-trigger">When</label>
-            <select class="fld" id="rt-trigger"><option value="webhook">A web address is called (webhook)</option><option value="thread_message">I message the bot in any of its threads</option><option value="bot_message">Another bot talks to it</option></select>
-            <div><label class="fld-label" for="rt-from">Only from this bot (slug, optional)</label><input class="fld" id="rt-from" type="text" maxlength="32"></div>
+            <select class="fld" id="rt-trigger"></select>
+            <p class="drawer-fine" id="rt-trig-desc"></p>
+            <div id="rt-trig-fields" class="rt-grp"></div>
           </div>
+          <div class="rt-limits" role="group" aria-label="Limit when it runs">
+            <span class="fld-label">Limit when it runs</span>
+            <label class="rt-check"><input type="checkbox" id="rt-weekdays"> <span>Weekdays only (Mon to Fri)</span></label>
+            <label class="rt-check"><input type="checkbox" id="rt-window-on"> <span>Only during active hours</span></label>
+            <div id="rt-window" class="rt-window" hidden><input class="fld rt-timeinp" id="rt-from" type="time" value="09:00" aria-label="Active hours start"><span class="rt-to">to</span><input class="fld rt-timeinp" id="rt-to" type="time" value="17:00" aria-label="Active hours end"></div>
+          </div>
+          <div class="rt-tzbox"><label class="fld-label" for="rt-tz">Time zone</label>
+            <input class="fld" id="rt-tz" type="text" list="rt-tz-list" placeholder="America/New_York" spellcheck="false">
+            <p class="drawer-fine" id="rt-tznote"></p></div>
+          <div class="rt-preview" id="rt-preview" role="status" aria-live="polite"><div class="rt-pv-sum" id="rt-pv-summary"></div><div id="rt-pv-next"></div></div>
           <p class="drawer-fine warn" id="rt-err" role="alert" hidden></p>
           <div class="row"><button class="btn-primary" id="rt-save" type="submit">Save routine</button><button class="btn-quiet" id="rt-cancel" type="button">Cancel</button></div>
         </form>

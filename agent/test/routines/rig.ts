@@ -9,13 +9,14 @@ import type { BoardLite, ThreadLite } from "../../src/routines/heartbeat.ts";
 export const BOT = "b_0123456789ab";
 export const OWNER = "u_alice";
 
-export function rig(o: { dir?: string; t0?: number; hold?: boolean } = {}) {
+export function rig(o: { dir?: string; t0?: number; hold?: boolean; deps?: Partial<RunnerDeps>; desktop?: boolean } = {}) {
   const dir = o.dir ?? mkdtempSync(join(tmpdir(), "routines-"));
   mkdirSync(join(dir, "bots", OWNER), { recursive: true });
   writeFileSync(join(dir, "bots", OWNER, "bots.json"), JSON.stringify({ v: 1, bots: { [BOT]: { id: BOT, slug: "quinn" } } }));
   const clock = { t: o.t0 ?? Date.parse("2026-10-28T12:00:00Z") };
   const now = () => clock.t;
   const hub = new RoutineHub(dir, { now });
+  hub.caps.desktop = o.desktop === true;
   const world = { threads: [] as ThreadLite[], board: [] as BoardLite[], alive: true };
   const turns: { thread: string; text: string }[] = [];
   const gate: { release?: () => void; wait?: Promise<void> } = {};
@@ -29,6 +30,8 @@ export function rig(o: { dir?: string; t0?: number; hold?: boolean } = {}) {
       if (gate.wait) await gate.wait;
       return { ok: true, threadId: "th_1", finalText: "did it" };
     },
+    ...(o.desktop ? { desktop: true } : {}),
+    ...o.deps,
   };
   const runner = new RoutineRunner(deps);
   return { dir, clock, hub, runner, world, turns, gate, deps };

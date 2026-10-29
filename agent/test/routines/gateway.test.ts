@@ -3,7 +3,7 @@ process.env.DAEBOT_BOTS_ENABLED = "1";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startGateway } from "../../src/gateway/index.ts";
@@ -150,5 +150,91 @@ test("Heartbeat via Run now: a bot with no threads makes NO model call; after ac
     assert.equal(r.provider.requests.length, n, "its own review is not new activity");
     const rec = (await r.j("GET", `/bots/${r.bot.id}/routines/${hb.id}`)).json.runs;
     assert.deepEqual(rec.map((x: any) => [x.status, x.model]), [["idle", false], ["ok", true], ["idle", false]]);
+  } finally { await r.close(); }
+});
+
+test("schedule model over REST: weekdays + active hours are saved, summarised, kept on a re-time, and in the preview with the next three runs", async () => {
+  const r = await rig();
+  try {
+    const f = { weekdays: true, from: "09:00", to: "17:00" };
+    const add = await r.j("POST", `/bots/${r.bot.id}/routines`, { name: "Hourly", prompt: "Check in.", kind: "timed", timing: { expression: "0 * * * *", tz: "America/New_York", filter: f } });
+    assert.equal(add.status, 200, JSON.stringify(add.json));
+    assert.equal(add.json.routine.summary, "Every hour · Weekdays · 9 AM–5 PM");
+    assert.deepEqual(add.json.routine.timing.filter, f);
+    assert.match(add.json.routine.when, /weekdays only, between 9 AM and 5 PM/);
+    const nextRun = add.json.routine.nextRunAt;
+    const w = new Date(nextRun).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", hour12: false });
+    assert.match(w, /^(Mon|Tue|Wed|Thu|Fri),? (09|1\d)$/, w);
+    // a re-time that does not mention the limit keeps it
+    const re = await r.j("PATCH", `/bots/${r.bot.id}/routines/${add.json.routine.id}`, { expression: "*/30 * * * *" });
+    assert.equal(re.json.routine.summary, "Every 30 minutes · Weekdays · 9 AM–5 PM");
+    // taking the limit off is explicit
+    const off = await r.j("PATCH", `/bots/${r.bot.id}/routines/${add.json.routine.id}`, { timing: { expression: "*/30 * * * *", tz: "America/New_York", filter: null } });
+    assert.equal(off.json.routine.summary, "Every 30 minutes");
+    assert.equal((await r.j("POST", `/bots/${r.bot.id}/routines`, { name: "Half", prompt: "x", kind: "timed", timing: { expression: "0 * * * *", tz: "UTC", filter: { from: "09:00" } } })).status, 400);
+    const pv = await r.j("POST", "/routines/preview", { expression: "0 * * * *", tz: "America/New_York", filter: f });
+    assert.equal(pv.json.ok, true);
+    assert.equal(pv.json.summary, "Every hour · Weekdays · 9 AM–5 PM");
+    assert.equal(pv.json.next.length, 3);
+    assert.equal((await r.j("POST", "/routines/preview", { expression: "0 * * * *", tz: "UTC", filter: { weekdays: 1 } })).json.ok, false);
+    const multi = await r.j("POST", "/routines/preview", { expression: "0 9 * * *;30 13 * * *", tz: "UTC" });
+    assert.equal(multi.json.summary, "Daily at 9:00 AM and 1:30 PM");
+  } finally { await r.close(); }
+});
+
+test("the trigger list is served by the gateway: desktop triggers exist only because this gateway runs on a computer", async () => {
+  const r = await rig();
+  try {
+    const l = await r.j("GET", "/routines/triggers");
+    assert.equal(l.status, 200);
+    const types = l.json.triggers.map((t: any) => t.type);
+    for (const t of ["webhook", "thread_message", "bot_message", "keyword", "turn_done", "mind_document", "mind_task", "mind_task_due", "mind_contact", "mail_new", "file_changed", "wake", "app_opened", "screen_change"]) assert.ok(types.includes(t), t);
+    assert.equal(l.json.desktop, true);
+    for (const t of l.json.triggers) assert.ok(t.label && t.description && Array.isArray(t.fields), t.type);
+  } finally { await r.close(); }
+});
+
+test("keyword and turn_done fire from real thread traffic; a webhook with a weekday limit is refused outside it", async () => {
+  const r = await rig([{ text: "ACK" }]);
+  try {
+    const kw = (await r.j("POST", `/bots/${r.bot.id}/routines`, { name: "Money", prompt: "Note it.", kind: "trigger", trigger: { type: "keyword", phrase: "invoice, refund" } })).json.routine;
+    const td = (await r.j("POST", `/bots/${r.bot.id}/routines`, { name: "After", prompt: "Review the last reply.", kind: "trigger", trigger: { type: "turn_done" } })).json.routine;
+    const { sessionId } = (await r.j("POST", "/sessions", { surface: "web", bot: r.bot.id })).json;
+    const runs = async (id: string) => ((await r.j("GET", `/bots/${r.bot.id}/routines/${id}`)).json.runs as any[]) ?? [];
+    await http(r.gw.url, "POST", `/sessions/${sessionId}/send`, { headers: r.a, body: { text: "hello there" } });
+    for (let i = 0; i < 60 && (await runs(td.id)).filter((x) => x.status === "ok").length < 1; i++) await new Promise((res) => setTimeout(res, 50));
+    assert.equal((await runs(td.id)).filter((x) => x.status === "ok").length, 1, "a finished reply runs turn_done once");
+    assert.equal((await runs(kw.id)).length, 0, "no keyword in that message");
+    await http(r.gw.url, "POST", `/sessions/${sessionId}/send`, { headers: r.a, body: { text: "Where is my Invoice?" } });
+    for (let i = 0; i < 60 && (await runs(kw.id)).filter((x) => x.status === "ok").length < 1; i++) await new Promise((res) => setTimeout(res, 50));
+    assert.equal((await runs(kw.id)).filter((x) => x.status === "ok").length, 1);
+    assert.equal((await runs(kw.id))[0].source, "keyword");
+    await new Promise((res) => setTimeout(res, 300));
+    assert.equal((await runs(td.id)).filter((x) => x.status === "ok").length, 2, "one per finished reply; the routine's own thread never re-triggers it");
+    // a webhook limited to a window that is never open now (all day closed except one minute that is not now) says so
+    const now = new Date();
+    const m = (now.getUTCHours() * 60 + now.getUTCMinutes() + 600) % 1440;
+    const hh = (n: number) => `${String(Math.floor(n / 60)).padStart(2, "0")}:${String(n % 60).padStart(2, "0")}`;
+    const hook = (await r.j("POST", `/bots/${r.bot.id}/routines`, { name: "Closed", prompt: "x", kind: "trigger", trigger: { type: "webhook", filter: { from: hh(m), to: hh((m + 5) % 1440) }, tz: "UTC" } })).json.routine;
+    const res = await http(r.gw.url, "POST", new URL(hook.webhookUrl).pathname, { body: { a: 1 } });
+    assert.equal(res.status, 409, res.body);
+    assert.match(res.body, /weekdays \/ active hours/);
+  } finally { await r.close(); }
+});
+
+test("a folder trigger over REST runs the routine when a file lands in the folder", async () => {
+  const folder = mkdtempSync(join(tmpdir(), "inbox-"));
+  const r = await rig([{ text: "filed" }]);
+  try {
+    assert.equal((await r.j("POST", `/bots/${r.bot.id}/routines`, { name: "Bad", prompt: "x", kind: "trigger", trigger: { type: "file_changed", path: join(folder, "nope") } })).status, 400);
+    const rt = (await r.j("POST", `/bots/${r.bot.id}/routines`, { name: "Inbox folder", prompt: "Say which files arrived.", kind: "trigger", trigger: { type: "file_changed", path: folder } })).json.routine;
+    assert.match(rt.when, /when a file changes in /);
+    await new Promise((res) => setTimeout(res, 400));                    // the OS watcher needs a moment to start
+    writeFileSync(join(folder, "contract.pdf"), "x");
+    let last: any;
+    for (let i = 0; i < 160; i++) { last = ((await r.j("GET", `/bots/${r.bot.id}/routines/${rt.id}`)).json.runs as any[])?.at(-1); if (last && last.status === "ok") break; await new Promise((res) => setTimeout(res, 100)); }
+    assert.ok(last && last.status === "ok", JSON.stringify(last));
+    assert.equal(last.source, "file_changed");
+    assert.match(r.provider.requests.at(-1)!.messages.filter((m) => m.role === "user").at(-1)!.content, /contract\.pdf/);
   } finally { await r.close(); }
 });

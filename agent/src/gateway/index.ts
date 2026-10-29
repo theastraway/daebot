@@ -355,6 +355,17 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         enforceModel: (me, id) => enforceModel(me, id),
         publicBase: () => (process.env.DAEBOT_PUBLIC_URL ?? "").trim().replace(/\/+$/, "") || (hosted?.allowedHosts?.[0] && hosted.allowedHosts[0] !== "localhost" ? `https://${hosted.allowedHosts[0]}` : undefined),
         readBody, readJson, sendJson, clientIp: (r) => clientIp(r),
+        desktop: !hosted,
+        screen: opts.screenFeed ?? screenFeed,
+        // Polled triggers read the owner's own MIND with the owner's own key (a hosted owner-login has none: those routines say so).
+        mindCall: opts.cfg
+          ? async (owner, tool, args, signal) => {
+              const p = owner === OWNER.id ? OWNER : auth?.store.principal(owner);
+              const key = p ? appsKeyFor(p) : undefined;
+              if (!p || !key) throw new Error("this account has no MIND key to read with");
+              return createMindClient(opts.cfg!, opts.fetchImpl, { getKey: () => appsKeyFor(p) ?? key }).call(tool, args, signal);
+            }
+          : undefined,
       })
     : undefined;
   if (routines && opts.bots) {
@@ -1428,7 +1439,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       return sendJson(res, 200, { tasks, stopped: tasks.filter((t) => t.status === "stopped").length });
     }
     if (path === "/permissions" || path.startsWith("/permissions/")) return permissionsApi(req, res, path, method, me);
-    if (routines && botsOn() && (path === "/routines/preview" || /^\/bots\/[^/]+\/routines(\/|$)/.test(path))) { if (await routines.api(req, res, path, method, me)) return; }
+    if (routines && botsOn() && (path === "/routines/preview" || path === "/routines/triggers" || /^\/bots\/[^/]+\/routines(\/|$)/.test(path))) { if (await routines.api(req, res, path, method, me)) return; }
     if (path === "/exchanges" || path.startsWith("/exchanges/")) return exchangesApi(res, path, method, me);
     if (path === "/bots/caelum") return caelumApi(req, res, method, me);
     if (path === "/bots" || path.startsWith("/bots/")) return botsApi(req, res, path, method, me);

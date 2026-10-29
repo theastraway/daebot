@@ -1,43 +1,103 @@
 // Routines section of the bot settings: the bot's routines (on a clock or when something happens), the built-in Heartbeat, Run now,
-// on/off, and the Add / Edit form with friendly presets, a plain-words preview and the next runs.
+// on/off, and the Add / Edit form: "How often" with a real time picker, day buttons and a monthly day; one "Weekdays only" switch and
+// optional active hours that work with every timing and every trigger; the trigger list comes from the server (only what this
+// deployment can really detect); a plain-words summary and the next three runs, in the routine's time zone.
 // DOM is built with createElement + textContent only. The pure helpers are exported and unit tested.
 
 export const PRESETS = [
-  { id: "minutes", label: "Every few minutes" },
+  { id: "m15", label: "Every 15 minutes" },
+  { id: "m30", label: "Every 30 minutes" },
   { id: "hourly", label: "Every hour" },
-  { id: "daily", label: "Every day at…" },
-  { id: "weekdays", label: "Weekdays at…" },
-  { id: "custom", label: "Custom (5 fields)" },
+  { id: "nhours", label: "Every few hours" },
+  { id: "daily", label: "Every day" },
+  { id: "multi", label: "Several times a day" },
+  { id: "weekly", label: "Weekly, on chosen days" },
+  { id: "monthly", label: "Monthly, on a day" },
+  { id: "minutes", label: "Every N minutes" },
+  { id: "custom", label: "Custom (advanced, cron)" },
 ];
-export const TRIGGERS = [
-  { id: "webhook", label: "A web address is called (webhook)" },
-  { id: "thread_message", label: "I message the bot in any of its threads" },
-  { id: "bot_message", label: "Another bot talks to it" },
-];
+export const HOUR_STEPS = [2, 3, 4, 6, 8, 12];
+export const DAYS = [{ v: 1, t: "Mon" }, { v: 2, t: "Tue" }, { v: 3, t: "Wed" }, { v: 4, t: "Thu" }, { v: 5, t: "Fri" }, { v: 6, t: "Sat" }, { v: 0, t: "Sun" }];
 
 const two = (n) => String(n).padStart(2, "0");
+const hm = (time) => {
+  const [hh, mm] = String(time || "09:00").split(":").map((x) => Math.max(0, Number(x) || 0));
+  return [Math.min(23, hh), Math.min(59, mm)];
+};
 
-/** The 5-field expression a preset stands for. `p`: { n, minute, time: "HH:MM" } */
+/** The 5-field expression a preset stands for ("" when the choice is incomplete, like a week with no day picked). */
 export function expressionFor(preset, p = {}) {
-  const [hh, mm] = String(p.time || "09:00").split(":").map((x) => Math.max(0, Number(x) || 0));
   const n = Math.min(59, Math.max(1, Number(p.n) || 15));
   const minute = Math.min(59, Math.max(0, Number(p.minute) || 0));
+  const [hh, mm] = hm(p.time);
+  if (preset === "m15") return "*/15 * * * *";
+  if (preset === "m30") return "*/30 * * * *";
   if (preset === "minutes") return `*/${n} * * * *`;
   if (preset === "hourly") return `${minute} * * * *`;
-  if (preset === "daily") return `${Math.min(59, mm)} ${Math.min(23, hh)} * * *`;
-  if (preset === "weekdays") return `${Math.min(59, mm)} ${Math.min(23, hh)} * * 1-5`;
+  if (preset === "nhours") return `${minute} */${HOUR_STEPS.includes(Number(p.hours)) ? Number(p.hours) : 2} * * *`;
+  if (preset === "daily") return `${mm} ${hh} * * *`;
+  if (preset === "multi") {
+    const times = [...new Set((p.times || []).filter(Boolean).map((t) => hm(t)).map(([h, m]) => h * 60 + m))].sort((a, b) => a - b).slice(0, 12);
+    return times.map((t) => `${t % 60} ${Math.floor(t / 60)} * * *`).join(";");
+  }
+  if (preset === "weekly") {
+    const days = [...new Set((p.days || []).map(Number).filter((d) => d >= 0 && d <= 6))].sort((a, b) => a - b);
+    return days.length ? `${mm} ${hh} * * ${days.join(",")}` : "";
+  }
+  if (preset === "monthly") return `${mm} ${hh} ${Math.min(31, Math.max(1, Number(p.dom) || 1))} * *`;
+  if (preset === "weekdays") return `${mm} ${hh} * * 1-5`;   // older callers
   return String(p.expression || "").trim();
 }
+
+const dayList = (field) => {
+  const out = new Set();
+  for (const part of field.split(",")) {
+    const m = /^(\d)(?:-(\d))?$/.exec(part);
+    if (!m) return null;
+    const lo = Number(m[1]), hi = m[2] === undefined ? lo : Number(m[2]);
+    if (hi < lo) return null;
+    for (let d = lo; d <= hi; d++) out.add(d % 7);
+  }
+  return [...out].sort((x, y) => x - y);
+};
 
 /** Best guess of the preset + fields for an existing expression (so Edit opens on the friendly picker when it can). */
 export function presetOf(expression) {
   const e = String(expression || "").trim();
   let m;
+  if (e.includes(";")) {
+    const times = [];
+    for (const part of e.split(";")) {
+      const x = /^(\d{1,2}) (\d{1,2}) \* \* \*$/.exec(part.trim());
+      if (!x) return { preset: "custom", expression: e };
+      times.push(`${two(Number(x[2]))}:${two(Number(x[1]))}`);
+    }
+    return { preset: "multi", times };
+  }
+  if (e === "*/15 * * * *") return { preset: "m15" };
+  if (e === "*/30 * * * *") return { preset: "m30" };
   if ((m = /^\*\/(\d{1,2}) \* \* \* \*$/.exec(e))) return { preset: "minutes", n: Number(m[1]) };
   if ((m = /^(\d{1,2}) \* \* \* \*$/.exec(e))) return { preset: "hourly", minute: Number(m[1]) };
+  if ((m = /^(\d{1,2}) \*\/(\d{1,2}) \* \* \*$/.exec(e)) && HOUR_STEPS.includes(Number(m[2]))) return { preset: "nhours", minute: Number(m[1]), hours: Number(m[2]) };
   if ((m = /^(\d{1,2}) (\d{1,2}) \* \* \*$/.exec(e))) return { preset: "daily", time: `${two(Number(m[2]))}:${two(Number(m[1]))}` };
-  if ((m = /^(\d{1,2}) (\d{1,2}) \* \* 1-5$/.exec(e))) return { preset: "weekdays", time: `${two(Number(m[2]))}:${two(Number(m[1]))}` };
+  if ((m = /^(\d{1,2}) (\d{1,2}) \* \* ([0-7,\-]+)$/.exec(e))) { const days = dayList(m[3]); if (days && days.length) return { preset: "weekly", time: `${two(Number(m[2]))}:${two(Number(m[1]))}`, days }; }
+  if ((m = /^(\d{1,2}) (\d{1,2}) (\d{1,2}) \* \*$/.exec(e))) return { preset: "monthly", time: `${two(Number(m[2]))}:${two(Number(m[1]))}`, dom: Number(m[3]) };
   return { preset: "custom", expression: e };
+}
+
+/** The filter the form describes: weekdays switch + optional active hours. null = nothing restricted. */
+export function filterOf({ weekdays, windowOn, from, to }) {
+  const f = {};
+  if (weekdays) f.weekdays = true;
+  if (windowOn && from && to) { f.from = from; f.to = to; }
+  return f.weekdays || f.from ? f : null;
+}
+
+const words12 = (t) => { const [h, m] = hm(t); return `${h % 12 === 0 ? 12 : h % 12}${m ? ":" + two(m) : ""} ${h < 12 ? "AM" : "PM"}`; };
+/** "Weekdays · 9 AM–5 PM" for the filter alone (what a trigger shows; a clock gets the whole summary from the server). */
+export function filterText(f) {
+  if (!f) return "";
+  return [f.weekdays ? "Weekdays" : "", f.from && f.to ? `${words12(f.from)}–${words12(f.to)}` : ""].filter(Boolean).join(" · ");
 }
 
 export function lastRunText(r, ago) {
@@ -56,9 +116,21 @@ export function nextRunText(r, fmt) {
   return "";
 }
 
+/** The status line of a polled trigger: how often it looks, when it last looked, or why the look failed. */
+export function pollText(r, ago) {
+  const every = r.trigger && r.trigger.every;
+  if (!every || !r.enabled) return "";
+  const p = r.poll || {};
+  const cadence = every === 60 ? "every hour" : `every ${every} minutes`;
+  if (p.error) return `Looks ${cadence}. Last look failed: ${p.error}`;
+  if (!p.lastPollAt) return `Looks ${cadence}. First look is coming up.`;
+  return `Looks ${cadence}. Last look ${ago(p.lastPollAt)}.`;
+}
+
 const tzList = () => {
   try { return typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : []; } catch { return []; }
 };
+export const tzName = (tz) => String(tz || "").split("/").pop().replace(/_/g, " ");
 
 export function initRoutines(ctx) {
   const { json, api, h, ago, notify, confirmDialog, openThread } = ctx;
@@ -66,13 +138,20 @@ export function initRoutines(ctx) {
   const el = {
     sec: $("bd-routines"), list: $("rt-list"), add: $("rt-add"), state: $("rt-state"), form: $("rt-form"),
     name: $("rt-name"), prompt: $("rt-prompt"), type: $("rt-type"), clockBox: $("rt-clock"), trigBox: $("rt-trig"),
-    preset: $("rt-preset"), n: $("rt-n"), minute: $("rt-minute"), time: $("rt-time"), expr: $("rt-expr"), tz: $("rt-tz"), preview: $("rt-preview"),
-    trig: $("rt-trigger"), from: $("rt-from"), save: $("rt-save"), cancel: $("rt-cancel"), err: $("rt-err"), title: $("rt-form-title"),
+    preset: $("rt-preset"), n: $("rt-n"), hours: $("rt-hours"), minute: $("rt-minute"), time: $("rt-time"), times: $("rt-times"), addTime: $("rt-addtime"),
+    days: $("rt-days"), dom: $("rt-dom"), expr: $("rt-expr"), tz: $("rt-tz"), tzNote: $("rt-tznote"),
+    weekdays: $("rt-weekdays"), windowOn: $("rt-window-on"), from: $("rt-from"), to: $("rt-to"), windowBox: $("rt-window"),
+    preview: $("rt-preview"), pvSummary: $("rt-pv-summary"), pvNext: $("rt-pv-next"),
+    trig: $("rt-trigger"), trigDesc: $("rt-trig-desc"), trigFields: $("rt-trig-fields"),
+    save: $("rt-save"), cancel: $("rt-cancel"), err: $("rt-err"), title: $("rt-form-title"),
   };
   if (!el.sec) return null;
-  const st = { bot: "", routines: [], running: new Set(), editing: "", timer: 0, pv: 0, loadSeq: 0 };
-  const fmt = (ms) => new Date(ms).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
+  const st = { bot: "", routines: [], running: new Set(), editing: "", timer: 0, pv: 0, loadSeq: 0, catalog: [], catalogSeq: 0, days: new Set([1, 2, 3, 4, 5]), pvT: 0 };
   const userTz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York"; } catch { return "America/New_York"; } })();
+  const fmt = (ms, tz) => {
+    try { return new Date(ms).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: tz || undefined, timeZoneName: "short" }); }
+    catch { return new Date(ms).toLocaleString(); }
+  };
 
   // time zone picker: a datalist keeps it typeable and short
   const dl = document.createElement("datalist"); dl.id = "rt-tz-list";
@@ -112,8 +191,16 @@ export function initRoutines(ctx) {
     });
     head.append(sw);
     li.append(head);
-    li.append(h("div", "rt-when", r.when || ""));
-    const nx = nextRunText(r, fmt);
+    const when = h("div", "rt-when", r.kind === "timed" ? r.summary || r.when || "" : r.when || "");
+    if (r.timing && r.timing.tz) when.append(h("span", "rt-tzlabel", ` · ${tzName(r.timing.tz)}`));
+    li.append(when);
+    if (r.kind === "trigger") {
+      const ft = filterText(r.trigger && r.trigger.filter);
+      if (ft) li.append(h("div", "rt-next", `Only ${ft}${r.trigger.tz ? ` (${tzName(r.trigger.tz)})` : ""}`));
+      const pt = pollText(r, ago);
+      if (pt) { const d = h("div", "rt-next", pt); if (r.poll && r.poll.error) d.classList.add("warn"); li.append(d); }
+    }
+    const nx = nextRunText(r, (ms) => fmt(ms, r.timing && r.timing.tz));
     if (nx) li.append(h("div", "rt-next", nx));
     const last = h("div", "rt-last", lastRunText(r, ago)); li.append(last);
     if (r.kind === "trigger" && r.trigger && r.trigger.type === "webhook" && r.webhookUrl) {
@@ -161,32 +248,126 @@ export function initRoutines(ctx) {
     el.list.replaceChildren(...st.routines.map(row));
   }
 
-  // ---------------------------------------------------------------- form
-  function currentExpression() {
-    return expressionFor(el.preset.value, { n: el.n.value, minute: el.minute.value, time: el.time.value, expression: el.expr.value });
+  // ---------------------------------------------------------------- trigger catalog (what this deployment can really detect)
+  async function loadCatalog() {
+    const seq = ++st.catalogSeq;
+    try {
+      const r = await json("/routines/triggers");
+      if (seq !== st.catalogSeq) return;
+      st.catalog = Array.isArray(r.triggers) ? r.triggers : [];
+    } catch { st.catalog = st.catalog.length ? st.catalog : []; }
+    fillTriggerSelect();
   }
+  const GROUPS = { messages: "Messages", daebot: "Daebot", web: "Web", mind: "Your MIND and mail", desktop: "This computer" };
+  function fillTriggerSelect(keep) {
+    const cur = keep || el.trig.value;
+    el.trig.replaceChildren();
+    for (const g of Object.keys(GROUPS)) {
+      const items = st.catalog.filter((t) => t.group === g);
+      if (!items.length) continue;
+      const og = document.createElement("optgroup"); og.label = GROUPS[g];
+      for (const t of items) { const o = document.createElement("option"); o.value = t.type; o.textContent = t.label; og.append(o); }
+      el.trig.append(og);
+    }
+    if (cur && [...el.trig.options].some((o) => o.value === cur)) el.trig.value = cur;
+  }
+  const def = () => st.catalog.find((t) => t.type === el.trig.value);
+  function renderTriggerFields(values = {}) {
+    const d = def();
+    el.trigDesc.textContent = d ? d.description : "";
+    el.trigFields.replaceChildren();
+    if (!d) return;
+    for (const f of d.fields) {
+      const wrap = document.createElement("div");
+      const id = `rt-f-${f.key}`;
+      const lab = h("label", "fld-label", f.label); lab.htmlFor = id;
+      let inp;
+      if (f.kind === "select") {
+        inp = document.createElement("select"); inp.className = "fld";
+        for (const o of f.options || []) { const op = document.createElement("option"); op.value = o.value; op.textContent = o.label; inp.append(op); }
+        inp.value = values[f.key] !== undefined ? String(values[f.key]) : f.default || (f.options && f.options[0] && f.options[0].value) || "";
+      } else {
+        inp = document.createElement("input"); inp.type = "text"; inp.className = "fld"; inp.spellcheck = false; inp.placeholder = f.placeholder || "";
+        inp.value = values[f.key] !== undefined ? String(values[f.key]) : "";
+      }
+      inp.id = id; inp.dataset.key = f.key;
+      inp.addEventListener("input", schedulePreview);
+      wrap.append(lab, inp);
+      if (f.help) wrap.append(h("p", "drawer-fine", f.help));
+      el.trigFields.append(wrap);
+    }
+  }
+  function triggerValues() {
+    const out = { type: el.trig.value };
+    for (const inp of el.trigFields.querySelectorAll("[data-key]")) {
+      const v = inp.value.trim();
+      if (v !== "") out[inp.dataset.key] = inp.tagName === "SELECT" && /^\d+$/.test(v) ? Number(v) : v;
+    }
+    return out;
+  }
+
+  // ---------------------------------------------------------------- clock form
+  function timeRow(value) {
+    const r = h("div", "rt-timerow");
+    const t = document.createElement("input"); t.type = "time"; t.className = "fld rt-timeinp"; t.value = value || "09:00"; t.setAttribute("aria-label", "Time of day");
+    t.addEventListener("input", schedulePreview);
+    const x = h("button", "btn-quiet rt-btn", "Remove"); x.type = "button";
+    x.addEventListener("click", () => { if (el.times.children.length > 1) { r.remove(); schedulePreview(); } });
+    r.append(t, x);
+    return r;
+  }
+  const timesNow = () => [...el.times.querySelectorAll("input")].map((i) => i.value).filter(Boolean);
+  function dayButtons() {
+    el.days.replaceChildren(...DAYS.map((d) => {
+      const b = h("button", "rt-day", d.t); b.type = "button"; b.dataset.d = String(d.v);
+      b.setAttribute("aria-pressed", st.days.has(d.v) ? "true" : "false");
+      b.addEventListener("click", () => { if (st.days.has(d.v)) st.days.delete(d.v); else st.days.add(d.v); b.setAttribute("aria-pressed", st.days.has(d.v) ? "true" : "false"); schedulePreview(); });
+      return b;
+    }));
+  }
+  function currentExpression() {
+    return expressionFor(el.preset.value, { n: el.n.value, hours: el.hours.value, minute: el.minute.value, time: el.time.value, times: timesNow(), days: [...st.days], dom: el.dom.value, expression: el.expr.value });
+  }
+  const currentFilter = () => filterOf({ weekdays: el.weekdays.checked, windowOn: el.windowOn.checked, from: el.from.value, to: el.to.value });
+
+  const SHOW = { hours: ["nhours"], n: ["minutes"], minute: ["hourly", "nhours"], time: ["daily", "weekly", "monthly"], multi: ["multi"], days: ["weekly"], dom: ["monthly"], custom: ["custom"] };
   function syncVisible() {
     const timed = el.type.value === "timed";
     el.clockBox.hidden = !timed; el.trigBox.hidden = timed;
     const p = el.preset.value;
-    el.n.parentElement.hidden = p !== "minutes";
-    el.minute.parentElement.hidden = p !== "hourly";
-    el.time.parentElement.hidden = p !== "daily" && p !== "weekdays";
-    el.expr.parentElement.hidden = p !== "custom";
-    el.from.parentElement.hidden = el.trig.value !== "bot_message";
-    if (p !== "custom") el.expr.value = currentExpression();
+    for (const sub of el.clockBox.querySelectorAll("[data-for]")) sub.hidden = !(SHOW[sub.dataset.for] || []).includes(p);
+    el.windowBox.hidden = !el.windowOn.checked;
+    el.tzNote.textContent = `Times are in ${tzName(el.tz.value.trim() || userTz)} time.`;
+    const tzNeeded = timed || !!currentFilter();
+    el.tz.closest(".rt-tzbox").hidden = !tzNeeded;
+    if (!timed) renderTriggerDesc();
     schedulePreview();
+  }
+  function renderTriggerDesc() {
+    const d = def();
+    el.trigDesc.textContent = d ? d.description : "";
   }
   function schedulePreview() {
     clearTimeout(st.pvT);
-    if (el.type.value !== "timed") { el.preview.textContent = ""; return; }
+    const timed = el.type.value === "timed";
+    el.tzNote.textContent = `Times are in ${tzName(el.tz.value.trim() || userTz)} time.`;
+    if (!timed) {
+      const f = currentFilter();
+      el.preview.classList.remove("warn");
+      el.pvSummary.textContent = f ? `Reacts only: ${filterText(f)}` : "";
+      el.pvNext.replaceChildren();
+      return;
+    }
     st.pvT = setTimeout(async () => {
       const seq = ++st.pv, expression = currentExpression(), tz = el.tz.value.trim() || userTz;
+      if (!expression) { el.preview.classList.add("warn"); el.pvSummary.textContent = el.preset.value === "weekly" ? "Pick at least one day." : "Add a time."; el.pvNext.replaceChildren(); return; }
       try {
-        const r = await json("/routines/preview", { method: "POST", body: JSON.stringify({ expression, tz }) });
+        const r = await json("/routines/preview", { method: "POST", body: JSON.stringify({ expression, tz, filter: currentFilter() }) });
         if (seq !== st.pv) return;
         el.preview.classList.toggle("warn", !r.ok);
-        el.preview.textContent = r.ok ? `Runs ${r.human}. Next: ${r.next.map(fmt).join(", ")}.` : r.error;
+        if (!r.ok) { el.pvSummary.textContent = r.error; el.pvNext.replaceChildren(); return; }
+        el.pvSummary.textContent = r.summary || r.human;
+        el.pvNext.replaceChildren(...(r.next.length ? [h("div", "rt-pv-h", "Next runs"), ...r.next.map((ms) => h("div", "rt-pv-run", fmt(ms, tz)))] : [h("div", "rt-pv-h", "No run in the next few years with these limits.")]));
       } catch { /* the preview is a courtesy */ }
     }, 250);
   }
@@ -199,10 +380,19 @@ export function initRoutines(ctx) {
     el.name.disabled = !!hb; el.prompt.disabled = !!hb; el.type.disabled = !!r;
     el.prompt.parentElement.hidden = !!hb;
     el.type.value = r ? r.kind : "timed";
-    const t = r && r.timing ? r.timing : { expression: "0 9 * * 1-5", tz: userTz };
+    const t = r && r.timing ? r.timing : { expression: "0 * * * *", tz: userTz, filter: null };
     const pr = presetOf(t.expression);
-    el.preset.value = pr.preset; el.n.value = pr.n || 15; el.minute.value = pr.minute || 0; el.time.value = pr.time || "09:00"; el.expr.value = t.expression; el.tz.value = t.tz || userTz;
-    el.trig.value = r && r.trigger ? r.trigger.type : "webhook"; el.from.value = r && r.trigger && r.trigger.from ? r.trigger.from : "";
+    el.preset.value = pr.preset;
+    el.n.value = pr.n || 15; el.hours.value = String(pr.hours || 2); el.minute.value = pr.minute || 0; el.time.value = pr.time || "09:00";
+    el.times.replaceChildren(...(pr.times && pr.times.length ? pr.times : ["09:00", "13:00"]).map(timeRow));
+    st.days = new Set(pr.days || [1, 2, 3, 4, 5]); dayButtons();
+    el.dom.value = pr.dom || 1; el.expr.value = t.expression;
+    el.tz.value = (r && r.trigger && r.trigger.tz) || t.tz || userTz;
+    const f = (r && r.kind === "trigger" ? r.trigger && r.trigger.filter : t.filter) || null;
+    el.weekdays.checked = !!(f && f.weekdays); el.windowOn.checked = !!(f && f.from && f.to);
+    el.from.value = (f && f.from) || "09:00"; el.to.value = (f && f.to) || "17:00";
+    fillTriggerSelect(r && r.trigger ? r.trigger.type : "thread_message");
+    renderTriggerFields(r && r.trigger ? r.trigger : {});
     el.trig.disabled = !!r;
     el.form.hidden = false; el.add.hidden = true;
     syncVisible();
@@ -212,17 +402,26 @@ export function initRoutines(ctx) {
 
   el.add.addEventListener("click", () => openForm(null));
   el.cancel.addEventListener("click", closeForm);
-  for (const n of [el.type, el.preset, el.trig]) n.addEventListener("change", syncVisible);
-  for (const n of [el.n, el.minute, el.time, el.expr, el.tz]) n.addEventListener("input", syncVisible);
+  el.addTime.addEventListener("click", () => { if (el.times.children.length < 12) { el.times.append(timeRow("17:00")); schedulePreview(); } });
+  for (const n of [el.type, el.preset, el.windowOn, el.weekdays]) n.addEventListener("change", syncVisible);
+  el.trig.addEventListener("change", () => { renderTriggerFields(); syncVisible(); });
+  for (const n of [el.n, el.hours, el.minute, el.time, el.dom, el.expr, el.tz, el.from, el.to]) { n.addEventListener("input", schedulePreview); n.addEventListener("change", schedulePreview); }
+  el.tz.addEventListener("input", () => { el.tzNote.textContent = `Times are in ${tzName(el.tz.value.trim() || userTz)} time.`; });
   el.form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const timed = el.type.value === "timed";
     const body = {};
+    const tz = el.tz.value.trim() || userTz;
     if (!st.editing) { body.name = el.name.value.trim(); body.prompt = el.prompt.value; body.kind = el.type.value; }
     else if (!el.name.disabled) { body.name = el.name.value.trim(); body.prompt = el.prompt.value; }
-    if (timed) body.timing = { expression: currentExpression(), tz: el.tz.value.trim() || userTz };
-    else if (!st.editing) body.trigger = { type: el.trig.value, ...(el.trig.value === "bot_message" && el.from.value.trim() ? { from: el.from.value.trim() } : {}) };
-    else if (el.trig.value === "bot_message") body.trigger = { type: "bot_message", ...(el.from.value.trim() ? { from: el.from.value.trim() } : {}) };
+    if (timed) {
+      const expression = currentExpression();
+      if (!expression) { el.err.textContent = el.preset.value === "weekly" ? "Pick at least one day." : "Add a time."; el.err.hidden = false; return; }
+      body.timing = { expression, tz, filter: currentFilter() };
+    } else {
+      const f = currentFilter();
+      body.trigger = { ...triggerValues(), ...(f ? { filter: f, tz } : {}) };
+    }
     el.save.disabled = true; el.err.hidden = true;
     try {
       const res = await api(st.editing ? `${base()}/${st.editing}` : base(), { method: st.editing ? "PATCH" : "POST", body: JSON.stringify(body) });
@@ -235,7 +434,7 @@ export function initRoutines(ctx) {
 
   return {
     /** Show the routines of this bot. */
-    open(botId) { st.bot = botId; st.routines = []; closeForm(); say(""); el.list.replaceChildren(h("div", "drawer-fine", "Loading…")); load(); },
+    open(botId) { st.bot = botId; st.routines = []; closeForm(); say(""); el.list.replaceChildren(h("div", "drawer-fine", "Loading…")); loadCatalog(); load(); },
     close() { clearTimeout(st.timer); st.loadSeq++; st.bot = ""; },
   };
 }
