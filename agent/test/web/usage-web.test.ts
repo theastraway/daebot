@@ -68,7 +68,7 @@ class El {
   replaceChildren(...c: El[]) { this.children = c; }
 }
 function dom() {
-  const ids = ["am-sub", "usage", "usage-head", "usage-line", "usage-bar", "usage-fill", "usage-detail", "usage-rows", "usage-extra", "usage-switch", "usage-extra-note", "plan-link"];
+  const ids = ["am-sub", "um-box", "usage-head", "usage-line", "usage-bar", "usage-fill", "usage-detail", "usage-rows", "usage-extra", "usage-switch", "usage-extra-note", "plan-link"];
   const els = Object.fromEntries(ids.map((i) => [i, new El(i)]));
   (globalThis as any).document = { getElementById: (i: string) => els[i] ?? null, createElement: () => new El() };
   return els;
@@ -87,7 +87,7 @@ test("initUsage: paints the line and bar, expands the detail, toggles through th
   const u = initUsage({ json, notify: (m: string) => notes.push(m), locale: EN });
   await u.refresh();
   assert.equal(els["usage-line"].textContent, "Pro · 62% left · resets Nov 1");
-  assert.equal(els["usage"].hidden, false); assert.equal(els["am-sub"].hidden, true, "the usage line replaces the old sub line");
+  assert.equal(els["um-box"].hidden, false); assert.equal(els["am-sub"].hidden, true, "the usage line replaces the old sub line");
   assert.equal(els["usage-fill"].style.width, "62%"); assert.equal(els["usage-bar"].hidden, false);
   assert.equal(els["usage-detail"].hidden, true);
   await els["usage-head"].click();
@@ -131,4 +131,6 @@ test("markup: the usage line sits under the name, the switch is an accessible sw
   assert.match(read("app.js"), /initUsage\(\{ json, notify \}\)/);
   assert.match(read("account.js"), /if \(onOpen\) onOpen\(\)/, "opening the menu re-reads usage");
   assert.match(read("style.css"), /@media \(min-width: 561px\) and \(max-height: 760px\) \{\s*\.acct-menu \{ max-height: calc\(100dvh - 90px\); overflow-y: auto/, "a short window scrolls the menu instead of clipping the usage line off the top");
+  const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(ids.filter((id, i) => ids.indexOf(id) !== i), [], "every id in index.html is unique (a second id=usage let the session token meter write into the menu)");
 });
