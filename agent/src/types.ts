@@ -72,8 +72,15 @@ export interface DeviceBridge {
   call(req: { tool: string; op: string; args: Record<string, unknown> }, opts: { timeoutMs: number; signal?: AbortSignal }): Promise<DeviceReply>;
 }
 
+/** A decision filed this turn with mind_decision_record: the OOC/EMR receipt a peer request or a peer-triggered action must carry. */
+export interface DecisionReceipt { id: string; subject: string; at: number; /** true = the decision was to decline: it never unlocks an action. */ declined?: boolean }
+
 export interface ToolContext {
   cwd: string; signal?: AbortSignal; sessionId: string;
+  /** Decisions filed in THIS turn only (a new turn starts empty). */
+  decisions?: readonly DecisionReceipt[];
+  /** Peer turns only: the decision receipt the requesting agent attached to the request (set by the bot bus, never by message text). */
+  peerReceipt?: string;
   /** "bot" when the turn was started by a peer bot, not the human. */
   origin?: "user" | "bot";
   /** What the client that sent this turn can do (e.g. "apple_calendar"). */
@@ -192,7 +199,7 @@ export interface ExchangeParty { id: string; kind: "main" | "bot"; name: string;
 export type AgentEvent =
   | { type: "text"; delta: string }                                   // streaming assistant text
   | { type: "toolStart"; receiptId: string; tool: string; args: Record<string, unknown> }
-  | { type: "toolEnd"; receiptId: string; tool: string; ok: boolean; preview: string }
+  | { type: "toolEnd"; receiptId: string; tool: string; ok: boolean; preview: string; /** mind_decision_record: the receipt id it filed */ decisionId?: string }
   | { type: "gate"; verdict: GateVerdict; enforced: boolean }         // kernel intervened (or would have)
   | { type: "confirm"; id: string; tool: string; args: Record<string, unknown>; reason: string } // needs a new user message
   // A tool call is waiting for the user's click (Allow once / Always allow / Deny / Always deny). The turn is paused until
@@ -242,7 +249,7 @@ export interface AgentSession {
   // interactive: a person is looking at a UI that can answer a `permission` card (web, desktop, mobile). Absent/false = typed confirmations only.
   // photos: already stored for this session (Runtime.photos); the model is told about them in the message text and reads them with view_photo.
   // capabilities/device: what the sending client can do and the relay to it, for this turn only (see DeviceBridge).
-  send(userMessage: string, opts?: { signal?: AbortSignal; origin?: "user" | "bot"; interactive?: boolean; photos?: PhotoRef[]; quote?: MessageQuote; capabilities?: string[]; device?: DeviceBridge }): AsyncIterable<AgentEvent>;
+  send(userMessage: string, opts?: { signal?: AbortSignal; origin?: "user" | "bot"; peerReceipt?: string; interactive?: boolean; photos?: PhotoRef[]; quote?: MessageQuote; capabilities?: string[]; device?: DeviceBridge }): AsyncIterable<AgentEvent>;
   /** Model for the next turn (per-session model). undefined = the configured default. */
   setModel?(model: string | undefined): void;
   /** This chat's permission mode for the next call onward. undefined = the account default. The caller has already checked bypass against the waiver. */

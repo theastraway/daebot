@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { MindClient, Tool, ToolClass, ToolResult, ToolSpec } from "../types.ts";
 
 const MAX_OUT = 24_000;
@@ -114,7 +115,7 @@ interface Def {
   receipt?: "mind";
   ownerGate?: boolean;
   actions?: string[];                 // allowed actions (enforced in run); undefined = no action arg
-  run: (client: MindClient, args: Record<string, unknown>) => Promise<string>;
+  run: (client: MindClient, args: Record<string, unknown>) => Promise<string | { text: string; meta?: Record<string, unknown> }>;
 }
 
 function build(t: TenantResolver, user: string, cross: Semaphore, d: Def): Tool {
@@ -161,7 +162,8 @@ function build(t: TenantResolver, user: string, cross: Semaphore, d: Def): Tool 
       const release = crossRead ? await cross.acquire() : undefined;
       try {
         const out = await d.run(withSignal(t.clientFor(target), ctx?.signal), stripLocal(args));
-        return { ok: true, output: cap(out) };
+        if (typeof out === "string") return { ok: true, output: cap(out) };
+        return { ok: true, output: cap(out.text), ...(out.meta ? { meta: out.meta } : {}) };
       } catch (e) {
         if (botUnsupported(e)) {
           const what = d.name.replace(/^mind_/, "");
@@ -321,13 +323,26 @@ export function createMindTools(source: MindClient | TenantResolver, opts: MindT
       plan: { type: "array", items: { type: "string" }, description: "Sequenced actions, each with a named owner" },
       decide_result: { type: "string", description: "Paste of the decide tool result, if used" },
       date: { type: "string", description: "YYYY-MM-DD (default today, New York)" },
+      stance: { type: "string", enum: ["act", "decline"], description: "Peer requests: \"act\" = you decided to do what another agent asked; \"decline\" = you decided not to (declining is allowed and is recorded too). Only \"act\" unlocks an outward action on a peer-requested turn. Default act." },
     },
     required: ["subject", "decision"], cls: "write", ownerGate: true,
-    run: (c, a) => {
+    run: async (c, a) => {
       if (typeof a.subject !== "string" || !titlePart(a.subject)) throw new Error("mind_decision_record needs a subject");
       if (typeof a.decision !== "string" || !a.decision.trim()) throw new Error("mind_decision_record needs the decision sentence");
       const date = typeof a.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(a.date) ? a.date : todayET();
-      return c.remember({ type: "document", title: decisionTitle(a.subject, date), content: renderDecision(a, date), tags: ["decision", "oocemr"], source: "daebot" });
+      const declined = a.stance === "decline";
+      const body = renderDecision(a, date) + (declined ? "\n\nStance: DECLINED" : "");
+      let text: string;
+      try {
+        text = await c.remember({ type: "document", title: decisionTitle(a.subject, date), content: body, tags: ["decision", "oocemr"], source: "daebot" });
+      } catch (e) {
+        // MIND unreachable: the decision still gets a local receipt id (clearly marked, NOT in MIND) so the work is not blocked on an outage.
+        const local = "local-" + createHash("sha256").update(`${a.subject}|${a.decision}|${Date.now()}`).digest("hex").slice(0, 12);
+        return { text: `NOT saved to MIND (${String((e as Error)?.message ?? e).split("\n")[0].slice(0, 120)}). Local decision receipt: ${local}. File it again in MIND when it is back.`, meta: { decisionId: local, subject: a.subject.trim().slice(0, 120), local: true, ...(declined ? { declined: true } : {}) } };
+      }
+      const id = /^saved \w+ (\S+)/.exec(text)?.[1];
+      const rid = id && id !== "document:" ? id : "local-" + createHash("sha256").update(`${a.subject}|${text}|${Date.now()}`).digest("hex").slice(0, 12);
+      return { text: `${text}\nDecision receipt: ${rid}`, meta: { decisionId: rid, subject: a.subject.trim().slice(0, 120), ...(declined ? { declined: true } : {}) } };
     },
   });
 

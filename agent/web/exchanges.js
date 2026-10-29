@@ -57,6 +57,13 @@ export function involves(ex, id) {
   return !!ex && ((ex.a && ex.a.id === id) || (ex.b && ex.b.id === id));
 }
 
+/** The "Decision ✓" chip's label: short id, with the role it vouches for. Pure so it is unit tested. */
+export function decisionLabel(d) {
+  const id = String((d && d.id) || "");
+  const short = id.length > 14 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id;
+  return { text: `Decision ✓ ${short}`, title: `${d && d.role === "receiver" ? "Receiver" : "Requester"} OOC/EMR decision record (MIND document ${id})` };
+}
+
 export function titleOf(ex) {
   return `${ex.a ? ex.a.name : "?"} ↔ ${ex.b ? ex.b.name : "?"}`;
 }
@@ -234,6 +241,17 @@ export function initExchanges(ctx) {
           d.append(line);
         }
         col.append(d);
+      }
+      if (m.decisions && m.decisions.length) {
+        const chips = h("div", "xv-decisions");
+        for (const d of m.decisions) {
+          const l = decisionLabel(d);
+          const a = h("a", `xv-decision ${d.role === "receiver" ? "recv" : "req"}`, l.text);
+          a.href = `https://m-i-n-d.ai/documents?q=${encodeURIComponent(d.id)}`; a.target = "_blank"; a.rel = "noopener noreferrer"; a.title = l.title;
+          a.dataset.decision = d.id;
+          chips.append(a);
+        }
+        col.append(chips);
       }
       col.append(h("div", "xv-at", ago(m.at)));
       row.append(face(p, "xf-md"), col);

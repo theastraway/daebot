@@ -949,3 +949,7 @@ select.fld { appearance: auto; }
 .keys-key { font: 600 13px var(--mono, ui-monospace, monospace); padding: 4px 9px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); color: var(--ink); white-space: nowrap; }
 .keys-msg { min-height: 1.3em; }
 @media (max-width: 560px) { .keys-row { grid-template-columns: 1fr 1fr; } .keys-text { grid-column: 1 / -1; } }
+/* ---------- decision receipts (OOC/EMR): "Decision ✓" chips in the exchange view and on the task board ---------- */
+.xv-decisions, .bd-decisions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.xv-decision, .bd-decision { display: inline-flex; align-items: center; font-size: 11px; line-height: 1; padding: 3px 7px; border-radius: 999px; border: 1px solid var(--ok); color: var(--ok); background: transparent; text-decoration: none; white-space: nowrap; }
+.xv-decision:hover, .bd-decision:hover { text-decoration: underline; }

@@ -8,7 +8,9 @@ import { tailOf } from "../suggest/index.ts";
 export type BoardStatus = "not_started" | "in_progress" | "ready_to_test" | "stopped";
 export const BOARD_STATUSES: readonly BoardStatus[] = ["not_started", "in_progress", "ready_to_test", "stopped"];
 
-export interface BoardTask { id: string; title: string; status: BoardStatus; question?: string; updatedAt: number }
+/** A peer-requested action waiting for the user, with the OOC/EMR decision receipts of both agents (MIND document ids). */
+export interface PeerDecisionInfo { issuer: string; receiver: string; tool: string }
+export interface BoardTask { id: string; title: string; status: BoardStatus; question?: string; updatedAt: number; /** set only on a red "awaiting decision" item raised by a peer request */ peer?: PeerDecisionInfo }
 
 /** One row of GET /board. `derived` = not declared by the model: built from the run state of a session that declared no tasks. */
 export interface BoardRow extends BoardTask { sessionId: string; sessionTitle: string; derived?: boolean }
@@ -27,7 +29,7 @@ const multiLine = (v: unknown, max: number): string => String(v ?? "").replace(/
 export type Checked<T> = { ok: true; value: T } | { ok: false; error: string };
 
 /** Validates one task as the model wrote it. A stopped task needs its question; any other status carries none. */
-export function checkTask(raw: unknown, now: number, prev?: BoardTask): Checked<BoardTask> {
+export function checkTask(raw: unknown, now: number, prev?: BoardTask, trustedPeer?: unknown): Checked<BoardTask> {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, error: "each task must be an object {id, title, status, question?}" };
   const r = raw as Record<string, unknown>;
   const id = typeof r.id === "string" ? r.id.trim() : "";
@@ -41,6 +43,12 @@ export function checkTask(raw: unknown, now: number, prev?: BoardTask): Checked<
     const q = r.question === undefined && prev?.status === "stopped" ? prev.question ?? "" : multiLine(r.question, MAX_QUESTION);
     if (!q) return { ok: false, error: `task ${id}: a stopped task needs "question": the exact question or decision the user must answer` };
     out.question = q;
+  }
+  // A peer "awaiting decision" item keeps its receipts (only the runtime sets them; the model's task_board tool cannot).
+  const pr = (trustedPeer && typeof trustedPeer === "object" ? trustedPeer : prev?.peer) as Record<string, unknown> | undefined;
+  if (pr && status === "stopped") {
+    const g = (k: string) => oneLine(pr[k], 120);
+    if (g("issuer") && g("receiver")) out.peer = { issuer: g("issuer"), receiver: g("receiver"), tool: g("tool") };
   }
   return { ok: true, value: out };
 }
@@ -74,7 +82,7 @@ export function loadTasks(raw: unknown): BoardTask[] {
   if (!Array.isArray(raw)) return [];
   const out: BoardTask[] = [];
   for (const t of raw.slice(0, MAX_TASKS)) {
-    const c = checkTask(t, Number((t as { updatedAt?: unknown })?.updatedAt) || 0);
+    const c = checkTask(t, Number((t as { updatedAt?: unknown })?.updatedAt) || 0, undefined, (t as { peer?: unknown })?.peer);
     if (c.ok) out.push(c.value);
   }
   return out;

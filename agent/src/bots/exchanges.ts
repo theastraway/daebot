@@ -24,7 +24,10 @@ export interface ExMessage {
   kind: "message" | "reply";
   /** Tool calls the author made while writing this (replies only), shown collapsed. */
   tools?: ExTool[];
+  /** OOC/EMR decision receipts (MIND document ids) behind this message: the requester's on a request, the receiver's on its reply. */
+  decisions?: ExDecision[];
 }
+export interface ExDecision { id: string; role: "requester" | "receiver" }
 export interface ExchangeRecord {
   v: 1;
   id: string;
@@ -131,7 +134,7 @@ export class ExchangeHub {
   }
 
   /** Adds one message. `at` is strictly increasing inside an exchange so seenAt comparisons are exact. */
-  append(owner: string, x: Party, y: Party, m: { from: Party; text: string; kind: "message" | "reply"; tools?: ExTool[] }): ExchangeMessageResult {
+  append(owner: string, x: Party, y: Party, m: { from: Party; text: string; kind: "message" | "reply"; tools?: ExTool[]; decisions?: ExDecision[] }): ExchangeMessageResult {
     const rec = this.ensure(owner, x, y);
     const last = rec.messages[rec.messages.length - 1];
     const at = Math.max(this.now(), (last?.at ?? 0) + 1);
@@ -139,6 +142,7 @@ export class ExchangeHub {
     const msg: ExMessage = {
       id: "m_" + createHash("sha256").update(`${rec.id}|${at}|${rec.messages.length}`).digest("hex").slice(0, 12),
       from: m.from, text, at, kind: m.kind,
+      ...(m.decisions?.length ? { decisions: m.decisions.slice(0, 6).map((d) => ({ id: String(d.id).slice(0, 80), role: d.role === "receiver" ? "receiver" as const : "requester" as const })) } : {}),
       ...(m.tools?.length ? { tools: m.tools.slice(0, MAX_TOOLS).map((t) => ({ name: String(t.name).slice(0, 60), ok: !!t.ok, preview: String(t.preview ?? "").slice(0, 300) })) } : {}),
     };
     rec.messages.push(msg);

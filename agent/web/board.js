@@ -12,6 +12,8 @@ export const LIGHTS = {
   stopped: { label: "Waiting on you", cls: "red" },
 };
 export const light = (status) => LIGHTS[status] || LIGHTS.not_started;
+/** A stopped row raised by a peer request reads "Awaiting decision" (same red). */
+export const labelOf = (r) => (r && r.peer && r.status === "stopped" ? "Awaiting decision" : light(r && r.status).label);
 
 export const REFRESH_MS = 10000;
 
@@ -83,8 +85,21 @@ export function initBoard({ json, h, els, app }) {
     const text = h("span", "bd-text");
     text.append(h("span", "bd-title", r.title));
     if (stopped && r.question && !open) text.append(h("span", "bd-q", r.question));
-    head.append(box(r.status), text, h("span", "bd-label", light(r.status).label));
+    let peerChips = null;
+    if (r.peer) {
+      const chips = h("span", "bd-decisions");
+      for (const [role, id] of [["requester", r.peer.issuer], ["receiver", r.peer.receiver]]) {
+        const a = h("a", `bd-decision ${role}`, `Decision ✓ ${String(id).length > 14 ? `${String(id).slice(0, 8)}…${String(id).slice(-4)}` : id}`);
+        a.href = `https://m-i-n-d.ai/documents?q=${encodeURIComponent(id)}`; a.target = "_blank"; a.rel = "noopener noreferrer";
+        a.title = `${role === "receiver" ? "Receiver" : "Requester"} OOC/EMR decision record (MIND document ${id})`; a.dataset.decision = id;
+        a.addEventListener("click", (e) => e.stopPropagation());
+        chips.append(a);
+      }
+      peerChips = chips;
+    }
+    head.append(box(r.status), text, h("span", "bd-label", labelOf(r)));
     li.append(head);
+    if (peerChips) li.append(peerChips);
     if (stopped) {
       head.addEventListener("click", () => {
         if (st.expanded.has(key)) st.expanded.delete(key); else st.expanded.add(key);
