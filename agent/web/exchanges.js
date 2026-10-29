@@ -66,6 +66,29 @@ export function decisionLabel(d) {
   return { text: `Decision ✓ ${short}`, title: `${d && d.role === "receiver" ? "Receiver" : "Requester"} OOC/EMR decision record (MIND document ${id})` };
 }
 
+/**
+ * Does a click on this element mean "go somewhere else"? Anything inside the sidebar that navigates (a session, the Sessions/Bots tabs, a bot,
+ * New session, an account-menu item) leaves the exchange view. Exempt: another exchange row (it swaps the view itself) and the controls that only
+ * expand something in place (the account button, the usage fold, Switch account). `el` is anything with Element.closest.
+ */
+export function closesOnClick(el) {
+  if (!el || typeof el.closest !== "function") return false;
+  if (!el.closest("#sidebar")) return false;
+  if (el.closest(".xs-row, #acct-btn, #usage-head, #am-switch, .u-switch")) return false;
+  return !!el.closest("button, a, [role='button'], [role='menuitem'], [role='tab']");
+}
+
+/** What to do with the browser history when the exchange view opens or closes. Pure so the transitions are unit tested.
+ *  state: {pushed: boolean}. open: push a history entry (or swap it when one is already ours). close by Back/Esc: pop our entry.
+ *  close by navigation (the user clicked something else): neutralise our entry in place, never a back() that could land after the next open.
+ *  close by popstate (the browser back button already popped it): nothing to do. */
+export function historyOp(state, action) {
+  if (action === "open") return state.pushed ? "replace" : "push";
+  if (action === "close-ui") return state.pushed ? "back" : "none";
+  if (action === "close-nav") return state.pushed ? "neutralise" : "none";
+  return "none"; // close-pop
+}
+
 export function titleOf(ex) {
   return `${ex.a ? ex.a.name : "?"} ↔ ${ex.b ? ex.b.name : "?"}`;
 }
@@ -192,9 +215,9 @@ export function initExchanges(ctx) {
     const root = h("section", "xv"); root.hidden = true;
     root.setAttribute("role", "dialog"); root.setAttribute("aria-modal", "false"); root.setAttribute("aria-label", "Agent exchange");
     const head = h("header", "xv-head");
-    const back = h("button", "icon-btn xv-back"); back.type = "button"; back.setAttribute("aria-label", "Back");
-    back.append(icon("i-chev")); back.querySelector("svg").classList.add("xv-back-ic");
-    back.addEventListener("click", close);
+    const back = h("button", "xv-back"); back.type = "button"; back.setAttribute("aria-label", "Back"); back.title = "Back (Esc)";
+    back.append(icon("i-chev"), h("span", "xv-back-label", "Back")); back.querySelector("svg").classList.add("xv-back-ic");
+    back.addEventListener("click", () => close());
     const titles = h("div", "xv-titles");
     const faces = h("span", "xv-faces");
     const title = h("h2", "xv-title", ""); const sub = h("p", "xv-sub", "");
@@ -208,7 +231,6 @@ export function initExchanges(ctx) {
     foot.append(pill);
     root.append(head, scroll, foot);
     (document.querySelector(".main") || document.body).append(root);
-    root.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
     st.view = { root, faces, title, sub, list, scroll, back };
     return st.view;
   }
@@ -272,6 +294,13 @@ export function initExchanges(ctx) {
     if (seq !== openSeq || !ex) return;
     app.beforeOpen();
     const v = ensureView();
+    // Browser back closes the exchange: our own history entry (or the one already ours when jumping exchange to exchange).
+    try {
+      const op = historyOp(hist, "open");
+      if (op === "push") history.pushState({ ...(history.state || {}), xv: ex.id }, "", location.href);
+      else history.replaceState({ ...(history.state || {}), xv: ex.id }, "", location.href);
+      hist.pushed = true;
+    } catch { /* no history API: Back button and Esc still work */ }
     st.openId = ex.id;
     st.openEx = ex;
     paintTranscript(ex);
@@ -279,14 +308,32 @@ export function initExchanges(ctx) {
     document.body.classList.add("xv-open");
     v.scroll.scrollTop = v.scroll.scrollHeight;
     v.back.focus({ preventScroll: true });
+    if (app.listChanged) app.listChanged();
     json(`/exchanges/${encodeURIComponent(ex.id)}/seen`, { method: "POST" }).then(() => refresh(), () => {});
   }
-  function close() {
-    if (!st.view) return;
+  /** how: "ui" (Back button, Esc), "nav" (the user clicked something else), "pop" (browser back already popped our entry). */
+  function close(how = "ui") {
+    if (!st.view || !st.openId) return;
     st.view.root.hidden = true;
     st.openId = "";
+    openSeq++; // an exchange still loading must not pop open after the user moved on
     document.body.classList.remove("xv-open");
+    const op = historyOp(hist, how === "pop" ? "close-pop" : how === "nav" ? "close-nav" : "close-ui");
+    hist.pushed = false;
+    try {
+      if (op === "back") history.back();
+      else if (op === "neutralise") history.replaceState(stripXv(history.state), "", location.href);
+    } catch { /* ignore */ }
+    if (app.listChanged) app.listChanged();
   }
+  const stripXv = (s) => { if (!s || typeof s !== "object") return null; const { xv, ...rest } = s; return rest; };
+  const hist = { pushed: false };
+  window.addEventListener("popstate", (e) => { if (st.openId && !(e.state && e.state.xv)) close("pop"); });
+  // Esc closes the exchange (unless something on top, such as a menu or modal, took it first).
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && st.openId && !e.defaultPrevented) close("ui"); });
+  // Clicking anything else that navigates closes the exchange and lets the click do its job: one click, one move.
+  const side = document.getElementById("sidebar");
+  if (side) side.addEventListener("click", (e) => { if (st.openId && closesOnClick(e.target)) close("nav"); }, true);
   // A live exchange keeps updating while it is open (a reply landing, or the next message).
   setInterval(async () => {
     if (!st.openId || document.hidden) return;
@@ -320,5 +367,5 @@ export function initExchanges(ctx) {
   }
 
   start();
-  return { buildCard, open, close, refresh, poke, group, unreadFor, list: () => st.list, isOpen: () => !!st.openId };
+  return { buildCard, open, close: (how) => close(how === "ui" || how === "pop" ? how : "nav"), refresh, poke, group, unreadFor, list: () => st.list, isOpen: () => !!st.openId };
 }
