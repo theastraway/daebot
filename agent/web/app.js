@@ -226,7 +226,7 @@ function buildItem(it, tr) {
     case "user":
       node = h("div", (it.photos?.length ? "msg-user has-photos" : "msg-user") + (it.quote ? " has-quote" : ""), it.text || undefined);
       if (it.photos?.length) node.prepend(photos.thumbs(it.photos, tkey()));
-      if (it.quote?.text) node.prepend(h("div", "mx-quote", it.quote.text));
+      if (it.quote?.text) node.prepend(h("div", "mx-quote", oneLine(it.quote.text, 200)));
       break;
     case "assistant": node = h("div", "msg-asst"); node.tabIndex = 0; node.setAttribute("aria-haspopup", "menu"); updateAssistant(node, it); break;
     case "tool": node = buildTool(it); break;
@@ -474,7 +474,8 @@ function paintReplyChip() {
   chipText.textContent = q ? q.text : "";
 }
 $("reply-chip-x").addEventListener("click", () => { replies.delete(tkey()); paintReplyChip(); els.input.focus(); });
-const oneLine = (t, n) => { const x = String(t || "").replace(/\s+/g, " ").trim(); return x.length > n ? x.slice(0, n - 1) + "…" : x; };
+const plain = (md) => String(md || "").replace(/```[a-z]*\n?/gi, "").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/[*`#]+/g, "");
+const oneLine = (t, n) => { const x = plain(t).replace(/\s+/g, " ").trim(); return x.length > n ? x.slice(0, n - 1) + "…" : x; };
 
 async function msgReact(it, emoji) {
   const id = state.currentId;

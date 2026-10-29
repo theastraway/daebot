@@ -564,7 +564,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         bot: botRec?.id, peer, model: explicitModel, permMode: curPerm,
         ...(stored?.titleSet ? { titleSet: true } : {}),
         ...(stored?.board?.length ? { board: loadTasks(stored.board) } : {}),
-        ...(stored?.msgMeta ? { msgMeta: stored.msgMeta } : {}), ...(stored?.unreadFrom ? { unreadFrom: stored.unreadFrom } : {}), ...(learn ? { learn } : {}),
+        ...(stored?.msgMeta ? { msgMeta: stored.msgMeta } : {}), ...(stored?.unreadFrom ? { unreadFrom: stored.unreadFrom } : {}), ...(learn && "feedback" in learn ? { learn: learn as Learning } : {}),
       };
       if (wasInterrupted && stored) {
         entry.recorder.push(interruptedNotice());

@@ -871,7 +871,8 @@ select.fld { appearance: auto; }
 .mx-row + .mx-row { border-top: 1px solid var(--line); }
 .mx-row .ic { width: 20px; height: 20px; color: var(--ink-2); }
 .mx-row:hover, .mx-row:focus-visible { background: var(--surface-2); }
-.mx-menu button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; border-radius: inherit; }
+.mx-menu button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.mx-em:focus-visible { outline-offset: 2px; }
 .mx-head { display: flex; align-items: center; gap: 6px; padding: 2px 2px 10px; }
 .mx-title { font: 650 15px var(--sans); flex: 1; }
 .mx-back { width: 32px; height: 32px; display: grid; place-items: center; border: 0; background: none; border-radius: 8px; color: var(--ink-2); transform: scaleX(-1); }
