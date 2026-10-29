@@ -54,8 +54,8 @@ test("origin:bot: irreversible and public tools are refused too; read and write 
   assert.equal(del.calls.length + post.calls.length, 0);
   assert.equal(note.calls.length, 1, "local writes are fine for a peer");
   const tool = provider.requests[1].messages.filter((m) => m.role === "tool");
-  assert.match(tool[0].content, /peer turns cannot request outward actions/);
-  assert.match(tool[1].content, /peer turns cannot request outward actions|not available/);
+  assert.match(tool[0].content, /blind job/);
+  assert.match(tool[1].content, /blind job/);
   // a pending human confirmation does not survive into a peer turn
   const email = fakeTool("send_email", "outward");
   const p2 = new FakeProvider([{ calls: [call("a", "send_email", { x: 1 })] }, { text: "ok" }, { calls: [call("b", "send_email", { x: 1 })] }, { text: "ok" }]);

@@ -160,7 +160,7 @@ export class SessionManager {
   }
 
   /** Runs one turn. Throws BusyError / NotFoundError synchronously-in-promise before any event is emitted. */
-  async turn(id: string, text: string, onEvent: (e: AgentEvent) => void, external?: AbortSignal, origin: "user" | "bot" = "user", interactive = false, photos?: PhotoRef[], client?: { capabilities?: string[]; device?: DeviceBridge }, quote?: MessageQuote): Promise<void> {
+  async turn(id: string, text: string, onEvent: (e: AgentEvent) => void, external?: AbortSignal, origin: "user" | "bot" = "user", interactive = false, photos?: PhotoRef[], client?: { capabilities?: string[]; device?: DeviceBridge; peerReceipt?: string }, quote?: MessageQuote): Promise<void> {
     const ls = this.live.get(id);
     if (!ls) throw new NotFoundError("no such session");
     if (ls.busy) throw new BusyError("session is busy with another turn");
@@ -177,7 +177,7 @@ export class SessionManager {
     }
     let sawDone = false;
     try {
-      for await (const ev of ls.session.send(text, { signal: ac.signal, origin, interactive, ...(quote ? { quote } : {}), ...(photos?.length ? { photos } : {}), ...(client?.capabilities?.length ? { capabilities: client.capabilities } : {}), ...(client?.device ? { device: client.device } : {}) })) {
+      for await (const ev of ls.session.send(text, { signal: ac.signal, origin, interactive, ...(quote ? { quote } : {}), ...(photos?.length ? { photos } : {}), ...(client?.capabilities?.length ? { capabilities: client.capabilities } : {}), ...(client?.device ? { device: client.device } : {}), ...(origin === "bot" && client?.peerReceipt ? { peerReceipt: client.peerReceipt } : {}) })) {
         if (ev.type === "done") sawDone = true;
         onEvent(ev);
         if (sawDone) break;

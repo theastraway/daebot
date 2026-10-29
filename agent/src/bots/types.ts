@@ -69,7 +69,7 @@ export const MAX_INSTRUCTIONS_BYTES = 8 * 1024;
 /** The in-process bot-to-bot message bus (set by startGateway; sessions and bots reach it through the bot_talk tool). */
 export interface BotBus {
   /** `to` is a bot slug or "main" (the user's own Daebot). waitForReply false = deliver and return; the answer lands in the exchange. */
-  talk(req: { owner: string; fromSession: string; selfBot?: string; to: string; message: string; waitForReply?: boolean; signal?: AbortSignal }): Promise<{ ok: boolean; output: string; exchange?: Extract<import("../types.ts").AgentEvent, { type: "exchange" }> }>;
+  talk(req: { owner: string; fromSession: string; selfBot?: string; to: string; message: string; /** The requester's OOC/EMR receipt (validated by bot_talk). Present only on a request for a task. */ decisionReceipt?: string; waitForReply?: boolean; signal?: AbortSignal }): Promise<{ ok: boolean; output: string; exchange?: Extract<import("../types.ts").AgentEvent, { type: "exchange" }> }>;
 }
 /** Late-bound holder: runtimes are built before the gateway (and its SessionManager) exists. */
 export interface BotBusRef { current?: BotBus }
