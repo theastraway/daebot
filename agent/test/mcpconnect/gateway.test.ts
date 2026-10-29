@@ -63,3 +63,17 @@ test("/health reports mcp, and the kill switch turns the routes into 404", async
     assert.equal((await http(off.gw.url, "GET", "/mcp/servers", { headers: { ...H, cookie: off.cookie } })).status, 404);
   } finally { await on.gw.close(); await off.gw.close(); }
 });
+
+test("POST /mcp/catalog/connect-oauth needs the session and same origin; unknown or token-only connectors are 404; the callback page tells the Apps card and closes its tab", async () => {
+  const { gw, cookie } = await boot();
+  try {
+    const body = { id: "local:n8n", url: "https://n8n.example.test" };
+    assert.equal((await http(gw.url, "POST", "/mcp/catalog/connect-oauth", { headers: H, body })).status, 401);
+    assert.equal((await http(gw.url, "POST", "/mcp/catalog/connect-oauth", { headers: { ...H, cookie, origin: "https://evil.example" }, body })).status, 403);
+    assert.equal((await http(gw.url, "GET", "/mcp/catalog/connect-oauth", { headers: { ...H, cookie } })).status, 405);
+    assert.equal((await http(gw.url, "POST", "/mcp/catalog/connect-oauth", { headers: { ...H, cookie }, body: { ...body, id: "local:nope" } })).status, 404);
+    // a failed callback still ends in a page that reports to the Apps card and carries on to the app
+    const page = await http(gw.url, "GET", "/mcp/oauth/callback?state=abc&code=xyz", { headers: H });
+    assert.match(page.body, /BroadcastChannel\("daebot-apps"\)/);
+  } finally { await gw.close(); }
+});

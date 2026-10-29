@@ -925,8 +925,12 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (e instanceof McpConnectError) return sendJson(res, e.status, { error: e.message, ...(e.code ? { code: e.code } : {}) });
     throw e;
   }
+  // The sign-in opens in its own tab. When this page was opened by Daebot it tells the Apps card (same-origin BroadcastChannel) and closes itself;
+  // otherwise (opened in the same tab, or the browser blocked closing) it carries on to the app.
   const mcpDonePage = (msg: string, ok: boolean): string =>
-    `<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/?mcp=${ok ? "connected" : "failed"}"><title>${ok ? "Connected" : "Not connected"}</title><p>${msg}</p><a href="/">Continue</a>`;
+    `<!doctype html><meta charset="utf-8"><title>${ok ? "Connected" : "Not connected"}</title><p>${msg}</p><a href="/?mcp=${ok ? "connected" : "failed"}">Continue</a>` +
+    `<script>(function(){var ok=${ok ? "true" : "false"};try{var c=new BroadcastChannel("daebot-apps");c.postMessage({type:ok?"connected":"failed"});c.close();}catch(e){}` +
+    `if(ok){try{window.close();}catch(e){}}setTimeout(function(){location.replace("/?mcp="+(ok?"connected":"failed"));},ok?1500:2500);})();</script>`;
 
   async function mcpOauthCallback(req: IncomingMessage, res: ServerResponse, query: URLSearchParams): Promise<void> {
     if (!mcp || !mcp.enabled()) return sendJson(res, 404, { error: "not found" });
@@ -1050,6 +1054,18 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
         const b = await readJson(req);
         return sendJson(res, 200, { server: await mcp.connectWithToken(me.id, { presetId: optStr(b.id, 80) ?? "", url: optStr(b.url, 5000) ?? "", token: optStr(b.token, 5000) ?? "", name: optStr(b.name, 40) }) });
+      }
+      // n8n / custom MCP server, OAuth first: only the address from the card. Answers authorize (open the address in a new tab), connected, or token_needed.
+      if (path === "/mcp/catalog/connect-oauth") {
+        if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+        const b = await readJson(req);
+        const r = await mcp.connectWithOAuth(me.id, { presetId: optStr(b.id, 80) ?? "", url: optStr(b.url, 5000) ?? "", name: optStr(b.name, 40), redirectUri: mcpRedirectUri(req) });
+        if (r.status === "authorize") {
+          // Local flow: this gateway's own callback needs the binding cookie. A MIND-held flow (no state) comes back through MIND's callback instead.
+          if (r.state) res.setHeader("set-cookie", `${MCP_COOKIE}=${me.id}.${r.state}.${mcpMac(me.id, r.state)}; ${mcpCookieAttrs(600)}`);
+          return sendJson(res, 200, { status: "authorize", url: r.url });
+        }
+        return sendJson(res, 200, r);
       }
       let m = /^\/mcp\/pending\/([A-Za-z0-9_-]{1,40})\/(approve|deny)$/.exec(path);
       if (m) {
