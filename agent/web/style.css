@@ -623,11 +623,16 @@ button.bd-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -
 .perm-rule-meta { margin: 0 0 8px; color: var(--ink-3); font-size: 12px; }
 .perm-edit { display: flex; flex-wrap: wrap; gap: 8px; }
 .perm-edit .fld { flex: 1; min-width: 160px; }
-.suggest { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 0 8px; }
+/* Suggested replies: a quiet list, never capsules. Rows have no container at rest; hover and the picked row get the
+   house trigger treatment (solid surface, 1px hairline, 6px corner). A small return glyph marks each row. */
+.suggest { display: flex; flex-direction: column; align-items: stretch; gap: 1px; padding: 0 0 8px; }
 .suggest[hidden] { display: none; }
-.suggest-label { font-size: 12px; color: var(--ink-3); }
-.suggest-chip { max-width: 100%; text-align: left; font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); cursor: pointer; overflow-wrap: anywhere; }
-.suggest-chip:hover, .suggest-chip.picked { border-color: var(--ink); }
+.suggest-label { padding: 0 10px 4px; font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.suggest-chip { display: flex; align-items: baseline; gap: 9px; width: 100%; max-width: 100%; text-align: left; font: inherit; font-size: 13px; line-height: 1.45; padding: 6px 10px; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--ink-2); cursor: pointer; transition: background .12s, border-color .12s, color .12s; }
+.suggest-chip::before { content: "\21B3"; flex: none; font-size: 12px; color: var(--ink-3); transition: color .12s; }
+.suggest-chip .suggest-text { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.suggest-chip:hover, .suggest-chip:focus-visible, .suggest-chip.picked { background: var(--surface); border-color: var(--line-strong); color: var(--ink); }
+.suggest-chip.picked::before { color: var(--accent); }
 
 /* ---- sidebar bottom bar: [avatar + name] [connection dot] [Apps]; the account menu opens above it ---- */
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
