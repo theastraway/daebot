@@ -356,7 +356,7 @@ export function initBots(ctx) {
     item.append(badge(bot), text, dot);
     if (app.exchangeUnread && app.exchangeUnread(bot.id) > 0) { const u = h("i", "xchg-dot"); u.setAttribute("role", "img"); u.setAttribute("aria-label", "Unread agent exchange"); item.append(u); }
     item.addEventListener("click", () => selectBot(bot));
-    const head = h("div", `bot-head${bot.pinned || bot.pinnedAt ? " pinned" : ""}`);
+    const head = h("div", `bot-head${bot.pinned || bot.pinnedAt ? " pinned" : ""}${bot.updateAvailable ? " has-upd" : ""}`);
     // The disclosure chevron only shows or hides this bot's threads; clicking the row itself opens the bot's top thread.
     const chev = h("button", "bot-chev side-icon"); chev.type = "button";
     chev.setAttribute("aria-expanded", String(open)); chev.dataset.botId = bot.id;

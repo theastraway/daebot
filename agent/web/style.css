@@ -628,7 +628,8 @@ button.bd-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -
 #title.renamable { cursor: text; }
 #title.renamable:hover { text-decoration: underline dotted var(--ink-3); text-underline-offset: 4px; }
 .bot-head .bot-item { padding-right: 10px; }
-.bot-head.pinned .bot-item { padding-right: 36px; }
+.bot-head.pinned .bot-item { padding-right: 98px; }
+.bot-head.has-upd .bot-item { padding-right: 150px; }
 .bot-chev { width: 22px; height: 28px; display: grid; place-items: center; padding: 0; color: var(--ink-3); cursor: pointer; margin-right: 1px; }
 .bot-chev .ic { width: 14px; height: 14px; transition: transform .15s; }
 .bot-chev[aria-expanded="true"] .ic { transform: rotate(90deg); }
