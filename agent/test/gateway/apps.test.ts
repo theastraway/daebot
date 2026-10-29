@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startGateway } from "../../src/gateway/index.ts";
-import { normalizeProviders } from "../../src/gateway/apps.ts";
+import { normalizeProviders, normalizeReferral } from "../../src/gateway/apps.ts";
 import { DailyCostCap } from "../../src/hosted.ts";
 import { createAuthContext } from "../../src/auth/index.ts";
 import { createRuntime } from "../../src/runtime.ts";
@@ -201,4 +201,34 @@ test("desktop (no hosted auth): the Apps card uses the key the app signed in wit
     assert.equal(j.providers.find((p: any) => p.provider === "google").connected, true);
     assert.doesNotMatch(r.body, /mind_/);
   } finally { await gw.close(); await fake.close(); }
+});
+
+test("referral: each user gets their OWN MIND link and the real terms, with their own key; owner login and a MIND failure get no link", async () => {
+  const r = await rig();
+  try {
+    assert.equal((await http(r.gw.url, "GET", "/apps/referral", { headers: H })).status, 401);
+    const alice = await r.cookie(r.keys.alice);
+    const bob = await r.cookie(r.keys.bob);
+    const a = JSON.parse((await http(r.gw.url, "GET", "/apps/referral", { headers: alice })).body);
+    const b = JSON.parse((await http(r.gw.url, "GET", "/apps/referral", { headers: bob })).body);
+    assert.deepEqual(a, { signedIn: true, url: "https://m-i-n-d.ai/register?ref=REFALICE", code: "REFALICE", referrerCredits: 100, refereeCredits: 50 });
+    assert.equal(b.url, "https://m-i-n-d.ai/register?ref=REFBOB");
+    assert.deepEqual(r.fake.seen.filter((s) => s.path === "/developer/v1/referral").map((c) => c.key), [r.keys.alice, r.keys.bob]);
+    assert.equal((await http(r.gw.url, "POST", "/apps/referral", { headers: alice, body: {} })).status, 405);
+    assert.deepEqual(JSON.parse((await http(r.gw.url, "GET", "/apps/referral", { headers: await r.ownerCookie() })).body), { signedIn: false });
+    r.fake.referralStatus = 404;
+    assert.equal((await http(r.gw.url, "GET", "/apps/referral", { headers: alice })).status, 503);
+    r.fake.referralStatus = 500;
+    assert.equal((await http(r.gw.url, "GET", "/apps/referral", { headers: alice })).status, 502);
+  } finally { await r.close(); }
+});
+
+test("normalizeReferral accepts only an https MIND link with both credit amounts", () => {
+  const ok = { code: "ABCD2345", url: "https://m-i-n-d.ai/register?ref=ABCD2345", referrer_credits: 100, referee_credits: 50 };
+  assert.deepEqual(normalizeReferral(ok), { url: ok.url, code: "ABCD2345", referrerCredits: 100, refereeCredits: 50 });
+  assert.equal(normalizeReferral({ ...ok, url: "http://m-i-n-d.ai/register?ref=A" }), null);
+  assert.equal(normalizeReferral({ ...ok, url: "https://evil.example/register?ref=A" }), null);
+  assert.equal(normalizeReferral({ ...ok, referee_credits: 0 }), null);
+  assert.equal(normalizeReferral({ ...ok, referrer_credits: "100" }), null);
+  assert.equal(normalizeReferral(null), null);
 });

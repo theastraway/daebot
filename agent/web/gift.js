@@ -1,12 +1,14 @@
 // The gift button in the sidebar's bottom bar and its modal: "Give MIND to a friend who loves AI".
 // The illustration is a cluster of our own M Daebot mascots, each in a different colour with a different LED face.
-// No referral link is built here: MIND's referral code is only reachable with a MIND web login, not with the key Daebot holds,
-// so the modal sends people to the plain link and promises nothing (no credits, no free weeks).
+// The link is the signed-in user's own MIND referral link from GET /apps/referral (the gateway asks MIND with their key), and the line
+// under the title states MIND's real terms from the same answer. If that fails (or it is the owner login) the modal falls back to the
+// plain link and the neutral line, and promises nothing.
 // DOM only: createElement and setAttribute, no HTML strings.
 
 import { mascotFor, wakeOn } from "./mbadge.js";
 
 export const GIFT_LINK = "https://daebot.live";
+export const GIFT_NEUTRAL_LINE = "Send them a link to MIND and Daebot.";
 export const GIFT_TEXT = "MIND and Daebot: an AI agent that remembers. Worth a look if you love AI.";
 
 /** The mascots in the illustration: a face from the faces module and its LED colour each. Order is left to right. */
@@ -23,11 +25,29 @@ export function xIntentUrl(link = GIFT_LINK, text = GIFT_TEXT) {
   return `https://x.com/intent/post?text=${encodeURIComponent(text)}&url=${encodeURIComponent(link)}`;
 }
 
+/** The line under the title for MIND's real terms, e.g. "They get 50 free credits, you get 100 when they join." (pure). Neutral when the amounts are not usable. */
+export function termsLine(ref) {
+  const ok = (v) => Number.isInteger(v) && v > 0;
+  return ref && ok(ref.refereeCredits) && ok(ref.referrerCredits)
+    ? `They get ${ref.refereeCredits} free credits, you get ${ref.referrerCredits} when they join.`
+    : GIFT_NEUTRAL_LINE;
+}
+
+/** Trim the gateway's /apps/referral answer to a usable link or null (pure). */
+export function referralFrom(j) {
+  try {
+    if (!j || j.signedIn === false) return null;
+    const u = new URL(String(j.url));
+    if (u.protocol !== "https:") return null;
+    return { url: u.href, refereeCredits: j.refereeCredits, referrerCredits: j.referrerCredits };
+  } catch { return null; }
+}
+
 export function initGift() {
   const $ = (id) => document.getElementById(id);
-  const q = { open: $("btn-gift"), card: $("gift-modal"), close: $("gift-close"), art: $("gift-art"), share: $("gift-x"), copy: $("gift-copy"), copyText: $("gift-copy-text"), live: $("gift-live") };
+  const q = { open: $("btn-gift"), card: $("gift-modal"), close: $("gift-close"), art: $("gift-art"), share: $("gift-x"), copy: $("gift-copy"), copyText: $("gift-copy-text"), live: $("gift-live"), line: $("gift-line") };
   if (!q.open || !q.card) return null;
-  let built = false, last = null, timer = 0;
+  let built = false, last = null, timer = 0, link = GIFT_LINK, asked = false;
 
   function build() {
     if (built) return;
@@ -38,10 +58,25 @@ export function initGift() {
       wakeOn(m, m);
       q.art.append(m);
     });
-    q.share.href = xIntentUrl();
+    q.share.href = xIntentUrl(link);
+  }
+  // Ask the gateway once per page load for this user's own link and terms; any failure leaves the plain link and the neutral line.
+  async function loadReferral() {
+    if (asked) return;
+    asked = true;
+    try {
+      const r = await fetch("/apps/referral", { headers: { accept: "application/json" }, cache: "no-store" });
+      if (!r.ok) return;
+      const ref = referralFrom(await r.json());
+      if (!ref) return;
+      link = ref.url;
+      q.share.href = xIntentUrl(link);
+      if (q.line) q.line.textContent = termsLine(ref);
+    } catch { /* stays on the plain link */ }
   }
   function open() {
     build();
+    loadReferral();
     last = document.activeElement;
     q.card.hidden = false;
     q.open.setAttribute("aria-expanded", "true");
@@ -54,9 +89,9 @@ export function initGift() {
   }
   async function copy() {
     let ok = false;
-    try { await navigator.clipboard.writeText(GIFT_LINK); ok = true; } catch {
+    try { await navigator.clipboard.writeText(link); ok = true; } catch {
       const t = document.createElement("textarea");
-      t.value = GIFT_LINK; t.setAttribute("readonly", ""); t.className = "sr-only";
+      t.value = link; t.setAttribute("readonly", ""); t.className = "sr-only";
       document.body.append(t); t.select();
       try { ok = document.execCommand("copy"); } catch { ok = false; }
       t.remove();

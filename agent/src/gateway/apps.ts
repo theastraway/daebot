@@ -2,6 +2,7 @@
 //   GET  /apps/integrations                         every provider + this user's connected state
 //   POST /apps/integrations/:provider/connect       { authUrl } to open in a new tab (MIND's own OAuth flow)
 //   POST /apps/integrations/:provider/disconnect    drop the connection at MIND
+//   GET  /apps/referral                             this user's MIND referral link + the real offer terms (the gift modal)
 // Every call goes to MIND's /developer/v1/integrations with the SIGNED-IN USER'S OWN MIND key as X-API-Key. The key never
 // reaches the browser and is never logged or echoed. The owner access-code login has no MIND user, so it gets a plain
 // "sign in with MIND" answer instead of the server key's integrations.
@@ -38,6 +39,16 @@ function json(res: ServerResponse, status: number, body: unknown): void {
 
 const str = (v: unknown, max: number): string => (typeof v === "string" ? v.trim().slice(0, max) : "");
 
+/** MIND's /developer/v1/referral answer, trimmed: an https link on MIND's own host plus the two credit amounts (pure). */
+export function normalizeReferral(j: any): { url: string; code: string; referrerCredits: number; refereeCredits: number } | null {
+  let url = "";
+  try { const u = new URL(str(j?.url, 300)); if (u.protocol === "https:" && /^(www\.)?m-i-n-d\.ai$/.test(u.hostname)) url = u.href; } catch { /* no usable link */ }
+  const n = (v: unknown): number => (typeof v === "number" && Number.isInteger(v) && v > 0 && v < 1_000_000 ? v : 0);
+  const referrerCredits = n(j?.referrer_credits), refereeCredits = n(j?.referee_credits);
+  const code = str(j?.code, 32);
+  return url && code && referrerCredits && refereeCredits ? { url, code, referrerCredits, refereeCredits } : null;
+}
+
 function mapError(status: number): { status: number; body: Record<string, unknown> } {
   if (status === 401 || status === 403) return { status: 401, body: { error: "mind_key_rejected", message: "MIND did not accept your key for apps. Sign in again." } };
   if (status === 404) return { status: 503, body: { error: "apps_unavailable", message: "Apps are not switched on at MIND yet." } };
@@ -60,6 +71,17 @@ export function createAppsHandler(o: AppsOptions): (req: IncomingMessage, res: S
     const method = req.method ?? "GET";
     const key = o.keyFor(p);
     const needsSignIn = !key; // keyFor already returns nothing for the hosted access-code owner
+    if (path === "/apps/referral") {
+      if (method !== "GET") return json(res, 405, { error: "method not allowed" });
+      if (needsSignIn) return json(res, 200, { signedIn: false });
+      try {
+        const r = await f(`${base}/referral`, { headers: { "X-API-Key": key!, Accept: "application/json" }, signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) });
+        if (!r.ok) { const m = mapError(r.status); return json(res, m.status, m.body); }
+        const ref = normalizeReferral(await r.json().catch(() => ({})));
+        if (!ref) return json(res, 502, { error: "referral_failed", message: "MIND did not return a referral link." });
+        return json(res, 200, { signedIn: true, ...ref });
+      } catch { return json(res, 502, { error: "referral_failed", message: "MIND could not be reached. Try again in a moment." }); }
+    }
     if (path === "/apps/integrations") {
       if (method !== "GET") return json(res, 405, { error: "method not allowed" });
       if (needsSignIn) return json(res, 200, { signedIn: false, message: SIGN_IN_MESSAGE, enabled: true, providers: [] });

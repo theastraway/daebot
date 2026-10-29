@@ -81,3 +81,18 @@ test("header: the Instructions pill is gone; the bot name with its M face opens 
   assert.match(b, /app\.mainSettings/);
   assert.match(web("app.js"), /mainSettings: \(\) => \$\("acct-btn"\)\.click\(\)/);
 });
+
+test("gift modal states MIND's real terms from the referral answer and falls back to the plain link", () => {
+  assert.equal(gift.termsLine({ refereeCredits: 50, referrerCredits: 100 }), "They get 50 free credits, you get 100 when they join.");
+  assert.equal(gift.termsLine(null), gift.GIFT_NEUTRAL_LINE);
+  assert.equal(gift.termsLine({ refereeCredits: 0, referrerCredits: 100 }), gift.GIFT_NEUTRAL_LINE);
+  const ok = gift.referralFrom({ signedIn: true, url: "https://m-i-n-d.ai/register?ref=ABCD2345", refereeCredits: 50, referrerCredits: 100 });
+  assert.equal(ok.url, "https://m-i-n-d.ai/register?ref=ABCD2345");
+  assert.equal(gift.referralFrom({ signedIn: false }), null);
+  assert.equal(gift.referralFrom({ signedIn: true, url: "http://m-i-n-d.ai/register?ref=A" }), null);
+  assert.equal(gift.referralFrom({ signedIn: true, url: "not a url" }), null);
+  assert.equal(gift.referralFrom(null), null);
+  assert.match(gift.xIntentUrl(ok.url), /url=https%3A%2F%2Fm-i-n-d\.ai%2Fregister%3Fref%3DABCD2345$/);
+  assert.match(web("index.html"), /id="gift-line"/);
+  assert.match(web("gift.js"), /\/apps\/referral/);
+});
