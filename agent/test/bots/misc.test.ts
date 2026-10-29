@@ -16,6 +16,7 @@ import { statSync } from "node:fs";
 
 test("hosted deployments may run bot_talk and mind_tenants; staff can use bot_talk, public cannot", () => {
   assert.equal(hostedToolAllowed("bot_talk"), true);
+  assert.equal(hostedToolAllowed("bot_manage"), true);
   assert.equal(hostedToolAllowed("mind_tenants"), true);
   assert.equal(hostedToolAllowed("bash"), false);
   const t = createBotTalkTool({ bus: {}, owner: "o" });

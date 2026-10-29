@@ -76,7 +76,7 @@ test("bot prompt order: identity, fixed protocols, DAEBOT.md, precedence, roster
     assert.match(mp, /## MINDs and bots/);
     assert.match(mp, /- sales \(Sales Bot\): owns the pipeline/);
     assert.match(mp, /ask that bot with bot_talk/);
-    assert.ok(!mp.includes("DAEBOT.md"));
+    assert.ok(!mp.includes("## Instructions for this bot (DAEBOT.md)"), "no bot-instructions section (the Creating a Daebot skill mentions DAEBOT.md)");
     assert.ok(!mp.includes("(you)"));
   } finally { await w.close(); }
 });
@@ -146,7 +146,9 @@ test("tools in a bot session: same set as a session (+ bot_talk, mind_tenants); 
     // The task board is the user's own: only their plain sessions have task_board (bot threads are not on the board).
     const mainNames = w.provider.requests.at(-1)!.tools.map((t) => t.name);
     assert.ok(mainNames.includes("task_board") && !names.includes("task_board"));
-    assert.deepEqual(mainNames.filter((n) => n !== "task_board").sort(), [...names].sort(), "a session and a bot get the same tools");
+    // bot_manage (Daebot makes bots) is the user's own session only, like task_board: a bot never gets it.
+    assert.ok(mainNames.includes("bot_manage") && !names.includes("bot_manage"));
+    assert.deepEqual(mainNames.filter((n) => n !== "task_board" && n !== "bot_manage").sort(), [...names].sort(), "a session and a bot get the same tools");
     for (const n of ["bot_talk", "mind_tenants", "mind_query", "mind_remember"]) assert.ok(names.includes(n), n);
     assert.ok(calls.every((c) => !JSON.stringify(c.body ?? {}).includes('"mind"')));
     assert.ok(evs.filter((e) => e.type === "toolEnd").every((e: any) => e.ok), JSON.stringify(evs.filter((e) => e.type === "toolEnd")));

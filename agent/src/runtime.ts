@@ -11,6 +11,8 @@ import { dataDir } from "./persist.ts";
 import { bootMind, createMindClient, createMindTools, createSessionSync } from "./mind/index.ts";
 import { BotStore, botMindApi } from "./bots/store.ts";
 import { createBotTalkTool } from "./bots/talk-tool.ts";
+import { createBotManageTool } from "./bots/manage-tool.ts";
+import { BOT_SKILL_PROMPT } from "./bots/skill.ts";
 import type { BotRecord, BotsContext, RosterEntry } from "./bots/types.ts";
 import { MAX_INSTRUCTIONS_BYTES } from "./bots/types.ts";
 import { createSettings, validModelId } from "./settings.ts";
@@ -106,6 +108,8 @@ export function composeSystemPrompt(o: {
   connectedApps?: string[];
   /** The task_board tool is offered: adds the "## Task board" section. */
   board?: boolean;
+  /** The bot_manage tool is offered: adds the stock "## Creating a Daebot" skill. */
+  botManage?: boolean;
 }): string {
   const lines = [
     o.identity ?? "You are Daebot (Dae), Anthony Conti's own agent. MIND is your memory and the only source of truth about his world.",
@@ -161,6 +165,7 @@ export function composeSystemPrompt(o: {
   }
   if (o.photos) lines.push("", ...PHOTOS_SECTION);
   if (o.board) lines.push("", BOARD_PROMPT);
+  if (o.botManage) lines.push("", BOT_SKILL_PROMPT);
   if (o.appleCalendar === true) {
     lines.push(
       "",
@@ -309,16 +314,25 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     get: (sid) => sessions.get(sid)?.board ?? [],
     set: (sid, tasks) => { const e = sessions.get(sid); if (!e) return; e.board = tasks; e.updatedAt = Date.now(); persist(sid); },
   });
+  const self: { rt?: Runtime } = {};
   const toolsFor = (home: string, selfBot: string | undefined): Tool[] => {
     const on = botsOn();
     const talk = on && botStore && botsCtx ? [createBotTalkTool({ bus: botsCtx.bus, owner: ownerKey, selfBot })] : [];
+    // bot_manage: the user's own session creates and configures bots internally (never through the screen). A bot never gets it.
+    const manage = on && botStore && botsCtx && !selfBot
+      ? [createBotManageTool({
+          bots: botStore, owner: ownerKey, hooks: () => botsCtx.manage?.current,
+          threads: (id) => self.rt?.listSessions().filter((s) => s.bot === id && !s.peer).length ?? 0,
+          purge: (id) => self.rt?.purgeBotSessions?.(id) ?? Promise.resolve(),
+        })]
+      : [];
     const every = [...builtinTools, ...(photoTool ? [photoTool] : []), ...createMindTools({
       home, clientFor: clientForMind, roster: () => botStore?.roster() ?? [],
       refresh: botStore ? async () => { await botStore.list(); } : undefined,
     }, { user: hosted?.username }).filter((t) => on || t.spec.name !== "mind_tenants"),
       // mail, calendar, contacts (the apps' synced data) + mind_apps. A bot reads them as the user's main account (like mind:"main") and can change nothing.
       ...(appsOn() ? createAppTools({ clientFor: clientForMind, readOnly: !!selfBot, connected: connectedApps, servers: serverLites }) : []),
-      ...talk];
+      ...talk, ...manage];
     // mcp_connect is the user's own session only: a bot never proposes connections (and its turns could be peer-driven).
     const withMcp = [...(overrides.mcpConnect && !selfBot ? [...every, createMcpConnectTool(overrides.mcpConnect, ownerKey)] : every), ...(selfBot ? [] : [boardTool])];
     const all = hosted ? filterHostedTools(withMcp) : withMcp;
@@ -359,7 +373,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     }).catch((err) => process.stderr.write(`persist: could not save a session (${String((err as Error)?.message ?? err).split("\n")[0].slice(0, 120)})\n`));
   }
 
-  return {
+  const runtime: Runtime = {
     async openSession(opts) {
       const tier = parseTier(opts.identity);
       if (opts.resumeId) {
@@ -441,6 +455,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
             mcp: !!overrides.mcpConnect?.enabled() && !botId,
             photos: tools.some((t) => t.spec.name === "view_photo"),
             board: tools.some((t) => t.spec.name === "task_board"),
+            botManage: tools.some((t) => t.spec.name === "bot_manage"),
             appleCalendar: botId ? undefined : curCaps.includes("apple_calendar"),
             connectedApps: botId || !appsOn() ? undefined : connectedAppsLines(connectedApps.state(), { servers: serverLites(), tools: new Set(tools.map((t) => t.spec.name)), deviceCalendar: curCaps.includes("apple_calendar") }),
             permissions: permissions?.preferencesText(),
@@ -641,4 +656,6 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       return rec.run?.status === "running" ? [...rec.history, interruptedNotice()] : rec.history;
     },
   };
+  self.rt = runtime;
+  return runtime;
 }

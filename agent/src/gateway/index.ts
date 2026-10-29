@@ -249,7 +249,22 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   // ---- Bots: the bus runs a recipient bot's turn in-process through this same SessionManager.
   if (opts.bots) opts.bots.bus.current = createBotBus({ manager, botsFor: (owner) => manager.runtimeOf(owner).bots, tierOf: (owner) => (owner === OWNER.id ? OWNER.tier : auth?.store.principal(owner)?.tier) });
   const catalog = createModelCatalog({ cfg: opts.cfg ?? ({ mindBaseUrl: "", models: { default: "", cheap: "", fallback: [] } } as unknown as Config), fetchImpl: opts.fetchImpl ?? opts.auth?.fetchImpl });
-  // ---- MIND Voice: billed to the caller's own MIND key (owner: the server key). Off when there is no MIND base URL.
+
+  // ---- bot_manage (Daebot makes its own bots): lend the runtimes the user's plan models and the cleanup after a delete.
+  if (opts.bots) {
+    const principalOf2 = (owner: string): Principal | undefined => (owner === OWNER.id ? OWNER : auth?.store.principal(owner));
+    opts.bots.manage ??= {};
+    opts.bots.manage.current = {
+      async models(owner) {
+        const p = principalOf2(owner);
+        if (!p || !opts.cfg) return undefined;
+        const plan = await planOf(p);
+        const cat = await catalog.list(billingKeyOf(p), plan.free);
+        return { models: cat.models.map((m) => ({ id: m.id, name: m.name, allowed: m.allowed })), default: manager.runtimeOf(owner).settings?.get().defaultModel ?? opts.cfg.models.default };
+      },
+      async removed(owner, botId) { await manager.closeBotSessions(owner, botId); },
+    };
+  }  // ---- MIND Voice: billed to the caller's own MIND key (owner: the server key). Off when there is no MIND base URL.
   const voiceBase = opts.voice?.baseUrl ?? opts.cfg?.mindBaseUrl;
   const voice = voiceBase
     ? createVoiceHandler({
