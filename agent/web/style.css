@@ -628,8 +628,6 @@ button.bd-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -
 #title.renamable { cursor: text; }
 #title.renamable:hover { text-decoration: underline dotted var(--ink-3); text-underline-offset: 4px; }
 .bot-head .bot-item { padding-right: 10px; }
-.bot-head.pinned .bot-item { padding-right: 98px; }
-.bot-head.has-upd .bot-item { padding-right: 150px; }
 .bot-chev { width: 22px; height: 28px; display: grid; place-items: center; padding: 0; color: var(--ink-3); cursor: pointer; margin-right: 1px; }
 .bot-chev .ic { width: 14px; height: 14px; transition: transform .15s; }
 .bot-chev[aria-expanded="true"] .ic { transform: rotate(90deg); }
@@ -641,7 +639,7 @@ button.bd-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -
 .bot-head:hover .row-pin, .bot-head:focus-within .row-pin { opacity: 1; }
 .bot-group { margin: 8px 0 2px 8px; font: 600 11px var(--sans); letter-spacing: .04em; text-transform: uppercase; color: var(--ink-3); }
 @media (prefers-reduced-motion: reduce) { .bot-chev .ic { transition: none; } }
-.bot-upd { position: absolute; right: 98px; top: 50%; transform: translateY(-50%); font: 600 11px var(--sans, inherit); padding: 3px 8px; border-radius: 999px; border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent); cursor: pointer; }
+.bot-upd { position: static; flex: none; margin-left: 2px; font: 600 11px var(--sans, inherit); padding: 3px 8px; border-radius: 999px; border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent); cursor: pointer; }
 .bot-upd:hover { background: var(--accent); color: #fff; }
 .ver-line { margin: 0; font-weight: 550; font-size: 14px; color: var(--ink); }
 .ver-notes { margin: 0; padding-left: 18px; font-size: 13px; color: var(--ink-2); display: grid; gap: 4px; }
