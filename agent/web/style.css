@@ -617,7 +617,7 @@ button.bd-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -
 .row-gear:hover { color: var(--ink); background: var(--surface-2); }
 .row-gear[aria-expanded="true"] { opacity: 1; color: var(--ink); }
 .sess-row:hover .row-gear, .bot-head:hover .row-gear, .row-gear:focus-visible, .bot-head:focus-within .row-gear { opacity: 1; }
-@media (hover: none), (max-width: 900px) { .row-del { opacity: .75; } }
+@media (hover: none), (max-width: 900px) { .row-del { opacity: .75; } .row-pin[aria-pressed="true"] { opacity: .75; } }
 .sess-row .sess { padding-right: 38px; }
 .row-ren { right: 36px; }
 .row-ren:hover { color: var(--ink); background: var(--surface-2); }
@@ -634,12 +634,15 @@ button.bd-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -
 .bot-chev:hover { color: var(--ink); }
 .row-pin { right: 66px; }
 .row-pin:hover { color: var(--ink); background: var(--surface-2); }
-.row-pin[aria-pressed="true"] { opacity: 1; color: var(--led-ink, var(--ink)); }
+.row-pin[aria-pressed="true"] { color: var(--led-ink, var(--ink)); }
+.bot-pinmark { display: inline-block; width: 11px; height: 11px; margin-left: 5px; vertical-align: -1px; color: var(--ink-3); fill: currentColor; }
 .row-pin[aria-pressed="true"] .ic { fill: currentColor; }
 .bot-head:hover .row-pin, .bot-head:focus-within .row-pin { opacity: 1; }
 .bot-group { margin: 8px 0 2px 8px; font: 600 11px var(--sans); letter-spacing: .04em; text-transform: uppercase; color: var(--ink-3); }
 @media (prefers-reduced-motion: reduce) { .bot-chev .ic { transition: none; } }
-.bot-upd { position: static; flex: none; margin-left: 2px; font: 600 11px var(--sans, inherit); padding: 3px 8px; border-radius: 999px; border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent); cursor: pointer; }
+.bot-head.has-upd { flex-wrap: wrap; }
+.bot-head.has-upd .bot-item { flex: 1 1 calc(100% - 24px); }
+.bot-upd { position: static; flex: none; margin: 0 0 4px 64px; font: 600 11px var(--sans, inherit); padding: 3px 8px; border-radius: 999px; border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent); cursor: pointer; }
 .bot-upd:hover { background: var(--accent); color: #fff; }
 .ver-line { margin: 0; font-weight: 550; font-size: 14px; color: var(--ink); }
 .ver-notes { margin: 0; padding-left: 18px; font-size: 13px; color: var(--ink-2); display: grid; gap: 4px; }
