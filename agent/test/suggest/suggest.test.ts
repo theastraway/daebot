@@ -141,3 +141,63 @@ test("runtime: permissions are per owner and their preferences reach the system 
   assert.match(sys, /User's permission preferences/);
   assert.match(sys, /NEVER do these[\s\S]*rm/);
 });
+
+// ---- grounding (Anthony's iPhone screenshot, 10/29: demo chips after Daebot listed its MIND tools)
+import { groundReplies, isCapabilityMenu } from "../../src/suggest/index.ts";
+
+const TOOL_LIST = [
+  "I have these MIND tools:",
+  "- mind_query: search your knowledge",
+  "- mind_crm: contacts and pipeline",
+  "- mind_life: goals, tasks, calendar",
+  "- mind_remember: store notes",
+  "What would you like me to do?",
+].join("\n");
+
+const FABRICATED = [
+  "Add a contact for Sarah Lee, email sarah@example.com",
+  "No, I meant edit an existing contact — update phone number for Mike",
+  "Create a life item: project 'Home renovation' with due date next month",
+];
+
+test("grounding: the exact failing chips are all dropped by the filter", () => {
+  assert.deepEqual(groundReplies(FABRICATED, "USER: what MIND tools do you have?\nASSISTANT: " + TOOL_LIST), []);
+});
+
+test("grounding: grounded replies survive, placeholders and unknown names/emails/numbers do not", () => {
+  const corpus = "USER: draft a reply to Dana about the 2:30 call\nASSISTANT: Draft to Dana ready, dana@clientco.io, 2:30 Thursday. Send it?";
+  assert.deepEqual(groundReplies(["Yes, send it", "Change the time to 2:30", "Cc dana@clientco.io"], corpus), ["Yes, send it", "Change the time to 2:30", "Cc dana@clientco.io"]);
+  assert.deepEqual(groundReplies(["Send it to Mike", "Cc bob@clientco.io", "Move it to 4:45", "Lorem ipsum", "Use [name] instead", "Email me at x@example.org"], corpus), []);
+});
+
+test("grounding: a tool-list reply is a menu, not a question waiting on the user", () => {
+  assert.equal(isCapabilityMenu(TOOL_LIST), true);
+  assert.equal(awaitsUser(TOOL_LIST), false);
+  assert.equal(isCapabilityMenu("Draft ready. Want me to send it?"), false);
+  assert.equal(awaitsUser("Draft ready. Want me to send it?"), true);
+});
+
+test("grounding: runtime yields no chips for the tool-list case, even if the model invents some, and drops invented ones elsewhere", async () => {
+  const stateDir = dir();
+  const provider = new FakeProvider([
+    { text: TOOL_LIST },
+    { text: "I wrote the reply to Sarah. Want me to send it?" },
+    { text: JSON.stringify({ replies: [...FABRICATED, "Yes, send it"] }) },
+  ]);
+  const failing = (async () => { throw new Error("offline"); }) as any;
+  const rt = createRuntime(baseCfg({ mindApiKey: "k" }), { provider, fetchImpl: failing, stateDir });
+  const s = await rt.openSession({ surface: "web", title: "t" });
+  await collect(s.send("what MIND tools do you have?"));
+  assert.deepEqual(await rt.suggestReplies!(s.id), { replies: [] });
+  assert.equal(provider.requests.length, 1, "a tool list never reaches the suggestion model");
+  await collect(s.send("draft a reply to Sarah"));
+  assert.deepEqual((await rt.suggestReplies!(s.id)).replies, ["Yes, send it"], "invented chips are filtered out, the grounded one stays");
+});
+
+test("grounding: the prompt forbids invention and carries the user's real context", () => {
+  const m = buildMessages([{ role: "assistant", text: "Send it?" }], [], "## PRIORITIES\n1. Finish the Atlas invoice");
+  assert.match(m[0].content, /GROUNDING RULES/);
+  assert.match(m[0].content, /example\.com/);
+  assert.match(m[0].content, /replies":\[\]/);
+  assert.match(m[1].content, /Finish the Atlas invoice/);
+});

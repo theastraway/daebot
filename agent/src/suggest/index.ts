@@ -92,11 +92,19 @@ export class SuggestionStore {
 
 const ASKS = /\b(want me to|should i|shall i|would you like|do you want|let me know|ok to|okay to|approve|approval|confirm|which (one|option|of)|reply with|say the word|go ahead|ready for me|send it|proceed|your call|what do you think|thoughts\b|sound good|look good|does that)\b/i;
 
+/** A "here is what I can do" menu (a tool or feature list ending in an open "what would you like?"). Nothing in it is a decision waiting on the user, and a model asked for replies to it invents demo tasks. */
+export function isCapabilityMenu(t: string): boolean {
+  if ((t.match(/\bmind_[a-z_]+/g) ?? []).length >= 3) return true;
+  const bullets = (t.match(/^\s*(?:[-*\u2022]|\d+[.)])\s+\S/gm) ?? []).length;
+  return bullets >= 4 && /\b(i can|i have|i['\u2019]ve got|available|tools?|capabilit|features?|here['\u2019]?s what)\b/i.test(t);
+}
+
 /** True when the assistant's last message hands the turn back to the user: a question, a proposal, a draft for approval. Free to run: no model. */
 export function awaitsUser(text: string, endedOnConfirm = false): boolean {
   if (endedOnConfirm) return true;
   const t = (text ?? "").trim();
   if (!t || t.length > 8000 || t === "[aborted]") return false;
+  if (isCapabilityMenu(t)) return false;
   const tail = t.slice(-500);
   if (/\?\s*[)"'”’*_`>\]]*\s*$/.test(t)) return true;
   if (/\?/.test(t.slice(-220))) return true;
@@ -136,7 +144,7 @@ export function tailOf(all: HistoryEvent[]): TurnTail | undefined {
 
 // ---------------------------------------------------------------- generating
 
-export function buildMessages(tail: TurnTail["transcript"], examples: ReturnType<SuggestionStore["examples"]>): Message[] {
+export function buildMessages(tail: TurnTail["transcript"], examples: ReturnType<SuggestionStore["examples"]>, context = ""): Message[] {
   const userVoice = tail.filter((m) => m.role === "user").slice(-6).map((m) => `- ${clip(flat(m.text), 220)}`);
   const convo = tail.slice(-4).map((m) => `${m.role === "user" ? "USER" : "ASSISTANT"}: ${clip(flat(m.text), 900)}`);
   const ex = examples.map((e) => `- When the assistant said: "${clip(e.ask, 200)}" the user ${e.how}: "${clip(e.reply, 220)}"`);
@@ -145,18 +153,22 @@ export function buildMessages(tail: TurnTail["transcript"], examples: ReturnType
     "Give 1 to 3 distinct options that differ in intent: approve or go ahead; correct or redirect; add a short note or ask for something. Skip an intent that makes no sense here.",
     'Output ONLY JSON: {"replies":["...","..."]}. Each reply is plain text under 160 characters, no quotes around it, no markdown, never written as the assistant.',
     'If the assistant\'s last message does not wait for the user (it is a finished report with no question, proposal or draft to approve), output {"replies":[]}.',
-    "Match the user's style: if they write short and blunt, write short and blunt. Never invent facts, names, numbers, emails or amounts that are not in the conversation.",
+    "Match the user's style: if they write short and blunt, write short and blunt.",
+    "GROUNDING RULES (a reply that breaks one is thrown away): use ONLY names, emails, phone numbers, amounts, dates and project names that appear in the conversation tail or the user's real context below. Never invent a person, an email, a number or a project. Never use example.com, example.org, 'sarah@', 'Mike', 'Home renovation' or any placeholder or demo data. Never propose a generic demo task (add a contact, create a project, make a to-do) that the conversation did not ask for.",
+    "Only suggest when the assistant's last message clearly waits on THIS user for a specific decision. A list of tools or capabilities, a greeting, or an open 'what would you like to do?' is NOT waiting: output {\"replies\":[]}. When unsure, output {\"replies\":[]}: no chips beat a made-up chip.",
+    "Prefer short, specific next steps that point at what was just discussed (\"Yes, send it\", \"Change the subject line first\"), never a new task of your own.",
   ].join("\n");
   const user = [
     userVoice.length ? `The user's recent messages (their voice):\n${userVoice.join("\n")}` : "",
     ex.length ? `Replies this user took or wrote before:\n${ex.join("\n")}` : "",
+    context.trim() ? `The user's real context (current priorities and recent items; the only facts you may use besides the conversation):\n${clip(context.trim(), 1800)}` : "",
     `Conversation tail:\n${convo.join("\n")}`,
     "Draft the user's next reply options now.",
   ].filter(Boolean).join("\n\n");
   return [{ role: "system", content: system }, { role: "user", content: user }];
 }
 
-export function parseReplies(raw: string): string[] {
+export function parseReplies(raw: string, max = 3): string[] {
   const m = /\{[\s\S]*\}/.exec(raw);
   let list: unknown[] = [];
   if (m) {
@@ -174,13 +186,49 @@ export function parseReplies(raw: string): string[] {
     if (!t || seen.has(t.toLowerCase())) continue;
     seen.add(t.toLowerCase());
     out.push(t);
-    if (out.length === 3) break;
+    if (out.length === max) break;
   }
   return out;
 }
 
+/** The slice of the user's boot context the prompt shows: from the priorities/recent heading on, else the tail. */
+export function contextForPrompt(ctx: string): string {
+  const c = (ctx ?? "").trim();
+  if (!c) return "";
+  const m = /^#+\s*.*(?:priorit|recent).*$/im.exec(c);
+  return m ? c.slice(m.index, m.index + 1800) : c.slice(-1800);
+}
+
+const PLACEHOLDER = /example\.(?:com|org|net)|@example\b|\blorem\b|\bipsum\b|\bfoo@|\bjohn\.?doe\b|\bjane\.?doe\b|\byour[- ]?(?:name|email)\b|\b(?:xxx|555-?0\d{3})\b|\[[^\]]*\]|<[^>]+>/i;
+const NOT_NAMES = new Set(["i", "i'm", "i'll", "i've", "i'd", "ok", "okay", "mind", "daebot", "dae", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december", "yes", "no", "mac", "iphone", "ios", "pr", "ci", "api", "url", "todo", "ai"]);
+
+/**
+ * Server-side grounding filter. A reply survives only if every email, number, quoted phrase and mid-sentence capitalized
+ * word (a name) in it also appears in the conversation, the user's real context, or the replies they took before.
+ * Placeholder and demo data (example.com, lorem, [bracket] fill-ins) never survives. Free to run: no model.
+ */
+export function groundReplies(replies: string[], corpus: string): string[] {
+  const hay = corpus.toLowerCase();
+  const has = (x: string): boolean => hay.includes(x.toLowerCase());
+  return replies.filter((r) => {
+    if (PLACEHOLDER.test(r)) return false;
+    for (const e of r.match(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g) ?? []) if (!has(e)) return false;
+    for (const n of r.match(/\d[\d,.:/-]*\d|\d/g) ?? []) if (!has(n)) return false;
+    for (const q of r.match(/"[^"]{2,}"|\u201c[^\u201d]{2,}\u201d|'[^']{3,}'(?!\w)/g) ?? []) if (!has(q.slice(1, -1))) return false;
+    // Capitalized words that are not the first word of a sentence read as names (Sarah Lee, Mike, Acme).
+    const words = r.replace(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, " ").split(/\s+/).filter(Boolean);
+    let sentenceStart = true;
+    for (const w of words) {
+      const bare = w.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9'\u2019]+$/g, "");
+      if (bare && !sentenceStart && /^[A-Z][a-z]/.test(bare) && !NOT_NAMES.has(bare.toLowerCase()) && !has(bare)) return false;
+      sentenceStart = /[.!?:]["')\u201d]*$/.test(w);
+    }
+    return true;
+  });
+}
+
 export async function generateReplies(o: {
-  provider: Provider; model: string; transcript: TurnTail["transcript"]; examples: ReturnType<SuggestionStore["examples"]>; signal?: AbortSignal; timeoutMs?: number;
+  provider: Provider; model: string; transcript: TurnTail["transcript"]; examples: ReturnType<SuggestionStore["examples"]>; context?: string; signal?: AbortSignal; timeoutMs?: number;
 }): Promise<{ replies: string[]; usage?: Usage }> {
   const ac = new AbortController();
   const onAbort = () => ac.abort();
@@ -190,11 +238,14 @@ export async function generateReplies(o: {
   try {
     let text = "";
     let usage: Usage | undefined;
-    for await (const ev of o.provider.stream({ model: o.model, messages: buildMessages(o.transcript, o.examples), tools: [], signal: ac.signal }) as AsyncIterable<StreamEvent>) {
+    for await (const ev of o.provider.stream({ model: o.model, messages: buildMessages(o.transcript, o.examples, contextForPrompt(o.context ?? "")), tools: [], signal: ac.signal }) as AsyncIterable<StreamEvent>) {
       if (ev.type === "text") text += ev.delta;
       else if (ev.type === "done") usage = ev.usage;
     }
-    const replies = parseReplies(text);
+    const corpus = [...o.transcript.map((m) => m.text), o.context ?? "", ...o.examples.flatMap((e) => [e.ask, e.reply])].join("\n");
+    const parsed = parseReplies(text, 12);
+    const replies = groundReplies(parsed, corpus).slice(0, 3);
+    if (replies.length < parsed.length) process.stderr.write(`suggest: dropped ${parsed.length - replies.length} ungrounded repl${parsed.length - replies.length === 1 ? "y" : "ies"}\n`);
     if (!replies.length && text.trim()) process.stderr.write(`suggest: no replies parsed from model output (${JSON.stringify(text.slice(0, 160))})\n`);
     return { replies, usage };
   } catch (e) {

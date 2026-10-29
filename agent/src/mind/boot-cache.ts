@@ -40,6 +40,12 @@ export class BootCache {
     return p;
   }
 
+  /** The cached boot for a key, if one is fresh. Never loads: callers that must stay cheap (suggested replies) use this. */
+  peek(mindKey: string): BootResult | undefined {
+    const hit = this.entries.get(this.keyOf(mindKey));
+    return hit && this.now() - hit.at < hit.ttl ? hit.boot : undefined;
+  }
+
   invalidate(mindKey?: string): void {
     if (mindKey === undefined) this.entries.clear();
     else this.entries.delete(this.keyOf(mindKey));
