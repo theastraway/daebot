@@ -63,7 +63,7 @@ export function extraState(u) {
 
 export function initUsage({ json, notify, locale }) {
   const $ = (id) => document.getElementById(id);
-  const box = $("usage"), head = $("usage-head"), line = $("usage-line"), bar = $("usage-bar"), fill = $("usage-fill");
+  const box = $("um-box"), head = $("usage-head"), line = $("usage-line"), bar = $("usage-bar"), fill = $("usage-fill");
   const detail = $("usage-detail"), rows = $("usage-rows"), extra = $("usage-extra"), sw = $("usage-switch"), note = $("usage-extra-note"), link = $("plan-link");
   if (!box || !head || !sw) return { refresh() {}, view: () => null };
   let view = null, open = false, busy = false;
