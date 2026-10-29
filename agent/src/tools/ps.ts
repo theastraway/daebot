@@ -64,7 +64,7 @@ export function parseBlocked(stdout: string): string | undefined {
 }
 
 export const blockedMessage = (tool: string, what: string): string =>
-  `${tool}: refused. The target is a terminal, console or Run box (${what}). This rule has no override. Run the command with the bash tool (short) or the process tool (long, background). Never on screen.`;
+  `${tool}: refused. The target is a terminal, console or Run box (${what}). This rule has no override. Run the command with the bash tool (short), the process tool (long, background) or the terminal tool (interactive, hidden). Never on screen.`;
 
 // CreateProcess caps the command line at 32,767 characters. Up to this much goes as -EncodedCommand (the proven path);
 // a bigger script (a long batch) is written to a temp .ps1 and run with -File.

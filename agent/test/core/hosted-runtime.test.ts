@@ -15,7 +15,7 @@ test("hosted: the offered tool set is web_fetch plus mind_* only; no shell or fi
   const s = await rt.openSession({ surface: "web" });
   await collect(s.send("hello"));
   const names = provider.requests[0].tools.map((t) => t.name);
-  for (const banned of ["bash", "read_file", "write_file", "edit_file", "glob", "grep"]) assert.ok(!names.includes(banned), `${banned} must not be offered`);
+  for (const banned of ["bash", "process", "terminal", "read_file", "write_file", "edit_file", "glob", "grep"]) assert.ok(!names.includes(banned), `${banned} must not be offered`);
   assert.ok(names.every((n) => hostedToolAllowed(n)), names.join(",")); // web_fetch, mind_*, and the few hosted-safe tools (decide, task_board, ...) listed in hosted.ts
   // before boot the kernel narrows further, so assert on the pure filter too
   const all = filterHostedTools(createBuiltinTools()).map((t) => t.spec.name);

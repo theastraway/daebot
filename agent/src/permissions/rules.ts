@@ -95,6 +95,8 @@ export function factsOf(tool: string, cls: ToolClass, args: Record<string, unkno
   const a = args ?? {};
   const f: CallFacts = { tool, cls, cwd: normPath(cwd), paths: [], recipients: extractRecipients(a), signature: callSignature(tool, a) };
   if (tool === "bash" && typeof a.command === "string") f.command = canonCommand(a.command);
+  // terminal send: what is typed into the session is a command line. Newlines become ";" so a multi-line paste is never one "simple" allow-listed command.
+  if (tool === "terminal" && a.action === "send" && typeof a.text === "string") f.command = canonCommand(a.text.replace(/\r?\n+$/, "").replace(/\r?\n/g, " ; "));
   if (FS_PATH_TOOLS.has(tool)) {
     const p = pathOf(cwd, a.path) ?? ((tool === "glob" || tool === "grep") ? normPath(cwd) : undefined);
     if (p) f.paths.push(p);
@@ -112,6 +114,8 @@ export function factsOf(tool: string, cls: ToolClass, args: Record<string, unkno
 
 const toolMatches = (rule: PermissionRule, f: CallFacts): boolean =>
   rule.tool === f.tool ||
+  // a ban on a bash command also bans typing it into a terminal session (an allow for bash never auto-allows terminal)
+  (rule.effect === "deny" && rule.tool === "bash" && f.tool === "terminal" && f.command !== undefined) ||
   (rule.tool === "group:fs-read" && FS_READ_TOOLS.has(f.tool)) ||
   (rule.tool.startsWith("connector:") && f.connector !== undefined && rule.tool.slice(10) === f.connector);
 

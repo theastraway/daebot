@@ -80,7 +80,7 @@ export function normalizeSteps(args: Record<string, unknown>): { steps: AppStep[
   return { steps, shot: args.screenshot === true, stopOnError: args.continue_on_error !== true };
 }
 
-const blockedHint = "Run the command with the bash tool (short) or the process tool (long, background). Never on screen.";
+const blockedHint = "Run the command with the bash tool (short), the process tool (long, background) or the terminal tool (interactive, hidden). Never on screen.";
 
 /** The window the final screenshot (screenshot:true) is taken of: the last step's window. */
 const lastWindow = (steps: AppStep[]): string | undefined => [...steps].reverse().find((s) => s.window)?.window;

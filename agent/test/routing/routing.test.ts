@@ -61,8 +61,8 @@ test("guard: the computer tool returns the error and never runs a script", async
 });
 
 test("eval set: 20 prompts, ids unique, 2 need the screen, the terminal and app prompts never allow computer", () => {
-  assert.equal(ROUTING_SCENARIOS.length, 20);
-  assert.equal(new Set(ROUTING_SCENARIOS.map((s) => s.id)).size, 20);
+  assert.equal(ROUTING_SCENARIOS.length, 22);
+  assert.equal(new Set(ROUTING_SCENARIOS.map((s) => s.id)).size, 22);
   const by = (id: string) => ROUTING_SCENARIOS.find((s) => s.id.startsWith(id))!;
   assert.deepEqual([by("R16").allow, by("R17").allow, by("R18").allow, by("R19").allow], [["bash", "process"], ["bash"], ["app"], ["app"]]);
   for (const id of ["R16", "R17", "R18", "R19", "R20"]) assert.ok(!by(id).allow.includes("computer"), id);

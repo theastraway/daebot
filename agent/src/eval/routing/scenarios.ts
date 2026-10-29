@@ -29,6 +29,9 @@ export const ROUTING_SCENARIOS: RoutingScenario[] = [
   { id: "R18-click-save", prompt: "click Save in Notepad", allow: ["app"] },
   { id: "R19-fill-field", prompt: "fill the Name field in the Contoso Invoice app with Dana Smith", allow: ["app"] },
   { id: "R20-open-cmd", prompt: "open cmd and run ipconfig /all", allow: ["bash", "process"] },
+  // Interactive sessions: the hidden terminal tool, never a terminal window and never computer.
+  { id: "R21-python-repl", prompt: "start a Python REPL and work out 2**100 and the 20th Fibonacci number in it", allow: ["terminal", "bash"] },
+  { id: "R22-answer-prompt", prompt: "run ./install.sh in ~/app and answer yes when it asks to continue", allow: ["terminal"] },
   { id: "R10-screen-xactimate", prompt: "Xactimate is open on my screen. Look at the estimate that's showing and tell me the first three line items.", allow: ["computer", "app"], needsScreen: true },
   { id: "R11-screen-watch", prompt: "Open the Calculator app and work out 1234 x 5678 on screen so I can watch you do it.", allow: ["computer", "app"], needsScreen: true },
 ];
