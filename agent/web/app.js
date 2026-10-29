@@ -1370,6 +1370,7 @@ const bots = initBots({
     exchangesGroup: () => (xchg ? xchg.group() : null),
     exchangeUnread: (id) => (xchg ? xchg.unreadFor(id) : 0),
     currentBot: () => state.curBot,
+    mainSettings: () => $("acct-btn").click(),
     currentId: () => state.currentId,
     refresh: () => refreshSessions(),
     newThread: (id) => newBotThread(id),

@@ -149,7 +149,7 @@ export function initBots(ctx) {
   const el = {
     tabSessions: $("tab-sessions"), tabBots: $("tab-bots"), sideLabel: $("side-label"), btnNew: $("btn-new"),
     sessionList: $("session-list"), botList: $("bot-list"),
-    topBadge: $("top-badge"), btnInstr: $("btn-instr"),
+    topBadge: $("top-badge"), topName: $("top-bot-name"), btnInstr: $("btn-instr"),
     drawer: $("instr-drawer"), drawerTitle: $("instr-title"), drawerClose: $("instr-close"),
     text: $("instr-text"), count: $("instr-count"), stateEl: $("instr-state"), save: $("instr-save"), revert: $("instr-revert"),
     name: $("bd-name"), purpose: $("bd-purpose"), colors: $("bd-colors"), saveDetails: $("bd-save"), detailsState: $("bd-state"),
@@ -475,10 +475,12 @@ export function initBots(ctx) {
   function sync() {
     const id = activeBotId();
     const shown = botById(app.currentBot()); // the badge and the LED colour follow the thread on screen, not just a list selection
-    el.btnInstr.hidden = !id;
-    if (id) el.btnInstr.title = botById(id) ? `Instructions for ${botById(id).name}` : "Instructions";
-    el.topBadge.hidden = !shown;
-    if (shown) paintBadge(el.topBadge, shown);
+    // The header's top-left trigger is the bot's name (with its M face); it opens that bot's settings and instructions.
+    // With no bot (a plain session) it reads "Daebot" and opens the main settings.
+    const trig = botById(id) || shown;
+    el.topName.textContent = trig ? trig.name : "Daebot";
+    el.btnInstr.title = trig ? `Settings and instructions for ${trig.name}` : "Daebot settings";
+    paintBadge(el.topBadge, trig || { face: DEFAULT_FACE, color: DEFAULT_COLOR });
     const accent = shown ? safeColor(shown.color) : "";
     if (accent) document.body.dataset.botAccent = accent; else delete document.body.dataset.botAccent;
     for (const m of document.querySelectorAll(".bot-dock m-bot, .hero-bot")) { if (accent) m.setAttribute("accent", accent); else m.removeAttribute("accent"); }
@@ -724,10 +726,13 @@ export function initBots(ctx) {
     if (routines) routines.close();
     el.drawer.hidden = true;
     el.btnInstr.setAttribute("aria-expanded", "false");
-    if (!el.btnInstr.hidden) el.btnInstr.focus();
+    el.btnInstr.focus();
     renderList();
   }
-  el.btnInstr.addEventListener("click", () => (st.drawerOpen ? closeDrawer() : openDrawer()));
+  el.btnInstr.addEventListener("click", () => {
+    if (!activeBotId()) { if (app.mainSettings) app.mainSettings(); return; }
+    if (st.drawerOpen) closeDrawer(); else openDrawer();
+  });
   el.drawerClose.addEventListener("click", closeDrawer);
 
   el.save.addEventListener("click", async () => {
