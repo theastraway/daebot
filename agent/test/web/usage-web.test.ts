@@ -130,4 +130,5 @@ test("markup: the usage line sits under the name, the switch is an accessible sw
   assert.doesNotMatch(html, /id="plan-text"|class="side-plan"|id="plan-name"/);
   assert.match(read("app.js"), /initUsage\(\{ json, notify \}\)/);
   assert.match(read("account.js"), /if \(onOpen\) onOpen\(\)/, "opening the menu re-reads usage");
+  assert.match(read("style.css"), /@media \(min-width: 561px\) and \(max-height: 760px\) \{\s*\.acct-menu \{ max-height: calc\(100dvh - 90px\); overflow-y: auto/, "a short window scrolls the menu instead of clipping the usage line off the top");
 });

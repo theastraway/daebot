@@ -706,6 +706,11 @@ button.bd-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -
   .acct-menu { max-height: min(78dvh, 560px); overflow-y: auto; overscroll-behavior: contain; }
   .am-sub { position: static; width: auto; max-height: none; box-shadow: none; border: 0; background: var(--surface-2); margin: 2px 4px 4px; }
 }
+/* a short desktop window: the menu (now with the usage detail) scrolls inside the window instead of running off the top, and Switch account opens in place */
+@media (min-width: 561px) and (max-height: 760px) {
+  .acct-menu { max-height: calc(100dvh - 90px); overflow-y: auto; overscroll-behavior: contain; }
+  .am-sub { position: static; width: auto; max-height: none; box-shadow: none; border: 0; background: var(--surface-2); margin: 2px 4px 4px; }
+}
 
 /* ---- per-chat permission mode (composer) ---- */
 /* sits on the composer's column: same 740px measure, and the glyph lines up with the text inside the composer (8px + 1px border + 8px = its 16px + 1px) */
