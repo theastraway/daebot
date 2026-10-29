@@ -1,6 +1,6 @@
 // The message menu: click (desktop) or long-press (touch) a Daebot reply to react, reply, mark unread, copy, select text, copy its
 // request id or report it. A bottom sheet on phones, an anchored card on desktop. Pure UI: app.js supplies what each row does.
-// All text goes through textContent. No innerHTML.
+// All text goes through textContent (the page forbids building markup from strings).
 
 export const QUICK = ["👍", "👎", "❤️", "😂", "🎉", "😮", "🔥", "👀", "🙏", "😢", "💯"];
 const MORE = [

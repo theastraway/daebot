@@ -154,7 +154,7 @@ test("a turn cut off by a server restart is saved as running, then shown as inte
   await new Promise((r) => setTimeout(r, 50));
   const onDisk = JSON.parse(readFileSync(join(dir, "sessions", `${s1.id}.json`), "utf8"));
   assert.equal(onDisk.run.status, "running");
-  assert.deepEqual(onDisk.history[0], { type: "user", text: "write the long report" }, "the user message is on disk before the model answers");
+  assert.deepEqual({ ...onDisk.history[0], id: undefined, rid: undefined }, { type: "user", text: "write the long report", id: undefined, rid: undefined }, "the user message is on disk before the model answers");
 
   const rt2 = createRuntime(baseCfg(), { provider: new FakeProvider([{ text: "second try" }]), fetchImpl: mindOk, store: createFileStore(dir) });
   const hist = rt2.history!(s1.id)!;

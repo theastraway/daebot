@@ -96,8 +96,8 @@ test("the served files are wired: markup, document-level drop handling, paste, p
   const app = read("app.js");
   assert.ok(app.includes('import { initPhotos'));
   assert.ok(app.includes("photos: attached.map"), "photos go in the send body");
-  assert.ok(app.includes("enqueue(tkey(), t, attached)"), "queued messages keep their photos");
-  assert.ok(app.includes("sendMessage(item.text, item.photos)"), "Send now sends the queued photos");
+  assert.ok(app.includes("enqueue(tkey(), t, attached, quote)"), "queued messages keep their photos");
+  assert.ok(app.includes("sendMessage(item.text, item.photos, item.quote)"), "Send now sends the queued photos");
   assert.ok(app.includes('ev.type === "photos"'), "the stored photo ids come back in the first SSE event");
   assert.ok(app.includes("photos.thumbs(it.photos, tkey())"), "the sent bubble shows the thumbnails");
   assert.ok(/photos: ev\.photos/.test(app), "history and re-attached runs carry photos");
