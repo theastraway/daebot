@@ -274,6 +274,7 @@ export function initBots(ctx) {
     el.sessionList.hidden = isBots;
     el.botList.hidden = !isBots;
     el.sideLabel.firstChild.textContent = isBots ? "Bots" : "Sessions";
+    el.btnNew.hidden = isBots; // New bot lives in the sidebar header now
     el.btnNew.querySelector("span").textContent = isBots ? "New bot" : "New session";
     el.btnNew.setAttribute("aria-label", isBots ? "New bot" : "New session");
     sync();
@@ -349,13 +350,12 @@ export function initBots(ctx) {
     const item = h("button", "bot-item"); item.type = "button";
     if (activeBotId() === bot.id) item.setAttribute("aria-current", "true");
     const text = h("span", "bot-text");
-    const nameEl = h("span", "bot-name", bot.name);
-    if (bot.pinned || bot.pinnedAt) { const pm = icon("i-pin"); pm.classList.add("bot-pinmark"); nameEl.append(pm); } // a quiet mark that stays visible; the pin button shows on hover
-    text.append(nameEl, h("span", "bot-purpose", bot.purpose || "No purpose yet"));
+    text.append(h("span", "bot-name", bot.name), h("span", "bot-purpose", bot.purpose || "No purpose yet"));
     const ds = dotState(bot);
     const dot = h("span", `bot-dot ${ds}`);
     dot.setAttribute("role", "img"); dot.setAttribute("aria-label", DOT_LABEL[ds]); dot.title = DOT_LABEL[ds];
     item.append(badge(bot), text, dot);
+    if (bot.pinned || bot.pinnedAt) { const pm = icon("i-pin"); pm.classList.add("bot-pinmark"); pm.setAttribute("aria-hidden", "true"); item.append(pm); } // its own slot at the right edge, beside the status dot
     if (app.exchangeUnread && app.exchangeUnread(bot.id) > 0) { const u = h("i", "xchg-dot"); u.setAttribute("role", "img"); u.setAttribute("aria-label", "Unread agent exchange"); item.append(u); }
     item.addEventListener("click", () => selectBot(bot));
     const head = h("div", `bot-head${bot.pinned || bot.pinnedAt ? " pinned" : ""}${bot.updateAvailable ? " has-upd" : ""}`);
@@ -409,10 +409,10 @@ export function initBots(ctx) {
         if (s.unread) { b.classList.add("unread"); b.title = "Unread"; }
         const m = h("span", "sess-m");
         const bits = [];
-        if (s.peer) bits.push(peerLabel(s.peer, st.bots));
+        if (s.peer) bits.push(peerLabel(s.peer, st.bots).replace(/^from /, ""));
         bits.push(s.surface || "web", ago(s.updatedAt));
-        bits.forEach((t, i) => { if (i) m.append(h("span", "", "·")); m.append(h("span", s.peer && i === 0 ? "peer" : "", t)); });
-        if (s.live) { m.append(h("span", "", "·"), h("span", "live", s.busy ? "working" : "live")); }
+        bits.forEach((t, i) => { if (i) m.append(h("span", "sep", "·")); m.append(h("span", s.peer && i === 0 ? "peer" : "", t)); });
+        if (s.live) { m.append(h("span", "sep", "·"), h("span", "live", s.busy ? "working" : "live")); }
         b.append(h("span", "sess-t", s.title || "Untitled"), m);
         b.addEventListener("click", () => app.openThread({ ...s, bot: s.bot || bot.id }));
         const tr = h("div", "sess-row");
@@ -836,6 +836,8 @@ export function initBots(ctx) {
     bots: () => st.bots,
     bot: (id) => botById(id),
     selected: () => st.selected,
+    /** Search picked a bot: show the Bots view and open its top thread. */
+    pickBot: (id) => { const b = botById(id); if (!b) return; if (st.view !== "bots") setView("bots", { silent: true }); selectBot(b); },
     /** Make sure the bot list is known (a bot thread can be open while the Sessions view is showing). */
     ensureLoaded: async () => { if (!st.botsLoaded) await refresh(); },
   };

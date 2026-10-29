@@ -21,6 +21,8 @@ import { initUsage } from "/usage.js";
 import { initBoard } from "/board.js";
 import { initExchanges } from "/exchanges.js";
 import { initSuggest } from "/suggest.js";
+import { initGift } from "/gift.js";
+import { initSearch } from "/search.js";
 import { initPhotos, normQueue, packQueue, queueLabel, SAYS as PHOTO_SAYS } from "/photos.js";
 import { calendarCapabilities, createDeviceCalls } from "/device-calendar.js";
 import { initMessageMenu, copyText } from "/msgmenu.js";
@@ -1266,6 +1268,12 @@ function openSidebar() { els.sidebar.classList.add("open"); els.scrim.hidden = f
 function closeSidebar() { els.sidebar.classList.remove("open"); els.scrim.hidden = true; }
 els.btnMenu.addEventListener("click", openSidebar);
 els.scrim.addEventListener("click", closeSidebar);
+initGift();
+$("btn-newbot").addEventListener("click", () => { closeSidebar(); bots.openCard(); });
+initSearch({
+  h, getSessions: () => state.sessions, getBots: () => bots.bots(), ensureLoaded: async () => { await bots.ensureLoaded(); try { state.sessions = (await json("/sessions")).sessions; } catch { /* the list on screen */ } },
+  openSession: (s) => selectSession(s, { userClick: true }), openBot: (id) => bots.pickBot(id), closeSidebar,
+});
 els.btnNew.addEventListener("click", () => (bots.view() === "bots" ? bots.openCard() : newSession()));
 els.btnViol.addEventListener("click", () => toggleDrawer(els.drawer.hidden));
 els.drawerClose.addEventListener("click", () => toggleDrawer(false));
