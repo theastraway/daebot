@@ -685,7 +685,18 @@ button.bd-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -
    house trigger treatment (solid surface, 1px hairline, 6px corner). A small return glyph marks each row. */
 .suggest { display: flex; flex-direction: column; align-items: stretch; gap: 1px; padding: 0 0 8px; }
 .suggest[hidden] { display: none; }
-.suggest-label { padding: 0 10px 4px; font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.suggest-label { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px 4px; border: 0; background: none; font: inherit; font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); cursor: pointer; }
+.suggest-label:hover, .suggest-label:focus-visible { color: var(--ink-2); }
+.suggest-count { font-weight: 500; letter-spacing: 0; opacity: .8; }
+.suggest-caret { width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(1px) rotate(-135deg); transition: transform .15s; }
+.suggest.collapsed .suggest-caret { transform: translateY(-2px) rotate(45deg); }
+.suggest.collapsed { padding-bottom: 4px; }
+.suggest-list { display: flex; flex-direction: column; gap: 1px; max-height: 30vh; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+@media (max-width: 640px) {
+  .suggest-list { max-height: 22vh; }
+  .suggest-chip { align-items: center; padding: 5px 10px; }
+  .suggest-chip .suggest-text { display: block; white-space: nowrap; text-overflow: ellipsis; }
+}
 .suggest-chip { display: flex; align-items: baseline; gap: 9px; width: 100%; max-width: 100%; text-align: left; font: inherit; font-size: 13px; line-height: 1.45; padding: 6px 10px; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--ink-2); cursor: pointer; transition: background .12s, border-color .12s, color .12s; }
 .suggest-chip::before { content: "\21B3"; flex: none; font-size: 12px; color: var(--ink-3); transition: color .12s; }
 .suggest-chip .suggest-text { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
