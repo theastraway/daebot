@@ -279,6 +279,11 @@ kbd { font-size: 10.5px; background: var(--surface-2); border: 1px solid var(--l
 .bot-badge { --bot: var(--led); display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 9px; background: var(--plate); color: var(--bot); font: 700 15px/1 var(--display); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08), 0 0 12px -3px color-mix(in srgb, var(--bot) 75%, transparent); text-shadow: 0 0 8px color-mix(in srgb, var(--bot) 80%, transparent); }
 .bot-badge .face-svg { width: 78%; height: 78%; display: block; filter: drop-shadow(0 0 3px color-mix(in srgb, var(--bot) 70%, transparent)); }
 .bot-badge.has-face { text-shadow: none; }
+/* the M Daebot mascot as a bot's icon (web/mbadge.js): no plate, the head is the avatar */
+.bot-badge.has-mbot { width: 40px; height: 40px; border-radius: 0; background: none; box-shadow: none; text-shadow: none; }
+.bot-badge.sm.has-mbot { width: 30px; height: 30px; margin-right: 0; }
+.bot-badge m-bot, .xf m-bot { display: block; width: 100%; height: 100%; }
+.xf.has-mbot { background: none; box-shadow: none; border-radius: 0; overflow: visible; }
 .bot-badge.sm { width: 26px; height: 26px; border-radius: 8px; font-size: 13px; margin-right: 2px; }
 
 .bot-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; min-width: 0; }
@@ -394,6 +399,7 @@ button.bd-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -
 .faces { --bot: var(--led); display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 8px; padding: 2px; }
 .face-opt { display: grid; justify-items: center; gap: 4px; padding: 8px 4px 6px; border: 0; border-radius: 12px; background: var(--surface-2); color: var(--ink-2); font: 600 12px var(--sans); box-shadow: inset 0 0 0 1px var(--line); }
 .face-opt:hover { background: var(--surface); color: var(--ink); }
+.face-opt .face-m { width: 52px; height: 52px; display: block; }
 .face-opt .face-svg { width: 44px; height: 44px; padding: 5px; box-sizing: border-box; border-radius: 10px; background: var(--plate); color: var(--bot); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08), 0 0 12px -4px color-mix(in srgb, var(--bot) 75%, transparent); }
 .face-opt[aria-checked="true"] { color: var(--ink); background: var(--surface); box-shadow: 0 0 0 2px var(--ink); }
 .face-opt:focus-visible, .swatch:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
@@ -621,8 +627,20 @@ button.bd-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -
 .title-edit.head-edit { font: inherit; font-weight: inherit; letter-spacing: inherit; width: min(100%, 520px); padding: 2px 8px; margin: 0; color: var(--ink); background: var(--surface); border: 1px solid var(--accent); border-radius: 8px; outline: none; }
 #title.renamable { cursor: text; }
 #title.renamable:hover { text-decoration: underline dotted var(--ink-3); text-underline-offset: 4px; }
-.bot-head .bot-item { padding-right: 68px; }
-.bot-upd { position: absolute; right: 68px; top: 50%; transform: translateY(-50%); font: 600 11px var(--sans, inherit); padding: 3px 8px; border-radius: 999px; border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent); cursor: pointer; }
+.bot-head .bot-item { padding-right: 10px; }
+.bot-head.pinned .bot-item { padding-right: 36px; }
+.bot-chev { width: 22px; height: 28px; display: grid; place-items: center; padding: 0; color: var(--ink-3); cursor: pointer; margin-right: 1px; }
+.bot-chev .ic { width: 14px; height: 14px; transition: transform .15s; }
+.bot-chev[aria-expanded="true"] .ic { transform: rotate(90deg); }
+.bot-chev:hover { color: var(--ink); }
+.row-pin { right: 66px; }
+.row-pin:hover { color: var(--ink); background: var(--surface-2); }
+.row-pin[aria-pressed="true"] { opacity: 1; color: var(--led-ink, var(--ink)); }
+.row-pin[aria-pressed="true"] .ic { fill: currentColor; }
+.bot-head:hover .row-pin, .bot-head:focus-within .row-pin { opacity: 1; }
+.bot-group { margin: 8px 0 2px 8px; font: 600 11px var(--sans); letter-spacing: .04em; text-transform: uppercase; color: var(--ink-3); }
+@media (prefers-reduced-motion: reduce) { .bot-chev .ic { transition: none; } }
+.bot-upd { position: absolute; right: 98px; top: 50%; transform: translateY(-50%); font: 600 11px var(--sans, inherit); padding: 3px 8px; border-radius: 999px; border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent); cursor: pointer; }
 .bot-upd:hover { background: var(--accent); color: #fff; }
 .ver-line { margin: 0; font-weight: 550; font-size: 14px; color: var(--ink); }
 .ver-notes { margin: 0; padding-left: 18px; font-size: 13px; color: var(--ink-2); display: grid; gap: 4px; }

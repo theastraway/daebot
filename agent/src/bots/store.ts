@@ -242,7 +242,7 @@ export class BotStore implements BotsApi {
     return { ...rec };
   }
 
-  update(id: string, patch: { name?: string; purpose?: string; color?: string; face?: unknown; model?: string | null }): BotRecord {
+  update(id: string, patch: { name?: string; purpose?: string; color?: string; face?: unknown; model?: string | null; pinned?: boolean }): BotRecord {
     const b = ID_RE.test(id) ? this.bots[id] : undefined;
     if (!b) throw new BotError(404, "not_found", "no such bot");
     if (patch.name !== undefined) {
@@ -264,7 +264,12 @@ export class BotStore implements BotsApi {
       if (typeof patch.color !== "string" || !COLOR_RE.test(patch.color.trim())) throw new BotError(400, "bad_color", "color must look like #1a2b3c");
       b.color = patch.color.trim().toLowerCase();
     }
-    b.updatedAt = this.now();
+    if (patch.pinned !== undefined) {
+      if (typeof patch.pinned !== "boolean") throw new BotError(400, "bad_pinned", "pinned must be true or false");
+      if (patch.pinned) { if (!b.pinnedAt) b.pinnedAt = this.now(); } else delete b.pinnedAt;
+    }
+    // Pinning is a view preference, not an edit: a pin-only change does not move "updated".
+    if (Object.keys(patch).some((k) => k !== "pinned" && (patch as Record<string, unknown>)[k] !== undefined)) b.updatedAt = this.now();
     this.save();
     return { ...b };
   }

@@ -9,6 +9,8 @@ export interface BotRecord {
   color: string;
   /** Face id from faces.ts (a personality preset). Absent on bots made before faces: the UI shows the letter badge. */
   face?: string;
+  /** When the user pinned this bot (ms). Absent = not pinned. Pinned bots sort to the top, in the order they were pinned. Saved per user, so it follows web, desktop and phone. */
+  pinnedAt?: number;
   createdAt: number;
   updatedAt: number;
   /** Definition version installed (absent = 1). See versions.ts. */
@@ -43,7 +45,7 @@ export interface BotsApi {
   bySlug(slug: string): BotRecord | undefined;
   create(a: { slug: string; name?: string; purpose?: string; color?: string; face?: unknown }): Promise<BotRecord>;
   /** `model`: a model id sets the override; null or "" clears it. The caller checks the id against the user's model list; the store checks its shape. */
-  update(id: string, patch: { name?: string; purpose?: string; color?: string; face?: unknown; model?: string | null }): BotRecord;
+  update(id: string, patch: { name?: string; purpose?: string; color?: string; face?: unknown; model?: string | null; pinned?: boolean }): BotRecord;
   remove(id: string): Promise<void>;
   /** Moves a bot to the latest definition. Keeps its DAEBOT.md, threads and MIND data. */
   upgrade(id: string): BotRecord;

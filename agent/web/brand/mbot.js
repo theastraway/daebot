@@ -10,10 +10,15 @@
 //   el.say(ms)                            pulse the mouth as if speaking for ms
 //   el.flash(mood, ms)                    show a mood briefly, then return to idle
 //   <m-bot accent="#7dff9a">              tint the lit LEDs (a bot's identity colour); red alert and white twinkle stay as they are
+//   <m-bot face="coach">                  a bot's chosen LED face as the resting expression (see mfaces.js); moods still win
+//   <m-bot lite>                          small-avatar build: no dark LED layer, no glow filter, brighter lit LEDs (readable at ~30px)
+//   <m-bot calm>                          still until el.hot = true (hover), then alive; back to a still frame when hot clears
 //
 // One shared requestAnimationFrame loop drives every live instance; LEDs are only touched when they change.
 
 const NS = "http://www.w3.org/2000/svg";
+import { faceLook } from "./mfaces.js";
+
 const HEAD_SRC = "/brand/daebot-head.webp";
 
 // Screen geometry in the head image's own pixel space (2048 x 2048), measured from the render.
@@ -123,7 +128,7 @@ function tick(now) {
 }
 
 class MBot extends HTMLElement {
-  static get observedAttributes() { return ["mood", "accent"]; }
+  static get observedAttributes() { return ["mood", "accent", "face"]; }
 
   connectedCallback() {
     if (!this._svg) {
@@ -132,13 +137,26 @@ class MBot extends HTMLElement {
       if (this.hasAttribute("playful")) this.addEventListener("click", () => this.flash(PLAY[(Math.random() * PLAY.length) | 0], 1500));
     }
     this._paint(performance.now(), true);
-    if (!this.hasAttribute("still") && !reduce) {
-      const first = !live.size;
-      live.add(this);
-      if (first) requestAnimationFrame(tick);
-    }
+    this._maybeLive();
   }
   disconnectedCallback() { live.delete(this); }
+  _maybeLive() {
+    if (!this.isConnected || this.hasAttribute("still") || reduce) return;
+    if (this.hasAttribute("calm") && !this._hot) return;
+    const first = !live.size;
+    live.add(this);
+    if (first) requestAnimationFrame(tick);
+  }
+  /** For `calm` avatars: true while the pointer is over the avatar or its row. Alive while hot, a still frame otherwise. */
+  get hot() { return !!this._hot; }
+  set hot(v) {
+    v = !!v;
+    if (v === !!this._hot) return;
+    this._hot = v;
+    if (v) { this._maybeLive(); return; }
+    live.delete(this);
+    if (this._svg) { this._svg.style.transform = ""; this._paint(performance.now(), true); }
+  }
   attributeChangedCallback() { if (this._svg) this._paint(performance.now(), true); }
 
   get accent() { const a = this.getAttribute("accent") || ""; return /^#[0-9a-f]{6}$/i.test(a) ? a : LED_ON; }
@@ -156,6 +174,8 @@ class MBot extends HTMLElement {
     svg.setAttribute("viewBox", "100 60 1848 1900");
     svg.setAttribute("role", "img");
     svg.setAttribute("aria-label", "Daebot");
+    const lite = this.hasAttribute("lite");
+    this._lite = lite;
     svg.innerHTML = `
       <defs>
         <clipPath id="k${uid}"><path d="${SCREEN}"/></clipPath>
@@ -165,7 +185,7 @@ class MBot extends HTMLElement {
       <image href="${HEAD_SRC}" x="0" y="0" width="2048" height="2048"/>
       <path d="${SCREEN}" fill="#0c0c0d"/>
       <g class="off" clip-path="url(#k${uid})"></g>
-      <g class="on" clip-path="url(#k${uid})" filter="url(#f${uid})"></g>
+      <g class="on" clip-path="url(#k${uid})"${lite ? "" : ` filter="url(#f${uid})"`}></g>
       <path d="${SCREEN}" fill="url(#s${uid})" pointer-events="none"/>`;
     const off = svg.querySelector(".off"), on = svg.querySelector(".on");
     this._dots = [];
@@ -174,13 +194,16 @@ class MBot extends HTMLElement {
       for (let c = 0; c < COLS; c++) {
         const x = X0 + c * PITCH, y = Y0 + r * PITCH;
         if (!inScreen(x, y)) { row.push(null); continue; }
-        const d = document.createElementNS(NS, "rect");
-        d.setAttribute("x", x - 8); d.setAttribute("y", y - 8); d.setAttribute("width", 16); d.setAttribute("height", 16);
-        d.setAttribute("rx", 3.5); d.setAttribute("fill", LED_OFF);
-        off.append(d);
+        if (!lite) {
+          const d = document.createElementNS(NS, "rect");
+          d.setAttribute("x", x - 8); d.setAttribute("y", y - 8); d.setAttribute("width", 16); d.setAttribute("height", 16);
+          d.setAttribute("rx", 3.5); d.setAttribute("fill", LED_OFF);
+          off.append(d);
+        }
         const l = document.createElementNS(NS, "rect");
-        l.setAttribute("x", x - 10); l.setAttribute("y", y - 10); l.setAttribute("width", 20); l.setAttribute("height", 20);
-        l.setAttribute("rx", 4); l.setAttribute("fill", LED_ON); l.setAttribute("visibility", "hidden");
+        const half = lite ? 15 : 10; // lite LEDs are drawn bigger so the face still reads at 30px
+        l.setAttribute("x", x - half); l.setAttribute("y", y - half); l.setAttribute("width", half * 2); l.setAttribute("height", half * 2);
+        l.setAttribute("rx", lite ? 6 : 4); l.setAttribute("fill", LED_ON); l.setAttribute("visibility", "hidden");
         on.append(l); l._v = 0;
         row.push(l);
       }
@@ -197,9 +220,11 @@ class MBot extends HTMLElement {
   }
 
   _paint(now, force) {
-    const m = MOODS[this.mood] || MOODS.idle;
+    const base = MOODS[this.mood] || MOODS.idle;
+    // a bot's chosen face is its resting expression; any other mood (talking, thinking...) wins while it lasts
+    const m = this.hasAttribute("face") && this.mood === "idle" ? { ...base, ...faceLook(this.getAttribute("face")) } : base;
     const t = (now - this._t0) / 1000;
-    const still = this.hasAttribute("still") || reduce;
+    const still = this.hasAttribute("still") || reduce || (this.hasAttribute("calm") && !this._hot);
 
     // gaze: the pointer when it moved recently, else the mood's gaze, else an occasional idle glance
     let tgx = m.gx ?? 0, tgy = m.gy ?? 0;
@@ -227,6 +252,8 @@ class MBot extends HTMLElement {
       const b = (now - this._blinkAt) / 140;
       if (b >= 0 && b < 1) open = Math.abs(1 - b * 2);
     }
+
+    if (m.maxOpen != null) open = Math.min(open, m.maxOpen);
 
     const talking = m.mouth === "talk" || (this._sayUntil && now < this._sayUntil);
     if (talking && !still) this._talk += (Math.abs(Math.sin(t * 15) * Math.sin(t * 6.1 + 1.3)) - this._talk) * .55;

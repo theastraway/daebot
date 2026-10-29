@@ -1130,7 +1130,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   }
 
   // ---------- bots + models REST (same cookie auth and origin rules as /sessions; one owner's bots are invisible to everyone else) ----------
-  const botView = (b: BotRecord) => ({ id: b.id, slug: b.slug, name: b.name, purpose: b.purpose, color: b.color, face: b.face ?? null, model: b.model ?? null, createdAt: b.createdAt, updatedAt: b.updatedAt, ...versionInfo(b) });
+  const botView = (b: BotRecord) => ({ id: b.id, slug: b.slug, name: b.name, purpose: b.purpose, color: b.color, face: b.face ?? null, model: b.model ?? null, pinned: !!b.pinnedAt, pinnedAt: b.pinnedAt ?? null, createdAt: b.createdAt, updatedAt: b.updatedAt, ...versionInfo(b) });
 
   function botFail(res: ServerResponse, e: unknown): void {
     if (e instanceof BotError) return sendJson(res, e.status, { error: e.code, message: e.message, ...(e.extra ?? {}) });
@@ -1225,7 +1225,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
           if (model === undefined) return sendJson(res, 400, { error: "bad_model", message: "model must be a model id, or null to clear it" });
           if (model) { const bad = await modelProblem(me, model); if (bad) return sendJson(res, bad.status === 402 ? 403 : bad.status, bad.body); }
         }
-        return sendJson(res, 200, { bot: botView(bots.update(id, { name: optStr(b.name, 120), purpose: optStr(b.purpose, 1000), color: optStr(b.color, 20), face: b.face, model })) });
+        if (b.pinned !== undefined && typeof b.pinned !== "boolean") return sendJson(res, 400, { error: "bad_pinned", message: "pinned must be true or false" });
+        return sendJson(res, 200, { bot: botView(bots.update(id, { name: optStr(b.name, 120), purpose: optStr(b.purpose, 1000), color: optStr(b.color, 20), face: b.face, model, pinned: b.pinned })) });
       }
       if (method === "DELETE") {
         await bots.remove(id);

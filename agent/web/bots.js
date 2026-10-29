@@ -8,12 +8,14 @@
 // api()/json() helpers. The pure helpers are exported (and unit tested); everything that touches `document` lives in initBots().
 
 import { confirmDialog, deleteControl, renameControl, isRenaming, botDeleteText, updateText } from "./manage.js";
-import { FACES, faceOf, faceSvg } from "./faces.js";
+import { FACES, faceOf } from "./faces.js";
+import { mascotFor, setMascot, wakeOn } from "./mbadge.js";
 import { groupModels, shortName, LOCKED_NOTE } from "./models.js";
 import { initRoutines } from "./routines.js";
 
 export const VIEW_KEY = "mc_view";
 export const SELECTED_KEY = "mc_bot";
+export const OPEN_KEY = "mc_bots_open";
 export const MAX_INSTRUCTION_BYTES = 8 * 1024;
 export const NAME_MAX = 40;
 export const PURPOSE_MAX = 140;
@@ -40,6 +42,33 @@ export const DEFAULT_FACE = "operator";
 export function safeColor(c) {
   return typeof c === "string" && /^#[0-9a-f]{6}$/i.test(c.trim()) ? c.trim().toLowerCase() : DEFAULT_COLOR;
 }
+
+/** Pinned bots first (in the order they were pinned), then the rest in their given order. */
+export function orderBots(list) {
+  const all = Array.isArray(list) ? list.filter(Boolean) : [];
+  const isPin = (b) => !!(b.pinned || b.pinnedAt);
+  const pinned = all.filter(isPin).sort((a, b) => (a.pinnedAt || 0) - (b.pinnedAt || 0) || String(a.name).localeCompare(String(b.name)));
+  return { pinned, rest: all.filter((b) => !isPin(b)) };
+}
+
+/** The thread to open when a bot is clicked: its most recently updated one, or null when it has none. */
+export function topThread(list) {
+  let top = null;
+  for (const t of Array.isArray(list) ? list : []) {
+    if (!t || typeof t.id !== "string") continue;
+    if (!top || (Number(t.updatedAt) || 0) > (Number(top.updatedAt) || 0)) top = t;
+  }
+  return top;
+}
+
+/** Which bots have their thread list open: remembered per bot. Anything but an array of strings is ignored. */
+export function parseOpen(raw) {
+  try {
+    const a = JSON.parse(raw);
+    return new Set(Array.isArray(a) ? a.filter((x) => typeof x === "string").slice(0, 200) : []);
+  } catch { return new Set(); }
+}
+export function serializeOpen(set) { return JSON.stringify([...set].slice(0, 200)); }
 
 /** The letter shown in a bot's badge. */
 export function initialOf(name) {
@@ -139,23 +168,34 @@ export function initBots(ctx) {
     bots: [], botsLoaded: false, botsError: "",
     selected: store.get("localStorage", SELECTED_KEY) || "",
     expanded: new Set(),
+    mascots: new Map(),
     threads: [], threadsFor: "", cache: new Map(), loading: new Set(),
     drawerBot: "", pinned: false, baseline: "", drafts: new Map(), loadingInstr: false, drawerOpen: false,
     color: DEFAULT_COLOR, face: "", newColor: DEFAULT_COLOR, newFace: DEFAULT_FACE, cardDirty: false, lastFocus: null,
   };
-  if (st.selected) st.expanded.add(st.selected);
+  { // thread lists open or closed per bot, remembered; before anything was remembered the selected bot's list is open (as it used to be)
+    const raw = store.get("localStorage", OPEN_KEY);
+    if (raw == null) { if (st.selected) st.expanded.add(st.selected); } else st.expanded = parseOpen(raw);
+  }
+  const saveOpen = () => store.set("localStorage", OPEN_KEY, serializeOpen(st.expanded));
+  /** A bot's M avatar, kept between list redraws so the LEDs are built once. */
+  function mascot(bot) {
+    let m = st.mascots.get(bot.id);
+    if (!m) { m = mascotFor(bot); st.mascots.set(bot.id, m); } else setMascot(m, bot);
+    return m;
+  }
 
   const botById = (id) => st.bots.find((b) => b.id === id);
   /** The bot the user is working with: the open thread's bot, else the one picked in the list. */
   function activeBotId() { return app.currentBot() || (st.view === "bots" ? st.selected : "") || ""; }
   const activeBot = () => botById(activeBotId());
 
-  /** A bot's badge: its face in its LED colour, else (bots made before faces) the first letter of its name. */
+  /** A bot's badge: the M mascot with the bot's chosen LED face, in its LED colour. */
   function paintBadge(node, bot) {
-    const svg = faceSvg(bot && bot.face);
-    node.classList.toggle("has-face", !!svg);
-    if (svg) node.replaceChildren(svg); else node.textContent = initialOf(bot && bot.name);
+    node.classList.add("has-mbot");
     node.style.setProperty("--bot", safeColor(bot && bot.color));
+    let m = node.querySelector("m-bot");
+    if (!m) { m = mascotFor(bot); node.replaceChildren(m); wakeOn(node, m); } else setMascot(m, bot);
   }
 
   /** LED colour swatches in `box` (a radiogroup): get/set the colour, arrow keys move the choice. */
@@ -195,7 +235,9 @@ export function initBots(ctx) {
         b.setAttribute("role", "radio"); b.setAttribute("aria-checked", String(on)); b.setAttribute("aria-label", `${f.name}: ${f.blurb}`); b.title = `${f.name}: ${f.blurb}`;
         b.tabIndex = on || (!cur && i === 0) ? 0 : -1;
         b.dataset.face = f.id;
-        b.append(faceSvg(f.id), h("span", "face-name", f.name));
+        const fm = mascotFor({ face: f.id, color: color() }); fm.classList.add("face-m");
+        wakeOn(b, fm);
+        b.append(fm, h("span", "face-name", f.name));
         b.addEventListener("click", () => { set(f.id); paint(); box.querySelector('[aria-checked="true"]').focus(); });
         box.append(b);
       });
@@ -216,7 +258,9 @@ export function initBots(ctx) {
   function badge(bot, cls = "") {
     const b = h("span", `bot-badge ${cls}`.trim());
     b.setAttribute("aria-hidden", "true");
-    paintBadge(b, bot);
+    b.classList.add("has-mbot");
+    b.style.setProperty("--bot", safeColor(bot && bot.color));
+    b.append(mascot(bot));
     return b;
   }
 
@@ -287,7 +331,14 @@ export function initBots(ctx) {
       box.append(e);
       return;
     }
-    for (const bot of st.bots) box.append(botRow(bot));
+    for (const id of [...st.mascots.keys()]) if (!botById(id)) st.mascots.delete(id);
+    const { pinned, rest } = orderBots(st.bots);
+    if (pinned.length) {
+      box.append(h("div", "bot-group", "Pinned"));
+      for (const bot of pinned) box.append(botRow(bot));
+      box.append(h("div", "bot-group", "Bots"));
+    }
+    for (const bot of rest) box.append(botRow(bot));
     const ex = app.exchangesGroup && app.exchangesGroup(); // the agent exchanges, with unread dots
     if (ex) box.append(ex);
   }
@@ -296,7 +347,6 @@ export function initBots(ctx) {
     const row = h("div", "bot-row");
     const open = st.expanded.has(bot.id);
     const item = h("button", "bot-item"); item.type = "button";
-    item.setAttribute("aria-expanded", String(open));
     if (activeBotId() === bot.id) item.setAttribute("aria-current", "true");
     const text = h("span", "bot-text");
     text.append(h("span", "bot-name", bot.name), h("span", "bot-purpose", bot.purpose || "No purpose yet"));
@@ -306,14 +356,29 @@ export function initBots(ctx) {
     item.append(badge(bot), text, dot);
     if (app.exchangeUnread && app.exchangeUnread(bot.id) > 0) { const u = h("i", "xchg-dot"); u.setAttribute("role", "img"); u.setAttribute("aria-label", "Unread agent exchange"); item.append(u); }
     item.addEventListener("click", () => selectBot(bot));
-    const head = h("div", "bot-head");
-    head.append(item);
+    const head = h("div", `bot-head${bot.pinned || bot.pinnedAt ? " pinned" : ""}`);
+    // The disclosure chevron only shows or hides this bot's threads; clicking the row itself opens the bot's top thread.
+    const chev = h("button", "bot-chev side-icon"); chev.type = "button";
+    chev.setAttribute("aria-expanded", String(open)); chev.dataset.botId = bot.id;
+    const label = `${open ? "Hide" : "Show"} threads for ${bot.name}`;
+    chev.setAttribute("aria-label", label); chev.title = label;
+    chev.append(icon("i-chev"));
+    chev.addEventListener("click", () => toggleThreads(bot));
+    head.append(chev, item);
     if (bot.updateAvailable) {
       const up = h("button", "bot-upd", "Update"); up.type = "button"; up.title = updateText(bot.version, bot.latestVersion).available;
       up.setAttribute("aria-label", `Update ${bot.name}: ${updateText(bot.version, bot.latestVersion).available}`);
       up.addEventListener("click", (e) => { e.stopPropagation(); updateBot(bot.id); });
       head.append(up);
     }
+    const pin = h("button", "row-del row-pin"); pin.type = "button";
+    const pinned = !!(bot.pinned || bot.pinnedAt);
+    const pinLabel = `${pinned ? "Unpin" : "Pin"} ${bot.name}`;
+    pin.setAttribute("aria-label", pinLabel); pin.title = pinned ? "Unpin" : "Pin to top";
+    pin.setAttribute("aria-pressed", String(pinned));
+    pin.append(icon("i-pin"));
+    pin.addEventListener("click", (e) => { e.stopPropagation(); setPinned(bot, !pinned); });
+    head.append(pin);
     head.append(deleteControl(head, icon, `Delete bot ${bot.name}`, () => deleteBot(bot.id)));
     // Bot settings: the gear opens this bot's settings (model, instructions, name, face) without opening or closing the row.
     const gear = h("button", "row-del row-gear"); gear.type = "button";
@@ -323,6 +388,7 @@ export function initBots(ctx) {
     gear.append(icon("i-gear"));
     gear.addEventListener("click", (e) => { e.stopPropagation(); openSettings(bot.id); });
     head.append(gear);
+    wakeOn(head, mascot(bot));
     row.append(head);
     if (open) {
       const sub = h("div", "bot-threads");
@@ -358,13 +424,49 @@ export function initBots(ctx) {
     return row;
   }
 
+  /** Show or hide a bot's thread list (remembered per bot). Does not touch the chat. */
+  async function toggleThreads(bot) {
+    if (st.expanded.has(bot.id)) st.expanded.delete(bot.id); else st.expanded.add(bot.id);
+    saveOpen();
+    renderList();
+    if (st.expanded.has(bot.id) && !st.cache.has(bot.id)) await loadThreads(bot.id, { cacheOnly: true, quiet: true });
+    for (const c of el.botList.querySelectorAll(".bot-chev")) if (c.dataset.botId === bot.id) c.focus();
+  }
+
+  /** Click a bot: select it and put its top thread in the chat (or a fresh thread when it has none). The previous bot's chat never stays. */
+  let selectSeq = 0;
   async function selectBot(bot) {
-    const wasOpen = st.expanded.has(bot.id) && st.selected === bot.id;
+    const seq = ++selectSeq;
     st.selected = bot.id;
     store.set("localStorage", SELECTED_KEY, bot.id);
-    if (wasOpen) st.expanded.delete(bot.id); else st.expanded.add(bot.id);
     renderList(); sync();
-    if (!wasOpen) await loadThreads(bot.id);
+    if (app.currentBot() === bot.id) return; // already in this bot's chat (a thread or its draft): stay put
+    let list = [];
+    try { list = (await json(`/sessions?bot=${encodeURIComponent(bot.id)}`)).sessions || []; st.cache.set(bot.id, list); }
+    catch (e) { if (e.message === "unauthorized") return; list = st.cache.get(bot.id) || []; }
+    if (seq !== selectSeq) return; // another bot was clicked while this one loaded
+    const top = topThread(list);
+    if (top) { st.threads = list; st.threadsFor = bot.id; await app.openThread({ ...top, bot: top.bot || bot.id }); }
+    else app.newThread(bot.id);
+  }
+
+  /** Pin or unpin a bot. Saved on the server, per user, so it follows web, desktop and phone. Optimistic, rolled back on failure. */
+  async function setPinned(bot, pinned) {
+    const prev = { pinned: bot.pinned, pinnedAt: bot.pinnedAt };
+    bot.pinned = pinned; bot.pinnedAt = pinned ? Date.now() : null;
+    renderList();
+    try {
+      const res = await api(`/bots/${encodeURIComponent(bot.id)}`, { method: "PATCH", body: JSON.stringify({ pinned }) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const b = await res.json().catch(() => ({}));
+      const saved = b && b.bot;
+      if (saved) { bot.pinned = !!saved.pinned; bot.pinnedAt = saved.pinnedAt || null; }
+    } catch (e) {
+      if (e.message === "unauthorized") return;
+      bot.pinned = prev.pinned; bot.pinnedAt = prev.pinnedAt;
+      notify(`Could not ${pinned ? "pin" : "unpin"} ${bot.name}.`);
+    }
+    renderList();
   }
 
   // ---------------------------------------------------------------- active bot: badge, accent, Instructions button
