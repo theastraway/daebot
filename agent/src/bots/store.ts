@@ -8,6 +8,7 @@ import { join } from "node:path";
 import type { MindClient } from "../types.ts";
 import { LATEST_BOT_VERSION } from "./versions.ts";
 import { isFaceId } from "./faces.ts";
+import { validModelId } from "../settings.ts";
 import { BotError, MAX_INSTRUCTIONS_BYTES, SLUG_RE, safeUpgradeUrl } from "./types.ts";
 import type { BotRecord, BotsApi, RosterEntry } from "./types.ts";
 
@@ -241,7 +242,7 @@ export class BotStore implements BotsApi {
     return { ...rec };
   }
 
-  update(id: string, patch: { name?: string; purpose?: string; color?: string; face?: unknown }): BotRecord {
+  update(id: string, patch: { name?: string; purpose?: string; color?: string; face?: unknown; model?: string | null }): BotRecord {
     const b = ID_RE.test(id) ? this.bots[id] : undefined;
     if (!b) throw new BotError(404, "not_found", "no such bot");
     if (patch.name !== undefined) {
@@ -253,6 +254,11 @@ export class BotStore implements BotsApi {
     if (patch.face !== undefined) {
       const face = parseFace(patch.face);
       if (face) b.face = face; else delete b.face;
+    }
+    if (patch.model !== undefined) {
+      if (patch.model === null || patch.model === "") delete b.model;
+      else if (!validModelId(patch.model)) throw new BotError(400, "bad_model", "that is not a valid model id");
+      else b.model = patch.model;
     }
     if (patch.color !== undefined) {
       if (typeof patch.color !== "string" || !COLOR_RE.test(patch.color.trim())) throw new BotError(400, "bad_color", "color must look like #1a2b3c");

@@ -533,10 +533,14 @@ button.bd-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -
 .row-del .ic { width: 16px; height: 16px; }
 .sess-row:hover .row-del, .bot-head:hover .row-del, .row-del:focus-visible, .sess-row:focus-within .row-del, .bot-head:focus-within .row-del { opacity: 1; }
 .row-del:hover { color: var(--accent); background: var(--accent-soft); }
+.row-gear { right: 36px; }
+.row-gear:hover { color: var(--ink); background: var(--surface-2); }
+.row-gear[aria-expanded="true"] { opacity: 1; color: var(--ink); }
+.sess-row:hover .row-gear, .bot-head:hover .row-gear, .row-gear:focus-visible, .bot-head:focus-within .row-gear { opacity: 1; }
 @media (hover: none), (max-width: 900px) { .row-del { opacity: .75; } }
 .sess-row .sess { padding-right: 38px; }
-.bot-head .bot-item { padding-right: 38px; }
-.bot-upd { position: absolute; right: 38px; top: 50%; transform: translateY(-50%); font: 600 11px var(--sans, inherit); padding: 3px 8px; border-radius: 999px; border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent); cursor: pointer; }
+.bot-head .bot-item { padding-right: 68px; }
+.bot-upd { position: absolute; right: 68px; top: 50%; transform: translateY(-50%); font: 600 11px var(--sans, inherit); padding: 3px 8px; border-radius: 999px; border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent); cursor: pointer; }
 .bot-upd:hover { background: var(--accent); color: #fff; }
 .ver-line { margin: 0; font-weight: 550; font-size: 14px; color: var(--ink); }
 .ver-notes { margin: 0; padding-left: 18px; font-size: 13px; color: var(--ink-2); display: grid; gap: 4px; }
@@ -718,3 +722,9 @@ button.bd-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -
 .photo-view img { max-width: min(96vw, 1568px); max-height: 88dvh; border-radius: 10px; object-fit: contain; }
 .photo-view-x { position: absolute; top: calc(12px + env(safe-area-inset-top)); right: 12px; width: 40px; height: 40px; display: grid; place-items: center; border: 0; border-radius: 50%; background: rgba(255,255,255,.14); color: #fff; }
 @media (max-width: 560px) { .msg-photo img { height: 112px; } .msg-photo.loading, .msg-photo.gone { width: 112px; height: 112px; } .attach-thumb { width: 56px; height: 56px; } }
+
+/* a bot thread whose bot has its own model: the header badge shows it, with a small note (models.js setPinned) */
+#model-badge[data-pinned="1"] .mb-via { font-size: 10.5px; color: var(--ink-3); margin-left: 4px; white-space: nowrap; }
+#model-badge[data-pinned="1"] .mb-chev { display: none; }
+@media (max-width: 520px) { #model-badge[data-pinned="1"] .mb-via { display: none; } }
+select.fld { appearance: auto; }

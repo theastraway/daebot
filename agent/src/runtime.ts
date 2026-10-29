@@ -14,6 +14,7 @@ import { createBotTalkTool } from "./bots/talk-tool.ts";
 import type { BotRecord, BotsContext, RosterEntry } from "./bots/types.ts";
 import { MAX_INSTRUCTIONS_BYTES } from "./bots/types.ts";
 import { createSettings, validModelId } from "./settings.ts";
+import { resolveTurnModel } from "./bots/model.ts";
 import { botsEnabled } from "./bots/flag.ts";
 import { BootCache } from "./mind/boot-cache.ts";
 import { ConnectedApps, connectedAppsLines } from "./mind/connected.ts";
@@ -429,7 +430,8 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         // A function: DAEBOT.md edits, renames and roster changes apply on the very next message.
         systemPrompt: () => {
           const live = botId ? botStore?.get(botId) ?? botRec : undefined;
-          const used = curModel ?? userDefault();
+          // A bot's own model (Bot settings) is what its threads run on; the prompt must say the same.
+          const used = resolveTurnModel({ botModel: live?.model, sessionModel: curModel, userDefault: userDefault() });
           return composeSystemPrompt({
             identity: live ? botIdentity(live, hosted?.username) : hosted?.persona, tier, bootContext, surface: opts.surface, cwd,
             model: used ?? (mindBilled ? `${cfg.models.default} on paid MIND plans and ${cfg.freeModel} on the free MIND plan (Explorer)` : cfg.models.default),
@@ -493,6 +495,9 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
           if (!botRec && overrides.mcpConnect?.enabled()) { try { await overrides.mcpConnect.prepare(ownerKey, 5000); } catch { /* the last good read stands */ } }
           // Read the user's connected apps before the model is called, so this turn's prompt names them (cached; a failed read is remembered and said plainly).
           if (!botRec && appsOn()) { try { await connectedApps.refresh(false, o?.signal); } catch { /* the prompt says the read failed */ } }
+          // A bot's thread runs on the bot's model, read fresh every turn (set or cleared in Bot settings, no reopen needed).
+          // Main and other bots' sessions are never touched here.
+          if (botId) inner.setModel?.(resolveTurnModel({ botModel: botStore?.get(botId)?.model, sessionModel: curModel, userDefault: userDefault() }));
           for await (const ev of inner.send(messageWithPhotos(msg, photos), o)) {
             entry.recorder.push(ev);
             if (ev.type === "done") { entry.updatedAt = Date.now(); run.status = "done"; run.updatedAt = Date.now(); persist(id); }

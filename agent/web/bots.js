@@ -9,6 +9,7 @@
 
 import { confirmDialog, deleteControl, botDeleteText, updateText } from "./manage.js";
 import { FACES, faceOf, faceSvg } from "./faces.js";
+import { groupModels, shortName, LOCKED_NOTE } from "./models.js";
 
 export const VIEW_KEY = "mc_view";
 export const SELECTED_KEY = "mc_bot";
@@ -122,7 +123,7 @@ export function initBots(ctx) {
     drawer: $("instr-drawer"), drawerTitle: $("instr-title"), drawerClose: $("instr-close"),
     text: $("instr-text"), count: $("instr-count"), stateEl: $("instr-state"), save: $("instr-save"), revert: $("instr-revert"),
     name: $("bd-name"), purpose: $("bd-purpose"), colors: $("bd-colors"), saveDetails: $("bd-save"), detailsState: $("bd-state"),
-    faces: $("bd-faces"), faceDesc: $("bd-face-desc"), bnFaces: $("bn-faces"), bnFaceDesc: $("bn-face-desc"), bnColors: $("bn-colors"),
+    model: $("bd-model"), modelState: $("bd-model-state"), faces: $("bd-faces"), faceDesc: $("bd-face-desc"), bnFaces: $("bn-faces"), bnFaceDesc: $("bn-face-desc"), bnColors: $("bn-colors"),
     del: $("bd-delete"), verText: $("bd-ver-text"), verCurrent: $("bd-ver-current"), verNotes: $("bd-ver-notes"), verBtn: $("bd-update"),
     card: $("bot-new"), cardForm: $("bot-new-form"), bnName: $("bn-name"), bnPurpose: $("bn-purpose"), bnInstr: $("bn-instr"),
     bnErr: $("bn-err"), bnCreate: $("bn-create"), bnCancel: $("bn-cancel"),
@@ -137,7 +138,7 @@ export function initBots(ctx) {
     selected: store.get("localStorage", SELECTED_KEY) || "",
     expanded: new Set(),
     threads: [], threadsFor: "", cache: new Map(), loading: new Set(),
-    drawerBot: "", baseline: "", drafts: new Map(), loadingInstr: false, drawerOpen: false,
+    drawerBot: "", pinned: false, baseline: "", drafts: new Map(), loadingInstr: false, drawerOpen: false,
     color: DEFAULT_COLOR, face: "", newColor: DEFAULT_COLOR, newFace: DEFAULT_FACE, cardDirty: false, lastFocus: null,
   };
   if (st.selected) st.expanded.add(st.selected);
@@ -308,6 +309,14 @@ export function initBots(ctx) {
       head.append(up);
     }
     head.append(deleteControl(head, icon, `Delete bot ${bot.name}`, () => deleteBot(bot.id)));
+    // Bot settings: the gear opens this bot's settings (model, instructions, name, face) without opening or closing the row.
+    const gear = h("button", "row-del row-gear"); gear.type = "button";
+    gear.setAttribute("aria-label", `Bot settings for ${bot.name}`); gear.title = `Bot settings for ${bot.name}`;
+    gear.setAttribute("aria-expanded", String(st.drawerOpen && st.drawerBot === bot.id));
+    gear.dataset.botId = bot.id;
+    gear.append(icon("i-gear"));
+    gear.addEventListener("click", (e) => { e.stopPropagation(); openSettings(bot.id); });
+    head.append(gear);
     row.append(head);
     if (open) {
       const sub = h("div", "bot-threads");
@@ -360,7 +369,8 @@ export function initBots(ctx) {
     const accent = shown ? safeColor(shown.color) : "";
     if (accent) document.body.dataset.botAccent = accent; else delete document.body.dataset.botAccent;
     for (const m of document.querySelectorAll(".bot-dock m-bot, .hero-bot")) { if (accent) m.setAttribute("accent", accent); else m.removeAttribute("accent"); }
-    if (st.drawerOpen && !id) closeDrawer();
+    if (st.drawerOpen && st.pinned) { /* opened from a row's gear: it stays on that bot until closed */ }
+    else if (st.drawerOpen && !id) closeDrawer();
     else if (st.drawerOpen && id !== st.drawerBot) openDrawer(); // another bot became active while the drawer is open
     markCurrent();
   }
@@ -490,13 +500,66 @@ export function initBots(ctx) {
     el.purpose.value = bot ? bot.purpose || "" : "";
     st.color = safeColor(bot && bot.color);
     st.face = faceOf(bot && bot.face) ? bot.face : "";
-    paintColors(); paintFaces();
+    paintColors(); paintFaces(); paintModel(bot);
+    if (el.modelState) el.modelState.textContent = "";
     el.detailsState.textContent = "";
     el.saveDetails.disabled = true;
     paintVersion(bot);
   }
   const paintColors = mountSwatches(el.colors, () => st.color, (c) => { st.color = c; paintFaces(); detailsChanged(); });
   const paintFaces = el.faces ? mountFaces(el.faces, el.faceDesc, () => st.face, (f) => { st.face = f; detailsChanged(); }, () => st.color) : () => {};
+  // ---- Model (the bot's LLM override). Saves on change: this bot's threads run on it, whatever the header says.
+  let modelRows = [];
+  function fillModelSelect(bot) {
+    const sel = el.model;
+    sel.replaceChildren();
+    const none = document.createElement("option"); none.value = ""; none.textContent = "Use default (whatever is chosen)";
+    sel.append(none);
+    for (const g of groupModels(modelRows)) {
+      const og = document.createElement("optgroup"); og.label = g.provider;
+      for (const r of g.models) {
+        const o = document.createElement("option"); o.value = r.id;
+        o.textContent = shortName(r.name, g.provider) + (r.free ? " (free)" : "") + (r.allowed ? "" : ` \u00b7 ${LOCKED_NOTE}`);
+        if (!r.allowed) o.disabled = true;
+        og.append(o);
+      }
+      sel.append(og);
+    }
+    const cur = bot && bot.model ? bot.model : "";
+    if (cur && ![...sel.options].some((o) => o.value === cur)) { // a model the list no longer carries: still shown, so it is never silently dropped
+      const o = document.createElement("option"); o.value = cur; o.textContent = cur; sel.append(o);
+    }
+    sel.value = cur;
+  }
+  function paintModel(bot) {
+    if (!el.model) return;
+    fillModelSelect(bot);
+    const id = bot && bot.id;
+    if (typeof app.modelRows === "function") {
+      Promise.resolve(app.modelRows()).then((rows) => {
+        if (!Array.isArray(rows) || st.drawerBot !== id) return;
+        modelRows = rows; fillModelSelect(botById(id));
+      }).catch(() => {});
+    }
+  }
+  el.model && el.model.addEventListener("change", async () => {
+    const id = st.drawerBot, bot = botById(id);
+    if (!bot) return;
+    const want = el.model.value;
+    if ((bot.model || "") === want) return;
+    el.model.disabled = true; el.modelState.textContent = "Saving model…";
+    try {
+      const res = await api(`/bots/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ model: want || null }) });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) { el.modelState.textContent = botErrorMessage(res.status, body).text; el.model.value = bot.model || ""; el.model.disabled = false; return; }
+      Object.assign(bot, body.bot || body, { id });
+      el.modelState.textContent = want ? "Model saved. This bot's threads use it from the next message." : "Model cleared. Threads use the normal choice again.";
+      el.model.disabled = false;
+      renderList(); sync();
+      app.botChanged(bot);
+    } catch (e) { if (e.message !== "unauthorized") { el.modelState.textContent = "Could not save the model. Try again."; el.model.value = bot.model || ""; } el.model.disabled = false; }
+  });
+
   function detailsChanged() {
     const bot = botById(st.drawerBot);
     if (!bot) return;
@@ -508,16 +571,24 @@ export function initBots(ctx) {
   el.purpose.addEventListener("input", detailsChanged);
 
 
-  async function openDrawer() {
-    const id = activeBotId();
+  /** The row's gear: settings for THAT bot, whichever thread is open. Toggles when it is already showing that bot. */
+  function openSettings(id) {
+    if (st.drawerOpen && st.drawerBot === id) { closeDrawer(); return; }
+    if (!botById(id)) return;
+    openDrawer(id);
+  }
+  async function openDrawer(forId) {
+    const id = forId || activeBotId();
     const bot = botById(id);
     if (!id || !bot) return;
     app.closeViolations();
+    st.pinned = !!forId && forId !== activeBotId();
     st.drawerBot = id; st.drawerOpen = true;
     el.drawer.hidden = false;
     el.btnInstr.setAttribute("aria-expanded", "true");
-    el.drawerTitle.textContent = `${bot.name} instructions`;
+    el.drawerTitle.textContent = `${bot.name} settings`;
     paintDetails(bot);
+    renderList();
     st.loadingInstr = true; delete el.stateEl.dataset.saved;
     el.text.disabled = true; el.text.value = ""; el.stateEl.textContent = "Loading…"; paintEditor();
     let text = "", updatedAt = 0, failed = false;
@@ -535,10 +606,11 @@ export function initBots(ctx) {
   }
   function closeDrawer() {
     if (!st.drawerOpen) return;
-    st.drawerOpen = false;
+    st.drawerOpen = false; st.pinned = false;
     el.drawer.hidden = true;
     el.btnInstr.setAttribute("aria-expanded", "false");
     if (!el.btnInstr.hidden) el.btnInstr.focus();
+    renderList();
   }
   el.btnInstr.addEventListener("click", () => (st.drawerOpen ? closeDrawer() : openDrawer()));
   el.drawerClose.addEventListener("click", closeDrawer);
@@ -575,7 +647,7 @@ export function initBots(ctx) {
       const body = await res.json().catch(() => ({}));
       if (!res.ok) { el.detailsState.textContent = botErrorMessage(res.status, body).text; el.saveDetails.disabled = false; return; }
       Object.assign(bot, body.bot || body, { id });
-      el.drawerTitle.textContent = `${bot.name} instructions`;
+      el.drawerTitle.textContent = `${bot.name} settings`;
       el.detailsState.textContent = "Saved";
       el.saveDetails.disabled = true;
       renderList(); sync();
@@ -639,6 +711,8 @@ export function initBots(ctx) {
     renderList,
     openCard,
     closeDrawer,
+    /** Open Bot settings for a bot (the header's "set by bot" badge uses it). */
+    openSettings: (id) => { if (!(st.drawerOpen && st.drawerBot === id)) openSettings(id); },
     drawerOpen: () => st.drawerOpen,
     cardOpen: () => !el.card.hidden,
     threads: () => st.threads,

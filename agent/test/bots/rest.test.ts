@@ -438,3 +438,47 @@ test("bot update + delete over REST: a new bot is on the latest; POST /bots/:id/
     assert.deepEqual((await r.call(alice, "GET", "/bots")).json.bots, []);
   } finally { await r.close(); }
 });
+
+test("bot model override over REST: validated against the model list, pinned to that bot's threads only, header PATCH refused on a pinned thread, clearing works", async () => {
+  const r = await rig();
+  try {
+    const alice = await r.login(r.keys.alice), bob = await r.login(r.keys.bob);
+    const sales = (await r.call(alice, "POST", "/bots", { slug: "sales", name: "Sales" })).json.bot;
+    const ops = (await r.call(alice, "POST", "/bots", { slug: "ops", name: "Ops" })).json.bot;
+    assert.equal(sales.model, null);
+    // validation: unknown to the list, malformed, wrong type
+    assert.equal((await r.call(alice, "PATCH", `/bots/${sales.id}`, { model: "not/in-the-list" })).status, 400);
+    assert.equal((await r.call(alice, "PATCH", `/bots/${sales.id}`, { model: "bad model!" })).status, 400);
+    assert.equal((await r.call(alice, "PATCH", `/bots/${sales.id}`, { model: 5 })).status, 400);
+    assert.equal((await r.call(alice, "GET", `/bots/${sales.id}`)).json.bot.model, null, "a refused model changes nothing");
+    // another owner cannot set it
+    assert.equal((await r.call(bob, "PATCH", `/bots/${sales.id}`, { model: "vendor/big" })).status, 404);
+    // set it
+    const set = await r.call(alice, "PATCH", `/bots/${sales.id}`, { model: "vendor/big" });
+    assert.equal(set.status, 200, set.raw);
+    assert.equal(set.json.bot.model, "vendor/big");
+    assert.equal((await r.call(alice, "GET", "/bots")).json.bots.find((b: any) => b.id === sales.id).model, "vendor/big");
+    // a rename keeps it
+    assert.equal((await r.call(alice, "PATCH", `/bots/${sales.id}`, { name: "Sales 2" })).json.bot.model, "vendor/big");
+    const turn = async (id: string, text: string) => { await http(r.gw.url, "POST", `/sessions/${id}/send`, { headers: alice, body: { text } }); return r.provider.requests.at(-1)!.model; };
+    const botThread = (await r.call(alice, "POST", "/sessions", { surface: "web", bot: sales.id })).json.sessionId;
+    const opsThread = (await r.call(alice, "POST", "/sessions", { surface: "web", bot: ops.id, model: "vendor/small" })).json.sessionId;
+    const main = (await r.call(alice, "POST", "/sessions", { surface: "web", model: "vendor/small" })).json.sessionId;
+    assert.equal(await turn(botThread, "a"), "vendor/big", "the bot thread runs on the bot's model");
+    assert.equal(await turn(opsThread, "b"), "vendor/small", "another bot is unaffected");
+    assert.equal(await turn(main, "c"), "vendor/small", "the main session follows the header choice");
+    // the header cannot move a pinned thread
+    const pin = await r.call(alice, "PATCH", `/sessions/${botThread}`, { model: "vendor/small" });
+    assert.equal(pin.status, 409);
+    assert.equal(pin.json.error, "model_set_by_bot");
+    assert.equal(await turn(botThread, "d"), "vendor/big");
+    // the main session can still be changed freely
+    assert.equal((await r.call(alice, "PATCH", `/sessions/${main}`, { model: "vendor/big" })).status, 200);
+    // clear it: the thread follows the normal choice again
+    const clear = await r.call(alice, "PATCH", `/bots/${sales.id}`, { model: null });
+    assert.equal(clear.json.bot.model, null);
+    assert.equal(await turn(botThread, "e"), "m/default");
+    assert.equal((await r.call(alice, "PATCH", `/sessions/${botThread}`, { model: "vendor/small" })).status, 200, "unpinned again");
+    assert.equal(await turn(botThread, "f"), "vendor/small");
+  } finally { await r.close(); }
+});

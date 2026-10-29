@@ -13,6 +13,8 @@ export interface BotRecord {
   updatedAt: number;
   /** Definition version installed (absent = 1). See versions.ts. */
   version?: number;
+  /** LLM override: every turn of THIS bot's threads runs on this model, whatever the header/global choice is. Absent = no override. */
+  model?: string;
 }
 
 /** One line of the roster shown to the model (sessions and bots alike). */
@@ -40,7 +42,8 @@ export interface BotsApi {
   get(id: string): BotRecord | undefined;
   bySlug(slug: string): BotRecord | undefined;
   create(a: { slug: string; name?: string; purpose?: string; color?: string; face?: unknown }): Promise<BotRecord>;
-  update(id: string, patch: { name?: string; purpose?: string; color?: string; face?: unknown }): BotRecord;
+  /** `model`: a model id sets the override; null or "" clears it. The caller checks the id against the user's model list; the store checks its shape. */
+  update(id: string, patch: { name?: string; purpose?: string; color?: string; face?: unknown; model?: string | null }): BotRecord;
   remove(id: string): Promise<void>;
   /** Moves a bot to the latest definition. Keeps its DAEBOT.md, threads and MIND data. */
   upgrade(id: string): BotRecord;

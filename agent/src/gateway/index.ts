@@ -1014,7 +1014,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   }
 
   // ---------- bots + models REST (same cookie auth and origin rules as /sessions; one owner's bots are invisible to everyone else) ----------
-  const botView = (b: BotRecord) => ({ id: b.id, slug: b.slug, name: b.name, purpose: b.purpose, color: b.color, face: b.face ?? null, createdAt: b.createdAt, updatedAt: b.updatedAt, ...versionInfo(b) });
+  const botView = (b: BotRecord) => ({ id: b.id, slug: b.slug, name: b.name, purpose: b.purpose, color: b.color, face: b.face ?? null, model: b.model ?? null, createdAt: b.createdAt, updatedAt: b.updatedAt, ...versionInfo(b) });
 
   function botFail(res: ServerResponse, e: unknown): void {
     if (e instanceof BotError) return sendJson(res, e.status, { error: e.code, message: e.message, ...(e.extra ?? {}) });
@@ -1073,7 +1073,14 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       }
       if (method === "PATCH") {
         const b = await readJson(req);
-        return sendJson(res, 200, { bot: botView(bots.update(id, { name: optStr(b.name, 120), purpose: optStr(b.purpose, 1000), color: optStr(b.color, 20), face: b.face })) });
+        // Bot model override: a model id from the user's own list sets it; null or "" clears it (its threads go back to the normal choice).
+        let model: string | null | undefined;
+        if (b.model !== undefined) {
+          model = b.model === null || b.model === "" ? null : optStr(b.model, 130);
+          if (model === undefined) return sendJson(res, 400, { error: "bad_model", message: "model must be a model id, or null to clear it" });
+          if (model) { const bad = await modelProblem(me, model); if (bad) return sendJson(res, bad.status === 402 ? 403 : bad.status, bad.body); }
+        }
+        return sendJson(res, 200, { bot: botView(bots.update(id, { name: optStr(b.name, 120), purpose: optStr(b.purpose, 1000), color: optStr(b.color, 20), face: b.face, model })) });
       }
       if (method === "DELETE") {
         await bots.remove(id);
@@ -1102,6 +1109,13 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (dflt && (await modelProblem(me, dflt))?.status === 402) {
       rt.settings?.set({ defaultModel: null });
       notice = `Your default model (${dflt}) is not on your plan. Using the free model.`;
+    }
+    // A bot's own model that is no longer on the plan is cleared, so its threads fall back to the normal choice.
+    const botId = rt.sessionInfo?.(id)?.bot;
+    const bm = botId ? rt.bots?.get(botId)?.model : undefined;
+    if (botId && bm && bm !== free && (await modelProblem(me, bm))?.status === 402) {
+      rt.bots!.update(botId, { model: null });
+      notice = `This bot's model (${bm}) is not on your plan. Its threads use the normal model again.`;
     }
     const cur = rt.sessionInfo?.(id)?.model;
     if (cur && cur !== free && (await modelProblem(me, cur))?.status === 402) {
@@ -1354,6 +1368,9 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         if (!manager.runtimeOf(me.id).history?.(id)) return sendJson(res, 404, { error: "no such session" });
         try { target = await manager.open({ surface: "web", resumeId: id, owner: me.id }); } catch (e) { if (e instanceof ForbiddenError) throw e; return sendJson(res, 404, { error: "no such session" }); }
       }
+      // A bot thread whose bot has its own model is pinned to it: change it in Bot settings (it would be ignored here anyway).
+      const brec = target.bot ? manager.runtimeOf(me.id).bots?.get(target.bot) : undefined;
+      if (brec?.model) return sendJson(res, 409, { error: "model_set_by_bot", message: "This thread uses the model set in its bot's settings. Change it there.", model: brec.model });
       return sendJson(res, manager.setModel(id, model || undefined) ? 200 : 409, { ok: true, model: model || null });
     }
 
