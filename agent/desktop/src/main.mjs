@@ -19,6 +19,7 @@ import { migrateHome } from "./lib/home.mjs";
 import { applyKeepWorking } from "./lib/keepworking.mjs";
 import { installMediaPermissions } from "./lib/media-permission.mjs";
 import { buildAppMenuTemplate, buildTrayTemplate } from "./lib/menu.mjs";
+import { isOverlayPlatform, windowChromeOptions, titleBarOverlayFor, shortcutAction, runShortcut } from "./lib/winchrome.mjs";
 import { buildLoadUrl, classifyUrl, originOf, redactUrl } from "./lib/allowlist.mjs";
 import { buildConfirmNotification, createRateLimiter, shouldNotify, validateNotifyPayload } from "./lib/notify.mjs";
 import { ConfirmWatcher } from "./lib/watcher.mjs";
@@ -102,7 +103,7 @@ function createWindow() {
     show: false,
     title: "Daebot",
     backgroundColor: nativeTheme.shouldUseDarkColors ? "#14161c" : "#f6f6f4",
-    titleBarStyle: "hiddenInset",
+    ...windowChromeOptions(process.platform, nativeTheme.shouldUseDarkColors),
     webPreferences: {
       preload: join(here, "preload.cjs"),
       contextIsolation: true,
@@ -116,6 +117,16 @@ function createWindow() {
   });
   if (b.maximized) win.maximize();
   const wc = win.webContents;
+  if (isOverlayPlatform(process.platform)) {
+    win.removeMenu();
+    // No menu bar on Windows and Linux, so the shortcuts the menu gave us (copy, paste, reload, zoom, devtools...) live here.
+    wc.on("before-input-event", (e, input) => {
+      const action = shortcutAction(input, process.platform);
+      if (!action) return;
+      e.preventDefault();
+      runShortcut(action, { wc, win, handlers });
+    });
+  }
 
   wc.setWindowOpenHandler(({ url }) => {
     if (classifyUrl(url, gatewayInfo?.origin) === "external") void shell.openExternal(url);
@@ -269,6 +280,12 @@ ipcMain.handle("desktop:account-switch", async (e, id) => (fromOurUi(e) && typeo
 ipcMain.handle("desktop:account-add", async (e) => (fromOurUi(e) ? addAccount() : { ok: false }));
 
 // In-window update control (the Updates bar in the sidebar). Same controller as the tray and app menu.
+// The web UI tells us when its theme flips (the in-app toggle can differ from the OS), so the window buttons keep matching.
+ipcMain.on("desktop:titlebar-theme", (e, dark) => {
+  if (!isOverlayPlatform(process.platform) || !fromOurUi(e) || typeof dark !== "boolean") return;
+  if (win && !win.isDestroyed() && e.sender === win.webContents) { try { win.setTitleBarOverlay(titleBarOverlayFor(dark)); } catch { /* window closing */ } }
+});
+
 const fromOurUi = (e) => classifyUrl(e.senderFrame?.url ?? "", gatewayInfo?.origin) === "internal";
 // Apple Calendar (Mac only): the bundled EventKit helper, run once per call and answered to our own window only. On other systems the channel
 // does not exist and the preload exposes no `calendar`, so the web UI sees no Calendar bridge.
@@ -563,6 +580,7 @@ const updater = createUpdater({
 
 function applyAppMenu() {
   if (SMOKE) return;
+  if (isOverlayPlatform(process.platform)) { Menu.setApplicationMenu(null); return; } // clean window: no File / Edit / View bar
   Menu.setApplicationMenu(Menu.buildFromTemplate(buildAppMenuTemplate({ handlers, isMac: process.platform === "darwin", update: updater.menuItem() })));
 }
 

@@ -44,6 +44,18 @@ code, pre, kbd { font-family: var(--mono); }
 
 .app { display: grid; grid-template-columns: 272px minmax(0, 1fr); height: 100dvh; position: relative; }
 
+/* Desktop app on Windows and Linux (html.win-overlay, set by shell.js): no native title bar. The top bar is the drag handle and
+   leaves room on the right for the OS window buttons (--wco-right, 140px until the real width is known). The Mac is untouched. */
+.win-overlay { --wco-h: 36px; --wco-right: 140px; }
+.win-overlay .topbar { -webkit-app-region: drag; padding-right: max(16px, var(--wco-right)); }
+.win-overlay .brand { -webkit-app-region: drag; }
+.win-overlay .topbar :is(button, a, input, select, textarea, label, .model-wrap, .top-meta, .bot-badge),
+.win-overlay .brand :is(button, a) { -webkit-app-region: no-drag; }
+.win-overlay .gate-token { -webkit-app-region: drag; }
+.win-overlay .gate-token :is(button, a, input, textarea) { -webkit-app-region: no-drag; }
+.win-overlay .drawer { top: var(--wco-h); -webkit-app-region: no-drag; }
+.win-overlay .screen-pill { top: calc(var(--wco-h) + 8px); }
+
 /* sidebar */
 .sidebar { background: var(--bg-side); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; padding: calc(16px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left)); }
 .brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px 16px; }
