@@ -731,6 +731,7 @@ async function refreshSessions() {
 }
 
 async function selectSession(s, opts = {}) {
+  if (xchg) xchg.close("nav"); // opening a session leaves any open agent exchange
   closeSidebar();
   suggest.clear();
   if (!s.live) {
@@ -753,6 +754,7 @@ async function selectSession(s, opts = {}) {
   syncCurrent();
 }
 function newSession() {
+  if (xchg) xchg.close("nav");
   closeSidebar();
   suggest.clear();
   state.currentId = null;
@@ -763,6 +765,7 @@ function newSession() {
 }
 // A new thread with one of the user's bots: a draft until the first message, like a new session.
 function newBotThread(botId) {
+  if (xchg) xchg.close("nav");
   closeSidebar();
   suggest.clear();
   state.currentId = null;
