@@ -1146,3 +1146,12 @@ body.xv-open .top-title, body.xv-open .model-wrap, body.xv-open .top-meta, body.
 .gift-btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 @media (max-width: 400px) { .gift-card { padding: 20px 18px 22px; } .gift-actions { gap: 8px; } .gift-btn { padding: 0 8px; font-size: 14px; } .gift-m1 { left: 0; } .gift-m5 { right: 0; } }
 @media (prefers-reduced-motion: no-preference) { .gift-m { transition: transform .2s; } .gift-m:hover { transform: translateY(-4px) rotate(0deg); } }
+
+/* ---- the header's top-left bot name: plain text and the M face, no capsule. Same quiet trigger family as .side-icon. ---- */
+.bot-trigger { flex: none; display: inline-flex; align-items: center; gap: 7px; max-width: 46%; height: 36px; padding: 0 8px 0 4px; margin-right: 2px; background: none; border: 1px solid transparent; border-radius: 6px; color: var(--ink); font: 600 14px var(--sans); transition: background .12s, border-color .12s; }
+.bot-trigger:hover, .bot-trigger:focus-visible, .bot-trigger[aria-expanded="true"] { background: var(--surface); border-color: var(--line-strong); }
+.bot-trigger .bot-badge.sm.has-mbot { width: 28px; height: 28px; margin: 0; }
+.bt-name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bt-chev { flex: none; width: 13px; height: 13px; color: var(--ink-3); }
+.bot-trigger:hover .bt-chev { color: var(--ink); }
+@media (max-width: 640px) { .bot-trigger { max-width: 40%; padding: 0 5px 0 2px; } .bt-chev { display: none; } }

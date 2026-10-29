@@ -127,12 +127,11 @@
   <main class="main">
     <header class="topbar">
       <button class="icon-btn only-mobile" id="btn-menu" type="button" aria-label="Open sessions"><svg class="ic"><use href="#i-menu"/></svg></button>
-      <span class="bot-badge sm" id="top-badge" aria-hidden="true" hidden></span>
+      <button class="bot-trigger" id="btn-instr" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="instr-drawer" title="Settings and instructions"><span class="bot-badge sm" id="top-badge" aria-hidden="true"></span><span class="bt-name" id="top-bot-name">Daebot</span><svg class="ic bt-chev" aria-hidden="true"><use href="#i-chev-down"/></svg></button>
       <div class="top-title">
         <h1 id="title">New session</h1>
         <p id="subtitle">Not started</p>
       </div>
-      <button class="btn-chip" id="btn-instr" type="button" aria-expanded="false" aria-controls="instr-drawer" hidden><svg class="ic"><use href="#i-sliders"/></svg><span>Instructions</span></button>
       <div class="model-wrap" id="model-wrap">
         <button class="model-badge" id="model-badge" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="model-menu" hidden><svg class="led mb-led" viewBox="0 0 11 11" aria-hidden="true" focusable="false"><rect x="0" y="0" width="3" height="3" rx=".5"/><rect x="4" y="0" width="3" height="3" rx=".5"/><rect x="8" y="0" width="3" height="3" rx=".5"/><rect x="0" y="4" width="3" height="3" rx=".5"/><rect x="4" y="4" width="3" height="3" rx=".5"/><rect x="8" y="4" width="3" height="3" rx=".5"/><rect x="0" y="8" width="3" height="3" rx=".5"/><rect x="4" y="8" width="3" height="3" rx=".5"/><rect x="8" y="8" width="3" height="3" rx=".5"/></svg><span class="mb-name" id="mb-name"></span><span class="mb-via" id="mb-via"></span><svg class="ic mb-chev" aria-hidden="true"><use href="#i-chev-down"/></svg></button>
         <div class="model-menu" id="model-menu" role="menu" aria-label="Choose a model" hidden></div>
