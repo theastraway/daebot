@@ -759,3 +759,73 @@ select.fld { appearance: auto; }
 .rt-form select.fld { appearance: auto; }
 .rt-form .fld-area { font: 14px/1.45 var(--sans); min-height: 72px; }
 .drawer-fine.warn, .inline-state.warn { color: var(--danger, #c0392b); }
+
+/* ---------- agent exchanges: the "Messaged <agent>" card, the read-only transcript, the Bots tab group ---------- */
+.xf { --bot: var(--led); display: inline-grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--plate); color: var(--bot); font: 700 13px/1 var(--display); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); overflow: hidden; }
+.xf .face-svg { width: 74%; height: 74%; display: block; }
+.xf-main { background: #3a2a1d; color: #ffd25a; }
+.xf-xs { width: 18px; height: 18px; font-size: 10px; vertical-align: -4px; }
+.xf-sm { width: 22px; height: 22px; font-size: 11px; }
+.xf-md { width: 32px; height: 32px; }
+.xf-pair { display: inline-flex; align-items: center; flex: none; }
+.xf-pair .xf + .xf { margin-left: -9px; box-shadow: 0 0 0 2px var(--bg-side), inset 0 0 0 1px rgba(255,255,255,.08); }
+.xf-pair-lg .xf { width: 34px; height: 34px; }
+.xf-pair-lg .xf + .xf { margin-left: -12px; box-shadow: 0 0 0 2px var(--bg), inset 0 0 0 1px rgba(255,255,255,.08); }
+.xchg-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--bg-side); }
+.xchg-dot.inline { display: inline-block; margin-left: 6px; }
+#tab-bots { position: relative; }
+#tab-bots .xchg-dot { position: absolute; top: 5px; right: 8px; }
+
+.xchg-card { display: grid; justify-items: center; gap: 6px; margin: 8px 0; }
+.xc-time { font-size: 11.5px; color: var(--ink-3); }
+.xc-line { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 13px; color: var(--ink-3); background: none; border: 0; cursor: pointer; }
+.xc-line:hover, .xc-line:focus-visible { color: var(--ink); background: var(--surface-2); }
+.xc-line .ic { width: 12px; height: 12px; }
+.xc-name { color: var(--ink-2); font-weight: 560; }
+.xc-row { display: flex; align-items: flex-end; gap: 6px; width: 100%; }
+.xc-row.recv { flex-direction: row-reverse; justify-content: flex-end; }
+.xc-bubble { flex: 1; min-width: 0; background: var(--surface-2); border: 1px solid var(--line); border-radius: 16px; padding: 10px 14px; font-size: 14px; line-height: 1.45; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.xc-pending { font-size: 12px; color: var(--ink-3); }
+.xc-view { font-size: 12.5px; color: var(--ink-3); background: none; border: 0; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; padding: 2px 6px; }
+.xc-view:hover, .xc-view:focus-visible { color: var(--ink); }
+
+.xv { position: absolute; inset: 0; z-index: 25; background: var(--bg); display: flex; flex-direction: column; min-height: 0; }
+.xv[hidden] { display: none; }
+.main { position: relative; }
+.xv-head { display: flex; align-items: center; gap: 10px; flex: none; height: calc(56px + env(safe-area-inset-top)); padding: env(safe-area-inset-top) calc(16px + env(safe-area-inset-right)) 0 calc(10px + env(safe-area-inset-left)); border-bottom: 1px solid var(--line); }
+.xv-back-ic { transform: rotate(180deg); }
+.xv-faces { display: inline-flex; flex: none; }
+.xv-titles { min-width: 0; }
+.xv-title { margin: 0; font-size: 15px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.xv-sub { margin: 0; font-size: 12px; color: var(--ink-3); }
+.xv-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 14px calc(16px + env(safe-area-inset-right)) 14px calc(16px + env(safe-area-inset-left)); }
+.xv-list { max-width: 740px; margin: 0 auto; display: grid; gap: 12px; }
+.xv-time { text-align: center; font-size: 11.5px; color: var(--ink-3); margin-top: 6px; }
+.xv-empty { text-align: center; color: var(--ink-3); }
+.xv-msg { display: flex; align-items: flex-end; gap: 8px; max-width: 86%; }
+.xv-msg.left { align-self: start; }
+.xv-msg.right { margin-left: auto; flex-direction: row-reverse; }
+.xv-col { min-width: 0; display: grid; gap: 3px; }
+.xv-msg.right .xv-col { justify-items: end; }
+.xv-name { font-size: 12px; color: var(--ink-3); padding: 0 6px; }
+.xv-bubble { background: var(--surface-2); border: 1px solid var(--line); border-radius: 16px; padding: 9px 14px; font-size: 14px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.xv-msg.right .xv-bubble { background: var(--surface); }
+.xv-at { font-size: 11px; color: var(--ink-3); padding: 0 6px; }
+.xv-tools { font-size: 12px; color: var(--ink-3); padding: 0 6px; }
+.xv-tools summary { cursor: pointer; }
+.xv-tool { display: flex; gap: 8px; padding: 2px 0; }
+.xv-tool-name { font-family: var(--mono, ui-monospace, monospace); color: var(--ink-2); }
+.xv-tool.fail .xv-tool-name { color: var(--accent); }
+.xv-foot { flex: none; display: grid; place-items: center; padding: 12px 16px calc(14px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); }
+.xv-pill { display: inline-flex; align-items: center; gap: 6px; padding: 7px 16px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); color: var(--ink-2); font-size: 13px; font-weight: 560; }
+.xv-pill .ic { width: 14px; height: 14px; }
+
+.xs-group { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 8px; display: grid; gap: 2px; }
+.xs-head { font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); padding: 2px 10px 6px; display: flex; align-items: center; }
+.xs-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; border-radius: 10px; background: none; border: 0; text-align: left; color: var(--ink); cursor: pointer; }
+.xs-row:hover, .xs-row[aria-current="true"] { background: var(--surface); }
+.xs-text { min-width: 0; flex: 1; display: grid; }
+.xs-title { font-size: 13px; font-weight: 560; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.xs-prev { font-size: 12px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.xs-ago { font-size: 11px; color: var(--ink-3); flex: none; }
+@media (max-width: 700px) { .xv-msg { max-width: 94%; } }

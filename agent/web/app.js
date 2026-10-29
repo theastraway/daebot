@@ -14,6 +14,7 @@ import { compareBuild, webUpdateText, WEB_CHECK_MS } from "/webupdate.js";
 import { buildPermissionCard, initChatMode, initPermissions } from "/permissions.js";
 import { initAccount } from "/account.js";
 import { initBoard } from "/board.js";
+import { initExchanges } from "/exchanges.js";
 import { initSuggest } from "/suggest.js";
 import { initPhotos, normQueue, packQueue, queueLabel, SAYS as PHOTO_SAYS } from "/photos.js";
 import { calendarCapabilities, createDeviceCalls } from "/device-calendar.js";
@@ -231,6 +232,7 @@ function buildItem(it, tr) {
     case "confirm": node = buildConfirm(it); break;
     case "permission": node = buildPermissionCard(it, { json, h, notify, onChange: () => toBottom() }); break;
     case "mcp": node = mcp.buildCard(it.pending, () => { it.done = true; }); if (it.done) node.classList.add("done"); break;
+    case "exchange": case "xin": node = xchg ? xchg.buildCard(it) : h("div", "notice", "Agent exchange"); break; // bot_talk cards: "Messaged <agent>" and "<agent> messaged you"
     default: // a billing notice carries an upgrade link; anything else stays plain text
       node = h("div", `notice ${it.level === "warn" ? "warn" : ""}`, /https?:\/\//.test(it.text) ? undefined : it.text);
       if (/https?:\/\//.test(it.text)) inline(node, it.text);
@@ -350,6 +352,7 @@ function itemsFromHistory(events) {
       case "permission": { asst = null; const it = permissionItem(ev); items.push(it); permById.set(ev.id, it); break; }
       case "permissionResolved": { const it = permById.get(ev.id); if (it) resolvePermission(it, ev); break; }
       case "notice": items.push({ kind: "notice", level: ev.level, text: ev.text }); break;
+      case "exchange": asst = null; items.push({ kind: "exchange", exchangeId: ev.exchangeId, from: ev.from, to: ev.to, message: ev.message, reply: ev.reply, at: ev.at }); break;
       case "usage": usage.in += ev.usage.promptTokens; usage.out += ev.usage.completionTokens; usage.cost = ev.totalCostUsd; if (ev.model) model = ev.model; break;
       default: break;
     }
@@ -927,6 +930,11 @@ function onEvent(id, ev, asst, toolByReceipt) {
     case "notice":
       addItem(id, { kind: "notice", level: ev.level, text: ev.text });
       return asst;
+    case "exchange":
+      if (asst) { asst.streaming = false; paintAssistant(asst); }
+      addItem(id, { kind: "exchange", exchangeId: ev.exchangeId, from: ev.from, to: ev.to, message: ev.message, reply: ev.reply, at: ev.at });
+      if (xchg) xchg.poke();
+      return null;
     case "usage":
       tr.usage.in += ev.usage.promptTokens; tr.usage.out += ev.usage.completionTokens; tr.usage.cost = ev.totalCostUsd;
       if (ev.model) tr.model = ev.model;
@@ -1219,9 +1227,12 @@ const models = initModels({
   onPinnedClick: () => { if (state.curBot) bots.openSettings(state.curBot); },
 });
 els.title.addEventListener("click", () => renameCurrent());
+let xchg = null; // agent exchanges (cards in the chat, the read-only transcript, the Bots tab group); assigned just after the bots module
 const bots = initBots({
   json, api, store, h, icon, ago, notify,
   app: {
+    exchangesGroup: () => (xchg ? xchg.group() : null),
+    exchangeUnread: (id) => (xchg ? xchg.unreadFor(id) : 0),
     currentBot: () => state.curBot,
     currentId: () => state.currentId,
     refresh: () => refreshSessions(),
@@ -1235,6 +1246,20 @@ const bots = initBots({
     renameThread: (btn, s) => renameRow(btn, s),
   },
 });
+
+xchg = initExchanges({
+  json, h, icon, ago,
+  app: {
+    online: () => state.online,
+    notify,
+    // The agent whose thread is on screen: a bot id, or "main" for a plain session. Cards "X messaged you" appear in that thread.
+    currentParty: () => (state.currentId ? (state.curBot || "main") : ""),
+    addInbound: (it) => { if (state.currentId) addItem(state.currentId, it); },
+    beforeOpen: () => { closeSidebar(); if (!els.drawer.hidden) toggleDrawer(false); board.close(); },
+    listChanged: () => bots.renderList(),
+  },
+});
+bots.renderList();
 
 // ---------- task board (right-side drawer, sibling of the violations drawer) ----------
 const board = initBoard({
@@ -1284,6 +1309,7 @@ async function boot() {
   if (state.hosted && !(await showWho())) return location.replace("/");
   await refreshSessions();
   board.refresh();
+  xchg.refresh();
   mcp.load();
   permissions.probe();
   chatMode.probe();

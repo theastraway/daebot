@@ -24,6 +24,7 @@ import { AGENT_SURFACE_RE, AGENT_TURN_PATH, KeyIdentityCache, TurnRateLimiter } 
 import { userIdFor } from "../auth/users.ts";
 import { FREE_TIER, usageLeftPct } from "../provider/mind.ts";
 import { createBotBus } from "../bots/bus.ts";
+import { ExchangeHub, MAIN as EX_MAIN } from "../bots/exchanges.ts";
 import { createRoutineGateway } from "./routines.ts";
 import { RoutineHub } from "../routines/store.ts";
 import { BotError, safeUpgradeUrl } from "../bots/types.ts";
@@ -250,7 +251,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   const mcpField = (): { mcp?: boolean } => (mcp ? { mcp: mcpOn() } : {}); // only reported where the feature is wired in
   // ---- Bots: the bus runs a recipient bot's turn in-process through this same SessionManager.
   const routinesLate: { fire?: (m: { owner: string; to: string; from: string; text: string }) => void } = {};
-  if (opts.bots) opts.bots.bus.current = createBotBus({ manager, botsFor: (owner) => manager.runtimeOf(owner).bots, tierOf: (owner) => (owner === OWNER.id ? OWNER.tier : auth?.store.principal(owner)?.tier), onBotMessage: (m) => routinesLate.fire?.(m) });
+  const exchangeHub = opts.bots ? (opts.bots.exchanges ??= new ExchangeHub(opts.bots.dir)) : undefined;
+  if (opts.bots) opts.bots.bus.current = createBotBus({ manager, exchanges: exchangeHub, botsFor: (owner) => manager.runtimeOf(owner).bots, tierOf: (owner) => (owner === OWNER.id ? OWNER.tier : auth?.store.principal(owner)?.tier), onBotMessage: (m) => routinesLate.fire?.(m) });
   const catalog = createModelCatalog({ cfg: opts.cfg ?? ({ mindBaseUrl: "", models: { default: "", cheap: "", fallback: [] } } as unknown as Config), fetchImpl: opts.fetchImpl ?? opts.auth?.fetchImpl });
 
   // ---- bot_manage (Daebot makes its own bots): lend the runtimes the user's plan models and the cleanup after a delete.
@@ -265,7 +267,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         const cat = await catalog.list(billingKeyOf(p), plan.free);
         return { models: cat.models.map((m) => ({ id: m.id, name: m.name, allowed: m.allowed })), default: manager.runtimeOf(owner).settings?.get().defaultModel ?? opts.cfg.models.default };
       },
-      async removed(owner, botId) { opts.bots?.routines?.drop(owner, botId); await manager.closeBotSessions(owner, botId); },
+      async removed(owner, botId) { opts.bots?.routines?.drop(owner, botId); exchangeHub?.purgeBot(owner, botId); await manager.closeBotSessions(owner, botId); },
     };
   }  // ---- MIND Voice: billed to the caller's own MIND key (owner: the server key). Off when there is no MIND base URL.
   const voiceBase = opts.voice?.baseUrl ?? opts.cfg?.mindBaseUrl;
@@ -871,7 +873,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/board" || path === "/ws" || path.startsWith("/routines/");
+    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/board" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/");
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -1061,6 +1063,35 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     throw e;
   }
 
+  // ---------- agent exchanges: the read-only two-sided transcripts users open from a "Messaged <agent>" card ----------
+  function exchangesApi(res: ServerResponse, path: string, method: string, me: Principal): void {
+    const bots = manager.runtimeOf(me.id).bots;
+    if (!botsOn() || !bots || !exchangeHub) return sendJson(res, 404, { error: "bots are not enabled on this deployment" });
+    const party = (id: string) => {
+      if (id === EX_MAIN) return { id: EX_MAIN, kind: "main", name: "Daebot" };
+      const b = bots.get(id);
+      return b ? { id, kind: "bot", name: b.name, slug: b.slug, face: b.face ?? null, color: b.color } : { id, kind: "bot", name: "a deleted bot", face: null, color: "" };
+    };
+    if (path === "/exchanges") {
+      if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+      const list = exchangeHub.list(me.id).map((s) => ({ ...s, a: party(s.a), b: party(s.b) }));
+      return sendJson(res, 200, { exchanges: list, unread: list.reduce((n, x) => n + (x.unread ? 1 : 0), 0) });
+    }
+    const m = /^\/exchanges\/([^/]+)(?:\/(seen))?$/.exec(path);
+    if (!m) return sendJson(res, 404, { error: "not found" });
+    let id: string;
+    try { id = decodeURIComponent(m[1]); } catch { return sendJson(res, 400, { error: "bad exchange id" }); }
+    const rec = exchangeHub.get(me.id, id);
+    if (!rec) return sendJson(res, 404, { error: "not_found", message: "no such exchange" });
+    if (m[2] === "seen") {
+      if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+      exchangeHub.markSeen(me.id, id);
+      return sendJson(res, 200, { ok: true });
+    }
+    if (method !== "GET") return sendJson(res, 405, { error: "method not allowed", message: "exchanges are read-only" });
+    return sendJson(res, 200, { exchange: { id: rec.id, a: party(rec.a), b: party(rec.b), createdAt: rec.createdAt, updatedAt: rec.updatedAt, seenAt: rec.seenAt, messages: rec.messages, readOnly: true } });
+  }
+
   async function botsApi(req: IncomingMessage, res: ServerResponse, path: string, method: string, me: Principal): Promise<void> {
     const bots = manager.runtimeOf(me.id).bots;
     if (!botsOn() || !bots) return sendJson(res, 404, { error: "bots are not enabled on this deployment" });
@@ -1126,6 +1157,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         await bots.remove(id);
         await manager.closeBotSessions(me.id, id);
         await manager.runtimeOf(me.id).purgeBotSessions?.(id); // saved threads (and DM threads with it as peer or recipient) go too
+        exchangeHub?.purgeBot(me.id, id); // and every agent exchange it was part of
         return sendJson(res, 200, { ok: true });
       }
       if (method === "GET") return sendJson(res, 200, { bot: botView(rec) });
@@ -1311,6 +1343,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
     if (path === "/permissions" || path.startsWith("/permissions/")) return permissionsApi(req, res, path, method, me);
     if (routines && botsOn() && (path === "/routines/preview" || /^\/bots\/[^/]+\/routines(\/|$)/.test(path))) { if (await routines.api(req, res, path, method, me)) return; }
+    if (path === "/exchanges" || path.startsWith("/exchanges/")) return exchangesApi(res, path, method, me);
     if (path === "/bots/caelum") return caelumApi(req, res, method, me);
     if (path === "/bots" || path.startsWith("/bots/")) return botsApi(req, res, path, method, me);
     if (path.startsWith("/mcp/")) return mcpApi(req, res, path, method, me);

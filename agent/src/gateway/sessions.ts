@@ -155,7 +155,7 @@ export class SessionManager {
         ...(prev?.permMode ? { permMode: prev.permMode } : {}),
       });
     }
-    return [...out.values()].filter((r) => (filter.bot ? r.bot === filter.bot : !r.bot)).sort((a, b) => b.updatedAt - a.updatedAt);
+    return [...out.values()].filter((r) => (filter.bot ? r.bot === filter.bot : !r.bot && !r.peer)).sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
   /** Runs one turn. Throws BusyError / NotFoundError synchronously-in-promise before any event is emitted. */

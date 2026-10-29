@@ -148,7 +148,7 @@ test("no revisiting a bot in the chain (a -> b -> a) and no talking to yourself"
   w.mgr.rows.set("A-thread", { owner: "u1", busy: true, turns: 1, bot: w.ids.a });
   const self = await w.talk("A-thread", "a", "me?", w.ids.a);
   assert.equal(self.ok, false);
-  assert.match(self.output, /no loops/);
+  assert.match(self.output, /yourself/);
 });
 
 test("busy DM thread: no queueing, 'busy, try again shortly', no turn started", async () => {

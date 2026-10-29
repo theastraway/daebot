@@ -96,7 +96,7 @@ export function botErrorMessage(status, body) {
 
 /** Sessions that belong in the plain Sessions list: bot threads live under their bot. */
 export function generalSessions(list) {
-  return (Array.isArray(list) ? list : []).filter((s) => !s.bot);
+  return (Array.isArray(list) ? list : []).filter((s) => !s.bot && !s.peer);
 }
 
 /** "from Quinn" for a DM thread. `peer` may be a bot id, a slug or already a name. */
@@ -288,6 +288,8 @@ export function initBots(ctx) {
       return;
     }
     for (const bot of st.bots) box.append(botRow(bot));
+    const ex = app.exchangesGroup && app.exchangesGroup(); // the agent exchanges, with unread dots
+    if (ex) box.append(ex);
   }
 
   function botRow(bot) {
@@ -302,6 +304,7 @@ export function initBots(ctx) {
     const dot = h("span", `bot-dot ${ds}`);
     dot.setAttribute("role", "img"); dot.setAttribute("aria-label", DOT_LABEL[ds]); dot.title = DOT_LABEL[ds];
     item.append(badge(bot), text, dot);
+    if (app.exchangeUnread && app.exchangeUnread(bot.id) > 0) { const u = h("i", "xchg-dot"); u.setAttribute("role", "img"); u.setAttribute("aria-label", "Unread agent exchange"); item.append(u); }
     item.addEventListener("click", () => selectBot(bot));
     const head = h("div", "bot-head");
     head.append(item);

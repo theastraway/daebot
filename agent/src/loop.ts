@@ -530,6 +530,9 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
       yield { type: "usage", usage: { promptTokens: n(m.inputTokens), completionTokens: n(m.outputTokens), costUsd: toolCost }, totalCostUsd: totalCost, model: typeof m.model === "string" ? m.model : tool.spec.name };
     }
     yield { type: "toolEnd", receiptId, tool: tool.spec.name, ok: result.ok, preview: result.output.replace(/\s+/g, " ").slice(0, 200) };
+    // bot_talk leaves a card in the chat: "Messaged <agent>" with the message and the reply, opening the pair's exchange.
+    const ex = result.meta?.exchange as Extract<AgentEvent, { type: "exchange" }> | undefined;
+    if (ex && tool.spec.name === "bot_talk" && ex.type === "exchange") yield ex;
     const msg = toolMsg(call, `[#${receiptId} ${tool.spec.name}${result.ok ? "" : " FAILED"}] ${result.output.length > MAX_TOOL_OUTPUT ? result.output.slice(0, MAX_TOOL_OUTPUT) + "\n[truncated]" : result.output}`);
     if (result.images?.length) msg.images = result.images.slice(0, 2);
     messages.push(msg);

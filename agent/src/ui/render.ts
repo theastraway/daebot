@@ -60,6 +60,8 @@ export class TurnFolder {
         return [];
       case "notice":
         return [{ kind: "notice", level: ev.level, text: ev.text }];
+      case "exchange":
+        return [{ kind: "notice", level: "info", text: `${ev.from.name} messaged ${ev.to.name}${ev.reply ? ` and ${ev.reply.ok ? "got a reply" : "got no reply"}` : ""}` }];
       case "retract":
         // A terminal cannot unprint: mark the block above as withdrawn so nobody reads it as the answer.
         return [{ kind: "notice", level: "warn", text: `the text above was withdrawn by a gate, rewriting: ${ev.reason}` }];
