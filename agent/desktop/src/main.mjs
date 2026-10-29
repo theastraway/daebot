@@ -13,7 +13,7 @@ import { clearKey, readConfigJson, readKey, resolveSignIn, saveKey, looksLikeMin
 import { AccountStore, accountsPath, dataDirFor } from "./lib/accounts.mjs";
 import { buildSignInPage } from "./lib/signin-page.mjs";
 import { signInWithMind } from "./lib/mind-signin.mjs";
-import { loadConfig, saveKernelMode, saveKeepWorking, configPath, statePath, loadState, writeJson, resolveBounds, desktopHome } from "./lib/config.mjs";
+import { loadConfig, saveKernelMode, saveKeepWorking, saveShortcut, isValidAccelerator, configPath, statePath, loadState, writeJson, resolveBounds, desktopHome } from "./lib/config.mjs";
 import { isKernelMode } from "./lib/kernel.mjs";
 import { migrateHome } from "./lib/home.mjs";
 import { applyKeepWorking } from "./lib/keepworking.mjs";
@@ -274,6 +274,8 @@ if (process.platform === "darwin") {
 }
 const publicUpdateState = (s) => ({ enabled: updater.enabled, status: s.status, currentVersion: s.currentVersion, nextVersion: s.nextVersion, percent: s.percent, error: s.error ? String(s.error).slice(0, 300) : null });
 function sendUpdateState(s) { try { if (win && !win.isDestroyed()) win.webContents.send("desktop:update-state", publicUpdateState(s)); } catch { /* window going away */ } }
+ipcMain.handle("desktop:shortcut-get", (e) => (fromOurUi(e) ? config.shortcut : null));
+ipcMain.handle("desktop:shortcut-set", (e, acc) => (fromOurUi(e) && (acc === null || typeof acc === "string") ? setShortcut(acc) : { ok: false }));
 ipcMain.handle("desktop:update-get", (e) => (fromOurUi(e) ? publicUpdateState(updater.getState()) : null));
 ipcMain.handle("desktop:update-check", async (e) => (fromOurUi(e) ? publicUpdateState(await updater.check("window", { manual: true })) : null));
 ipcMain.handle("desktop:update-install", async (e) => (fromOurUi(e) ? updater.install() : false));
@@ -506,6 +508,29 @@ function createTray() {
   tray.setToolTip("Daebot");
   tray.on("click", toggleWindow);
   refreshTray();
+}
+
+/** Rebind the global summon shortcut from the web UI's Keyboard shortcuts card. Keeps the old one if the new one is invalid or taken. */
+function setShortcut(acc) {
+  const next = acc === null || acc === "" ? null : acc;
+  if (next !== null && !isValidAccelerator(next)) return { ok: false, error: "That shortcut is not valid." };
+  const prev = config.shortcut;
+  if (next === prev) return { ok: true, shortcut: prev };
+  try { if (prev) globalShortcut.unregister(prev); } catch { /* not registered */ }
+  config = { ...config, shortcut: next };
+  if (next) {
+    let ok = false;
+    try { ok = globalShortcut.register(next, showWindow); } catch { ok = false; }
+    if (!ok) {
+      config = { ...config, shortcut: prev };
+      registerShortcut();
+      refreshTray();
+      return { ok: false, error: `${next} is taken by another app.` };
+    }
+  }
+  if (!SMOKE) { try { saveShortcut(next); } catch (e) { log("could not save shortcut:", String(e?.message ?? e)); } }
+  refreshTray();
+  return { ok: true, shortcut: next };
 }
 
 function registerShortcut() {

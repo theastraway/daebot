@@ -37,9 +37,9 @@ Everything Daebot keeps on the machine (config, sign-in, accounts, chats) lives 
 
 ## Config: `~/.daebot/desktop.json`
 ```json
-{ "shortcut": "Alt+Space", "kernelMode": "enforced", "idleTrimSeconds": 300, "keepWorking": true }
+{ "shortcut": "CommandOrControl+Shift+Space", "kernelMode": "enforced", "idleTrimSeconds": 300, "keepWorking": true }
 ```
-`shortcut` is an Electron accelerator (`null` disables it). Window bounds live in `~/.daebot/desktop-state.json`.
+`shortcut` is the global Summon Daebot shortcut, an Electron accelerator (`null` disables it); the default is Cmd+Shift+Space on a Mac and Ctrl+Shift+Space elsewhere, and it is rebindable in the app under Keyboard shortcuts. The hold-to-talk keys (Right Option/Alt = Dictation, Right Command/Ctrl = Voice) work while the Daebot window is focused: Electron has no global solo-modifier hook without native modules. Window bounds live in `~/.daebot/desktop-state.json`.
 Credentials: see Sign-in below. Without any usable key the gateway child reports why and the window shows a plain error page.
 
 ## Sign-in (first run)

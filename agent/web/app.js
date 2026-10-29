@@ -2,6 +2,7 @@
 // All dynamic text goes through textContent / createTextNode. No innerHTML anywhere.
 
 import { initVoice } from "/voice.js";
+import { initHotkeys } from "/hotkeys.js";
 import { initUpdates } from "/updates.js";
 import { initBots, generalSessions, peerLabel } from "/bots.js";
 import { initModels } from "/models.js";
@@ -1313,7 +1314,7 @@ document.addEventListener("keydown", (e) => {
 
 // ---------- voice (MIND Voice: mic, spoken answers, hands-free; billed to the user's MIND credits) ----------
 const voice = initVoice({
-  els: { mic: $("btn-mic"), speak: $("btn-speak"), convo: $("btn-convo"), dock: $("voice-dock"), status: $("voice-status"), stop: $("voice-stop"),
+  els: { mic: $("btn-mic"), voiceBtn: $("btn-voice"), pill: $("voice-pill"), speak: $("btn-speak"), convo: $("btn-convo"), dock: $("voice-dock"), status: $("voice-status"), stop: $("voice-stop"),
          bars: [...document.querySelectorAll("#voice-dock .vbars i")], composer: els.composer, input: els.input },
   authHeaders: () => (token ? { authorization: `Bearer ${token}` } : {}),
   onUnauthorized: () => { if (state.hosted) location.replace("/"); else showTokenGate("That token was not accepted."); },
@@ -1322,6 +1323,15 @@ const voice = initVoice({
   creditsChanged: () => refreshPlan(),
   bots: () => [...document.querySelectorAll(".hero-bot, .bot-dock m-bot")],
 });
+
+// Hold-to-talk hotkeys (Right Option = dictation, Right Command = voice by default) + the Keyboard shortcuts card.
+const hotkeys = initHotkeys({
+  voice, h, icon, notify,
+  getUser: () => state.who || "",
+  desktop: () => (typeof window.mindclawDesktop?.shortcuts?.get === "function" ? window.mindclawDesktop : null),
+  hintEl: $("hotkey-hint"), buttons: { dictate: $("btn-mic"), voice: $("btn-voice") }, openButton: $("am-keys"),
+});
+$("am-keys").addEventListener("click", closeSidebar);
 
 // ---------- suggested replies + permissions ----------
 const suggest = initSuggest({

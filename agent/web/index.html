@@ -28,6 +28,8 @@
   <symbol id="i-mic" viewBox="0 0 20 20"><rect x="7.5" y="2.5" width="5" height="9.5" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M4.5 9.5a5.5 5.5 0 0011 0M10 15v2.5M7 17.5h6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
   <symbol id="i-speaker" viewBox="0 0 20 20"><path d="M3.5 8v4h2.8l4.2 3.5v-11L6.3 8z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M13.3 7.4a3.6 3.6 0 010 5.2M15.4 5.3a6.5 6.5 0 010 9.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
   <symbol id="i-speaker-off" viewBox="0 0 20 20"><path d="M3.5 8v4h2.8l4.2 3.5v-11L6.3 8z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M13.5 8l4 4M17.5 8l-4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+  <symbol id="i-voice" viewBox="0 0 20 20"><path d="M4 4.5h12a1.5 1.5 0 011.5 1.5v6a1.5 1.5 0 01-1.5 1.5H9.5L6 17v-3.5H4A1.5 1.5 0 012.5 12V6A1.5 1.5 0 014 4.5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M7 7.5v3M10 6.5v5M13 7.5v3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+  <symbol id="i-keys" viewBox="0 0 20 20"><rect x="2.5" y="5" width="15" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 8.5h1M9.5 8.5h1M13.5 8.5h1M6 11.5h8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
   <symbol id="i-wave" viewBox="0 0 20 20"><path d="M3.5 8.5v3M7 5.5v9M10.5 7.5v5M14 4v12M17 8v4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
   <symbol id="i-stop" viewBox="0 0 20 20"><rect x="5.5" y="5.5" width="9" height="9" rx="1.8" fill="currentColor"/></symbol>
   <symbol id="i-chev" viewBox="0 0 20 20"><path d="M7.5 5l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
@@ -82,6 +84,7 @@
         </div>
         <div class="am-update" id="upd" hidden><span id="upd-text"></span><button class="btn-primary sm" id="upd-btn" type="button" role="menuitem"></button></div>
         <button class="am-item" id="btn-perms" type="button" role="menuitem" hidden aria-haspopup="dialog" aria-expanded="false"><svg class="ic"><use href="#i-lock"/></svg><span>Permissions</span></button>
+        <button class="am-item" id="am-keys" type="button" role="menuitem" aria-haspopup="dialog" aria-expanded="false"><svg class="ic"><use href="#i-keys"/></svg><span>Keyboard shortcuts</span></button>
         <button class="am-item" id="am-apps" type="button" role="menuitem" aria-haspopup="dialog"><svg class="ic"><use href="#i-apps"/></svg><span>Apps &amp; connectors</span></button>
         <a class="am-item" id="am-mobile" href="/download/" target="_blank" rel="noopener" role="menuitem" hidden><svg class="ic"><use href="#i-phone"/></svg><span>Get Daebot for mobile</span></a>
         <a class="am-item" id="am-desktop" href="/download/" target="_blank" rel="noopener" role="menuitem" hidden><svg class="ic"><use href="#i-desktop"/></svg><span>Get the desktop app</span></a>
@@ -118,7 +121,7 @@
         <span id="usage-tokens"></span><span class="sep">·</span><span id="usage-cost"></span>
       </div>
       <button class="icon-btn voice-btn" id="btn-speak" type="button" aria-label="Spoken answers off" aria-pressed="false" title="Read answers aloud (uses MIND credits)"><svg class="ic"><use href="#i-speaker-off"/></svg></button>
-      <button class="icon-btn voice-btn" id="btn-convo" type="button" aria-label="Hands-free conversation" aria-pressed="false" title="Hands-free conversation (uses MIND credits)"><svg class="ic"><use href="#i-wave"/></svg></button>
+      <button class="icon-btn voice-btn" id="btn-convo" type="button" aria-label="Voice conversation, hands-free" aria-pressed="false" title="Voice conversation, hands-free (uses MIND credits)"><svg class="ic"><use href="#i-wave"/></svg></button>
       <button class="icon-btn" id="btn-board" type="button" aria-label="Task board" aria-expanded="false" aria-controls="board-drawer"><svg class="ic"><use href="#i-board"/></svg><span class="badge" id="board-count" hidden>0</span></button>
       <button class="icon-btn" id="btn-violations" type="button" aria-label="Kernel violations" aria-expanded="false"><svg class="ic"><use href="#i-shield"/></svg><span class="badge" id="viol-count" hidden>0</span></button>
       <button class="icon-btn" id="btn-theme" type="button" aria-label="Toggle theme"><svg class="ic" id="theme-ic"><use href="#i-moon"/></svg></button>
@@ -130,6 +133,7 @@
 
     <div class="composer-wrap">
       <div class="voice-dock" id="voice-dock" role="status" aria-live="polite" hidden>
+        <span class="vpill" id="voice-pill" data-mode="voice" hidden><svg class="ic"><use href="#i-voice"/></svg><span class="vpill-text">Voice</span></span>
         <span class="vbars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
         <span class="vstatus" id="voice-status"></span>
         <button class="btn-quiet vstop" id="voice-stop" type="button">Stop <kbd>Esc</kbd></button>
@@ -152,11 +156,12 @@
         <textarea id="input" rows="1" placeholder="Message Daebot" aria-label="Message"></textarea>
         <button class="attach" id="btn-attach" type="button" aria-label="Attach photos" title="Attach photos (or drop or paste them here)"><svg class="ic"><use href="#i-image"/></svg></button>
         <input type="file" id="photo-input" accept="image/*" multiple hidden>
-        <button class="mic" id="btn-mic" type="button" aria-label="Talk to Daebot (hold, or tap to start)" aria-pressed="false" title="Hold to talk, or tap to start and stop"><svg class="ic"><use href="#i-mic"/></svg></button>
+        <button class="mic" id="btn-mic" type="button" aria-label="Dictate (hold Right Option)" aria-pressed="false" title="Dictate: hold, speak, release. Your words are typed here; nothing is sent."><svg class="ic"><use href="#i-mic"/></svg></button>
+        <button class="mic voice" id="btn-voice" type="button" aria-label="Voice (hold Right Command)" aria-pressed="false" title="Voice: hold, speak, release. Your words are sent and Daebot answers aloud."><svg class="ic"><use href="#i-voice"/></svg></button>
         <button class="send" id="btn-send" type="submit" aria-label="Send"><svg class="ic"><use href="#i-send"/></svg></button>
         <button class="send stop" id="btn-stop" type="button" aria-label="Stop (Esc)" hidden><svg class="ic"><use href="#i-stop"/></svg></button>
       </form>
-      <p class="hint"><kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line · <kbd>Esc</kbd> to stop · hold the mic to talk</p>
+      <p class="hint"><kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line · <kbd>Esc</kbd> to stop · <span id="hotkey-hint">Hold Right ⌥ to dictate · Hold Right ⌘ for voice</span></p>
     </div>
   </main>
 

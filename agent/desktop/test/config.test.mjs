@@ -3,12 +3,12 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_CONFIG, isValidAccelerator, loadConfig, normalizeConfig, resolveBounds, saveKernelMode, desktopHome, configPath } from "../src/lib/config.mjs";
+import { DEFAULT_CONFIG, isValidAccelerator, loadConfig, normalizeConfig, resolveBounds, saveKernelMode, saveShortcut, desktopHome, configPath } from "../src/lib/config.mjs";
 import { envForKernelMode, isKernelMode } from "../src/lib/kernel.mjs";
 
-test("default shortcut is Alt+Space and kernel is enforced", () => {
-  assert.deepEqual(loadConfig("/nonexistent/desktop.json"), { shortcut: "Alt+Space", kernelMode: "enforced", idleTrimSeconds: 300, keepWorking: true });
-  assert.equal(DEFAULT_CONFIG.shortcut, "Alt+Space");
+test("default shortcut is CommandOrControl+Shift+Space and kernel is enforced", () => {
+  assert.deepEqual(loadConfig("/nonexistent/desktop.json"), { shortcut: "CommandOrControl+Shift+Space", kernelMode: "enforced", idleTrimSeconds: 300, keepWorking: true });
+  assert.equal(DEFAULT_CONFIG.shortcut, "CommandOrControl+Shift+Space");
 });
 
 test("accelerator validation accepts real combos and rejects junk", () => {
@@ -75,4 +75,15 @@ test("gateway child gets Bots on by default, matching daebot.live; an explicit e
   const base = { agentRoot: "/a", entry: "/a/e.mjs", nodePath: "/n", kernelMode: "enforced" };
   assert.equal(buildSpawnPlan({ ...base, baseEnv: {} }).env.DAEBOT_BOTS_ENABLED, "1");
   assert.equal(buildSpawnPlan({ ...base, baseEnv: { DAEBOT_BOTS_ENABLED: "0" } }).env.DAEBOT_BOTS_ENABLED, "0");
+});
+
+test("saveShortcut persists the rebound Summon shortcut and keeps other keys", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mcd-"));
+  const p = join(dir, "desktop.json");
+  writeFileSync(p, JSON.stringify({ kernelMode: "shadow" }));
+  saveShortcut("CommandOrControl+Shift+K", p);
+  assert.equal(loadConfig(p).shortcut, "CommandOrControl+Shift+K");
+  assert.equal(loadConfig(p).kernelMode, "shadow");
+  saveShortcut(null, p);
+  assert.equal(loadConfig(p).shortcut, null, "null turns the global shortcut off");
 });
