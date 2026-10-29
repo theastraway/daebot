@@ -622,7 +622,7 @@ function renderQueue() {
     row.append(h("span", "queue-tag", `Queued ${i + 1}`));
     if (it.photos.length) row.append(photos.mini(it.photos));
     const label = queueLabel(it) + (it.lost ? ` (${it.lost} photo${it.lost === 1 ? "" : "s"} not kept after the reload)` : "");
-    row.append(h("span", "queue-text", label));
+    const lbl = h("span", "queue-text", label); lbl.title = t; row.append(lbl); // full text on hover; the row stays one line
     const send = h("button", "btn-quiet queue-btn", "Send now"); send.type = "button";
     send.title = state.busy.has(tkey()) ? "Stop what Dae is doing and send this now" : "Send this message";
     send.onclick = () => { sendQueued(i); };
