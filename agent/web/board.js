@@ -90,9 +90,9 @@ export function initBoard({ json, h, els, app }) {
       const chips = h("span", "bd-decisions");
       for (const [role, id] of [["requester", r.peer.issuer], ["receiver", r.peer.receiver]]) {
         const a = h("a", `bd-decision ${role}`, `Decision ✓ ${String(id).length > 14 ? `${String(id).slice(0, 8)}…${String(id).slice(-4)}` : id}`);
-        a.href = `https://m-i-n-d.ai/documents?q=${encodeURIComponent(id)}`; a.target = "_blank"; a.rel = "noopener noreferrer";
+        a.href = "https://m-i-n-d.ai/documents"; a.target = "_blank"; a.rel = "noopener noreferrer";
         a.title = `${role === "receiver" ? "Receiver" : "Requester"} OOC/EMR decision record (MIND document ${id})`; a.dataset.decision = id;
-        a.addEventListener("click", (e) => e.stopPropagation());
+        a.addEventListener("click", (e) => { e.stopPropagation(); try { navigator.clipboard.writeText(id); } catch { /* clipboard blocked */ } });
         chips.append(a);
       }
       peerChips = chips;

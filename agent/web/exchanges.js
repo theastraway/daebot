@@ -10,6 +10,8 @@
 
 import { faceSvg } from "./faces.js";
 
+/** MIND has no per-document deep link; /documents is its real documents route (MINDapp App.tsx). The chip copies the id so it can be found there. */
+export const MIND_DOCS_URL = "https://m-i-n-d.ai/documents";
 export const POLL_MS = 8000;
 export const MAIN_ID = "main";
 const DEFAULT_COLOR = "#ffd25a";
@@ -247,8 +249,10 @@ export function initExchanges(ctx) {
         for (const d of m.decisions) {
           const l = decisionLabel(d);
           const a = h("a", `xv-decision ${d.role === "receiver" ? "recv" : "req"}`, l.text);
-          a.href = `https://m-i-n-d.ai/documents?q=${encodeURIComponent(d.id)}`; a.target = "_blank"; a.rel = "noopener noreferrer"; a.title = l.title;
+          a.href = MIND_DOCS_URL; a.target = "_blank"; a.rel = "noopener noreferrer"; a.title = l.title;
           a.dataset.decision = d.id;
+          a.addEventListener("click", () => { try { navigator.clipboard.writeText(d.id); } catch { /* clipboard blocked */ } });
+          a.addEventListener("click", () => { try { navigator.clipboard.writeText(d.id); } catch { /* clipboard blocked */ } });
           chips.append(a);
         }
         col.append(chips);

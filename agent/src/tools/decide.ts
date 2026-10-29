@@ -64,6 +64,20 @@ function cleanOptions(raw: unknown): Record<string, string> | string {
   return out;
 }
 
+/** Models often pass `context` as a string or a JSON string. Never fail on shape: an object stays, a JSON-object string is parsed, anything else is wrapped. */
+export function coerceContext(raw: unknown): Record<string, unknown> {
+  if (raw === undefined || raw === null) return {};
+  if (typeof raw === "string") {
+    const t = raw.trim();
+    if (!t) return {};
+    try { const j = JSON.parse(t); if (j && typeof j === "object" && !Array.isArray(j)) return j as Record<string, unknown>; } catch { /* plain text */ }
+    return { summary: t };
+  }
+  if (Array.isArray(raw)) return { items: raw };
+  if (typeof raw === "object") return raw as Record<string, unknown>;
+  return { summary: String(raw) };
+}
+
 export function createDecideTool(opts: DecideOptions): Tool {
   const doFetch: typeof fetch = opts.fetchImpl ?? ((...a) => fetch(...a));
   const url = opts.url ?? DECISIONS_URL;
@@ -123,7 +137,7 @@ export function createDecideTool(opts: DecideOptions): Tool {
         properties: {
           question: { type: "string", description: "The decision, as a full sentence, with the user's aim stated" },
           options: { type: "object", description: "Option name -> definition (2 to 12). Definitions say what choosing it means.", additionalProperties: { type: "string" } },
-          context: { type: "object", description: "Facts the decision turns on (constraints, numbers, evidence, deadlines)", additionalProperties: true },
+          context: { type: "object", description: "Facts the decision turns on (constraints, numbers, evidence, deadlines). An object is best; plain text is accepted and wrapped.", additionalProperties: true },
           model: { type: "string", enum: ["jev", "decider"], description: "jev (default) or decider. The other one is the automatic fallback." },
         },
         required: ["question", "options"],
@@ -135,8 +149,7 @@ export function createDecideTool(opts: DecideOptions): Tool {
       if (!question) return fail("decide: question is required");
       const criteria = cleanOptions(args.options);
       if (typeof criteria === "string") return fail(criteria);
-      const context = args.context ?? {};
-      if (typeof context !== "object" || Array.isArray(context) || context === null) return fail("decide: context must be an object");
+      const context = coerceContext(args.context);
       if (JSON.stringify(context).length > CONTEXT_CAP) return fail(`decide: context is over ${CONTEXT_CAP} characters; send the facts that matter`);
       const first: ModelKey = args.model === "decider" ? "decider" : "jev";
       if (args.model !== undefined && args.model !== "jev" && args.model !== "decider") return fail("decide: model must be 'jev' or 'decider'");

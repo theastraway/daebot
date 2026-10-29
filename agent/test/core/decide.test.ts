@@ -245,3 +245,21 @@ test("mind_decision_record: defaults the date to today and rejects an empty deci
   assert.ok(ok.ok);
   assert.match(seen[0].body.title, /^Decision - Hiring plan - \d{4}-\d{2}-\d{2}$/);
 });
+
+test("decide: context may be an object, a plain string, a JSON string, an array or a number: it never fails on shape", async () => {
+  const cases: [unknown, unknown][] = [
+    [{ users: 40 }, { users: 40 }],
+    ["we ship friday and have 40 users", { summary: "we ship friday and have 40 users" }],
+    ['{"users":40,"deadline":"friday"}', { users: 40, deadline: "friday" }],
+    ["   ", {}],
+    [["a", "b"], { items: ["a", "b"] }],
+    [42, { summary: "42" }],
+    [undefined, {}],
+  ];
+  for (const [input, state] of cases) {
+    const { tool, seen } = make(() => json(200, answer("ship")));
+    const r = await tool.run({ question: "q", options: OPTIONS, context: input }, ctx);
+    assert.ok(r.ok, `${JSON.stringify(input)}: ${r.output}`);
+    assert.deepEqual((seen[0].body as { state: unknown }).state, state);
+  }
+});
