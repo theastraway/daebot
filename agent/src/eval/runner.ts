@@ -71,7 +71,7 @@ export async function runScenario(sc: Scenario, mode: Mode): Promise<RunResult> 
     sync: nullSync,
     cfg: cfgFor(mode),
     cwd: env.scratch,
-    systemPrompt: "You are MINDClaw (eval harness, scripted model).",
+    systemPrompt: "You are Daebot (eval harness, scripted model).",
     bootContext: sc.bootContext ?? "MIND boot context",
   });
 

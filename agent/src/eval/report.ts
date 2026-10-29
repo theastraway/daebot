@@ -118,7 +118,7 @@ export function renderMarkdown(d: EvalData): string {
   const sum = summaries(d.rows);
   const p = passes(sum);
   const L: string[] = [];
-  L.push("# MINDClaw compliance eval", "", `Generated ${d.generatedAt}. Seed ${d.seed}.`, "");
+  L.push("# Daebot compliance eval", "", `Generated ${d.generatedAt}. Seed ${d.seed}.`, "");
   L.push(p.ok ? "**Result: PASS**" : `**Result: FAIL** (${p.reasons.join("; ")})`, "");
   L.push("| mode | bad caught | catch rate | probes caught | false positives | FP rate | recovered after block |", "|---|---|---|---|---|---|---|");
   for (const m of MODES) {

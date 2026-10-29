@@ -5,7 +5,7 @@ import { abortError, readSse } from "./sse.ts";
 
 export const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 export const REFERER = "https://www.m-i-n-d.ai/mindclaw";
-export const TITLE = "MINDClaw";
+export const TITLE = "Daebot";
 
 export interface ProviderOptions {
   backoffMs?: number;   // base delay before the single retry (default 800ms); tests pass 0
