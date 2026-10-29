@@ -214,7 +214,8 @@ test("F-7: the root budget key is a per-turn random nonce (not the turn counter)
     turn: async (_i, _t, onEvent) => { onEvent({ type: "done", finalText: "ok" } as AgentEvent); },
   };
   const bus = createBotBus({ manager: mgr, botsFor: () => store, budgetPerRoot: 2, maxCallsPerTurn: 50, perMinute: 1000 });
-  const talk = () => bus.talk({ owner: "u1", fromSession: "S", to: "a", message: "x" });
+  let n = 0; // distinct asks: a repeat of the same ask inside one user turn is dropped before it touches the budget
+  const talk = () => bus.talk({ owner: "u1", fromSession: "S", to: "a", message: `question number ${++n}` });
   assert.equal((await talk()).ok, true);
   assert.equal((await talk()).ok, true);
   assert.equal((await talk()).ok, false, "budget spent for nonce n1");

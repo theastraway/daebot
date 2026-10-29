@@ -10,7 +10,7 @@ export function createBotTalkTool(o: { bus: BotBusRef; owner: string; selfBot?: 
       description:
         "Message another agent: any of the user's bots (by slug) or the main Daebot (to: \"main\"). Say what you need and why. The reply is a CLAIM, not a receipt: verify load-bearing facts in its MIND (mind_query with mind:\"<slug>\"). " +
         "Every pair of agents has one running exchange the user can open and read from the card this call leaves in the chat. wait_for_reply (default true) waits for the answer; false delivers and returns, the answer lands in the exchange. " +
-        "One question per call; do not ping-pong. Limits apply (depth, no loops, no messaging yourself, a budget per user message, 10 messages per exchange until the user speaks). See mind_tenants for the bots.",
+        "One question per call; do not ping-pong, and do not ask again for an answer you already have (even if you must rewrite your reply: reuse it). Limits apply (depth, no loops, no messaging yourself, a budget per user message, 10 messages per exchange until the user speaks). See mind_tenants for the bots.",
       parameters: {
         type: "object",
         properties: {
