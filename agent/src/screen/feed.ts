@@ -110,6 +110,10 @@ export class ScreenFeed {
   private waiters = new Set<() => void>();
   /** Set the first time the desktop shell reports state, so a headless/CLI gateway can say the shell is missing. */
   attached = false;
+  private frameListeners = new Set<(f: Frame) => void>();
+
+  /** Runs `fn` for every frame that is stored (routines that wait for the screen to change). Returns the function that stops it. */
+  onFrame(fn: (f: Frame) => void): () => void { this.frameListeners.add(fn); return () => { this.frameListeners.delete(fn); }; }
 
   private now: () => number;
   constructor(now: () => number = Date.now) { this.now = now; }
@@ -147,9 +151,11 @@ export class ScreenFeed {
     if (!this.active()) return false;
     if (f.sig.length !== SIG_LEN || !(f.jpeg.length > 0) || f.jpeg.length > MAX_FRAME_BYTES) return false;
     if (!(f.width > 0 && f.height > 0)) return false;
-    this.frames.push({ ...f, id: ++this.seq, t: f.t ?? this.now() });
+    const stored: Frame = { ...f, id: ++this.seq, t: f.t ?? this.now() };
+    this.frames.push(stored);
     this.trim();
     this.wake();
+    for (const fn of this.frameListeners) { try { fn(stored); } catch { /* a listener never breaks the feed */ } }
     return true;
   }
 

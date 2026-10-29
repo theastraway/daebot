@@ -83,6 +83,8 @@ export function routeFor(toolIn: string, args: Record<string, unknown>): Route {
       const body = clean(args, ["type"]);
       return { method: "POST", path: type === "document" ? "/documents" : "/entries", body };
     }
+    case "documents":
+      return { method: "GET", path: "/documents", query: toQuery(clean(args)) };
     case "sense": {
       const a = (action || "state").replace(/_/g, "-");
       if (a === "acknowledge") return { method: "POST", path: `/mindsense/acknowledge/${need(args, "signal_id", tool, a)}`, body: {} };

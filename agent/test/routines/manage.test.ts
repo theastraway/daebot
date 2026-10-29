@@ -112,3 +112,24 @@ test("bot_message: a bot_talk delivery tells the listener once, with who sent it
   assert.equal(res.ok, true, res.output);
   assert.deepEqual(seen, [{ owner: "u1", to: "b_aaaaaaaaaaaa", from: "quinn", text: "ping" }]);
 });
+
+test("bot_manage: 'every hour, weekdays only, 9 to 5' and a keyword trigger with a limit, in the model's own words", async () => {
+  const r = rig();
+  await r.run({ action: "create", slug: "clock", name: "Clock", purpose: "tells time" });
+  const a = JSON.parse((await r.run({ action: "add_routine", slug: "clock", name: "Hourly", prompt: "Check in.", kind: "timed", expression: "0 * * * *", tz: "America/New_York", weekdays_only: true, active_from: "09:00", active_to: "17:00" })).output).added;
+  assert.equal(a.summary, "Every hour · Weekdays · 9 AM–5 PM");
+  assert.deepEqual(a.timing.filter, { weekdays: true, from: "09:00", to: "17:00" });
+  const u = JSON.parse((await r.run({ action: "update_routine", slug: "clock", routine: "Hourly", expression: "*/15 * * * *" })).output).updated;
+  assert.equal(u.summary, "Every 15 minutes · Weekdays · 9 AM–5 PM", "a re-time keeps the limit");
+  const off = JSON.parse((await r.run({ action: "update_routine", slug: "clock", routine: "Hourly", weekdays_only: false, active_from: "", active_to: "" })).output).updated;
+  assert.equal(off.summary, "Every 15 minutes");
+  const k = JSON.parse((await r.run({ action: "add_routine", slug: "clock", name: "Money", prompt: "Note it.", trigger: "keyword", phrase: "invoice, refund", where: "user", weekdays_only: true })).output).added;
+  assert.equal(k.trigger.type, "keyword");
+  assert.equal(k.trigger.where, "user");
+  assert.deepEqual(k.trigger.filter, { weekdays: true });
+  const p = JSON.parse((await r.run({ action: "add_routine", slug: "clock", name: "Docs", prompt: "Summarise.", trigger: "mind_document", every: 30 })).output).added;
+  assert.equal(p.trigger.every, 30);
+  assert.equal(p.poll.primed, false);
+  assert.equal((await r.run({ action: "add_routine", slug: "clock", name: "Nope", prompt: "x", trigger: "wake" })).ok, false, "a hosted deployment has no desktop triggers");
+  assert.equal((await r.run({ action: "add_routine", slug: "clock", name: "NoPhrase", prompt: "x", trigger: "keyword" })).ok, false);
+});

@@ -4,16 +4,20 @@
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { TimingError, describeTiming, nextRun, parseTiming, validTz } from "./clock.ts";
+import { TimingError, checkFilter, describeTiming, filterWords, nextRun, parseTiming, validTz } from "./clock.ts";
+import type { ActiveFilter } from "./clock.ts";
+import { TRIGGER_TYPES, checkTrigger as validateTrigger, describeTrigger } from "./triggers.ts";
+import type { Trigger, TriggerCaps, TriggerType } from "./triggers.ts";
+
+export { TRIGGER_TYPES };
+export type { ActiveFilter, Trigger, TriggerType };
 
 export type RoutineKind = "timed" | "trigger";
-export type TriggerType = "webhook" | "thread_message" | "bot_message";
-export const TRIGGER_TYPES: readonly TriggerType[] = ["webhook", "thread_message", "bot_message"];
 export type RunStatus = "ok" | "error" | "skipped" | "idle" | "running";
 
 export interface RunRecord {
   at: number;
-  source: string;              // "timer" | "webhook" | "thread_message" | "bot_message" | "manual"
+  source: string;              // "timer" | "manual" | a trigger type
   status: RunStatus;
   /** Did this run call the model? A heartbeat that found nothing changed records model:false. */
   model: boolean;
@@ -28,8 +32,10 @@ export interface Routine {
   prompt: string;
   enabled: boolean;
   kind: RoutineKind;
-  timing?: { expression: string; tz: string };
-  trigger?: { type: TriggerType; from?: string };
+  timing?: { expression: string; tz: string; /** Weekdays only / active hours: applies to ANY expression. */ filter?: ActiveFilter };
+  trigger?: Trigger;
+  /** Polled triggers: what the last looks saw. `seen` are ids already reported, so each new item fires once. */
+  tstate?: { primed: boolean; seen: string[]; nextPollAt?: number; lastPollAt?: number; error?: string };
   /** Webhook only: the secret in https://<host>/hooks/<id>/<secret>. */
   secret?: string;
   /** Title of the bot thread each run lands in. Default "Routine: <name>". */
@@ -79,7 +85,7 @@ export const HEARTBEAT_PROMPT = [
 export interface RoutineInput {
   name?: unknown; prompt?: unknown; enabled?: unknown; kind?: unknown;
   timing?: unknown; expression?: unknown; tz?: unknown;
-  trigger?: unknown; thread?: unknown;
+  trigger?: unknown; thread?: unknown; filter?: unknown;
 }
 
 function newId(taken: Set<string>): string {
@@ -111,8 +117,9 @@ export class RoutineBook {
   lessons = 0;
   private now: () => number;
   private onChange: (b: RoutineBook) => void;
+  private caps: () => TriggerCaps;
 
-  constructor(o: { dir: string; owner: string; botId: string; now?: () => number; onChange?: (b: RoutineBook) => void }) {
+  constructor(o: { dir: string; owner: string; botId: string; now?: () => number; onChange?: (b: RoutineBook) => void; caps?: () => TriggerCaps }) {
     if (!BOT_RE.test(o.botId)) throw new RoutineError(404, "no such bot");
     this.owner = o.owner;
     this.botId = o.botId;
@@ -120,6 +127,7 @@ export class RoutineBook {
     this.file = join(this.dir, "routines.json");
     this.now = o.now ?? Date.now;
     this.onChange = o.onChange ?? (() => {});
+    this.caps = o.caps ?? (() => ({ desktop: false }));
     this.load();
     this.ensureHeartbeat();
   }
@@ -174,23 +182,20 @@ export class RoutineBook {
     if (!n) throw new RoutineError(400, "a routine needs a name");
     return n;
   }
-  private checkTiming(expression: unknown, tz: unknown, tzDefault: string): { expression: string; tz: string } {
-    let parsed;
-    try { parsed = parseTiming(expression); } catch (e) { throw new RoutineError(400, e instanceof TimingError ? e.message : "bad timing"); }
+  private checkTiming(expression: unknown, tz: unknown, tzDefault: string, filter?: unknown): { expression: string; tz: string; filter?: ActiveFilter } {
+    let parsed, f: ActiveFilter | undefined;
+    try { parsed = parseTiming(expression); f = checkFilter(filter); } catch (e) { throw new RoutineError(400, e instanceof TimingError ? e.message : "bad timing"); }
     const z = tz === undefined || tz === null || tz === "" ? tzDefault : tz;
     if (!validTz(z)) throw new RoutineError(400, `"${String(z).slice(0, 40)}" is not a time zone name (use one like America/New_York)`);
-    return { expression: parsed.text, tz: z };
+    return { expression: parsed.text, tz: z, ...(f ? { filter: f } : {}) };
   }
-  private checkTrigger(v: unknown): { type: TriggerType; from?: string } {
-    const o = v && typeof v === "object" ? (v as Record<string, unknown>) : { type: v };
-    const type = o.type;
-    if (typeof type !== "string" || !(TRIGGER_TYPES as readonly string[]).includes(type)) throw new RoutineError(400, `trigger must be one of ${TRIGGER_TYPES.join(", ")}`);
-    const from = type === "bot_message" && typeof o.from === "string" && o.from.trim() ? o.from.trim().toLowerCase().slice(0, 32) : undefined;
-    return { type: type as TriggerType, ...(from ? { from } : {}) };
+  private checkTrigger(v: unknown): Trigger {
+    try { return validateTrigger(v, this.caps()); } catch (e) { throw new RoutineError(400, e instanceof TimingError ? e.message : "bad trigger"); }
   }
   private timingOf(i: RoutineInput): Record<string, unknown> {
-    return i.timing && typeof i.timing === "object" ? (i.timing as Record<string, unknown>) : { expression: i.expression, tz: i.tz };
+    return i.timing && typeof i.timing === "object" ? (i.timing as Record<string, unknown>) : { expression: i.expression, tz: i.tz, filter: i.filter };
   }
+  private nextOf(t: { expression: string; tz: string; filter?: ActiveFilter }, after: number): number | undefined { return nextRun(t.expression, t.tz, after, t.filter); }
 
   // ---------------------------------------------------------------- writes
   add(input: RoutineInput, tzDefault = DEFAULT_TZ): Routine {
@@ -205,11 +210,12 @@ export class RoutineBook {
     if (typeof input.thread === "string" && input.thread.trim()) r.thread = oneLine(input.thread, 60);
     if (kind === "timed") {
       const tm = this.timingOf(input);
-      r.timing = this.checkTiming(tm.expression, tm.tz, tzDefault);
-      if (r.enabled) r.nextDueAt = nextRun(r.timing.expression, r.timing.tz, t);
+      r.timing = this.checkTiming(tm.expression, tm.tz, tzDefault, tm.filter);
+      if (r.enabled) r.nextDueAt = this.nextOf(r.timing, t);
     } else {
       r.trigger = this.checkTrigger(input.trigger);
       if (r.trigger.type === "webhook") r.secret = newSecret();
+      if (r.enabled) this.armPoll(r, t);
     }
     this.routines.push(r);
     this.save();
@@ -234,20 +240,27 @@ export class RoutineBook {
     if (patch.kind !== undefined && patch.kind !== r.kind) {
       if (patch.kind !== "timed" && patch.kind !== "trigger") throw new RoutineError(400, 'kind must be "timed" or "trigger"');
       r.kind = patch.kind;
-      if (r.kind === "timed") { delete r.trigger; delete r.secret; } else { delete r.timing; delete r.nextDueAt; }
+      if (r.kind === "timed") { delete r.trigger; delete r.secret; delete r.tstate; } else { delete r.timing; delete r.nextDueAt; }
     }
     if (r.kind === "timed") {
       const retimed = patch.timing !== undefined || patch.expression !== undefined || patch.tz !== undefined;
       if (retimed || !r.timing) {
         const tm = this.timingOf(patch);
-        r.timing = this.checkTiming(tm.expression ?? r.timing?.expression, tm.tz ?? r.timing?.tz, tzDefault);
+        const keepFilter = tm.filter === undefined && patch.timing === undefined ? r.timing?.filter : tm.filter;
+        r.timing = this.checkTiming(tm.expression ?? r.timing?.expression, tm.tz ?? r.timing?.tz, tzDefault, keepFilter);
       }
       // Re-timed or turned on: the next run is computed from NOW (a routine turned on never replays the time it was off).
-      if (retimed || patch.enabled !== undefined || r.nextDueAt === undefined) r.nextDueAt = r.enabled ? nextRun(r.timing!.expression, r.timing!.tz, t) : undefined;
+      if (retimed || patch.enabled !== undefined || r.nextDueAt === undefined) r.nextDueAt = r.enabled ? this.nextOf(r.timing!, t) : undefined;
     } else {
-      if (patch.trigger !== undefined || !r.trigger) r.trigger = this.checkTrigger(patch.trigger ?? r.trigger);
+      if (patch.trigger !== undefined || !r.trigger) {
+        const before = r.trigger;
+        r.trigger = this.checkTrigger(patch.trigger ?? r.trigger);
+        if (!before || before.type !== r.trigger.type || before.every !== r.trigger.every) delete r.tstate;   // a different thing to watch: look again from scratch
+      }
       if (r.trigger.type === "webhook" && !r.secret) r.secret = newSecret();
       if (r.trigger.type !== "webhook") delete r.secret;
+      if (patch.enabled === true || !r.enabled) delete r.tstate;
+      if (r.enabled) this.armPoll(r, t); else delete r.tstate;
     }
     r.updatedAt = t;
     this.save();
@@ -281,12 +294,12 @@ export class RoutineBook {
   claimSlot(id: string, now: number, jitterMs = 0): number | undefined {
     const r = this.routines.find((x) => x.id === id);
     if (!r || !r.enabled || r.kind !== "timed" || !r.timing) return undefined;
-    if (r.nextDueAt === undefined) { r.nextDueAt = nextRun(r.timing.expression, r.timing.tz, now); this.save(); return undefined; }
+    if (r.nextDueAt === undefined) { r.nextDueAt = this.nextOf(r.timing, now); this.save(); return undefined; }
     if (now < r.nextDueAt + jitterMs) return undefined;
     const slot = r.nextDueAt;
-    if (r.lastSlot !== undefined && slot <= r.lastSlot) { r.nextDueAt = nextRun(r.timing.expression, r.timing.tz, Math.max(now, r.lastSlot)); this.save(); return undefined; }
+    if (r.lastSlot !== undefined && slot <= r.lastSlot) { r.nextDueAt = this.nextOf(r.timing, Math.max(now, r.lastSlot)); this.save(); return undefined; }
     r.lastSlot = slot;
-    r.nextDueAt = nextRun(r.timing.expression, r.timing.tz, now);
+    r.nextDueAt = this.nextOf(r.timing, now);
     this.save();
     return slot;
   }
@@ -323,6 +336,28 @@ export class RoutineBook {
     this.save();
   }
 
+  // ---------------------------------------------------------------- polled triggers
+  /** A polled trigger that is on gets its first look at once (which only records what is already there). */
+  private armPoll(r: Routine, t: number): void {
+    if (r.kind !== "trigger" || !r.trigger || !r.enabled || !(r.trigger.every)) return;
+    r.tstate ??= { primed: false, seen: [] };
+    if (r.tstate.nextPollAt === undefined) r.tstate.nextPollAt = t;
+  }
+  pollState(id: string): Routine["tstate"] | undefined { return this.routines.find((x) => x.id === id)?.tstate; }
+  /** Saves the outcome of one look: ids now known, when to look next, and the error if it failed. */
+  setPoll(id: string, p: { primed?: boolean; seen?: string[]; at: number; error?: string }): void {
+    const r = this.routines.find((x) => x.id === id);
+    if (!r || r.kind !== "trigger" || !r.trigger?.every) return;
+    const ts = r.tstate ?? { primed: false, seen: [] };
+    if (p.primed !== undefined) ts.primed = p.primed;
+    if (p.seen) ts.seen = p.seen.slice(-400);
+    ts.lastPollAt = p.at;
+    ts.nextPollAt = p.at + r.trigger.every * 60_000;
+    if (p.error) ts.error = p.error.slice(0, 160); else delete ts.error;
+    r.tstate = ts;
+    this.save();
+  }
+
   noteLesson(): void { this.lessons++; this.save(); }
 }
 
@@ -334,6 +369,8 @@ export class RoutineHub {
   private now: () => number;
   private listeners = new Set<(b: RoutineBook) => void>();
   private lastScanAt = 0;
+  /** What this deployment can detect; the gateway sets desktop:true when it runs on the user's own computer. */
+  readonly caps: TriggerCaps = { desktop: false };
 
   constructor(dir: string, o: { now?: () => number } = {}) {
     this.dir = dir;
@@ -346,7 +383,7 @@ export class RoutineHub {
     const k = this.key(owner, botId);
     let b = this.books.get(k);
     if (!b) {
-      b = new RoutineBook({ dir: this.dir, owner, botId, now: this.now, onChange: (x) => this.reindex(x) });
+      b = new RoutineBook({ dir: this.dir, owner, botId, now: this.now, onChange: (x) => this.reindex(x), caps: () => this.caps });
       this.books.set(k, b);
       this.reindex(b);
     }
@@ -403,9 +440,6 @@ export class RoutineHub {
 }
 
 export function describeRoutine(r: Routine): string {
-  if (r.kind === "timed" && r.timing) return describeTiming(r.timing.expression, r.timing.tz);
-  if (r.trigger?.type === "webhook") return "when its secret URL is called";
-  if (r.trigger?.type === "thread_message") return "when you message the bot in any of its threads";
-  if (r.trigger?.type === "bot_message") return r.trigger.from ? `when bot ${r.trigger.from} talks to it` : "when another bot talks to it (bot_talk)";
-  return "";
+  if (r.kind === "timed" && r.timing) return describeTiming(r.timing.expression, r.timing.tz) + filterWords(r.timing.filter);
+  return r.trigger ? describeTrigger(r.trigger) : "";
 }
