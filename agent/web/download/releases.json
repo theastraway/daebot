@@ -1,6 +1,6 @@
 {
-  "version": "0.3.16",
-  "releasedAt": "2026-10-29T04:38:54Z",
+  "version": "0.3.17",
+  "releasedAt": "2026-10-29T15:37:49Z",
   "platforms": {
     "mac": {
       "label": "macOS",
@@ -9,11 +9,11 @@
         {
           "label": "Download for Mac",
           "kind": "dmg",
-          "file": "Daebot-0.3.16-mac-universal.dmg",
-          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-0.3.16-mac-universal.dmg",
-          "size": 282253592,
-          "sha256": "e6a726e56eea539a712c019ddaa617e21b82c7dd37635c75bd705384ba699adf",
-          "version": "0.3.16"
+          "file": "Daebot-0.3.17-mac-universal.dmg",
+          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-0.3.17-mac-universal.dmg",
+          "size": 282371114,
+          "sha256": "a8d3948cb7d1bc1413d41dcdf501ffe5f3220c5f980bd7aeafbae85a544aae1b",
+          "version": "0.3.17"
         }
       ]
     },
@@ -24,20 +24,20 @@
         {
           "label": "Download for Windows",
           "kind": "exe",
-          "file": "Daebot-Setup-0.3.16-x64.exe",
-          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-Setup-0.3.16-x64.exe",
-          "size": 143086984,
-          "sha256": "3395d4cdbc9caa1bec3d82967069a53a16a4f2c703f1cf9b013af33da8a7b09d",
-          "version": "0.3.16"
+          "file": "Daebot-Setup-0.3.17-x64.exe",
+          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-Setup-0.3.17-x64.exe",
+          "size": 143114231,
+          "sha256": "a08917b9f1e8e4e4b5e5910d085fd838cd3598506efee7229a3514f1187f842e",
+          "version": "0.3.17"
         },
         {
           "label": "Windows on ARM (arm64)",
           "kind": "exe",
-          "file": "Daebot-Setup-0.3.16-arm64.exe",
-          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-Setup-0.3.16-arm64.exe",
-          "size": 136167125,
-          "sha256": "a63257922acb51d3f6b51f1fb083d1c25f1c746135a2b11f286b81ab1f0a5dba",
-          "version": "0.3.16"
+          "file": "Daebot-Setup-0.3.17-arm64.exe",
+          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-Setup-0.3.17-arm64.exe",
+          "size": 136195403,
+          "sha256": "170fbb18173197466ca7df1ba444043940e7dcde2637543334ffca28ad65def9",
+          "version": "0.3.17"
         }
       ]
     },
@@ -48,20 +48,20 @@
         {
           "label": "Download for Linux",
           "kind": "AppImage",
-          "file": "Daebot-0.3.16-linux-x86_64.AppImage",
-          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-0.3.16-linux-x86_64.AppImage",
-          "size": 168735070,
-          "sha256": "80d9fcbf900f099edd23f9ff2e8ad01c516f117c69bae8d049f546f812ecc255",
-          "version": "0.3.16"
+          "file": "Daebot-0.3.17-linux-x86_64.AppImage",
+          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-0.3.17-linux-x86_64.AppImage",
+          "size": 168800532,
+          "sha256": "dee4bd93bf5bfb1b3de6cb0bfe5bf0686c254a7281fe29a0b9dcf3c6f865dc5a",
+          "version": "0.3.17"
         },
         {
           "label": "Debian and Ubuntu (.deb)",
           "kind": "deb",
-          "file": "Daebot-0.3.16-linux-amd64.deb",
-          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-0.3.16-linux-amd64.deb",
-          "size": 132265952,
-          "sha256": "52661eefc4d8261515dc758e5ca16f3905bca38af7b359b3584dbd3ad75d9dca",
-          "version": "0.3.16"
+          "file": "Daebot-0.3.17-linux-amd64.deb",
+          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-0.3.17-linux-amd64.deb",
+          "size": 132309588,
+          "sha256": "937a9cbd2a3651841ac73d14015c50380b7d61a1d02fb9da56c6a26f135b13ed",
+          "version": "0.3.17"
         }
       ]
     }
