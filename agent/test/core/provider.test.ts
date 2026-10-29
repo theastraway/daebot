@@ -48,7 +48,7 @@ test("parses text, assembled split tool-call JSON, usage and cost (even with 7-b
   assert.equal(body.stream, true);
   assert.equal(body.tools[0].function.name, "x");
   assert.equal(seen.init.headers["HTTP-Referer"], "https://www.m-i-n-d.ai/mindclaw");
-  assert.equal(seen.init.headers["X-Title"], "MINDClaw");
+  assert.equal(seen.init.headers["X-Title"], "Daebot");
   assert.equal(seen.init.headers.Authorization, "Bearer or-test");
 });
 

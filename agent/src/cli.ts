@@ -180,7 +180,7 @@ async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promis
   }
   if (hosted) {
     // Never print the login secret (platform logs are not a safe place for it).
-    process.stdout.write(`MINDClaw hosted gateway listening on ${gw.url} (login required; allowed hosts: ${hosted.allowedHosts.join(", ")}; MIND sign-in: ${auth?.store.enabled ? `on (${auth.store.count()} users${auth.oauth ? ", OAuth" : ""})` : "off, set DAEBOT_SECRET_KEY to enable"})\n`);
+    process.stdout.write(`Daebot hosted gateway listening on ${gw.url} (login required; allowed hosts: ${hosted.allowedHosts.join(", ")}; MIND sign-in: ${auth?.store.enabled ? `on (${auth.store.count()} users${auth.oauth ? ", OAuth" : ""})` : "off, set DAEBOT_SECRET_KEY to enable"})\n`);
   } else {
     process.stdout.write(`Daebot gateway on ${gw.url} (token in ~/.daebot/gateway-token)\n`);
     // Machine-readable line for the desktop shell and scripts.

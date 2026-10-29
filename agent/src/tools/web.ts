@@ -40,7 +40,7 @@ export function createWebFetchTool(fetchImpl: typeof fetch = fetch): Tool {
       try {
         const res = await fetchImpl(url, {
           method: "GET",
-          headers: { "User-Agent": "MINDClaw/0.2 (+https://www.m-i-n-d.ai/mindclaw)", Accept: "text/html,text/plain,application/json,*/*" },
+          headers: { "User-Agent": "Daebot/0.3 (+https://daebot.live)", Accept: "text/html,text/plain,application/json,*/*" },
           redirect: "follow",
           signal: ctx.signal,
         });
