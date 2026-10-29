@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 // @ts-expect-error plain browser module
-import { clip, closesOnClick, historyOp, dividerLabel, involves, needsDivider, otherOf, titleOf, unreadList, safeColor } from "../../web/exchanges.js";
+import { clip, closesOnArrow, closesOnClick, historyOp, dividerLabel, involves, needsDivider, otherOf, titleOf, unreadList, safeColor } from "../../web/exchanges.js";
 // @ts-expect-error plain browser module
 import { generalSessions } from "../../web/bots.js";
 
@@ -79,4 +79,13 @@ test("the exchange view is wired to close on every way off the screen", () => {
   for (const fn of ["selectSession", "newSession", "newBotThread"]) assert.match(app, new RegExp(`function ${fn}\\([^)]*\\) \\{\\n  if \\(xchg\\) xchg\\.close\\("nav"\\)`));
   assert.match(css, /\.xv \{[^}]*z-index: 11/); // under the phone sidebar (z 20), so the sidebar can open over it
   assert.match(css, /\.xv-back \{[^}]*height: 40px/);
+});
+
+test("ArrowLeft/ArrowRight on the Sessions/Bots switch leave the exchange; other keys do not", () => {
+  assert.equal(closesOnArrow("ArrowLeft"), true);
+  assert.equal(closesOnArrow("ArrowRight"), true);
+  assert.equal(closesOnArrow("Enter"), false);
+  assert.equal(closesOnArrow("ArrowDown"), false);
+  const src = readFileSync(new URL("../../web/exchanges.js", import.meta.url), "utf8");
+  assert.match(src, /getElementById\("seg"\)[\s\S]*closesOnArrow\(e\.key\)/);
 });
