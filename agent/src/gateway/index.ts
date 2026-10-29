@@ -1048,6 +1048,12 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         // `linked`: connections that ride on a MIND app (GitHub through the user's GitHub connection). They show under that app's one row, never as a second row.
         return sendJson(res, 200, { items, counts: { official: items.filter((i) => i.publisher === "official").length, community: items.filter((i) => i.publisher === "community").length }, linked: mcp.integrationServers(me.id) });
       }
+      // "Add tools" on a connected MIND app (GitHub): MIND tries the vendor's MCP server with the app's own token right now and says what happened.
+      if (path === "/mcp/integrations/link") {
+        if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+        const b = await readJson(req);
+        return sendJson(res, 200, await mcp.linkIntegration(me.id, optStr(b.provider, 40) ?? ""));
+      }
       // Connect on a connector: creates the same pending request a model's proposal would. The URL is looked up here by id; the body never carries one.
       if (path === "/mcp/catalog/connect") {
         if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });

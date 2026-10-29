@@ -174,7 +174,7 @@ export function connectedAppsLines(state: AppsState, c: ComposeContext): string[
       const live = a.connected ? c.servers.find((s) => s.id === a.serverId) : undefined;
       line += a.connected
         ? ` ${a.label}: connected${live ? ` (${plural(live.tools, "tool")})` : ""}.`
-        : ` ${a.label}: not connected (a separate, optional connector the user adds inside this app in Apps; without it you cannot act in ${oneLineUntrusted(p.name, 40)}, only read what MIND synced).`;
+        : ` ${a.label}: NOT connected. ${oneLineUntrusted(p.name, 40)} is connected to MIND for syncing only, so you have NO ${oneLineUntrusted(p.name, 40)} tools or MCP server this turn and must not pretend to. Tell the user plainly, and that Apps > ${oneLineUntrusted(p.name, 40)} > Add tools connects them.`;
     }
     out.push(line);
   }

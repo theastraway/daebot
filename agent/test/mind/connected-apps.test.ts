@@ -167,7 +167,7 @@ test("the Connected apps section lists what is connected with account, what it b
   assert.match(text, /GitHub \(theastraway\): brings files into MIND\. Reach it with files: mind_query and mind_folders_read\./);
   assert.match(text, /Dropbox \(anthony@theastraway\.com\): brings files into MIND/);
   assert.match(text, /Apple Calendar \(anthony@theastraway\.com\): brings calendar into MIND\. Reach it with calendar: mind_calendar\./);
-  assert.match(text, /GitHub actions \(issues, pull requests, code\): not connected \(a separate, optional connector/, "the other half of GitHub is said plainly");
+  assert.match(text, /GitHub actions \(issues, pull requests, code\): NOT connected\. GitHub is connected to MIND for syncing only, so you have NO GitHub tools/, "the other half of GitHub is said plainly");
   assert.match(text, /Connected MCP server connectors[^\n]*\n- n8n: 3 tools/);
   assert.match(text, /Connectors available but not connected: Microsoft 365, Zoom, Slack, Box, Notion, HubSpot and Stripe\./);
   assert.match(text, /call mind_apps so your answer carries a MIND✓ receipt/);

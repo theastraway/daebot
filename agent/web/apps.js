@@ -21,6 +21,7 @@ import { markFor } from "/apps-icons.js";
 export function statusOf(e) {
   if (e.waiting && !e.connected) return { text: "Waiting for your approval", tone: "warn" };
   if (e.connected && e.needsReconnect) return { text: "Needs reconnect", tone: "warn" };
+  if (e.connected && e.toolsNote) return { text: `Connected${e.account ? ` · ${e.account}` : ""} · ${e.toolsNote}`, tone: "warn" };
   if (e.connected) return { text: e.account ? `Connected · ${e.account}` : "Connected", tone: "ok" };
   return { text: "Not connected", tone: "off" };
 }
@@ -160,6 +161,12 @@ function rowFor(e, handlers) {
       manage.setAttribute("aria-label", `Manage ${e.name}`);
       manage.addEventListener("click", () => handlers.onManage(e));
       actions.append(manage);
+    }
+    if (e.connected && e.addTools && handlers.onAddTools) {
+      const add = el("button", "btn-primary app-btn", e.addTools.label || "Add tools"); add.type = "button";
+      add.setAttribute("aria-label", `${add.textContent} ${e.name}`);
+      add.addEventListener("click", () => handlers.onAddTools(e, { busy: (on) => { add.disabled = on; }, say: (t, tone) => { stateEl.textContent = t; stateEl.className = `app-state is-${tone || "warn"}`; } }));
+      actions.append(add);
     }
     actions.append(btn);
     row.append(logoFor(e), main, actions);
