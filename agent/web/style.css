@@ -736,3 +736,26 @@ button.bd-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -
 #model-badge[data-pinned="1"] .mb-chev { display: none; }
 @media (max-width: 520px) { #model-badge[data-pinned="1"] .mb-via { display: none; } }
 select.fld { appearance: auto; }
+
+/* Routines (bot settings) */
+.rt-list { display: grid; gap: 10px; }
+.rt-row { display: grid; gap: 4px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); min-width: 0; }
+.rt-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rt-head .rt-name { font: 650 14px var(--sans); overflow-wrap: anywhere; flex: 1 1 auto; min-width: 0; }
+.rt-tag { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--line); color: var(--ink-3); }
+.rt-switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-3); cursor: pointer; }
+.rt-switch input { width: 18px; height: 18px; accent-color: var(--led-deep); }
+.rt-when { font-size: 13.5px; color: var(--ink); }
+.rt-next, .rt-last { font-size: 12.5px; color: var(--ink-3); overflow-wrap: anywhere; }
+.rt-url { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 2px; }
+.rt-code { flex: 1 1 100%; min-width: 0; font: 11.5px/1.4 var(--mono); padding: 6px 8px; border-radius: 8px; background: var(--line); overflow-wrap: anywhere; user-select: all; }
+.rt-acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.rt-btn { font-size: 12.5px; padding: 5px 10px; }
+.rt-del { color: var(--danger, #c0392b); }
+.rt-form { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line-strong); border-radius: 12px; margin-top: 4px; }
+.rt-form h4 { margin: 0; font: 650 14px var(--display); }
+.rt-grp { display: grid; gap: 8px; }
+.rt-grp[hidden], .rt-form [hidden] { display: none !important; }
+.rt-form select.fld { appearance: auto; }
+.rt-form .fld-area { font: 14px/1.45 var(--sans); min-height: 72px; }
+.drawer-fine.warn, .inline-state.warn { color: var(--danger, #c0392b); }

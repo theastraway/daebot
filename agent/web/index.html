@@ -202,6 +202,39 @@
         <div class="swatches" id="bd-colors" role="radiogroup" aria-labelledby="bd-colors-label"></div>
         <div class="row"><button class="btn-primary" id="bd-save" type="button" disabled>Save details</button><span class="inline-state" id="bd-state" role="status" aria-live="polite"></span></div>
       </section>
+      <section class="dsec" id="bd-routines">
+        <h3>Routines</h3>
+        <p class="drawer-fine">Work this bot does on its own, on a clock or when something happens. Each run lands in the bot's thread named after the routine. Built into Daebot: nothing to install.</p>
+        <div class="rt-list" id="rt-list"></div>
+        <div class="row"><button class="btn-quiet" id="rt-add" type="button">Add routine</button><span class="inline-state" id="rt-state" role="status" aria-live="polite"></span></div>
+        <form class="rt-form" id="rt-form" hidden autocomplete="off">
+          <h4 id="rt-form-title">Add a routine</h4>
+          <label class="fld-label" for="rt-name">Name</label>
+          <input class="fld" id="rt-name" type="text" maxlength="60">
+          <div><label class="fld-label" for="rt-prompt">What it does each time</label>
+          <textarea class="fld-area" id="rt-prompt" rows="4" maxlength="4000" placeholder="Write the time in one line."></textarea></div>
+          <label class="fld-label" for="rt-type">Runs</label>
+          <select class="fld" id="rt-type"><option value="timed">On a clock</option><option value="trigger">When something happens</option></select>
+          <div id="rt-clock" class="rt-grp">
+            <label class="fld-label" for="rt-preset">How often</label>
+            <select class="fld" id="rt-preset"><option value="minutes">Every few minutes</option><option value="hourly">Every hour</option><option value="daily">Every day at…</option><option value="weekdays">Weekdays at…</option><option value="custom">Custom (5 fields)</option></select>
+            <div><label class="fld-label" for="rt-n">Every how many minutes</label><input class="fld" id="rt-n" type="number" min="1" max="59" value="15"></div>
+            <div><label class="fld-label" for="rt-minute">At minute</label><input class="fld" id="rt-minute" type="number" min="0" max="59" value="0"></div>
+            <div><label class="fld-label" for="rt-time">Time</label><input class="fld" id="rt-time" type="time" value="09:00"></div>
+            <div><label class="fld-label" for="rt-expr">Minute Hour Day Month Weekday</label><input class="fld" id="rt-expr" type="text" value="0 9 * * 1-5" spellcheck="false"></div>
+            <label class="fld-label" for="rt-tz">Time zone</label>
+            <input class="fld" id="rt-tz" type="text" list="rt-tz-list" placeholder="America/New_York" spellcheck="false">
+            <p class="drawer-fine" id="rt-preview" role="status" aria-live="polite"></p>
+          </div>
+          <div id="rt-trig" class="rt-grp" hidden>
+            <label class="fld-label" for="rt-trigger">When</label>
+            <select class="fld" id="rt-trigger"><option value="webhook">A web address is called (webhook)</option><option value="thread_message">I message the bot in any of its threads</option><option value="bot_message">Another bot talks to it</option></select>
+            <div><label class="fld-label" for="rt-from">Only from this bot (slug, optional)</label><input class="fld" id="rt-from" type="text" maxlength="32"></div>
+          </div>
+          <p class="drawer-fine warn" id="rt-err" role="alert" hidden></p>
+          <div class="row"><button class="btn-primary" id="rt-save" type="submit">Save routine</button><button class="btn-quiet" id="rt-cancel" type="button">Cancel</button></div>
+        </form>
+      </section>
       <section class="dsec" id="bd-version">
         <h3>Version</h3>
         <p class="drawer-fine" id="bd-ver-current"></p>

@@ -148,7 +148,9 @@ test("tools in a bot session: same set as a session (+ bot_talk, mind_tenants); 
     assert.ok(mainNames.includes("task_board") && !names.includes("task_board"));
     // bot_manage (Daebot makes bots) is the user's own session only, like task_board: a bot never gets it.
     assert.ok(mainNames.includes("bot_manage") && !names.includes("bot_manage"));
-    assert.deepEqual(mainNames.filter((n) => n !== "task_board" && n !== "bot_manage").sort(), [...names].sort(), "a session and a bot get the same tools");
+    // bot_self (see my threads, push work along, record lessons for the Heartbeat) is the bot's own: a main session never gets it.
+    assert.ok(names.includes("bot_self") && !mainNames.includes("bot_self"));
+    assert.deepEqual(mainNames.filter((n) => n !== "task_board" && n !== "bot_manage").sort(), names.filter((n) => n !== "bot_self").sort(), "a session and a bot get the same tools");
     for (const n of ["bot_talk", "mind_tenants", "mind_query", "mind_remember"]) assert.ok(names.includes(n), n);
     assert.ok(calls.every((c) => !JSON.stringify(c.body ?? {}).includes('"mind"')));
     assert.ok(evs.filter((e) => e.type === "toolEnd").every((e: any) => e.ok), JSON.stringify(evs.filter((e) => e.type === "toolEnd")));

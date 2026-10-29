@@ -58,7 +58,7 @@ export function hostedPort(env: NodeJS.ProcessEnv = process.env): number | undef
 // The ONLY tools a hosted session may offer or run: web_fetch, decide (read-only decision advice), view_photo (reads the photos the user attached to this chat), apple_calendar (runs on the USER's device through the relay, never on this host), bot_talk, bot_manage (creates and configures the user's own bots), mcp_connect, the mind_* family (incl. mind_tenants and the connected-app tools mind_apps, mind_mail, mind_calendar and mind_contacts: they call MIND with the signed-in user's own key and never touch this host), and tools of remote MCP servers
 // the operator listed in MINDCLAW_MCP_SERVERS (named `<server>__<tool>`; no host tool name contains "__").
 export function hostedToolAllowed(name: string): boolean {
-  return name === "web_fetch" || name === "decide" || name === "view_photo" || name === "apple_calendar" || name === "bot_talk" || name === "bot_manage" || name === "mcp_connect" || name === "task_board" || name === "mind_tenants" || /^mind_[a-z0-9_]+$/.test(name) || /^[a-z0-9][a-z0-9-]{0,30}__[A-Za-z0-9_-]+$/.test(name);
+  return name === "web_fetch" || name === "decide" || name === "view_photo" || name === "apple_calendar" || name === "bot_talk" || name === "bot_manage" || name === "bot_self" || name === "mcp_connect" || name === "task_board" || name === "mind_tenants" || /^mind_[a-z0-9_]+$/.test(name) || /^[a-z0-9][a-z0-9-]{0,30}__[A-Za-z0-9_-]+$/.test(name);
 }
 
 export function filterHostedTools(tools: Tool[]): Tool[] {
