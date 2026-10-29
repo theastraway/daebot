@@ -181,6 +181,8 @@ test("web wiring: both buttons, the pill, the hint, the shortcuts card, and no i
   const app = web("app.js");
   assert.match(app, /from "\/hotkeys\.js"/);
   assert.match(app, /voiceBtn: \$\("btn-voice"\)/);
+  assert.equal((app.match(/dispatchEvent\(new Event\("daebot:who"\)\)/g) || []).length, 2, "both sign-in paths announce the account");
+  assert.match(web("hotkeys.js"), /addEventListener\("daebot:who"/);
   assert.doesNotMatch(web("hotkeys.js").replace(/^\s*\/\/.*$/gm, ""), /innerHTML|insertAdjacentHTML|eval\(|new Function|document\.write|fetch\(/);
 });
 
