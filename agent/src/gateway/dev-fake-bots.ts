@@ -2,7 +2,7 @@
 // (a reverse proxy: anything it does not own is piped straight through), so the web UI can be built and screenshotted
 // before the real endpoints land. Nothing here is imported by the gateway itself.
 //
-//   GET/POST /bots, PATCH/DELETE /bots/:id, GET/PUT /bots/:id/instructions
+//   GET/POST /bots, PATCH/DELETE /bots/:id (PATCH takes model: an id, or null to clear), GET/PUT /bots/:id/instructions
 //   GET /sessions?bot=<id>, GET /sessions (annotated with `bot`/`peer`), POST /sessions {bot,model}, PATCH /sessions/:id {model}
 //   GET /models
 import { request as httpRequest } from "node:http";
@@ -10,7 +10,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { COOKIE_NAME, parseCookies, safeEqual } from "./auth.ts";
 import { isFaceId } from "../bots/faces.ts";
 
-export interface FakeBot { id: string; slug: string; name: string; purpose: string; color: string; face?: string | null; updatedAt: number; live: boolean; busy: boolean }
+export interface FakeBot { id: string; slug: string; name: string; purpose: string; color: string; face?: string | null; model?: string | null; updatedAt: number; live: boolean; busy: boolean }
 
 const MAX_INSTRUCTIONS = 8 * 1024;
 const COLORS = ["#ffd25a", "#ff9a3d", "#7dff9a", "#5ee0ff", "#a98bff", "#ff7ad9"];
@@ -149,6 +149,10 @@ export function createBotsFake(opts: { token: string; backendPort: number; botLi
           if (b.face !== undefined) {
             if (b.face !== null && b.face !== "" && !isFaceId(b.face)) { json(res, 400, { error: "bad_face" }); return true; }
             bot.face = b.face || null;
+          }
+          if (b.model !== undefined) {
+            if (b.model === null || b.model === "") bot.model = null;
+            else { const row = MODELS.find((x) => x.id === b.model); if (!row) { json(res, 400, { error: "unknown_model" }); return true; } if (!row.allowed) { json(res, 403, { error: "model_locked" }); return true; } bot.model = row.id; }
           }
           bot.updatedAt = Date.now();
           json(res, 200, bot);

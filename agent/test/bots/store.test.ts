@@ -209,3 +209,33 @@ test("botMindApi maps MIND statuses: 409 duplicate, 402 bot_limit with limit/tie
   const bad = botMindApi(mkClient(() => ({ weird: true })));
   await assert.rejects(() => bad.list(), (e: any) => e.status === 502);
 });
+
+test("bot model override: persists across a restart, is validated, can be cleared, and is per owner", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bots-model-"));
+  const mind = fakeMindApi();
+  const s = mk(dir, "u1", mind);
+  const b = await s.create({ slug: "sales", name: "Sales" });
+  assert.equal(b.model, undefined, "no override by default");
+  const set = s.update(b.id, { model: "vendor/big" });
+  assert.equal(set.model, "vendor/big");
+  // other fields never touch it
+  assert.equal(s.update(b.id, { name: "Sales 2" }).model, "vendor/big");
+  // restart: read back from disk
+  const s2 = mk(dir, "u1", mind);
+  assert.equal(s2.get(b.id)!.model, "vendor/big");
+  assert.equal(s2.snapshot()[0].model, "vendor/big");
+  // validation: a malformed id is a 400 and changes nothing
+  for (const bad of ["bad model!!", "../x", " ", "a".repeat(200), 5 as any]) {
+    assert.throws(() => s2.update(b.id, { model: bad }), (e: any) => e instanceof BotError && e.status === 400 && e.code === "bad_model", String(bad));
+  }
+  assert.equal(s2.get(b.id)!.model, "vendor/big");
+  // clearing: null and "" both remove the override, and that persists too
+  assert.equal(s2.update(b.id, { model: null }).model, undefined);
+  assert.equal(mk(dir, "u1", mind).get(b.id)!.model, undefined);
+  s2.update(b.id, { model: "vendor/small" });
+  assert.equal(s2.update(b.id, { model: "" }).model, undefined);
+  // owner scoped: another owner's store has no such bot, so cannot read or set its model
+  const other = mk(dir, "u2", mind);
+  assert.equal(other.get(b.id), undefined);
+  assert.throws(() => other.update(b.id, { model: "vendor/big" }), (e: any) => e.status === 404);
+});

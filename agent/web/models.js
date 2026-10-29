@@ -114,18 +114,19 @@ export function badgeTitle({ label, served, chosen, servedLabel }) {
   return `${label}. Click to change.`;
 }
 
-export function initModels({ json, store, notify, icon, getSessionId, onPicked }) {
+export function initModels({ json, store, notify, icon, getSessionId, onPicked, onPinnedClick }) {
   const $ = (id) => document.getElementById(id);
   const btn = $("model-badge"), menu = $("model-menu"), nameEl = $("mb-name"), viaEl = $("mb-via");
   if (!btn || !menu || !nameEl) return null;
 
-  const st = { rows: [], def: "", loaded: false, failed: false, served: "", health: "", chosen: new Map(), open: false, expanded: new Set() };
+  const st = { rows: [], def: "", loaded: false, failed: false, served: "", health: "", chosen: new Map(), open: false, expanded: new Set(), pinned: "" };
   const stored = () => store.get("localStorage", MODEL_KEY) || "";
   const rowOf = (id) => st.rows.find((r) => r.id === id);
   const labelOf = (id) => { const r = rowOf(id); return r ? r.name : prettyModel(id); };
 
   function sessionChosen() { const id = getSessionId(); return id ? st.chosen.get(id) || "" : ""; }
   function currentId() {
+    if (st.pinned) return st.pinned; // a bot thread: the bot's model is what runs
     return badgeModel({ served: st.served, chosen: sessionChosen(), def: stored() || st.def, health: st.health });
   }
 
@@ -133,9 +134,17 @@ export function initModels({ json, store, notify, icon, getSessionId, onPicked }
     const id = currentId();
     const label = id ? labelOf(id) : "";
     nameEl.textContent = label;
-    if (viaEl) viaEl.textContent = "";
+    if (viaEl) viaEl.textContent = st.pinned ? "set by bot" : "";
     btn.dataset.owned = label ? "1" : "";
+    btn.dataset.pinned = st.pinned ? "1" : "";
     btn.hidden = !label;
+    if (st.pinned) {
+      btn.title = `${label}. Set by this bot's settings: this bot's threads always use it. Click to open the bot's settings.`;
+      btn.setAttribute("aria-label", `Model: ${label}, set by bot. Open bot settings to change`);
+      btn.removeAttribute("aria-haspopup"); btn.removeAttribute("aria-expanded");
+      return;
+    }
+    btn.setAttribute("aria-haspopup", "menu"); btn.setAttribute("aria-expanded", String(st.open));
     btn.title = badgeTitle({ label, served: st.served, chosen: sessionChosen(), servedLabel: st.served ? labelOf(st.served) : "" });
     btn.setAttribute("aria-label", label ? `Model: ${label}. Change model` : "Choose a model");
   }
@@ -253,7 +262,10 @@ export function initModels({ json, store, notify, icon, getSessionId, onPicked }
     if (first) first.focus();
   }
 
-  btn.addEventListener("click", () => setOpen(!st.open));
+  btn.addEventListener("click", () => {
+    if (st.pinned) { if (st.open) setOpen(false); if (onPinnedClick) onPinnedClick(); return; } // the bot's model is changed in Bot settings, not here
+    setOpen(!st.open);
+  });
   document.addEventListener("pointerdown", (e) => { if (st.open && !menu.contains(e.target) && !btn.contains(e.target)) setOpen(false); });
   menu.addEventListener("keydown", (e) => {
     const items = [...menu.querySelectorAll(".mm-group, .mm-item")];
@@ -263,7 +275,7 @@ export function initModels({ json, store, notify, icon, getSessionId, onPicked }
     else if (e.key === "Home") { e.preventDefault(); items[0]?.focus(); }
     else if (e.key === "End") { e.preventDefault(); items[items.length - 1]?.focus(); }
   });
-  btn.addEventListener("keydown", (e) => { if (e.key === "ArrowDown" && !st.open) { e.preventDefault(); setOpen(true); } });
+  btn.addEventListener("keydown", (e) => { if (e.key === "ArrowDown" && !st.open && !st.pinned) { e.preventDefault(); setOpen(true); } });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && st.open) { e.stopPropagation(); setOpen(false); btn.focus(); }
   }, true);
@@ -278,6 +290,12 @@ export function initModels({ json, store, notify, icon, getSessionId, onPicked }
     setHealth(id) { st.health = id || ""; paint(); },
     /** The session on screen changed: re-read which model it uses. */
     refresh() { paint(); if (st.open) render(); },
+    /** A bot thread is on screen and its bot has its own model ("" = none): the badge shows that model, locked, with a "set by bot" note. */
+    setPinned(id) { st.pinned = id || ""; if (st.pinned && st.open) setOpen(false); paint(); },
+    /** The model list as loaded for the badge (shared with Bot settings). */
+    list: load,
+    rows: () => st.rows,
+    labelOf,
     /** Sent with POST /sessions so a new session starts on the chosen default ("" lets the server decide). */
     defaultForNew() { return stored(); },
     close() { setOpen(false); },

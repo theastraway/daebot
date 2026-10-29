@@ -429,6 +429,7 @@ function renderHeader() {
   els.usageCost.textContent = fmtCost(u.cost);
   const tm = transcript(tkey()).model || state.model; els.usage.title = tm ? `Model: ${tm}` : "";
   models.setServed(transcript(tkey()).model || "");
+  models.setPinned(bot && bot.model ? bot.model : ""); // a bot thread whose bot has its own model: the badge shows it, locked
   bots.sync();
   setBusyUi();
   chatMode?.render();
@@ -1189,6 +1190,7 @@ const models = initModels({
   json, store, notify, icon,
   getSessionId: () => state.currentId,
   onPicked: () => renderHeader(),
+  onPinnedClick: () => { if (state.curBot) bots.openSettings(state.curBot); },
 });
 const bots = initBots({
   json, api, store, h, icon, ago, notify,
@@ -1200,6 +1202,7 @@ const bots = initBots({
     openThread: (s) => selectSession(s),
     closeViolations: () => { if (!els.drawer.hidden) toggleDrawer(false); board.close(); },
     botChanged: () => renderHeader(),
+    modelRows: async () => { if (!models) return []; await models.list(); return models.rows(); },
     botDeleted: (id) => { if (state.curBot === id) newSession(); refreshSessions(); },
     threadDeleted: (s) => deleteSession(s),
   },

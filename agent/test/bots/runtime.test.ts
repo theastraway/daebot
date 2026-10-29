@@ -258,3 +258,44 @@ test("a bot turn's LLM request uses the MAIN MIND key (billing stays on MAIN) an
     assert.ok(llm[0].url.endsWith("/llm/chat/completions"));
   } finally { await fake.close(); }
 });
+
+test("bot model override: a bot's threads run on the bot's model; main and other bots do not; clearing returns to the normal choice; survives a restart", async () => {
+  const w = await world({ rounds: Array.from({ length: 12 }, (_, i) => ({ text: `r${i}` })) });
+  try {
+    const sales = await w.runtime.bots!.create({ slug: "sales", name: "Sales" });
+    const ops = await w.runtime.bots!.create({ slug: "ops", name: "Ops" });
+    w.runtime.settings!.set({ defaultModel: "vendor/default-x" });
+    const last = () => w.provider.requests.at(-1)!;
+    const run = async (s: { send(m: string): AsyncIterable<unknown> }, t: string) => { await collect(s.send(t) as any); return last(); };
+    const sThread = await w.runtime.openSession({ surface: "web", botId: sales.id, identity: "admin" });
+    const oThread = await w.runtime.openSession({ surface: "web", botId: ops.id, identity: "admin" });
+    const main = await w.runtime.openSession({ surface: "web", identity: "admin", model: "vendor/header-pick" });
+    // before any override everything follows the normal choice
+    assert.equal((await run(sThread, "1")).model, "vendor/default-x");
+    // set the override: the very next turn of the EXISTING thread runs on it (no reopen)
+    w.runtime.bots!.update(sales.id, { model: "vendor/bot-model" });
+    const r2 = await run(sThread, "2");
+    assert.equal(r2.model, "vendor/bot-model");
+    assert.match(r2.messages[0].content as string, /you run on vendor\/bot-model/, "the prompt names the bot's model too");
+    // a session-level model on the bot thread does not beat the bot's model
+    sThread.setModel!("vendor/header-pick");
+    assert.equal((await run(sThread, "3")).model, "vendor/bot-model");
+    // other bot and main are untouched
+    assert.equal((await run(oThread, "4")).model, "vendor/default-x");
+    assert.equal((await run(main, "5")).model, "vendor/header-pick");
+    // a NEW thread of the same bot also uses it
+    const sThread2 = await w.runtime.openSession({ surface: "web", botId: sales.id, identity: "admin" });
+    assert.equal((await run(sThread2, "6")).model, "vendor/bot-model");
+    // restart: the override is on the bot, the stored thread resumes on it
+    await new Promise((r) => setTimeout(r, 50));
+    const rt2 = w.mkRuntime();
+    const back = await rt2.openSession({ surface: "web", resumeId: sThread.id, identity: "admin" });
+    assert.equal((await run(back, "7")).model, "vendor/bot-model");
+    // clearing: threads return to the normal choice (the thread's own pick, else the user default); main is still its own
+    rt2.bots!.update(sales.id, { model: null });
+    assert.equal((await run(back, "8")).model, "vendor/header-pick", "the thread's own earlier pick applies again");
+    const fresh = await rt2.openSession({ surface: "web", botId: sales.id, identity: "admin" });
+    assert.equal((await run(fresh, "9")).model, "vendor/default-x", "a thread with no pick of its own uses the user default");
+    assert.equal((await run(main, "10")).model, "vendor/header-pick", "main never saw the bot's model");
+  } finally { await w.close(); }
+});
