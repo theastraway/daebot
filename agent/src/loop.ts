@@ -55,6 +55,16 @@ export interface SessionDeps {
   permMode?: () => SessionPermMode | undefined;
   /** Tools that can appear or change between turns (e.g. MCP servers the user connected mid-chat). Re-read every round; a name already in `tools` is never shadowed. */
   dynamicTools?: () => Tool[];
+  /** Wall clock in ms (tests inject a fake one). Default Date.now. */
+  now?: () => number;
+}
+
+/** How many identical tool calls in a row (same tool, same args) before the model is told to change approach. */
+export const REPEAT_CALL_LIMIT = 8;
+
+/** The 5-minute reminder the model sees at a round boundary. It is context only: the user sees the model's own one-line reply, never this text. */
+export function checkInReminder(minutes: number): string {
+  return `[Check-in: ${minutes} min into this turn. Write ONE line to the user saying what you are doing and what is left. Check your task board (task_board get) and update statuses. Then keep going: push the work to finished; do not stop to ask unless you truly need a decision, and if so mark that task stopped with the question. If you are actually finished, just give your final answer instead.]`;
 }
 
 /** Plain-words reply used when the model ends a turn with no text. A refused tool call must never leave the user with a blank reply. */
@@ -138,6 +148,9 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
 
   const enforced = () => !state.shadow;
   let blockedThisTurn: { tool: string; gate: string }[] = [];
+  let lastCallSig = "";
+  let sameCallCount = 0;
+  let loopNudges: string[] = [];
   let turnOrigin: "user" | "bot" = "user";
   let turnInteractive = false;
   let turnCaps: string[] = [];
@@ -189,6 +202,14 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
       if (note) { learnedNote = { role: "system", content: note }; messages.push(learnedNote); }
     }
 
+    const clock = deps.now ?? Date.now;
+    const checkInMs = cfg.checkInMs && cfg.checkInMs > 0 ? cfg.checkInMs : 0;
+    const checkInStart = clock();
+    let nextCheckIn = checkInStart + checkInMs;
+    let checkInNote: Message | undefined;
+    const dropCheckIn = () => { if (checkInNote) { const i = messages.indexOf(checkInNote); if (i >= 0) messages.splice(i, 1); checkInNote = undefined; } };
+    lastCallSig = ""; sameCallCount = 0; loopNudges = [];
+
     let finalText: string | undefined;
     let pendingNarration = "";
     let regenerations = 0;
@@ -197,8 +218,17 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     blockedThisTurn = [];
 
     try {
-      for (let round = 0; round < cfg.maxToolRoundsPerTurn; round++) {
+      for (let round = 0; cfg.maxToolRoundsPerTurn === undefined || round < cfg.maxToolRoundsPerTurn; round++) {
         if (signal?.aborted) throw abortErr();
+
+        // ---- check-in: a long turn gets a reminder every checkInMs, at a round boundary, as hidden context.
+        dropCheckIn();
+        if (checkInMs && clock() >= nextCheckIn) {
+          const mins = Math.max(1, Math.round((clock() - checkInStart) / 60_000));
+          checkInNote = { role: "system", content: checkInReminder(mins) };
+          messages.push(checkInNote);
+          nextCheckIn = clock() + checkInMs;
+        }
 
         yield* maybeCompact(signal);
 
@@ -260,6 +290,8 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
             }
           }
           if (withheldNudge) messages.push({ role: "system", content: withheldNudge });
+          for (const n of loopNudges) messages.push({ role: "system", content: n });
+          loopNudges = [];
           if (confirmed) break;
           continue;
         }
@@ -294,11 +326,13 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
         if (confirmed) {
           finalText = pendingNarration;
         } else {
+          // Only reachable when an operator set MINDCLAW_MAX_TOOL_ROUNDS; by default there is no round limit.
           yield { type: "notice", level: "warn", text: `stopped after ${cfg.maxToolRoundsPerTurn} tool rounds` };
           finalText = pendingNarration || `[stopped after ${cfg.maxToolRoundsPerTurn} tool rounds without a final answer]`;
         }
       }
     } catch (e) {
+      dropCheckIn();
       if (isAbort(e, signal)) {
         finalText = "[aborted]";
         yield { type: "notice", level: "warn", text: "turn aborted" };
@@ -311,6 +345,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
       }
     }
 
+    dropCheckIn();
     // A turn that ended with no text (e.g. the model went silent after a gate refused one write) still answers the user.
     if (!failed && !confirmed && !(finalText ?? "").trim()) {
       finalText = emptyReplyFallback(blockedThisTurn);
@@ -498,6 +533,12 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     const msg = toolMsg(call, `[#${receiptId} ${tool.spec.name}${result.ok ? "" : " FAILED"}] ${result.output.length > MAX_TOOL_OUTPUT ? result.output.slice(0, MAX_TOOL_OUTPUT) + "\n[truncated]" : result.output}`);
     if (result.images?.length) msg.images = result.images.slice(0, 2);
     messages.push(msg);
+    // Same tool, same args, again and again: not a stop, a nudge to change approach (delivered at the round boundary).
+    const sig = callSignature(call);
+    if (sig === lastCallSig) sameCallCount++; else { lastCallSig = sig; sameCallCount = 1; }
+    if (sameCallCount > 0 && sameCallCount % REPEAT_CALL_LIMIT === 0) {
+      loopNudges.push(`[Loop guard: you have made the identical ${tool.spec.name} call ${sameCallCount} times in a row with the same arguments. It is not getting you anywhere. Change your approach: different arguments, a different tool, or tell the user what is blocking you.]`);
+    }
     return "ok";
   }
 

@@ -10,7 +10,6 @@ export const baseCfg = (over: Partial<Config> = {}): Config => ({
   models: { default: "m/default", cheap: "m/cheap", fallback: ["m/fallback"] },
   shadow: false,
   kernel: true,
-  maxToolRoundsPerTurn: 25,
   ...over,
 });
 

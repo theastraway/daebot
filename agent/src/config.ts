@@ -10,8 +10,8 @@ const DEFAULTS = {
   defaultModel: "qwen/qwen3.8-flash",
   cheapModel: "qwen/qwen3.8-flash",
   fallback: ["deepseek/deepseek-v4-flash"],
-  maxToolRoundsPerTurn: 25,
   contextWindow: 128_000,
+  checkInMs: 300_000, // while a turn is still running, remind the model every 5 minutes to give a one-line update and push its tasks along
   compactAt: 0.6,
   // Explorer (free tier) model when DAEBOT_BILLING=mind. On MIND's free list (mindapp /llm-models, tier "free") and, per OpenRouter's
   // live model metadata (supported_parameters), one of the free models that supports tool calling, which the agent loop needs.
@@ -24,6 +24,11 @@ const DEFAULTS = {
   visionFallback: ["anthropic/claude-haiku-5.5"],
   visionFreeModel: "google/gemma-4-31b-it:free",
 };
+
+function posMs(v: string | undefined): number | undefined {
+  const n = Number(v);
+  return v !== undefined && v.trim() !== "" && Number.isFinite(n) && n >= 1 ? Math.floor(n) : undefined;
+}
 
 function posInt(v: string | undefined): number | undefined {
   const n = Number(v);
@@ -73,7 +78,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 
   const shadowEnv = env.MINDCLAW_SHADOW;
   const kernelEnv = env.MINDCLAW_KERNEL;
-  const rounds = Number(env.MINDCLAW_MAX_TOOL_ROUNDS ?? file.maxToolRoundsPerTurn);
+  // Optional operator override. Unset (or not a positive number) = no round limit: a turn runs until the model answers or the user presses Stop.
+  const roundsRaw = env.MINDCLAW_MAX_TOOL_ROUNDS ?? file.maxToolRoundsPerTurn;
+  const rounds = roundsRaw === undefined || roundsRaw === null || String(roundsRaw).trim() === "" ? NaN : Number(roundsRaw);
 
   const mindApiKey = str(env.MIND_API_KEY) ?? str(file.mindApiKey) ?? "";
   const visionFallback = nameList(env.DAEBOT_VISION_FALLBACK, undefined);
@@ -99,7 +106,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     },
     shadow: shadowEnv !== undefined ? truthy(shadowEnv) : file.shadow === true,
     kernel: kernelEnv !== undefined ? kernelEnv.trim() !== "0" : file.kernel !== false,
-    maxToolRoundsPerTurn: Number.isFinite(rounds) && rounds > 0 ? Math.floor(rounds) : DEFAULTS.maxToolRoundsPerTurn,
+    ...(Number.isFinite(rounds) && rounds >= 1 ? { maxToolRoundsPerTurn: Math.floor(rounds) } : {}),
+    checkInMs: posMs(env.DAEBOT_CHECKIN_MS) ?? DEFAULTS.checkInMs,
     contextWindow: posInt(env.MINDCLAW_CONTEXT_WINDOW) ?? DEFAULTS.contextWindow,
     compactAt: fraction(env.MINDCLAW_COMPACT_AT) ?? DEFAULTS.compactAt,
   };

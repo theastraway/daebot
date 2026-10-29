@@ -15,7 +15,8 @@ test("defaults", () => {
   assert.deepEqual(c.models.fallback, ["deepseek/deepseek-v4-flash"]);
   assert.equal(c.contextWindow, 128000);
   assert.equal(c.compactAt, 0.6);
-  assert.equal(c.maxToolRoundsPerTurn, 25);
+  assert.equal(c.maxToolRoundsPerTurn, undefined); // no round limit by default
+  assert.equal(c.checkInMs, 300_000);
   assert.equal(c.kernel, true);
   assert.equal(c.shadow, false);
 });
