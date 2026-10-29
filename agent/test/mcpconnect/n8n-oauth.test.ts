@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { BASE, createFakeMind } from "./fake-mind-mcp.ts";
 import { McpStore } from "../../src/mcpconnect/store.ts";
 import { LOCAL_CONNECTORS, McpConnectService, n8nAddress, presetAddress } from "../../src/mcpconnect/service.ts";
 import { createMcpConnectTool } from "../../src/mcpconnect/tool.ts";
@@ -266,5 +267,39 @@ test("in chat: pasting an n8n page address makes mcp_connect produce the OAuth c
     const v = await svc.completeOAuth("u1", a.state, "code-1");
     assert.equal(v.preset, "local:n8n", "the chat route lands on the same n8n connection as the card");
     assert.equal((await svc.catalogItems("u1")).find((i) => i.id === "local:n8n")!.connected, true);
+  } finally { await m.close(); }
+});
+
+test("MIND holds this user's connections but refuses a host on its own hosting: the n8n card falls back to this gateway's own sign-in (and token path)", async () => {
+  const m = await n8nMock({ token: "n8n-api-token-ABC123" });
+  const mind = createFakeMind({ keys: { "mind_key_alice": "alice" } });
+  let refusals = 0;
+  const refusing: typeof fetch = async (input, init) => {
+    const u = String(input);
+    if ((init?.method ?? "GET") === "POST" && /\/mcp\/servers$/.test(u)) { refusals++; return new Response(JSON.stringify({ detail: { message: "That host belongs to MIND and cannot be submitted.", code: "refused" } }), { status: 422, headers: { "content-type": "application/json" } }); }
+    return mind.fetch(input as any, init);
+  };
+  try {
+    const store = new McpStore({ dir: mkdtempSync(join(tmpdir(), "n8noa-")), secretKey: "k".repeat(40) });
+    const svc = new McpConnectService({ store, net: m.net, env: {}, catalog: async () => [], mind: { baseUrl: BASE, keyFor: () => "mind_key_alice", fetchImpl: refusing } });
+    // token path first (n8n with no OAuth would use it): the local store holds it
+    const v = await svc.connectWithToken("alice", { presetId: "local:n8n", url: "https://n8n.example.test", token: "n8n-api-token-ABC123" });
+    assert.equal(v.auth, "key"); assert.equal(v.preset, "local:n8n");
+    assert.equal(store.list("alice").length, 1);
+    store.remove("alice", store.list("alice")[0].id);
+    // OAuth path
+    const m2 = await n8nMock();
+    try {
+      const svc2 = new McpConnectService({ store, net: m2.net, env: {}, catalog: async () => [], mind: { baseUrl: BASE, keyFor: () => "mind_key_alice", fetchImpl: refusing } });
+      const r = await svc2.connectWithOAuth("alice", { presetId: "local:n8n", url: "https://n8n.example.test", redirectUri: REDIRECT });
+      assert.equal(r.status, "authorize");
+      if (r.status !== "authorize") return;
+      assert.ok(r.state, "a local flow, bound to this gateway's callback");
+      approveAt(m2, r.url);
+      const v2 = await svc2.completeOAuth("alice", r.state, "code-1");
+      assert.equal(v2.auth, "oauth"); assert.equal(v2.preset, "local:n8n");
+      assert.equal(store.list("alice").length, 1);
+      assert.equal(refusals, 2, "MIND was asked both times and refused both times");
+    } finally { await m2.close(); }
   } finally { await m.close(); }
 });

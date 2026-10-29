@@ -230,6 +230,13 @@ export function n8nAddress(raw: string): string | undefined {
   return undefined;
 }
 
+/** MIND will not create a connection to an address that is on MIND's own infrastructure ("That host belongs to MIND and cannot be submitted"), because its
+ *  servers would be the ones calling it. A user's own n8n can sit on the same hosting. Daebot's own gateway can still reach that address, so for a
+ *  connector card (the user typed their own server) the connection is held in this gateway's own store instead. */
+export function mindRefusedHost(e: unknown): boolean {
+  return e instanceof McpConnectError && e.code === "refused" && /belongs to MIND/i.test(e.message);
+}
+
 function normalizeUrl(raw: string): URL {
   let u: URL;
   try { u = new URL(raw.trim()); } catch { throw new McpConnectError("That is not a valid URL."); }
@@ -476,9 +483,11 @@ export class McpConnectService {
       if (this.active(uid)) {
         // MIND probes the server with the token first and stores nothing unless it answers and accepts it. Daebot hands the token over once and keeps no copy.
         // `allow` is left to MIND's default (the read-only tools): a read-only tool of the user's own server runs without asking either way.
-        const r = await this.mindCreate(uid, { mode: "key", url: urlStr, token, name: p.suggestedName, preset: preset.id, source: "user" });
-        if (r.status !== "connected") throw new McpConnectError("That server asked for a sign-in instead of the token.");
-        return r.server;
+        try {
+          const r = await this.mindCreate(uid, { mode: "key", url: urlStr, token, name: p.suggestedName, preset: preset.id, source: "user" });
+          if (r.status !== "connected") throw new McpConnectError("That server asked for a sign-in instead of the token.");
+          return r.server;
+        } catch (e) { if (!mindRefusedHost(e)) throw e; /* MIND will not hold a connection to its own hosting: keep it in this gateway */ }
       }
       return await this.finish(uid, p, { kind: "key", key: token }, [], undefined, preset.id);
     } catch (e) {
@@ -679,7 +688,10 @@ export class McpConnectService {
     }
     // oauth
     if (!p.authRequired) throw new McpConnectError("That server does not need a sign-in.");
-    if (viaMind) return this.approveMind(uid, p, { mode: "oauth", allow: o.allow, name: o.name, returnTo: originRoot(o.redirectUri) });
+    if (viaMind) {
+      try { return await this.approveMind(uid, p, { mode: "oauth", allow: o.allow, name: o.name, returnTo: originRoot(o.redirectUri) }); }
+      catch (e) { if (!(p.preset && mindRefusedHost(e))) throw e; /* the user's own server on MIND's hosting: sign in from this gateway instead */ }
+    }
     let disc = p.discovery;
     if (!disc) { try { disc = await discover(this.net, p.url); } catch (e) { throw new McpConnectError(e instanceof OAuthError ? e.message : "Could not start the sign-in."); } }
     let client: { clientId: string; clientSecret?: string };
