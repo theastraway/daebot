@@ -743,10 +743,12 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       if (userCap?.exceeded() || costCap?.exceeded()) return { replies: [] };
       const tail = tailOf(e.recorder.events());
       if (!tail || !awaitsUser(tail.lastText, tail.endedOnConfirm)) return { replies: [] };
+      // The user's real context (priorities, recent), from the boot cache only: never a fresh MIND call on this path. Bot sessions skip it.
+      const context = e.bot || e.peer ? "" : bootCache.peek(cfg.mindApiKey)?.context ?? "";
       const key = `${tail.transcript.length}:${tail.lastText.length}:${tail.lastText.slice(-60)}:${tail.endedOnConfirm}`;
       const hit = suggestCache.get(id);
       if (hit && hit.key === key) return { replies: hit.replies };
-      const r = await generateReplies({ provider, model: cfg.models.cheap, transcript: tail.transcript, examples: suggestStore.examples(), signal });
+      const r = await generateReplies({ provider, model: cfg.models.cheap, transcript: tail.transcript, examples: suggestStore.examples(), context, signal });
       if (r.usage) { costCap?.add(r.usage.costUsd); userCap?.add(r.usage.costUsd); }
       suggestCache.set(id, { key, replies: r.replies });
       if (suggestCache.size > 200) suggestCache.delete(suggestCache.keys().next().value as string);
