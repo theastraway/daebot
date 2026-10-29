@@ -328,6 +328,7 @@ export function initRoutines(ctx) {
   function currentExpression() {
     return expressionFor(el.preset.value, { n: el.n.value, hours: el.hours.value, minute: el.minute.value, time: el.time.value, times: timesNow(), days: [...st.days], dom: el.dom.value, expression: el.expr.value });
   }
+  const windowIncomplete = () => el.windowOn.checked && !(el.from.value && el.to.value);
   const currentFilter = () => filterOf({ weekdays: el.weekdays.checked, windowOn: el.windowOn.checked, from: el.from.value, to: el.to.value });
 
   const SHOW = { hours: ["nhours"], n: ["minutes"], minute: ["hourly", "nhours"], time: ["daily", "weekly", "monthly"], multi: ["multi"], days: ["weekly"], dom: ["monthly"], custom: ["custom"] };
@@ -353,13 +354,15 @@ export function initRoutines(ctx) {
     el.tzNote.textContent = `Times are in ${tzName(el.tz.value.trim() || userTz)} time.`;
     if (!timed) {
       const f = currentFilter();
-      el.preview.classList.remove("warn");
+      el.preview.classList.toggle("warn", windowIncomplete());
+      if (windowIncomplete()) { el.pvSummary.textContent = "Pick a start and an end time for the active hours."; el.pvNext.replaceChildren(); return; }
       el.pvSummary.textContent = f ? `Reacts only: ${filterText(f)}` : "";
       el.pvNext.replaceChildren();
       return;
     }
     st.pvT = setTimeout(async () => {
       const seq = ++st.pv, expression = currentExpression(), tz = el.tz.value.trim() || userTz;
+      if (windowIncomplete()) { el.preview.classList.add("warn"); el.pvSummary.textContent = "Pick a start and an end time for the active hours."; el.pvNext.replaceChildren(); return; }
       if (!expression) { el.preview.classList.add("warn"); el.pvSummary.textContent = el.preset.value === "weekly" ? "Pick at least one day." : "Add a time."; el.pvNext.replaceChildren(); return; }
       try {
         const r = await json("/routines/preview", { method: "POST", body: JSON.stringify({ expression, tz, filter: currentFilter() }) });
@@ -412,6 +415,7 @@ export function initRoutines(ctx) {
     const timed = el.type.value === "timed";
     const body = {};
     const tz = el.tz.value.trim() || userTz;
+    if (windowIncomplete()) { el.err.textContent = "Pick a start and an end time for the active hours."; el.err.hidden = false; return; }
     if (!st.editing) { body.name = el.name.value.trim(); body.prompt = el.prompt.value; body.kind = el.type.value; }
     else if (!el.name.disabled) { body.name = el.name.value.trim(); body.prompt = el.prompt.value; }
     if (timed) {
