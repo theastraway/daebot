@@ -177,7 +177,8 @@ export interface Config {
   models: { default: string; cheap: string; fallback: string[] };
   shadow: boolean;           // MINDCLAW_SHADOW=1
   kernel: boolean;           // MINDCLAW_KERNEL=0 turns the kernel off (used by the eval harness)
-  maxToolRoundsPerTurn: number;
+  maxToolRoundsPerTurn?: number; // optional operator override (env MINDCLAW_MAX_TOOL_ROUNDS); unset = no round limit
+  checkInMs?: number;        // env DAEBOT_CHECKIN_MS; default 300000. A running turn gets a one-line-update reminder this often. Absent = off
   contextWindow?: number;    // model context window in tokens, used for compaction (env MINDCLAW_CONTEXT_WINDOW); default 128000
   compactAt?: number;        // fraction of contextWindow that triggers compaction (env MINDCLAW_COMPACT_AT); default 0.6
 }
