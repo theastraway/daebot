@@ -266,7 +266,7 @@ export interface Runtime {
   // boot: runs mind_context before returning; throws only if tools are unreachable.
   // botId: open a session of that bot (home MIND = the bot's); peer: the other end of a bot-to-bot DM thread; model: per-session model.
   openSession(opts: { surface: string; title?: string; resumeId?: string; identity?: string; botId?: string; peer?: string; model?: string }): Promise<AgentSession>;
-  listSessions(): { id: string; surface: string; title: string; updatedAt: number; bot?: string; peer?: string; model?: string; permMode?: string; unread?: boolean }[];
+  listSessions(): { id: string; surface: string; title: string; updatedAt: number; bot?: string; peer?: string; model?: string; permMode?: string; unread?: boolean; archived?: boolean }[];
   /** Bots of this runtime's owner (absent on runtimes built without a bots context). */
   bots?: BotsApi;
   /** Bot / peer / model of a live or persisted session of this owner. */
@@ -277,6 +277,8 @@ export interface Runtime {
   deleteSession?(id: string): Promise<boolean>;
   /** Renames one saved or live session of this owner (the title is already cleaned). The name is kept for good: the auto title never replaces it. false = no such session. */
   renameSession?(id: string, title: string): Promise<boolean>;
+  /** Hides (on) or restores (off) one session of this owner in the lists; nothing is deleted. false = no such session. */
+  archiveSession?(id: string, on: boolean): Promise<boolean>;
   /** Reactions / feedback of each message and the unread marker of a session of this owner. Undefined = unknown id. */
   messageMeta?(id: string): SessionMessageMeta | undefined;
   /** history() and messageMeta() in one read. live = the session is running in this process (its transcript changes under the reader). */

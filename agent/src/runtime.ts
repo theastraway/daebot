@@ -17,7 +17,7 @@ import { createBotSelfTool } from "./bots/self-tool.ts";
 import type { ThreadView } from "./bots/self-tool.ts";
 import { botRecall, recordBotLesson } from "./bots/lessons.ts";
 import { RoutineHub } from "./routines/store.ts";
-import { BOT_SKILL_PROMPT } from "./bots/skill.ts";
+import { BOT_SKILL_PROMPT, BOT_TOOLKIT_PROMPT } from "./bots/skill.ts";
 import type { BotRecord, BotsContext, RosterEntry } from "./bots/types.ts";
 import { MAX_INSTRUCTIONS_BYTES } from "./bots/types.ts";
 import { createSettings, validModelId } from "./settings.ts";
@@ -178,7 +178,7 @@ export function composeSystemPrompt(o: {
   if (o.toolNames) { const r = routingSection(o.toolNames, { screenWatching: o.screenWatching }); if (r.length) lines.push("", ...r); }
   if (o.photos) lines.push("", ...PHOTOS_SECTION);
   if (o.board) lines.push("", BOARD_PROMPT);
-  if (o.botManage) lines.push("", BOT_SKILL_PROMPT);
+  if (o.botManage) lines.push("", ...(o.bot ? [] : [BOT_SKILL_PROMPT, ""]), BOT_TOOLKIT_PROMPT);
   if (o.appleCalendar === true) {
     lines.push(
       "",
@@ -198,7 +198,7 @@ export function composeSystemPrompt(o: {
   return lines.join("\n");
 }
 
-interface Entry { session: AgentSession; surface: string; title: string; updatedAt: number; tier: Tier; recorder: HistoryRecorder; createdAt: number; bot?: string; peer?: string; model?: string; permMode?: SessionPermMode; titleSet?: boolean; run?: RunMark; board?: BoardTask[]; msgMeta?: Record<string, MessageMeta>; unreadFrom?: string; learn?: Learning }
+interface Entry { session: AgentSession; surface: string; title: string; updatedAt: number; tier: Tier; recorder: HistoryRecorder; createdAt: number; bot?: string; peer?: string; model?: string; permMode?: SessionPermMode; titleSet?: boolean; run?: RunMark; board?: BoardTask[]; msgMeta?: Record<string, MessageMeta>; unreadFrom?: string; archived?: boolean; learn?: Learning }
 
 export const INTERRUPTED_TEXT = "Interrupted: the server restarted while this reply was being written. Your message is saved above; send it again to retry.";
 const interruptedNotice = (): AgentEvent => ({ type: "notice", level: "warn", text: INTERRUPTED_TEXT });
@@ -361,12 +361,19 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
   const toolsFor = (home: string, selfBot: string | undefined, peerMain = false): Tool[] => {
     const on = botsOn();
     const talk = on && botStore && botsCtx ? [createBotTalkTool({ bus: botsCtx.bus, owner: ownerKey, selfBot })] : [];
-    // bot_manage: the user's own session creates and configures bots internally (never through the screen). A bot never gets it.
-    const manage = on && botStore && botsCtx && !selfBot && !peerMain
+    // bot_manage: the user's own session creates and configures bots internally (never through the screen). A bot gets it too, but only for
+    // ITSELF (selfBot: slug "self"; it can neither create nor delete bots). A peer-driven main turn gets none.
+    const botRows = (botId: string, all: boolean) => (self.rt?.listSessions() ?? []).filter((s) => s.bot === botId && !s.peer && (all || !s.archived));
+    const manage = on && botStore && botsCtx && !peerMain
       ? [createBotManageTool({
-          bots: botStore, owner: ownerKey, hooks: () => botsCtx.manage?.current, routines: botsCtx.routines,
-          threads: (id) => self.rt?.listSessions().filter((s) => s.bot === id && !s.peer).length ?? 0,
+          bots: botStore, owner: ownerKey, hooks: () => botsCtx.manage?.current, routines: botsCtx.routines, selfBot,
+          threads: (id) => botRows(id, false).length,
           purge: (id) => self.rt?.purgeBotSessions?.(id) ?? Promise.resolve(),
+          threadOps: {
+            list: (botId, all) => botRows(botId, all).slice(0, 100).map((s) => ({ id: s.id, title: s.title || "Untitled", updatedAt: s.updatedAt, surface: s.surface, ...(s.archived ? { archived: true } : {}) })),
+            rename: async (botId, tid, title) => botRows(botId, true).some((s) => s.id === tid) && !!(await self.rt?.renameSession?.(tid, title)),
+            archive: async (botId, tid, on) => botRows(botId, true).some((s) => s.id === tid) && !!(await self.rt?.archiveSession?.(tid, on)),
+          },
         })]
       : [];
     // bot_self: a bot's own tool for the Heartbeat (see its threads, push work along, record lessons). Bots only.
@@ -439,7 +446,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       v: 1, id, surface: e.surface, title: e.title, tier: e.tier, owner: ownerId, createdAt: e.createdAt, updatedAt: e.updatedAt,
       state: st, violations: e.session.violations(), history: e.recorder.events(),
       ...(e.bot ? { bot: e.bot } : {}), ...(e.peer ? { peer: e.peer } : {}), ...(e.model ? { model: e.model } : {}), ...(e.permMode ? { permMode: e.permMode } : {}), ...(e.titleSet ? { titleSet: true } : {}), ...(e.run ? { run: { ...e.run } } : {}), ...(e.board?.length ? { board: e.board } : {}),
-      ...(e.msgMeta && Object.keys(e.msgMeta).length ? { msgMeta: e.msgMeta } : {}), ...(e.unreadFrom ? { unreadFrom: e.unreadFrom } : {}),
+      ...(e.msgMeta && Object.keys(e.msgMeta).length ? { msgMeta: e.msgMeta } : {}), ...(e.unreadFrom ? { unreadFrom: e.unreadFrom } : {}), ...(e.archived ? { archived: true } : {}),
     }).catch((err) => process.stderr.write(`persist: could not save a session (${String((err as Error)?.message ?? err).split("\n")[0].slice(0, 120)})\n`));
   }
 
@@ -586,7 +593,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         bot: botRec?.id, peer, model: explicitModel, permMode: curPerm,
         ...(stored?.titleSet ? { titleSet: true } : {}),
         ...(stored?.board?.length ? { board: loadTasks(stored.board) } : {}),
-        ...(stored?.msgMeta ? { msgMeta: stored.msgMeta } : {}), ...(stored?.unreadFrom ? { unreadFrom: stored.unreadFrom } : {}), ...(learn && "feedback" in learn ? { learn: learn as Learning } : {}),
+        ...(stored?.msgMeta ? { msgMeta: stored.msgMeta } : {}), ...(stored?.unreadFrom ? { unreadFrom: stored.unreadFrom } : {}), ...(stored?.archived ? { archived: true } : {}), ...(learn && "feedback" in learn ? { learn: learn as Learning } : {}),
       };
       if (wasInterrupted && stored) {
         entry.recorder.push(interruptedNotice());
@@ -682,11 +689,11 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       return session;
     },
     listSessions() {
-      type Row = { id: string; surface: string; title: string; updatedAt: number; bot?: string; peer?: string; model?: string; permMode?: string; unread?: boolean };
+      type Row = { id: string; surface: string; title: string; updatedAt: number; bot?: string; peer?: string; model?: string; permMode?: string; unread?: boolean; archived?: boolean };
       const out = new Map<string, Row>();
-      const row = (m: Row): Row => ({ id: m.id, surface: m.surface, title: m.title, updatedAt: m.updatedAt, ...(m.bot ? { bot: m.bot } : {}), ...(m.peer ? { peer: m.peer } : {}), ...(m.model ? { model: m.model } : {}), ...(m.permMode ? { permMode: m.permMode } : {}), ...(m.unread ? { unread: true } : {}) });
+      const row = (m: Row): Row => ({ id: m.id, surface: m.surface, title: m.title, updatedAt: m.updatedAt, ...(m.bot ? { bot: m.bot } : {}), ...(m.peer ? { peer: m.peer } : {}), ...(m.model ? { model: m.model } : {}), ...(m.permMode ? { permMode: m.permMode } : {}), ...(m.unread ? { unread: true } : {}), ...(m.archived ? { archived: true } : {}) });
       for (const m of store?.list() ?? []) if (mine(m)) out.set(m.id, row(m));
-      for (const [id, e] of sessions) if (out.has(id) || e.recorder.events().some((h) => h.type === "user")) out.set(id, row({ id, surface: e.surface, title: e.title, updatedAt: e.updatedAt, bot: e.bot, peer: e.peer, model: e.model, ...(e.permMode ? { permMode: e.permMode } : {}), ...(e.unreadFrom ? { unread: true } : {}) }));
+      for (const [id, e] of sessions) if (out.has(id) || e.recorder.events().some((h) => h.type === "user")) out.set(id, row({ id, surface: e.surface, title: e.title, updatedAt: e.updatedAt, bot: e.bot, peer: e.peer, model: e.model, ...(e.permMode ? { permMode: e.permMode } : {}), ...(e.unreadFrom ? { unread: true } : {}), ...(e.archived ? { archived: true } : {}) }));
       return [...out.values()].sort((a, b) => b.updatedAt - a.updatedAt);
     },
     boardRows() {
@@ -803,6 +810,22 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       const rec = store.load(id);
       if (!rec || !mine(rec)) return false;
       await store.save({ ...rec, title, titleSet: true });
+      return true;
+    },
+    async archiveSession(id, on) {
+      const live = sessions.get(id);
+      if (live) {
+        if (on) live.archived = true; else delete live.archived;
+        persist(id);
+        return true;
+      }
+      const meta = store?.meta?.(id);
+      if (!store || !meta || !mine(meta)) return false;
+      const rec = store.load(id);
+      if (!rec || !mine(rec)) return false;
+      const next = { ...rec } as StoredSession;
+      if (on) next.archived = true; else delete next.archived;
+      await store.save(next);
       return true;
     },
     sessionInfo(id) {

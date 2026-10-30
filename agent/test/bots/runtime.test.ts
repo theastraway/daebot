@@ -146,11 +146,11 @@ test("tools in a bot session: same set as a session (+ bot_talk, mind_tenants); 
     // The task board is the user's own: only their plain sessions have task_board (bot threads are not on the board).
     const mainNames = w.provider.requests.at(-1)!.tools.map((t) => t.name);
     assert.ok(mainNames.includes("task_board") && !names.includes("task_board"));
-    // bot_manage (Daebot makes bots) is the user's own session only, like task_board: a bot never gets it.
-    assert.ok(mainNames.includes("bot_manage") && !names.includes("bot_manage"));
+    // bot_manage (Daebot makes bots): every session has it; a bot's own copy edits only itself (slug "self") and cannot create or delete bots.
+    assert.ok(mainNames.includes("bot_manage") && names.includes("bot_manage"));
     // bot_self (see my threads, push work along, record lessons for the Heartbeat) is the bot's own: a main session never gets it.
     assert.ok(names.includes("bot_self") && !mainNames.includes("bot_self"));
-    assert.deepEqual(mainNames.filter((n) => n !== "task_board" && n !== "bot_manage").sort(), names.filter((n) => n !== "bot_self").sort(), "a session and a bot get the same tools");
+    assert.deepEqual(mainNames.filter((n) => n !== "task_board").sort(), names.filter((n) => n !== "bot_self").sort(), "a session and a bot get the same tools");
     for (const n of ["bot_talk", "mind_tenants", "mind_query", "mind_remember"]) assert.ok(names.includes(n), n);
     assert.ok(calls.every((c) => !JSON.stringify(c.body ?? {}).includes('"mind"')));
     assert.ok(evs.filter((e) => e.type === "toolEnd").every((e: any) => e.ok), JSON.stringify(evs.filter((e) => e.type === "toolEnd")));

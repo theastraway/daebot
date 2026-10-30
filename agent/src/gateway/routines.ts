@@ -121,7 +121,7 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
   manager.onTurnDone = (ls, r) => { if (ls.bot) runner.trigger(ls.owner, ls.bot, "turn_done", { text: r.text.slice(0, 2000) || (r.ok ? "(no reply)" : "the turn failed"), ok: r.ok }); };
 
   /** The hooks the runtime lends bot_manage and bot_self. */
-  const hooks: Pick<BotManageHooks, "runRoutine" | "continueThread" | "publicBase" | "setup"> = {
+  const hooks: Pick<BotManageHooks, "runRoutine" | "continueThread" | "startThread" | "publicBase" | "setup"> = {
     publicBase: () => d.publicBase(),
     setup: (owner, trigger, o) => setupFor(owner, trigger, o ?? {}),
     async runRoutine(owner, botId, routineId) {
@@ -131,6 +131,19 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
       const last = d.hub.book(owner, botId).get(routineId)?.runs?.at(-1);
       if (!last || runner.isRunning(routineId)) return { ok: true, message: "Started. It is still running; the result lands in the routine's thread." };
       return { ok: last.status !== "error", message: last.model ? `Ran (${last.status}): ${last.result ?? ""}` : `No model call: ${last.result ?? "nothing to do"}` };
+    },
+    /** A new thread in a bot, like the Bots tab's "New thread" button; with a message, the bot starts on it (a server-owned turn, so it finishes without the chat open). */
+    async startThread(owner, botId, o) {
+      const ls = await manager.open({ surface: "web", owner, bot: botId });
+      const rt = manager.runtimeOf(owner);
+      const title = o.title || (o.message ? o.message.replace(/\s+/g, " ").trim().slice(0, 60) : "New thread");
+      await rt.renameSession?.(ls.id, title); // names it AND saves it, so it is in the sidebar at once
+      if (o.message) {
+        const p = d.principalOf(owner);
+        if (p) await d.enforceModel(p, ls.id).catch(() => undefined);
+        void pump(ls.id, o.message, undefined, "bot");
+      }
+      return { id: ls.id, title, started: !!o.message };
     },
     async continueThread(owner, botId, tid, note) {
       const key = `${owner}:${botId}`, now = Date.now();

@@ -29,6 +29,8 @@ export interface StoredSession {
   permMode?: string;
   /** The user named this thread (rename). The auto title from the first message never overwrites it. */
   titleSet?: boolean;
+  /** Hidden from the sidebar and thread lists (nothing is deleted); the bot_manage tool can restore it. */
+  archived?: boolean;
   /** Reactions and thumbs feedback per message id (the message menu). */
   msgMeta?: Record<string, MessageMeta>;
   /** Mark as unread: the thread is unread from this message on, until the user opens it again. */
@@ -51,10 +53,10 @@ export function cleanTitle(raw: unknown): string | undefined {
   return t.length >= 1 && t.length <= 80 ? t : undefined;
 }
 
-export interface StoredMeta { id: string; surface: string; title: string; updatedAt: number; owner?: string; bot?: string; peer?: string; model?: string; permMode?: string; unread?: boolean }
+export interface StoredMeta { id: string; surface: string; title: string; updatedAt: number; owner?: string; bot?: string; peer?: string; model?: string; permMode?: string; unread?: boolean; archived?: boolean }
 
 function metaOf(rec: StoredSession): StoredMeta {
-  return { id: rec.id, surface: rec.surface, title: rec.title, updatedAt: rec.updatedAt, owner: rec.owner, bot: rec.bot, peer: rec.peer, model: rec.model, ...(rec.permMode ? { permMode: rec.permMode } : {}), ...(rec.unreadFrom ? { unread: true } : {}) };
+  return { id: rec.id, surface: rec.surface, title: rec.title, updatedAt: rec.updatedAt, owner: rec.owner, bot: rec.bot, peer: rec.peer, model: rec.model, ...(rec.permMode ? { permMode: rec.permMode } : {}), ...(rec.unreadFrom ? { unread: true } : {}), ...(rec.archived ? { archived: true } : {}) };
 }
 
 export interface SessionStore {
