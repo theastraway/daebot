@@ -18,6 +18,7 @@ import { confirmDialog, deleteControl, renameControl, editInline, isRenaming, se
 import { compareBuild, webUpdateText, WEB_CHECK_MS } from "/webupdate.js";
 import { buildPermissionCard, initChatMode, initPermissions } from "/permissions.js";
 import { initAccount } from "/account.js";
+import { initMainBot } from "/mainbot.js";
 import { initUsage } from "/usage.js";
 import { initBoard } from "/board.js";
 import { initExchanges } from "/exchanges.js";
@@ -1659,6 +1660,7 @@ $("btn-apps").addEventListener("click", () => mcp.load());
 }
 
 // ---------- boot ----------
+const mainBot = initMainBot({ json, onChange: () => bots.sync() });
 async function boot() {
   renderThread();
   await ping();
@@ -1666,6 +1668,7 @@ async function boot() {
   // Prewarming a session boots MIND, so it only ever runs for a signed-in user (hosted: the session cookie must be valid).
   if (state.hosted && !(await showWho())) return location.replace("/");
   await refreshSessions();
+  mainBot.refresh();
   board.refresh();
   xchg.refresh();
   mcp.load();
@@ -1686,5 +1689,5 @@ async function boot() {
 }
 boot();
 setInterval(ping, 10000);
-setInterval(() => { if ((token || state.hosted) && state.online) { refreshSessions(); board.refresh(); } }, 30000);
+setInterval(() => { if ((token || state.hosted) && state.online) { refreshSessions(); mainBot.refresh(); board.refresh(); } }, 30000);
 initUpdates();

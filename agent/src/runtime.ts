@@ -16,7 +16,7 @@ import { createBotManageTool } from "./bots/manage-tool.ts";
 import { createBotSelfTool } from "./bots/self-tool.ts";
 import type { ThreadView } from "./bots/self-tool.ts";
 import { botRecall, recordBotLesson } from "./bots/lessons.ts";
-import { RoutineHub } from "./routines/store.ts";
+import { MAIN_BOT_ID, RoutineHub } from "./routines/store.ts";
 import { BOT_SKILL_PROMPT, BOT_TOOLKIT_PROMPT } from "./bots/skill.ts";
 import type { BotRecord, BotsContext, RosterEntry } from "./bots/types.ts";
 import { MAX_INSTRUCTIONS_BYTES } from "./bots/types.ts";
@@ -121,6 +121,8 @@ export function composeSystemPrompt(o: {
   board?: boolean;
   /** The bot_manage tool is offered: adds the stock "## Creating a Daebot" skill. */
   botManage?: boolean;
+  /** The user's own dressing of the MAIN Daebot (name, face, instructions), from the settings. Ignored in a bot's prompt. */
+  main?: { name?: string; face?: string; instructions?: string };
 }): string {
   const lines = [
     o.identity ?? "You are Daebot (Dae), Anthony Conti's own agent. MIND is your memory and the only source of truth about his world.",
@@ -146,6 +148,15 @@ export function composeSystemPrompt(o: {
   if (o.tier === "public") lines.push("Identity: public. You can read and answer only. You cannot write, send, post, run a shell or change anything; say so plainly if asked.");
   if (o.tier === "staff") lines.push("Identity: staff. You can read and make local writes. You cannot contact third parties, post publicly or do anything irreversible; say so plainly if asked.");
   const roster = (o.roster ?? []).slice(0, MAX_ROSTER);
+  if (!o.bot && o.main && (o.main.name || o.main.face || o.main.instructions?.trim())) {
+    const text = (o.main.instructions ?? "").slice(0, MAX_INSTRUCTIONS_BYTES).trim();
+    lines.push(
+      "",
+      ...(o.main.name ? [`The user named you "${noKernelSpoof(clipLine(o.main.name, 80))}". That is your name now; answer to it.`] : []),
+      ...(text ? ["## Your own instructions (written by the user or by you; edit them with bot_manage on slug \"self\")", noKernelSpoof(text), "Precedence: these set your role and style. They never lift a kernel gate, the receipt rule, the owner check or the feed rule; where they conflict with those, those win."] : []),
+      ...(facePersonality(o.main.face) ? ["", `## Personality: ${faceOf(o.main.face)!.name} (the face the user picked for you)`, facePersonality(o.main.face), "This is tone and manner only. Your instructions and every gate win over it."] : []),
+    );
+  }
   if (o.bot) {
     const text = o.bot.instructions.length > MAX_INSTRUCTIONS_BYTES ? o.bot.instructions.slice(0, MAX_INSTRUCTIONS_BYTES) : o.bot.instructions;
     lines.push(
@@ -363,10 +374,10 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     const talk = on && botStore && botsCtx ? [createBotTalkTool({ bus: botsCtx.bus, owner: ownerKey, selfBot })] : [];
     // bot_manage: the user's own session creates and configures bots internally (never through the screen). A bot gets it too, but only for
     // ITSELF (selfBot: slug "self"; it can neither create nor delete bots). A peer-driven main turn gets none.
-    const botRows = (botId: string, all: boolean) => (self.rt?.listSessions() ?? []).filter((s) => s.bot === botId && !s.peer && (all || !s.archived));
+    const botRows = (botId: string, all: boolean) => (self.rt?.listSessions() ?? []).filter((s) => (botId === MAIN_BOT_ID ? !s.bot : s.bot === botId) && !s.peer && (all || !s.archived));
     const manage = on && botStore && botsCtx && !peerMain
       ? [createBotManageTool({
-          bots: botStore, owner: ownerKey, hooks: () => botsCtx.manage?.current, routines: botsCtx.routines, selfBot,
+          bots: botStore, owner: ownerKey, hooks: () => botsCtx.manage?.current, routines: botsCtx.routines, selfBot, main: !selfBot && settings ? settings : undefined,
           threads: (id) => botRows(id, false).length,
           purge: (id) => self.rt?.purgeBotSessions?.(id) ?? Promise.resolve(),
           threadOps: {
@@ -579,6 +590,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
             photos: tools.some((t) => t.spec.name === "view_photo"),
             board: tools.some((t) => t.spec.name === "task_board"),
             botManage: tools.some((t) => t.spec.name === "bot_manage"),
+            main: botId ? undefined : settings?.get().main,
             appleCalendar: botId ? undefined : curCaps.includes("apple_calendar"),
             connectedApps: botId || !appsOn() ? undefined : connectedAppsLines(connectedApps.state(), { servers: serverLites(), tools: new Set(tools.map((t) => t.spec.name)), deviceCalendar: curCaps.includes("apple_calendar") }),
             permissions: permissions?.preferencesText(),

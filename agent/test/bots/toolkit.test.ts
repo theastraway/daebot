@@ -217,7 +217,7 @@ test("self: a bot's session edits ITSELF through slug self (or its own slug) and
   assert.ok(main.store.bySlug("scout"));
   assert.equal((await run({ action: "list" })).ok, true, "reads of the roster still work");
   // the main Daebot is not a bot: self means nothing there
-  await main.bad({ action: "rename", slug: "self", name: "x" }, /"self" means the bot you are running as/);
+  await main.bad({ action: "rename", slug: "self", name: "x" }, /"self" is not available here/);
 });
 
 test("bot_self threads needs NO thread argument (the Heartbeat defect): bare call lists all, a thread id only narrows, continue still needs one", async () => {

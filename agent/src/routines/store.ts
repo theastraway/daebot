@@ -71,6 +71,8 @@ export const HEARTBEAT_NAME = "Heartbeat";
 const RUN_KEEP = 20;
 const ID_RE = /^r_[0-9a-f]{12}$/;
 const BOT_RE = /^b_[0-9a-f]{12}$/;
+/** The routine book of the MAIN Daebot (the plain Sessions chat, not a bot). It has no bot record and no Heartbeat; its runs land in "Routine: <name>" threads of the main list. */
+export const MAIN_BOT_ID = "b_000000000000";
 
 const safeSegment = (s: string): string => { const v = s.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 80); return v === "" || v === "." || v === ".." ? "_" : v; };
 // eslint-disable-next-line no-control-regex
@@ -155,6 +157,7 @@ export class RoutineBook {
   }
 
   private ensureHeartbeat(): void {
+    if (this.botId === MAIN_BOT_ID) return;
     if (this.routines.some((r) => r.builtin === "heartbeat")) return;
     const t = this.now();
     const timing = { expression: `${heartbeatMinute(this.botId)} * * * *`, tz: DEFAULT_TZ };
@@ -464,7 +467,8 @@ export class RoutineHub {
       try {
         const j = JSON.parse(readFileSync(join(root, seg, "bots.json"), "utf8"));
         ids = j && j.bots && typeof j.bots === "object" ? Object.keys(j.bots).filter((id) => BOT_RE.test(id) && existsSync(join(root, seg))) : [];
-      } catch { continue; }
+      } catch { /* no bots yet: the main Daebot may still have routines */ }
+      if (existsSync(join(root, seg, MAIN_BOT_ID, "routines.json"))) ids.push(MAIN_BOT_ID);
       for (const id of ids) { try { out.push(this.book(owner, id)); } catch { /* unreadable bot: skip */ } }
     }
     return out;

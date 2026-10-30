@@ -12,6 +12,7 @@ import { FACES, faceOf } from "./faces.js";
 import { mascotFor, setMascot, wakeOn } from "./mbadge.js";
 import { groupModels, shortName, LOCKED_NOTE } from "./models.js";
 import { initRoutines } from "./routines.js";
+import { currentMain, mainLook } from "./mainbot.js";
 
 export const VIEW_KEY = "mc_view";
 export const SELECTED_KEY = "mc_bot";
@@ -485,9 +486,10 @@ export function initBots(ctx) {
     // The header's top-left trigger is the bot's name (with its M face); it opens that bot's settings and instructions.
     // With no bot (a plain session) it reads "Daebot" and opens the main settings.
     const trig = botById(id) || shown;
-    el.topName.textContent = trig ? trig.name : "Daebot";
+    const mainLk = mainLook(currentMain()); // a plain session is the main Daebot, as the user dressed it
+    el.topName.textContent = trig ? trig.name : mainLk.name;
     el.btnInstr.title = trig ? `Settings and instructions for ${trig.name}` : "Daebot settings";
-    paintBadge(el.topBadge, trig || { face: DEFAULT_FACE, color: DEFAULT_COLOR });
+    paintBadge(el.topBadge, trig || { face: (currentMain() && currentMain().face) || DEFAULT_FACE, color: (currentMain() && currentMain().color) || DEFAULT_COLOR });
     const accent = shown ? safeColor(shown.color) : "";
     if (accent) document.body.dataset.botAccent = accent; else delete document.body.dataset.botAccent;
     for (const m of document.querySelectorAll(".bot-dock m-bot, .hero-bot")) { if (accent) m.setAttribute("accent", accent); else m.removeAttribute("accent"); }
