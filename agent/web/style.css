@@ -444,7 +444,8 @@ button.bd-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -
   .topbar { gap: 0; padding: env(safe-area-inset-top) calc(6px + env(safe-area-inset-right)) 0 calc(6px + env(safe-area-inset-left)); }
   .topbar .icon-btn, .btn-chip { width: 32px; }
   #model-badge { padding: 0 6px; gap: 6px; }
-  #top-badge { display: none; } /* the title's subtitle names the bot, and the mascot wears its colour */
+  .bot-trigger { gap: 5px; }
+  .bot-trigger .bot-badge.sm.has-mbot { width: 24px; height: 24px; } /* the pill keeps the bot's face next to its name */
 }
 
 /* iOS shell: pages that have no topbar still clear the notch */
@@ -994,7 +995,7 @@ select.fld { appearance: auto; }
 .xv-back .ic, .xv-back-ic { width: 20px; height: 20px; }
 @media (max-width: 640px) { .xv-back { padding: 0 12px 0 6px; } .xv-head { gap: 8px; } }
 /* While an exchange is on screen, the top bar keeps only the controls that still mean something. */
-body.xv-open .top-title, body.xv-open .model-wrap, body.xv-open .top-meta, body.xv-open .voice-btn, body.xv-open #btn-instr, body.xv-open #top-badge { visibility: hidden; }
+body.xv-open .top-title, body.xv-open .model-wrap, body.xv-open .top-meta, body.xv-open .voice-btn, body.xv-open #btn-instr { visibility: hidden; }
 .xv-back-ic { transform: rotate(180deg); }
 .xv-faces { display: inline-flex; flex: none; }
 .xv-titles { min-width: 0; }
