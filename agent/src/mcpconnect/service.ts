@@ -109,6 +109,8 @@ export interface ConnectorDetail {
   id: string; kind: "mind" | "mcp"; name: string; description: string; developer: string;
   accounts: ConnectorAccount[]; addAccount: { supported: boolean; note: string };
   tools: ConnectorToolView[]; enabledTools: number; toolsNote?: string;
+  /** A connector with no account yet: the page shows ONE Connect button (the same sign-in as the list row). */
+  connect?: { supported: boolean; label: string };
   apps: { name: string; subtitle: string }[]; capabilities: number; serverIds: string[]; host?: string; publisher?: string;
 }
 export interface PendingView {
@@ -869,8 +871,9 @@ export class McpConnectService {
         accounts,
         addAccount: { supported: false, note: `MIND connects one ${prov.name} account for your login. To use a different one, Uninstall and connect again.` },
         tools, enabledTools: tools.filter((t) => t.enabled).length,
-        toolsNote: prov.connected && !rides.length ? `${prov.name} is connected to MIND for syncing only, so Daebot has no ${prov.name} tools yet. Select Add tools on the card.` : undefined,
-        apps: [{ name: prov.name, subtitle: "Connector" }], capabilities: 1,
+        toolsNote: prov.connected && !rides.length ? `Daebot is connecting ${prov.name}'s tools. If this stays, select Retry on the connector list.` : undefined,
+        connect: prov.connected ? undefined : { supported: true, label: "Connect" },
+        apps: [{ name: prov.name, subtitle: "Connector" }, ...(prov.connected && prov.provider === "github" ? [{ name: "Repo sync to MIND", subtitle: "On" }] : [])], capabilities: 1,
         serverIds: rides.map((v) => v.id),
       };
     }
@@ -889,6 +892,7 @@ export class McpConnectService {
       accounts,
       addAccount: multi ? { supported: true, note: "Add another server address for this connector." } : { supported: false, note: `Daebot connects one ${item.name} account per sign-in. To use a different one, Uninstall and connect again.` },
       tools, enabledTools: tools.filter((t) => t.enabled).length,
+      ...(mine.length ? {} : { connect: { supported: true, label: "Connect" } }),
       apps: [{ name: item.name, subtitle: "Connector" }], capabilities: 1,
       serverIds: mine.map((v) => v.id), host: item.host, publisher: item.publisher,
     };
@@ -1234,14 +1238,14 @@ export class McpConnectService {
 
   /** The Apps card's "Add tools" on a connected MIND app (GitHub): ask MIND now to link the vendor's MCP server with the app's own token (the hourly background link may have
    *  said no, or not run yet). The answer says plainly what happened, so the card never shows "Connected" with no tools and no reason. */
-  async linkIntegration(uid: string, provider: string): Promise<{ status: "linked" | "already" | "rejected" | "unavailable"; tools: number; reason: string }> {
+  async linkIntegration(uid: string, provider: string, force = false): Promise<{ status: "linked" | "already" | "rejected" | "unavailable"; tools: number; reason: string }> {
     this.requireEnabled();
     if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(provider)) throw new McpConnectError("That app name is not valid.", 400);
     await this.prepare(uid);
     const st = this.active(uid);
     const b = this.backendOn();
     if (!st || !b) return { status: "unavailable", tools: 0, reason: "MIND is not holding your connections right now. Try again in a moment." };
-    const rs = await this.mindCall(uid, st, () => b.linkIntegrations(uid, [provider]));
+    const rs = await this.mindCall(uid, st, () => b.linkIntegrations(uid, [provider], force));
     const r = rs.find((x) => x.provider === provider) ?? { provider, status: "unavailable" as const, serverId: null, reason: "MIND did not answer for that app." };
     st.serversDueAt = 0; st.linkDueAt = this.now() + LINK_TTL_MS;
     await this.prepare(uid);

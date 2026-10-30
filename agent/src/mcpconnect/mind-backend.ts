@@ -161,7 +161,7 @@ export class MindMcpBackend {
     // A key signed in with a hand-picked scope list can read connections but not change or run them: say exactly that and how to fix it
     // (signing in with MIND, or a key with all permissions). Keys minted by Daebot's own "Sign in with MIND" (web, desktop, iPhone) carry every scope.
     if (status === 403 && typeof d === "string" && /lacks required scope/i.test(d)) {
-      return new McpConnectError("Your MIND key can read your connected servers but cannot change or run them: it was made without the profile:write permission. Sign in with MIND, or make a key with all permissions in MIND under Settings, Developer, and sign in with that.", 502, "mind_scope");
+      return new McpConnectError("Daebot needs you to sign in with MIND again before it can use your connected apps. Select Re-sign in to let Daebot use your apps in the Apps window. Do not create or paste a key.", 502, "mind_scope");
     }
     if (status === 401 || status === 403) return new McpConnectError("MIND did not accept your sign-in for connected servers. Sign in with MIND again.", 502, "mind_auth");
     if (status === 404) return new McpConnectError("MIND does not have connected servers switched on for this account yet.", 404, "absent");
@@ -250,8 +250,8 @@ export class MindMcpBackend {
   }
 
   /** POST /mcp/integrations/link: MIND tries each connected integration's vendor MCP server with that integration's own token. Idempotent. */
-  async linkIntegrations(uid: string, providers?: string[]): Promise<MindLinkResult[]> {
-    const j = await this.ok(uid, await this.raw(uid, "POST", "/mcp/integrations/link", { body: providers && providers.length ? { providers } : {}, timeoutMs: this.o.createTimeoutMs ?? 45_000 }));
+  async linkIntegrations(uid: string, providers?: string[], force = false): Promise<MindLinkResult[]> {
+    const j = await this.ok(uid, await this.raw(uid, "POST", "/mcp/integrations/link", { body: { ...(providers && providers.length ? { providers } : {}), ...(force ? { force: true } : {}) }, timeoutMs: this.o.createTimeoutMs ?? 45_000 }));
     const out: MindLinkResult[] = [];
     for (const r of Array.isArray(j.results) ? j.results.slice(0, 60) : []) {
       if (!r || typeof r.provider !== "string") continue;

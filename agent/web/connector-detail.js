@@ -125,7 +125,15 @@ export async function openConnectorDetail(ctx) {
       });
       card.append(row);
     }
-    if (!d.accounts.length) card.append(el("div", "cd-row", "No account is connected."));
+    if (!d.accounts.length) {
+      const none = el("div", "cd-row", "No account is connected.");
+      if (d.connect && d.connect.supported) {
+        const go = el("button", "btn-primary cd-connect", d.connect.label || "Connect"); go.type = "button";
+        go.addEventListener("click", () => ctx.actions.connect(d, { busy: (on) => { go.disabled = on; go.textContent = on ? "Working…" : (d.connect.label || "Connect"); }, say }));
+        none.append(go);
+      }
+      card.append(none);
+    }
     const add = el("button", "cd-add"); add.type = "button";
     add.append(svg(ICON.plus, 16), el("span", "", "Add Another Account"));
     const addNote = el("p", "cd-note", d.addAccount.note); addNote.hidden = true;

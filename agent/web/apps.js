@@ -162,10 +162,10 @@ function rowFor(e, handlers) {
       manage.addEventListener("click", () => handlers.onManage(e));
       actions.append(manage);
     }
-    if (e.connected && e.addTools && handlers.onAddTools) {
-      const add = el("button", "btn-primary app-btn", e.addTools.label || "Add tools"); add.type = "button";
+    if (e.connected && e.retryLink && handlers.onRetry) {
+      const add = el("button", "btn-primary app-btn", e.retryLink.label || "Retry"); add.type = "button";
       add.setAttribute("aria-label", `${add.textContent} ${e.name}`);
-      add.addEventListener("click", () => handlers.onAddTools(e, { busy: (on) => { add.disabled = on; }, say: (t, tone) => { stateEl.textContent = t; stateEl.className = `app-state is-${tone || "warn"}`; } }));
+      add.addEventListener("click", () => handlers.onRetry(e, { busy: (on) => { add.disabled = on; }, say: (t, tone) => { stateEl.textContent = t; stateEl.className = `app-state is-${tone || "warn"}`; } }));
       actions.append(add);
     }
     actions.append(btn);
@@ -206,9 +206,15 @@ export function initApps(ctx) {
   const json = async (path, opts) => {
     const res = await api(path, opts);
     const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.message || body.error || `HTTP ${res.status}`);
+    if (!res.ok) { if (body.code === "mind_scope") offerResignIn(); const err = new Error(body.message || body.error || `HTTP ${res.status}`); err.code = body.code; throw err; }
     return body;
   };
+  // A key that cannot run connected apps cannot be upgraded from here: one clear button signs in with MIND again (which mints a key that can).
+  function offerResignIn() {
+    const live = document.getElementById("apps-live"); if (!live || !signOut) return;
+    live.hidden = false; live.replaceChildren(el("span", "", "Daebot needs you to sign in with MIND again to use your apps. "));
+    const b = el("button", "btn-primary", "Re-sign in to let Daebot use your apps"); b.type = "button"; b.addEventListener("click", () => signOut()); live.append(b);
+  }
   // The card's sections read the same lists (the Connectors list also feeds the app rows): one request per list per refresh.
   const memo = new Map();
   const cached = (path) => {
