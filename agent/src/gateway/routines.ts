@@ -12,7 +12,7 @@ import type { SessionManager } from "./sessions.ts";
 import { checkFilter, describeTiming, filterWords, nextRuns, parseTiming, summarizeTiming, TimingError, validTz } from "../routines/clock.ts";
 import { RoutineRunner } from "../routines/runner.ts";
 import type { FireResult, TurnResult } from "../routines/runner.ts";
-import { RoutineError, RoutineHub, secretMatches } from "../routines/store.ts";
+import { MAIN_BOT_ID, RoutineError, RoutineHub, secretMatches } from "../routines/store.ts";
 import { DEFS, catalogFor, checkTrigger, isGithub } from "../routines/triggers.ts";
 import { checkSetup } from "../routines/setup.ts";
 import type { SetupApp, SetupReport } from "../routines/setup.ts";
@@ -53,6 +53,8 @@ export interface RoutineGatewayDeps {
   runner?: { tickMs?: number; scanMs?: number; jitterMs?: number; runTimeoutMs?: number; maxRunsPerOwnerHour?: number; now?: () => number };
 }
 
+/** The bot of a routine book as the session layer wants it: the main Daebot is "no bot". */
+const realBot = (botId: string): string | undefined => (botId === MAIN_BOT_ID ? undefined : botId);
 const threadIdOf = (owner: string, botId: string, thread: string): string => "rt_" + createHash("sha256").update(`${owner}|${botId}|${thread}`).digest("hex").slice(0, 32);
 
 export function createRoutineGateway(d: RoutineGatewayDeps) {
@@ -84,7 +86,7 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
     const bad = (error: string): TurnResult => ({ ok: false, threadId: "", finalText: "", error });
     if (!p) return bad("this account is not signed in any more");
     let ls;
-    try { ls = await manager.open({ surface: "routine", title: a.thread.slice(0, 120), resumeId: id, owner: a.owner, bot: a.botId }); }
+    try { ls = await manager.open({ surface: "routine", title: a.thread.slice(0, 120), resumeId: id, owner: a.owner, bot: realBot(a.botId) }); }
     catch (e) { return bad(String((e as Error)?.message ?? e).split("\n")[0].slice(0, 200)); }
     if (ls.busy) return bad("the thread is busy with another turn");
     const note = await d.enforceModel(p, id).catch(() => undefined);
@@ -105,6 +107,7 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
     state(owner, botId) {
       const rt = manager.runtimeOf(owner);
       if (!rt.bots) return { threads: [], board: [] };           // the account's sign-in lapsed: the run itself will say so
+      if (botId === MAIN_BOT_ID) return { threads: rt.listSessions().filter((s) => !s.bot && !s.peer).map((s) => ({ id: s.id, title: s.title, updatedAt: s.updatedAt, surface: s.surface })), board: [] };
       if (!rt.bots.get(botId)) return undefined;
       const threads = rt.listSessions().filter((s) => s.bot === botId).map((s) => ({ id: s.id, title: s.title, updatedAt: s.updatedAt, surface: s.surface, peer: s.peer }));
       const board = (rt.botBoardRows?.(botId) ?? []).map((b) => ({ sessionId: b.sessionId, id: b.id, title: b.title, status: b.status, question: b.question, updatedAt: b.updatedAt }));
@@ -116,9 +119,9 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
   // Folder and screen watches follow the routines at once (the runner also re-checks them every tick).
   if (local) d.hub.onChange(() => { try { local.sync(d.hub.all()); } catch { /* the next tick tries again */ } });
   // A user message in a bot's thread fires thread_message routines (once per message).
-  manager.onUserMessage = (ls, text) => { if (ls.bot) runner.trigger(ls.owner, ls.bot, "thread_message", { text }); };
+  manager.onUserMessage = (ls, text) => { runner.trigger(ls.owner, ls.bot ?? MAIN_BOT_ID, "thread_message", { text }); };
   // A finished (or failed) reply in a bot's thread fires turn_done routines. Routine threads never do, so a routine cannot start itself.
-  manager.onTurnDone = (ls, r) => { if (ls.bot) runner.trigger(ls.owner, ls.bot, "turn_done", { text: r.text.slice(0, 2000) || (r.ok ? "(no reply)" : "the turn failed"), ok: r.ok }); };
+  manager.onTurnDone = (ls, r) => { runner.trigger(ls.owner, ls.bot ?? MAIN_BOT_ID, "turn_done", { text: r.text.slice(0, 2000) || (r.ok ? "(no reply)" : "the turn failed"), ok: r.ok }); };
 
   /** The hooks the runtime lends bot_manage and bot_self. */
   const hooks: Pick<BotManageHooks, "runRoutine" | "continueThread" | "startThread" | "publicBase" | "setup"> = {
@@ -134,7 +137,7 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
     },
     /** A new thread in a bot, like the Bots tab's "New thread" button; with a message, the bot starts on it (a server-owned turn, so it finishes without the chat open). */
     async startThread(owner, botId, o) {
-      const ls = await manager.open({ surface: "web", owner, bot: botId });
+      const ls = await manager.open({ surface: "web", owner, bot: realBot(botId) });
       const rt = manager.runtimeOf(owner);
       const title = o.title || (o.message ? o.message.replace(/\s+/g, " ").trim().slice(0, 60) : "New thread");
       await rt.renameSession?.(ls.id, title); // names it AND saves it, so it is in the sidebar at once

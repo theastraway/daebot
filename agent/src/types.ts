@@ -292,7 +292,7 @@ export interface Runtime {
   /** Saves thumbs feedback (or a Report) on a message and routes it into the learning store. */
   feedbackMessage?(id: string, mid: string, f: { rating: "up" | "down" | null; comment?: string; reason?: string; report?: boolean }): Promise<{ feedback?: MessageMeta["feedback"]; learned: boolean; excerpt: string } | "nosession" | "nomsg">;
   /** The owner's per-user settings (default model). */
-  settings?: { get(): { defaultModel?: string }; set(patch: { defaultModel?: string | null }): void };
+  settings?: { get(): import("./settings.ts").UserSettings; set(patch: import("./settings.ts").SettingsPatch): void };
   // Visible transcript of a live or persisted session (replayed after a resume or restart). Undefined = unknown id.
   history?(id: string): HistoryEvent[] | undefined;
   /** Granular permissions of this owner (rules, mode, pending cards). Absent on runtimes built without a data dir. */

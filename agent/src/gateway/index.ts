@@ -36,6 +36,7 @@ import { McpConnectError } from "../mcpconnect/service.ts";
 import type { McpConnectService } from "../mcpconnect/service.ts";
 import { createHash, createHmac } from "node:crypto";
 import { validModelId } from "../settings.ts";
+import { isFaceId } from "../bots/faces.ts";
 import { STATIC_CSP, resolveStatic, serveEmbedded, serveFile } from "./static.ts";
 import { EMBEDDED_FILES } from "../embedded.generated.ts";
 import { hasEmbeddedSite } from "../embedded.ts";
@@ -922,7 +923,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/board" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/");
+    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/board" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/");
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -1398,6 +1399,23 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     return sendJson(res, 404, { error: "not found" });
   }
 
+  /** The main Daebot's own name, face and LED colour (what bot_manage on slug "self" edits; the sidebar header shows it). Instructions are not sent to the page. */
+  async function mainProfileApi(req: IncomingMessage, res: ServerResponse, method: string, me: Principal): Promise<void> {
+    const settings = manager.runtimeOf(me.id).settings;
+    if (!settings) return sendJson(res, 404, { error: "settings are not enabled on this deployment" });
+    const view = () => { const m = settings.get().main ?? {}; return { name: m.name ?? null, face: m.face ?? null, color: m.color ?? null, hasInstructions: !!m.instructions }; };
+    if (method === "GET") return sendJson(res, 200, view());
+    if (method !== "PATCH") return sendJson(res, 405, { error: "method not allowed" });
+    const b = await readJson(req);
+    const patch: Record<string, string | null> = {};
+    if (b.name !== undefined) { const n = b.name === null ? null : optStr(b.name, 80); if (n === undefined) return sendJson(res, 400, { error: "name must be up to 80 characters (or null)" }); patch.name = n; }
+    if (b.face !== undefined) { if (b.face !== null && !(typeof b.face === "string" && isFaceId(b.face))) return sendJson(res, 400, { error: "unknown face" }); patch.face = b.face as string | null; }
+    if (b.color !== undefined) { if (b.color !== null && !(typeof b.color === "string" && /^#[0-9a-fA-F]{6}$/.test(b.color))) return sendJson(res, 400, { error: "color must look like #1a2b3c" }); patch.color = b.color as string | null; }
+    if (!Object.keys(patch).length) return sendJson(res, 400, { error: "send name, face or color" });
+    settings.set({ main: patch });
+    return sendJson(res, 200, view());
+  }
+
   async function modelsApi(req: IncomingMessage, res: ServerResponse, path: string, method: string, me: Principal): Promise<void> {
     if (!opts.cfg) return sendJson(res, 404, { error: "models are not available here" });
     const settings = manager.runtimeOf(me.id).settings;
@@ -1473,6 +1491,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (routines && botsOn() && (path === "/routines/preview" || path === "/routines/triggers" || /^\/bots\/[^/]+\/routines(\/|$)/.test(path))) { if (await routines.api(req, res, path, method, me)) return; }
     if (path === "/exchanges" || path.startsWith("/exchanges/")) return exchangesApi(res, path, method, me);
     if (path === "/bots/caelum") return caelumApi(req, res, method, me);
+    if (path === "/settings/daebot") return mainProfileApi(req, res, method, me);
     if (path === "/bots" || path.startsWith("/bots/")) return botsApi(req, res, path, method, me);
     if (path.startsWith("/mcp/")) return mcpApi(req, res, path, method, me);
     if (path === "/models" || path.startsWith("/models/")) return modelsApi(req, res, path, method, me);

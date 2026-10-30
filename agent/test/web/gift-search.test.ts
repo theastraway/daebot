@@ -73,11 +73,11 @@ test("header: the Instructions pill is gone; the bot name with its M face opens 
   assert.match(html, /id="btn-instr"[^>]*class|class="bot-trigger" id="btn-instr"/);
   assert.match(html, /<button class="bot-trigger" id="btn-instr"[\s\S]*id="top-badge"[\s\S]*id="top-bot-name">Daebot<[\s\S]*bt-chev/);
   const css = web("style.css");
-  const t = /\.bot-trigger \{[^}]*\}/.exec(css)![0];
+  const t = /^\.bot-trigger \{[^}]*\}/m.exec(css)![0]; // the base rule, not the one inside a media query
   assert.match(t, /border: 1px solid transparent; border-radius: 6px/);
   assert.doesNotMatch(t, /999px/);
   const b = web("bots.js");
-  assert.match(b, /el\.topName\.textContent = trig \? trig\.name : "Daebot"/);
+  assert.match(b, /el\.topName\.textContent = trig \? trig\.name : mainLk\.name/); // "Daebot" unless the user renamed the main Daebot (mainbot.js)
   assert.match(b, /app\.mainSettings/);
   assert.match(web("app.js"), /mainSettings: \(\) => \$\("acct-btn"\)\.click\(\)/);
 });

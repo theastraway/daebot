@@ -169,7 +169,7 @@ export class SessionManager {
     if (ls.busy) throw new BusyError("session is busy with another turn");
     ls.busy = true; // set synchronously: no await between check and set
     ls.turns++;
-    if (origin === "user" && ls.bot && !ls.peer && ls.surface !== "routine" && this.onUserMessage) { try { this.onUserMessage(ls, text); } catch { /* a routine hook never blocks a message */ } }
+    if (origin === "user" && !ls.peer && ls.surface !== "routine" && this.onUserMessage) { try { this.onUserMessage(ls, text); } catch { /* a routine hook never blocks a message */ } }
     ls.turnNonce = randomUUID();
     const ac = new AbortController();
     ls.abort = ac;
@@ -202,7 +202,7 @@ export class SessionManager {
       ls.busy = false;
       ls.abort = null;
       ls.lastUsed = Date.now();
-      if (!aborted && ls.bot && !ls.peer && ls.surface !== "routine" && this.onTurnDone) { try { this.onTurnDone(ls, { ok: !failedMsg, text: failedMsg || finalText }); } catch { /* a routine hook never breaks a turn */ } }
+      if (!aborted && !ls.peer && ls.surface !== "routine" && this.onTurnDone) { try { this.onTurnDone(ls, { ok: !failedMsg, text: failedMsg || finalText }); } catch { /* a routine hook never breaks a turn */ } }
     }
   }
 

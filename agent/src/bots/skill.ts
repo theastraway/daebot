@@ -26,5 +26,5 @@ export const BOT_TOOLKIT_PROMPT = [
   "- Instructions (DAEBOT.md): read_instructions, write_instructions (replace all), append_instructions, patch_instructions (find / replace_with).",
   "- Threads: list_threads, create_thread (optional first message; the bot starts on it), rename_thread, archive_thread, unarchive_thread.",
   "- Routines on ANY bot: list_routines, add_routine, update_routine, remove_routine, run_routine_now, pause_routine, resume_routine (timed with weekdays_only and active hours, or any trigger).",
-  "A bot can change only itself: slug \"self\" is the bot you are running as. Read before you rewrite (read_instructions), and make the smallest edit that does the job (append or patch rather than replace).",
+  "The slug \"self\" is YOU: in a bot's thread, that bot; in the plain Sessions chat, the main Daebot (your own name, face, color, instructions, threads and routines; reset_self restores the stock Daebot). A bot can change only itself. Read before you rewrite (read_instructions), and make the smallest edit that does the job (append or patch rather than replace).",
 ].join("\n");

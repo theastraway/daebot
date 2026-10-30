@@ -7,7 +7,8 @@ import { cleanTitle } from "../persist.ts";
 import { BOT_FACES, isFaceId } from "./faces.ts";
 import { BotError, MAX_INSTRUCTIONS_BYTES, SLUG_RE } from "./types.ts";
 import { summarizeTiming } from "../routines/clock.ts";
-import { RoutineError, TRIGGER_TYPES, describeRoutine } from "../routines/store.ts";
+import { MAIN_BOT_ID, RoutineError, TRIGGER_TYPES, describeRoutine } from "../routines/store.ts";
+import type { MainProfile, SettingsPatch } from "../settings.ts";
 import type { Routine, RoutineHub } from "../routines/store.ts";
 import { isGithub, isPoll } from "../routines/triggers.ts";
 import type { SetupReport } from "../routines/setup.ts";
@@ -52,11 +53,49 @@ export interface BotManageDeps {
   /** Set in a BOT's own session: the tool then works on that one bot only ("self"), and can neither create nor delete bots. */
   selfBot?: string;
   threadOps?: ThreadOps;
+  /** The main Daebot's own profile (name, face, colour, instructions) in the user's settings. Present in the main session: slug "self" is then the main Daebot. */
+  main?: { get(): { main?: MainProfile }; set(patch: SettingsPatch): void };
+}
+
+export const MAIN_DEFAULT_NAME = "Daebot";
+const MAIN_DEFAULT_COLOR = "#ffd25a";
+
+/** The main Daebot dressed as a BotRecord (id MAIN_BOT_ID, slug "self"), so every bot_manage action works on it through the same code. Edits go to the user's settings. */
+function withMain(bots: BotsApi, main: NonNullable<BotManageDeps["main"]>): BotsApi {
+  const rec = (): BotRecord => {
+    const m = main.get().main ?? {};
+    return { id: MAIN_BOT_ID, slug: "self", name: m.name ?? MAIN_DEFAULT_NAME, purpose: "the main Daebot (the plain Sessions chat)", color: m.color ?? MAIN_DEFAULT_COLOR, ...(m.face ? { face: m.face } : {}), createdAt: 0, updatedAt: 0 };
+  };
+  const isMain = (id: string) => id === MAIN_BOT_ID;
+  return new Proxy(bots, {
+    get(t, k, r) {
+      switch (k) {
+        case "bySlug": return (slug: string) => (slug === "self" ? rec() : t.bySlug(slug));
+        case "get": return (id: string) => (isMain(id) ? rec() : t.get(id));
+        case "instructions": return (id: string) => (isMain(id) ? main.get().main?.instructions ?? "" : t.instructions(id));
+        case "setInstructions": return (id: string, text: string) => { if (isMain(id)) main.set({ main: { instructions: text } }); else t.setInstructions(id, text); };
+        case "update": return (id: string, patch: Parameters<BotsApi["update"]>[1]) => {
+          if (!isMain(id)) return t.update(id, patch);
+          if (patch.model !== undefined) throw new BotError(400, "bad_model", "the main Daebot's model is the default model: change it in the model picker");
+          if (patch.purpose !== undefined) throw new BotError(400, "bad_purpose", "the main Daebot has no purpose line: its instructions say what it does (append_instructions)");
+          if (patch.pinned !== undefined) throw new BotError(400, "bad_pinned", "the main Daebot is always at the top: it cannot be pinned");
+          const m: NonNullable<SettingsPatch["main"]> = {};
+          if (patch.name !== undefined) m.name = patch.name;
+          if (patch.color !== undefined) m.color = patch.color;
+          if (patch.face !== undefined) m.face = typeof patch.face === "string" ? patch.face : null;
+          main.set({ main: m });
+          return rec();
+        };
+        case "remove": return async (id: string) => { if (isMain(id)) throw new BotError(400, "bad_delete", "the main Daebot cannot be deleted"); return t.remove(id); };
+        default: return Reflect.get(t, k, r);
+      }
+    },
+  });
 }
 
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 const ACTIONS = [
-  "list", "get", "create", "update", "delete", "faces", "models",
+  "list", "get", "create", "update", "delete", "faces", "models", "reset_self",
   "rename", "set_face", "set_color", "set_purpose", "set_model", "pin", "unpin",
   "read_instructions", "write_instructions", "append_instructions", "patch_instructions",
   "list_threads", "create_thread", "rename_thread", "archive_thread", "unarchive_thread",
@@ -139,7 +178,7 @@ export function createBotManageTool(d: BotManageDeps): Tool {
         "ONE-FIELD EDITS (same as update): rename {slug, name}, set_face {slug, face}, set_color {slug, color}, set_purpose {slug, purpose}, set_model {slug, model (\"\" clears)}, pin {slug}, unpin {slug}. get {slug}: the bot's settings plus its instructions. " +
         "INSTRUCTIONS (its DAEBOT.md): read_instructions {slug}; write_instructions {slug, instructions} replaces all; append_instructions {slug, text} adds to the end; patch_instructions {slug, find, replace_with, all?} swaps one exact piece of text (find must match exactly once unless all:true). " +
         "THREADS: list_threads {slug, archived?}; create_thread {slug, title?, message?} opens a NEW thread in that bot and, when message is given, the bot starts working on it; rename_thread {slug, thread, title}; archive_thread / unarchive_thread {slug, thread} hide or restore a thread in the sidebar (nothing is deleted). " +
-        "SELF: slug \"self\" means the bot you are running as. A bot may edit only itself (instructions, name, face, color, purpose, model, threads, routines); it cannot create or delete bots. " +
+        "SELF: slug \"self\" means YOU. In a bot's thread it is that bot; in the plain Sessions chat it is the main Daebot (your own name, face, color, instructions, threads and routines: edit them like any bot's; purpose, model and pin do not apply; reset_self returns you to the stock Daebot). A bot may edit only itself and cannot create or delete bots. " +
         "ROUTINES (work a bot does on its own, inside Daebot, nothing to install): list_routines {slug}. add_routine {slug, name, prompt, kind:\"timed\"|\"trigger\", expression + tz (timed: 5 fields minute hour day-of-month month day-of-week, e.g. \"0 9 * * 1-5\", tz an IANA name, default America/New_York) or trigger: one of webhook, thread_message, bot_message (+ from: a bot slug), keyword (+ phrase: words separated by commas, where: user|bot|either), turn_done (+ on: done|failed|any), mind_document, mind_task, mind_task_due, mind_contact, mail_new (+ every: 5|15|30|60 minutes), gh_issue / gh_pr / gh_push / gh_comment (GitHub pushes to Daebot; + repo: owner/name optional, + branch for gh_push), and on the desktop app only app_opened, wake, file_changed (+ path: a folder), screen_change (+ sensitivity: low|medium|high)). " +
         "ANY routine can be limited with weekdays_only:true (Monday to Friday) and active_from + active_to (\"09:00\" to \"17:00\", both ends included), in tz: \"every hour, weekdays only, 9 to 5\" is expression \"0 * * * *\" with weekdays_only, active_from \"09:00\", active_to \"17:00\". Several times a day: join 5-field parts with \";\" (\"0 9 * * *;30 13 * * *\"). " +
         "update_routine {slug, routine (id or name), name?, prompt?, enabled?, expression?, tz?, weekdays_only?, active_from?, active_to?, trigger? (+ its fields)}. remove_routine {slug, routine}. run_routine_now {slug, routine}. pause_routine / resume_routine {slug, routine}. Routines work on ANY bot, not only the current one. " +
@@ -151,7 +190,7 @@ export function createBotManageTool(d: BotManageDeps): Tool {
         type: "object",
         properties: {
           action: { type: "string", enum: [...ACTIONS] },
-          slug: { type: "string", description: "1 to 32 characters: lowercase letters, digits, dashes. Unique. Never \"main\". \"self\" = the bot you are running as." },
+          slug: { type: "string", description: "1 to 32 characters: lowercase letters, digits, dashes. Unique. Never \"main\". \"self\" = you (the bot you run as, or the main Daebot)." },
           name: { type: "string", description: "Display name, up to 80 characters" },
           purpose: { type: "string", description: "One line: what the bot is for (up to 500 characters)" },
           face: { type: "string", description: "A face id from the faces action (its personality preset). \"\" clears it on update." },
@@ -198,7 +237,7 @@ export function createBotManageTool(d: BotManageDeps): Tool {
       let args = args0;
       let action = str(args.action) as string;
       if (!action || !(ACTIONS as readonly string[]).includes(action)) return fail(`action must be one of ${ACTIONS.join(", ")}`);
-      const bots = d.bots;
+      const bots = !d.selfBot && d.main ? withMain(d.bots, d.main) : d.bots;
       try {
         // ---- who the call is about. A bot's own session may touch only itself ("self"); the main Daebot names any bot by slug.
         if (d.selfBot) {
@@ -210,8 +249,14 @@ export function createBotManageTool(d: BotManageDeps): Tool {
             if (given && given !== "self" && given !== own.slug) return fail(`a bot can only change itself. Use slug "self" (you are "${own.slug}"), or ask the main Daebot to change "${given.slice(0, 40)}".`);
             args = { ...args, slug: own.slug };
           }
-        } else if (str(args.slug)?.trim() === "self") {
-          return fail('"self" means the bot you are running as, and the main Daebot is not a bot. Name the bot by its slug (call list).');
+        } else if (str(args.slug)?.trim() === "self" && !d.main) {
+          return fail('"self" is not available here. Name the bot by its slug (call list).');
+        }
+        if (action === "reset_self") {
+          if (d.selfBot || !d.main) return fail("reset_self is for the main Daebot: it clears its custom name, face, color and instructions");
+          if (ctx.origin === "bot") return fail("a message from another bot cannot change the main Daebot. Only the user can.");
+          d.main.set({ main: { name: null, face: null, color: null, instructions: null } });
+          return { ok: true, output: JSON.stringify({ reset: "self", note: "The main Daebot is back to its stock name, face, color and instructions. Its routines are unchanged." }) };
         }
         // ---- aliases
         if (FIELD_ACTIONS[action]) {
