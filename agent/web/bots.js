@@ -847,7 +847,7 @@ export function initBots(ctx) {
     ensureLoaded: async () => { if (!st.botsLoaded) await refresh(); },
     /** The setup link Daebot gives in chat (#setup=<bot id>/<routine id>): show the Bots view, open that bot's settings and that routine's Set up step. */
     openSetup: async (botId, routineId) => {
-      if (!st.botsLoaded) await refresh();
+      if (!st.botsLoaded || !botById(botId)) await refresh();
       if (!botById(botId)) return false;
       if (st.view !== "bots") setView("bots", { silent: true });
       if (!(st.drawerOpen && st.drawerBot === botId)) await openDrawer(botId);
