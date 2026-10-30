@@ -404,7 +404,7 @@ export function initBots(ctx) {
       if (!cached && !st.loading.has(bot.id)) { st.loading.add(bot.id); loadThreads(bot.id, { cacheOnly: true, quiet: true }).finally(() => st.loading.delete(bot.id)); }
       if (!mine.length) sub.append(h("div", "empty-side", cached ? "No threads yet." : "Loading threads…"));
       for (const s of mine) {
-        const b = h("button", "sess"); b.type = "button";
+        const b = h("button", "sess"); b.type = "button"; b.dataset.sid = s.id;
         if (s.id === app.currentId()) b.setAttribute("aria-current", "true");
         if (s.unread) { b.classList.add("unread"); b.title = "Unread"; }
         const m = h("span", "sess-m");
@@ -443,9 +443,16 @@ export function initBots(ctx) {
     store.set("localStorage", SELECTED_KEY, bot.id);
     renderList(); sync();
     if (app.currentBot() === bot.id) return; // already in this bot's chat (a thread or its draft): stay put
-    let list = [];
-    try { list = (await json(`/sessions?bot=${encodeURIComponent(bot.id)}`)).sessions || []; st.cache.set(bot.id, list); }
-    catch (e) { if (e.message === "unauthorized") return; list = st.cache.get(bot.id) || []; }
+    // The thread list this bot had last time opens its top thread at once; the fresh list is read behind it. Only a bot never seen waits for the network.
+    const fetchList = async () => { try { const l = (await json(`/sessions?bot=${encodeURIComponent(bot.id)}`)).sessions || []; st.cache.set(bot.id, l); return l; } catch (e) { return e.message === "unauthorized" ? null : undefined; } };
+    let list = st.cache.get(bot.id);
+    if (list && list.length) {
+      void fetchList().then((l) => { if (l && seq === selectSeq) { if (st.threadsFor === bot.id) st.threads = l; renderList(); } });
+    } else {
+      const l = await fetchList();
+      if (l === null) return;
+      list = l || st.cache.get(bot.id) || [];
+    }
     if (seq !== selectSeq) return; // another bot was clicked while this one loaded
     const top = topThread(list);
     if (top) { st.threads = list; st.threadsFor = bot.id; await app.openThread({ ...top, bot: top.bot || bot.id }); }
@@ -491,13 +498,9 @@ export function initBots(ctx) {
   }
   function markCurrent() {
     const cur = app.currentId();
-    for (const b of el.botList.querySelectorAll(".bot-threads .sess")) b.removeAttribute("aria-current");
-    if (!cur) return;
-    st.threads.forEach((s, i) => {
-      if (s.id !== cur) return;
-      const nodes = el.botList.querySelectorAll(".bot-threads .sess");
-      if (nodes[i]) nodes[i].setAttribute("aria-current", "true");
-    });
+    for (const b of el.botList.querySelectorAll(".bot-threads .sess")) {
+      if (cur && b.dataset.sid === cur) b.setAttribute("aria-current", "true"); else b.removeAttribute("aria-current");
+    }
   }
 
   // ---------------------------------------------------------------- New bot card
