@@ -12,3 +12,10 @@ test("the Apps card is the one scroll container: no scroller inside it", () => {
   assert.ok(card, ".apps-card scrolls (overflow-y: auto)");
   assert.match(card.body, /max-height:\s*92dvh/);
 });
+
+test("no stylesheet caps the height of the Apps list (it would clip or add a second scroller)", () => {
+  const brand = readFileSync(new URL("../../web/brand/brand.css", import.meta.url), "utf8");
+  for (const [name, text] of [["style.css", css], ["brand.css", brand]] as const) {
+    for (const m of text.matchAll(/([^{}]*\.apps-(?:body|sec)[^{}]*)\{([^{}]*)\}/g)) assert.doesNotMatch(m[2], /max-height/, `${name}: ${m[1].trim()}`);
+  }
+});
