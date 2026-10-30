@@ -79,7 +79,7 @@ const oneLine = (v: unknown, max: number): string => String(v ?? "").replace(/[\
 /** The task of the built-in heartbeat run. The cheap non-model check decides first whether it runs at all. */
 export const HEARTBEAT_PROMPT = [
   "Review your own threads like a manager. The digest below came from a non-model check of your threads, tasks and routines.",
-  "1. Call bot_self threads to see each thread, its last messages, run state and board tasks.",
+  "1. Call bot_self with just {\"action\":\"threads\"} (no other argument: it needs no thread id) to see each thread, its last messages, run state and board tasks.",
   "2. For each item in the digest (an unanswered user message, a stalled or red task, an interrupted or failed run, a routine that errored) push it along: bot_self continue {thread, note} to resume the work, or bot_self stop {thread, question} when you need the user (one clear question, nothing else).",
   "3. Give ONE short line per thread you looked at as your final answer: thread title, state, what you did. Leave threads you did not need to touch out.",
   "4. Record what you learned with bot_self learn: what worked, what failed, a correction the user made. At most 3 lessons, each one rule you would follow next time. Skip it when you learned nothing new.",

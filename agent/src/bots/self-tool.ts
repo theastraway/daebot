@@ -24,7 +24,7 @@ export function createBotSelfTool(d: BotSelfDeps): Tool {
     spec: {
       name: "bot_self",
       description:
-        "Manage your own work (used in your Heartbeat). threads: your threads with last messages, run state and tasks. " +
+        "Manage your own work (used in your Heartbeat). threads {}: lists ALL your threads with last messages, run state and tasks. It takes NO other argument: call it with just action \"threads\", never ask for or invent a thread id (the ids come back in its result). " +
         "continue {thread, note}: resume a stalled thread with a short instruction (Heartbeat only; at most 3 per run). " +
         "stop {thread, question}: mark a thread stopped with the one question the user must answer (Heartbeat only). " +
         "learn {kind: failure|win|behavior, trigger, behavior (2-3 words), rule, evidence}: record a lesson in your own memory.",
@@ -32,7 +32,7 @@ export function createBotSelfTool(d: BotSelfDeps): Tool {
         type: "object",
         properties: {
           action: { type: "string", enum: [...ACTIONS] },
-          thread: { type: "string", description: "Thread id from threads" },
+          thread: { type: "string", description: "Only for continue and stop: a thread id taken from the result of threads. Never needed for threads itself." },
           note: { type: "string", description: "What to do next, one or two sentences" },
           question: { type: "string", description: "The exact question for the user" },
           kind: { type: "string", enum: ["failure", "win", "behavior"] },
@@ -48,7 +48,13 @@ export function createBotSelfTool(d: BotSelfDeps): Tool {
       const action = s(args.action);
       if (!(ACTIONS as readonly string[]).includes(action)) return fail(`action must be one of ${ACTIONS.join(", ")}`);
       try {
-        if (action === "threads") return { ok: true, output: JSON.stringify({ threads: await d.threads() }) };
+        // threads never needs a thread id: it lists them all. A thread id passed anyway (a model reading the schema too literally) only narrows the list.
+        if (action === "threads") {
+          const all = await d.threads();
+          const only = s(args.thread);
+          const hit = only ? all.filter((t) => t.id === only) : [];
+          return { ok: true, output: JSON.stringify({ threads: hit.length ? hit : all }) };
+        }
         if (action === "learn") {
           const r = await d.learn({ kind: s(args.kind) as LessonInput["kind"], trigger: s(args.trigger), behavior: s(args.behavior), rule: s(args.rule), evidence: s(args.evidence) });
           return { ok: r.ok, output: r.text };

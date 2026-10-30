@@ -3,6 +3,7 @@
 // user first, every time). Offered only to the user's own sessions (a bot never gets it) and refused again here on a peer-originated turn.
 import type { Tool, ToolClass, ToolResult } from "../types.ts";
 import { validModelId } from "../settings.ts";
+import { cleanTitle } from "../persist.ts";
 import { BOT_FACES, isFaceId } from "./faces.ts";
 import { BotError, MAX_INSTRUCTIONS_BYTES, SLUG_RE } from "./types.ts";
 import { summarizeTiming } from "../routines/clock.ts";
@@ -21,10 +22,21 @@ export interface BotManageHooks {
   runRoutine?(owner: string, botId: string, routineId: string): Promise<{ ok: boolean; message: string }>;
   /** Heartbeat only: resumes a stalled thread of the bot with a short instruction. */
   continueThread?(owner: string, botId: string, threadId: string, note: string): Promise<string>;
+  /** Opens a NEW thread in a bot (the same thing the Bots tab's "New thread" button does) and, when `message` is given, starts the bot working on it. */
+  startThread?(owner: string, botId: string, o: { title?: string; message?: string }): Promise<{ id: string; title: string; started: boolean }>;
   /** https://daebot.live (where webhook URLs point). */
   publicBase?(): string | undefined;
   /** Checks a trigger's requirements live (Gmail connected? screen allowed?). `fresh` skips the short cache. Absent = nothing to check against. */
   setup?(owner: string, trigger: unknown, o?: { routineId?: string; botId?: string; fresh?: boolean }): Promise<SetupReport | undefined>;
+}
+
+/** The runtime's own thread functions (the ones the sidebar's rename and archive use), scoped to the owner's sessions. */
+export interface ThreadOps {
+  /** Threads of one bot (never bot-to-bot DM threads). Archived ones only when `all`. */
+  list(botId: string, all: boolean): { id: string; title: string; updatedAt: number; surface: string; archived?: boolean }[];
+  /** false = not a thread of that bot. */
+  rename(botId: string, threadId: string, title: string): Promise<boolean>;
+  archive(botId: string, threadId: string, on: boolean): Promise<boolean>;
 }
 
 export interface BotManageDeps {
@@ -37,10 +49,22 @@ export interface BotManageDeps {
   purge?: (botId: string) => Promise<unknown>;
   /** Routines of every bot (shared with the gateway's runner). */
   routines?: RoutineHub;
+  /** Set in a BOT's own session: the tool then works on that one bot only ("self"), and can neither create nor delete bots. */
+  selfBot?: string;
+  threadOps?: ThreadOps;
 }
 
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
-const ACTIONS = ["list", "create", "update", "delete", "faces", "models", "list_routines", "add_routine", "update_routine", "remove_routine", "run_routine_now"] as const;
+const ACTIONS = [
+  "list", "get", "create", "update", "delete", "faces", "models",
+  "rename", "set_face", "set_color", "set_purpose", "set_model", "pin", "unpin",
+  "read_instructions", "write_instructions", "append_instructions", "patch_instructions",
+  "list_threads", "create_thread", "rename_thread", "archive_thread", "unarchive_thread",
+  "list_routines", "add_routine", "update_routine", "remove_routine", "run_routine_now", "pause_routine", "resume_routine",
+] as const;
+/** The one-field edits: action -> the argument it needs. */
+const FIELD_ACTIONS: Record<string, string> = { rename: "name", set_face: "face", set_color: "color", set_purpose: "purpose", set_model: "model" };
+const READ_ACTIONS = new Set(["list", "get", "faces", "models", "read_instructions", "list_threads", "list_routines"]);
 
 /** The house shape every new bot starts from (kept in step with starterTemplate in web/bots.js). */
 export function starterInstructions(name: string, purpose: string): string {
@@ -112,9 +136,13 @@ export function createBotManageTool(d: BotManageDeps): Tool {
         "list: every bot (slug, name, purpose, face, model, thread count). faces: the personalities you can pick. models: the models the user's plan allows. " +
         "create {slug, name, purpose, face?, color?, model?, instructions?}: makes the bot AND writes its DAEBOT.md in ONE call. update {slug, name?, purpose?, face?, color?, model? (\"\" clears), instructions? (replaces the whole DAEBOT.md)}: edit a bot, never recreate it. " +
         "delete {slug}: permanent (its threads go too); the user is asked to confirm first. " +
+        "ONE-FIELD EDITS (same as update): rename {slug, name}, set_face {slug, face}, set_color {slug, color}, set_purpose {slug, purpose}, set_model {slug, model (\"\" clears)}, pin {slug}, unpin {slug}. get {slug}: the bot's settings plus its instructions. " +
+        "INSTRUCTIONS (its DAEBOT.md): read_instructions {slug}; write_instructions {slug, instructions} replaces all; append_instructions {slug, text} adds to the end; patch_instructions {slug, find, replace_with, all?} swaps one exact piece of text (find must match exactly once unless all:true). " +
+        "THREADS: list_threads {slug, archived?}; create_thread {slug, title?, message?} opens a NEW thread in that bot and, when message is given, the bot starts working on it; rename_thread {slug, thread, title}; archive_thread / unarchive_thread {slug, thread} hide or restore a thread in the sidebar (nothing is deleted). " +
+        "SELF: slug \"self\" means the bot you are running as. A bot may edit only itself (instructions, name, face, color, purpose, model, threads, routines); it cannot create or delete bots. " +
         "ROUTINES (work a bot does on its own, inside Daebot, nothing to install): list_routines {slug}. add_routine {slug, name, prompt, kind:\"timed\"|\"trigger\", expression + tz (timed: 5 fields minute hour day-of-month month day-of-week, e.g. \"0 9 * * 1-5\", tz an IANA name, default America/New_York) or trigger: one of webhook, thread_message, bot_message (+ from: a bot slug), keyword (+ phrase: words separated by commas, where: user|bot|either), turn_done (+ on: done|failed|any), mind_document, mind_task, mind_task_due, mind_contact, mail_new (+ every: 5|15|30|60 minutes), gh_issue / gh_pr / gh_push / gh_comment (GitHub pushes to Daebot; + repo: owner/name optional, + branch for gh_push), and on the desktop app only app_opened, wake, file_changed (+ path: a folder), screen_change (+ sensitivity: low|medium|high)). " +
         "ANY routine can be limited with weekdays_only:true (Monday to Friday) and active_from + active_to (\"09:00\" to \"17:00\", both ends included), in tz: \"every hour, weekdays only, 9 to 5\" is expression \"0 * * * *\" with weekdays_only, active_from \"09:00\", active_to \"17:00\". Several times a day: join 5-field parts with \";\" (\"0 9 * * *;30 13 * * *\"). " +
-        "update_routine {slug, routine (id or name), name?, prompt?, enabled?, expression?, tz?, weekdays_only?, active_from?, active_to?, trigger? (+ its fields)}. remove_routine {slug, routine}. run_routine_now {slug, routine}. " +
+        "update_routine {slug, routine (id or name), name?, prompt?, enabled?, expression?, tz?, weekdays_only?, active_from?, active_to?, trigger? (+ its fields)}. remove_routine {slug, routine}. run_routine_now {slug, routine}. pause_routine / resume_routine {slug, routine}. Routines work on ANY bot, not only the current one. " +
         "SETUP: some triggers need the user to do something first (connect a mailbox for mail_new, paste a webhook into GitHub, allow the screen). add_routine checks this live: if something is missing the routine is saved turned OFF and the result has needsSetup:true, missing:[...] and a setupLink. Say plainly what is missing and give the user the setupLink; never claim the routine is running until it is on. update_routine enabled:true is refused while setup is missing. " +
         "Every bot also has a built-in Heartbeat routine (hourly review of its own threads): it can be turned off or re-timed with update_routine, never removed. After add_routine or update_routine, tell the user the timing in plain words (the result's \"summary\" or \"when\"), e.g. \"Every hour · Weekdays · 9 AM–5 PM\"; for a webhook give the webhookUrl. " +
         "Procedure for a new bot: ask at most 2 short questions only if the job is unclear, otherwise infer; pick slug, name, one-line purpose and a fitting face (call faces if unsure); set a model only if the job needs one (call models first); write DAEBOT.md as # Role / # How you work / # Never, specific to the job, with the MIND-first and ask-before-irreversible rules kept; call create once with everything; then tell the user the bot's name, what it does, its model, that it is in the Bots tab with a \"New thread with <name>\" button, and offer to hand it a first task with bot_talk. " +
@@ -123,7 +151,7 @@ export function createBotManageTool(d: BotManageDeps): Tool {
         type: "object",
         properties: {
           action: { type: "string", enum: [...ACTIONS] },
-          slug: { type: "string", description: "1 to 32 characters: lowercase letters, digits, dashes. Unique. Never \"main\"." },
+          slug: { type: "string", description: "1 to 32 characters: lowercase letters, digits, dashes. Unique. Never \"main\". \"self\" = the bot you are running as." },
           name: { type: "string", description: "Display name, up to 80 characters" },
           purpose: { type: "string", description: "One line: what the bot is for (up to 500 characters)" },
           face: { type: "string", description: "A face id from the faces action (its personality preset). \"\" clears it on update." },
@@ -146,7 +174,15 @@ export function createBotManageTool(d: BotManageDeps): Tool {
           active_from: { type: "string", description: "Routine: active hours start, HH:MM (needs active_to)" },
           active_to: { type: "string", description: "Routine: active hours end, HH:MM, included" },
           enabled: { type: "boolean", description: "Routine: on or off" },
-          instructions: { type: "string", description: `The bot's whole DAEBOT.md (max ${MAX_INSTRUCTIONS_BYTES / 1024} KB). On update it REPLACES the file.` },
+          instructions: { type: "string", description: `The bot's whole DAEBOT.md (max ${MAX_INSTRUCTIONS_BYTES / 1024} KB). On update and write_instructions it REPLACES the file.` },
+          text: { type: "string", description: "append_instructions: the text to add at the end of DAEBOT.md" },
+          find: { type: "string", description: "patch_instructions: the exact text to replace" },
+          replace_with: { type: "string", description: "patch_instructions: what to put in its place (\"\" removes it)" },
+          all: { type: "boolean", description: "patch_instructions: replace every match instead of requiring exactly one" },
+          thread: { type: "string", description: "rename_thread / archive_thread / unarchive_thread: the thread id from list_threads" },
+          title: { type: "string", description: "create_thread / rename_thread: the thread's name (up to 80 characters)" },
+          message: { type: "string", description: "create_thread: the first message; the bot starts working on it" },
+          archived: { type: "boolean", description: "list_threads: include archived threads" },
         },
         required: ["action"],
         additionalProperties: false,
@@ -156,13 +192,54 @@ export function createBotManageTool(d: BotManageDeps): Tool {
     classFor(args) {
       const a = args.action;
       if (a === "delete" || a === "remove_routine") return "irreversible" as ToolClass;
-      return a === "create" || a === "update" || a === "add_routine" || a === "update_routine" || a === "run_routine_now" ? "write" : "read";
+      return typeof a === "string" && READ_ACTIONS.has(a) ? "read" : "write";
     },
-    async run(args, ctx) {
-      const action = str(args.action);
+    async run(args0, ctx) {
+      let args = args0;
+      let action = str(args.action) as string;
       if (!action || !(ACTIONS as readonly string[]).includes(action)) return fail(`action must be one of ${ACTIONS.join(", ")}`);
       const bots = d.bots;
       try {
+        // ---- who the call is about. A bot's own session may touch only itself ("self"); the main Daebot names any bot by slug.
+        if (d.selfBot) {
+          if (action === "create" || action === "delete") return fail("a bot cannot create or delete bots. Ask the user to ask the main Daebot.");
+          if (action !== "list" && action !== "faces" && action !== "models") {
+            const own = bots.get(d.selfBot);
+            if (!own) return fail("this bot no longer exists");
+            const given = (str(args.slug) ?? "").trim();
+            if (given && given !== "self" && given !== own.slug) return fail(`a bot can only change itself. Use slug "self" (you are "${own.slug}"), or ask the main Daebot to change "${given.slice(0, 40)}".`);
+            args = { ...args, slug: own.slug };
+          }
+        } else if (str(args.slug)?.trim() === "self") {
+          return fail('"self" means the bot you are running as, and the main Daebot is not a bot. Name the bot by its slug (call list).');
+        }
+        // ---- aliases
+        if (FIELD_ACTIONS[action]) {
+          if (args[FIELD_ACTIONS[action]] === undefined) return fail(`${action} needs ${FIELD_ACTIONS[action]}`);
+          action = "update";
+        } else if (action === "pin" || action === "unpin") {
+          args = { ...args, pinned: action === "pin" };
+          action = "update";
+        } else if (action === "write_instructions") {
+          if (args.instructions === undefined) return fail("write_instructions needs instructions (the whole new DAEBOT.md)");
+          action = "update";
+        } else if (action === "pause_routine" || action === "resume_routine") {
+          args = { ...args, enabled: action === "resume_routine" };
+          action = "update_routine";
+        }
+        const lookup = (): BotRecord | string => {
+          const slug = (str(args.slug) ?? "").trim();
+          if (!slug) return `${action} needs the bot's slug (call list)`;
+          return bots.bySlug(slug) ?? `no bot "${slug.slice(0, 40)}". Valid: ${bots.snapshot().map((b) => b.slug).join(", ") || "(none yet)"}`;
+        };
+        if (action === "get" || action === "read_instructions" || action === "list_threads") {
+          const rec = lookup();
+          if (typeof rec === "string") return fail(rec);
+          if (action === "get") return { ok: true, output: JSON.stringify({ bot: { ...view(rec, d.threads(rec.id)), pinned: !!rec.pinnedAt }, instructions: bots.instructions(rec.id), routines: d.routines?.book(d.owner, rec.id).list().map((r) => ({ id: r.id, name: r.name, enabled: r.enabled, when: describeRoutine(r) })) ?? [] }) };
+          if (action === "read_instructions") { const t = bots.instructions(rec.id); return { ok: true, output: JSON.stringify({ bot: rec.slug, instructions: t, bytes: Buffer.byteLength(t, "utf8"), maxBytes: MAX_INSTRUCTIONS_BYTES }) }; }
+          if (!d.threadOps) return fail("threads are not available here");
+          return { ok: true, output: JSON.stringify({ bot: rec.slug, threads: d.threadOps.list(rec.id, args.archived === true).slice(0, 100) }) };
+        }
         if (action === "faces") return { ok: true, output: JSON.stringify({ faces: BOT_FACES.map((f) => ({ id: f.id, name: f.name, blurb: f.blurb })) }) };
         if (action === "list") {
           const all = await bots.list();
@@ -296,6 +373,53 @@ export function createBotManageTool(d: BotManageDeps): Tool {
         const rec = bots.bySlug(slug);
         if (!rec) return fail(`no bot "${slug.slice(0, 40)}". Valid: ${bots.snapshot().map((b) => b.slug).join(", ") || "(none yet)"}`);
 
+        if (action === "append_instructions" || action === "patch_instructions") {
+          const cur = bots.instructions(rec.id);
+          let next: string;
+          if (action === "append_instructions") {
+            const add = str(args.text) ?? "";
+            if (!add.trim()) return fail("append_instructions needs text");
+            next = cur.replace(/\s+$/, "") + "\n\n" + add.trim() + "\n";
+          } else {
+            const find = str(args.find) ?? "";
+            if (!find) return fail("patch_instructions needs find (the exact text to replace)");
+            if (typeof args.replace_with !== "string") return fail('patch_instructions needs replace_with (use "" to remove the text)');
+            const n = cur.split(find).length - 1;
+            if (n === 0) return fail("find does not appear in the instructions (call read_instructions and copy the text exactly)");
+            if (n > 1 && args.all !== true) return fail(`find appears ${n} times. Make it longer so it matches once, or pass all:true.`);
+            next = cur.split(find).join(args.replace_with);
+          }
+          const tooBig = checkInstr(next.trim() ? next : undefined) ?? (next.trim() ? undefined : "that would leave the instructions empty");
+          if (tooBig) return fail(tooBig);
+          bots.setInstructions(rec.id, next);
+          return { ok: true, output: JSON.stringify({ bot: rec.slug, instructionsBytes: Buffer.byteLength(next, "utf8"), instructions: next }) };
+        }
+
+        if (action === "create_thread" || action === "rename_thread" || action === "archive_thread" || action === "unarchive_thread") {
+          if (action === "create_thread") {
+            const start = d.hooks()?.startThread;
+            if (!start) return fail("opening a thread is not available here");
+            const title = str(args.title) === undefined ? undefined : (cleanTitle(args.title) ?? "");
+            if (title === "") return fail("title must be 1 to 80 characters");
+            const message = str(args.message)?.trim() || undefined;
+            if (message && Buffer.byteLength(message, "utf8") > 8000) return fail("message is longer than 8 KB");
+            const t = await start(d.owner, rec.id, { title, message });
+            return { ok: true, output: JSON.stringify({ bot: rec.slug, thread: t, where: `${rec.name}'s thread list in the sidebar`, ...(t.started ? { note: "The bot is working on the first message now; its reply lands in that thread." } : {}) }) };
+          }
+          if (!d.threadOps) return fail("threads are not available here");
+          const tid = (str(args.thread) ?? "").trim();
+          if (!tid) return fail(`${action} needs thread (an id from list_threads)`);
+          if (action === "rename_thread") {
+            const title = cleanTitle(args.title);
+            if (!title) return fail("title must be 1 to 80 characters");
+            if (!(await d.threadOps.rename(rec.id, tid, title))) return fail(`no thread "${tid.slice(0, 40)}" in ${rec.slug} (call list_threads)`);
+            return { ok: true, output: JSON.stringify({ bot: rec.slug, thread: tid, title }) };
+          }
+          const on = action === "archive_thread";
+          if (!(await d.threadOps.archive(rec.id, tid, on))) return fail(`no thread "${tid.slice(0, 40)}" in ${rec.slug} (call list_threads${on ? "" : " with archived:true"})`);
+          return { ok: true, output: JSON.stringify({ bot: rec.slug, thread: tid, archived: on }) };
+        }
+
         if (action === "delete") {
           await bots.remove(rec.id);
           d.routines?.drop(d.owner, rec.id);
@@ -318,8 +442,9 @@ export function createBotManageTool(d: BotManageDeps): Tool {
         if (args.face !== undefined) patch.face = args.face === null ? "" : args.face;
         if (args.color !== undefined) patch.color = args.color as string;
         if (mc.model !== undefined) patch.model = mc.model;
+        if (typeof args.pinned === "boolean") patch.pinned = args.pinned;
         const changes = Object.keys(patch).length + (args.instructions !== undefined ? 1 : 0);
-        if (!changes) return fail("update needs at least one of name, purpose, face, color, model, instructions");
+        if (!changes) return fail("update needs at least one of name, purpose, face, color, model, instructions, pinned");
         let cur = rec;
         if (args.instructions !== undefined) bots.setInstructions(rec.id, args.instructions as string);
         if (Object.keys(patch).length) cur = bots.update(rec.id, patch);

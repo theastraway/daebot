@@ -30,7 +30,7 @@ export interface LiveSession {
   turnNonce: string;
 }
 
-export interface SessionRow { id: string; surface: string; title: string; updatedAt: number; live: boolean; busy: boolean; bot?: string; peer?: string; model?: string; permMode?: string; unread?: boolean }
+export interface SessionRow { id: string; surface: string; title: string; updatedAt: number; live: boolean; busy: boolean; bot?: string; peer?: string; model?: string; permMode?: string; unread?: boolean; archived?: boolean }
 
 export const IDLE_MS = 6 * 60 * 60 * 1000;
 export const EMPTY_IDLE_MS = 15 * 60 * 1000; // a session nobody has written to is dropped sooner
@@ -127,7 +127,7 @@ export class SessionManager {
   }
 
   /** Sessions of one owner. Bot threads are left out by default; `bot` returns only that bot's threads. */
-  list(owner: string = LOCAL_OWNER, filter: { bot?: string } = {}): SessionRow[] {
+  list(owner: string = LOCAL_OWNER, filter: { bot?: string; archived?: boolean } = {}): SessionRow[] {
     const out = new Map<string, SessionRow>();
     try {
       for (const s of (this.runtimeFor ? this.runtimeFor(owner) : this.runtime).listSessions()) {
@@ -156,9 +156,10 @@ export class SessionManager {
         ...(prev?.model ? { model: prev.model } : {}),
         ...(prev?.permMode ? { permMode: prev.permMode } : {}),
         ...(prev?.unread ? { unread: true } : {}),
+        ...(prev?.archived ? { archived: true } : {}),
       });
     }
-    return [...out.values()].filter((r) => (filter.bot ? r.bot === filter.bot : !r.bot && !r.peer)).sort((a, b) => b.updatedAt - a.updatedAt);
+    return [...out.values()].filter((r) => (filter.archived || !r.archived) && (filter.bot ? r.bot === filter.bot : !r.bot && !r.peer)).sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
   /** Runs one turn. Throws BusyError / NotFoundError synchronously-in-promise before any event is emitted. */
