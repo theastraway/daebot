@@ -9,7 +9,7 @@ import { auth, http, tmpStatic } from "./helpers.ts";
 function countingRuntime(reads: { combined: number; history: number; meta: number }) {
   const rec = new HistoryRecorder();
   const rt: Runtime = {
-    async openSession(o) {
+    async openSession(o: { surface: string; resumeId?: string }) {
       const id = o.resumeId ?? "s-1";
       const s: AgentSession = {
         id, surface: o.surface, violations: () => [], close: async () => {},
