@@ -1198,3 +1198,8 @@ body.xv-open .top-title, body.xv-open .model-wrap, body.xv-open .top-meta, body.
 
 .cd-acctbtns { display: flex; gap: 6px; margin-left: 8px; flex-wrap: wrap; }
 .cd-reconnect.is-danger { color: var(--accent); border-color: var(--accent); }
+
+/* Switching chats: older messages are built while the browser is idle and skip layout/paint until scrolled near; the "earlier" row loads more on scroll up. */
+.thread > .cv { content-visibility: auto; contain-intrinsic-size: auto 96px; }
+.thread > .older { align-self: center; border: 0; background: transparent; color: var(--ink-3); font: 13px/1 var(--sans, inherit); padding: 6px 12px; border-radius: 999px; cursor: pointer; }
+.thread > .older:hover { color: var(--ink-2); background: var(--surface); }

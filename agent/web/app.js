@@ -13,6 +13,7 @@ import { initMcp } from "/mcp.js";
 import { initConnectors } from "/connectors.js";
 import { openConnectorDetail } from "/connector-detail.js";
 import { transcriptBehind } from "/sync.js";
+import { lruPut, raceAbort, windowPlan, scrollMemory } from "/switchcache.js";
 import { confirmDialog, deleteControl, renameControl, editInline, isRenaming, sessionDeleteText } from "/manage.js";
 import { compareBuild, webUpdateText, WEB_CHECK_MS } from "/webupdate.js";
 import { buildPermissionCard, initChatMode, initPermissions } from "/permissions.js";
@@ -324,14 +325,98 @@ function buildConfirm(it) {
   return c;
 }
 
+// A chat shows its newest FIRST_PAINT items at once (what fits on screen), the rest of a WINDOW_ITEMS window is filled in
+// above them while the browser is idle, and anything older loads when you scroll up. A 300-message chat costs the same
+// to open as a 10-message one. Items whose DOM node already exists (the chat was open before) are re-attached, not rebuilt.
+const FIRST_PAINT_ITEMS = 6, WINDOW_ITEMS = 40, OLDER_STEP = 40, SLICE_MS = 8;
+const REUSE_KINDS = new Set(["user", "tool", "gate", "notice"]);
+let renderGen = 0, olderIO = null;
+const whenIdle = (f) => (window.requestIdleCallback ? window.requestIdleCallback(f, { timeout: 250 }) : setTimeout(f, 16));
+// The thread is a polite live region: while history is being built into it, screen readers must not read it all out.
+let busyT = 0;
+function threadBusy() { els.thread.setAttribute("aria-busy", "true"); clearTimeout(busyT); busyT = setTimeout(() => els.thread.removeAttribute("aria-busy"), 400); }
+function nodeFor(it, tr, old) {
+  const reuse = it.node && (REUSE_KINDS.has(it.kind) || (it.kind === "assistant" && !it.streaming));
+  const n = reuse ? it.node : buildItem(it, tr);
+  if (old) n.classList.add("cv"); else n.classList.remove("cv"); // offscreen history skips layout and paint until scrolled near
+  return n;
+}
+/** Insert nodes above everything shown and keep the reader looking at the same message. */
+function prependKeep(frag) {
+  const sc = els.scroll, before = sc.scrollHeight, top = sc.scrollTop;
+  const older = els.thread.querySelector(":scope > .older");
+  els.thread.insertBefore(frag, older ? older.nextSibling : els.thread.firstChild);
+  sc.scrollTop = top + (sc.scrollHeight - before);
+}
+function placeOlder(tr) {
+  if (olderIO) { olderIO.disconnect(); olderIO = null; }
+  els.thread.querySelector(":scope > .older")?.remove();
+  if (!(tr.from > 0)) return;
+  const b = h("button", "older", `Show earlier messages (${tr.from})`); b.type = "button";
+  b.addEventListener("click", () => loadOlder(tr));
+  els.thread.prepend(b);
+  if (window.IntersectionObserver) {
+    olderIO = new IntersectionObserver((en) => { if (en.some((x) => x.isIntersecting)) loadOlder(tr); }, { root: els.scroll, rootMargin: "500px 0px 0px 0px" });
+    olderIO.observe(b);
+  }
+}
+function loadOlder(tr) {
+  if (transcript(tkey()) !== tr || !(tr.from > 0)) return;
+  threadBusy();
+  const from = Math.max(0, tr.from - OLDER_STEP), frag = document.createDocumentFragment();
+  for (let i = from; i < tr.from; i++) frag.append(nodeFor(tr.items[i], tr, true));
+  tr.from = from;
+  prependKeep(frag);
+  placeOlder(tr);
+}
 function renderThread() {
+  const gen = ++renderGen;
+  threadBusy();
+  const tr = transcript(tkey()), items = tr.items, total = items.length;
+  if (olderIO) { olderIO.disconnect(); olderIO = null; }
   els.thread.replaceChildren();
-  const tr = transcript(tkey());
-  if (!tr.items.length) renderEmpty();
-  for (const it of tr.items) els.thread.append(buildItem(it, tr));
-  renderHeader();
-  paintReplyChip();
-  toBottom(true);
+  if (!total) {
+    if (!tr.pending) renderEmpty(); // a chat still loading shows nothing (no "What should we work on?" flash)
+    renderHeader(); paintReplyChip(); toBottom(true);
+    return;
+  }
+  const mem = tr.scrollMem; tr.scrollMem = undefined;
+  const { away, tailFrom, fillTo } = windowPlan({ total, mem, first: FIRST_PAINT_ITEMS, win: WINDOW_ITEMS }); // away: came back to a chat that was scrolled up
+  const frag = document.createDocumentFragment();
+  for (let i = tailFrom; i < total; i++) frag.append(nodeFor(items[i], tr, false)); // coming back to a scrolled-up chat builds it whole (no estimated heights) so the reader lands exactly where they were
+  els.thread.append(frag);
+  tr.from = tailFrom;
+  renderHeader(); paintReplyChip();
+  if (away) { stick = false; els.scroll.scrollTop = els.scroll.scrollHeight - els.scroll.clientHeight - mem.fromBottom; }
+  else toBottom(true);
+  // Short items at the end of a chat may not fill the screen: add earlier ones now, or the idle fill would push what is on screen down.
+  while (!away && tr.from > 0 && els.scroll.scrollHeight < els.scroll.clientHeight * 1.3) {
+    const f = document.createDocumentFragment(), from = Math.max(0, tr.from - 4);
+    for (let i = from; i < tr.from; i++) f.append(nodeFor(items[i], tr, false));
+    tr.from = from;
+    els.thread.insertBefore(f, els.thread.firstChild);
+  }
+  if (!away && tr.from > fillTo) {
+    // The rest of the window is built a few items at a time, each slice capped at SLICE_MS, so typing and scrolling never wait on it.
+    const slice = () => {
+      if (gen !== renderGen || transcript(tkey()) !== tr) return; // another chat was opened meanwhile
+      const f = document.createDocumentFragment(), t0 = performance.now();
+      let from = tr.from;
+      while (from > fillTo && (from === tr.from || performance.now() - t0 < SLICE_MS)) { from--; f.prepend(nodeFor(items[from], tr, true)); }
+      tr.from = from;
+      threadBusy();
+      prependKeep(f);
+      if (tr.from > fillTo) whenIdle(slice); else placeOlder(tr);
+    };
+    whenIdle(slice);
+  } else placeOlder(tr);
+}
+/** Remember where the reader was in the chat being left. */
+function rememberScroll() {
+  const tr = state.transcripts.get(tkey());
+  if (!tr || !tr.items.length) return;
+  const sc = els.scroll;
+  tr.scrollMem = scrollMemory({ scrollHeight: sc.scrollHeight, scrollTop: sc.scrollTop, clientHeight: sc.clientHeight, total: tr.items.length, from: tr.from });
 }
 
 // Swap one transcript item for another in place (a retracted draft becomes a "rewriting" note).
@@ -383,19 +468,66 @@ function itemsFromHistory(events) {
   return { items, usage, model };
 }
 
-// Fill an empty transcript from the server (resume after a restart, or a live session this browser has not seen).
-async function loadHistory(id) {
+// ---------- history: one cached, conditional read per chat ----------
+// The last transcript the server sent for each chat (newest HIST_MAX kept). A chat that is already here paints at once on
+// open and is only re-checked in the background; GET history carries an ETag, so an unchanged chat costs a 304.
+const HIST_MAX = 12;
+const hist = new Map();       // id -> { events, meta, run, etag }
+const histFlight = new Map(); // id -> Promise: one request per chat at a time, shared by hover prefetch, a switch and the sync tick
+function histPut(id, e) { lruPut(hist, id, e, HIST_MAX); }
+function getHistory(id, { signal } = {}) {
+  let p = histFlight.get(id);
+  if (!p) {
+    const prev = hist.get(id);
+    p = (async () => {
+      const res = await api(`/sessions/${encodeURIComponent(id)}/history`, prev?.etag ? { headers: { "if-none-match": prev.etag } } : {});
+      if (res.status === 304 && prev) return prev;
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+      const body = await res.json();
+      const e = { events: body.events, meta: body.meta, run: body.run, etag: res.headers.get("etag") || "" };
+      histPut(id, e);
+      return e;
+    })().finally(() => histFlight.delete(id));
+    histFlight.set(id, p);
+  }
+  return raceAbort(p, signal);
+}
+/** Warm the cache for a chat the user is about to open (hover, focus, press, neighbours of the open one). */
+function prefetchHistory(id) {
+  if (!id || id === state.currentId || hist.has(id) || histFlight.has(id)) return;
+  void getHistory(id).catch(() => { /* a failed prefetch only means the click fetches it */ });
+}
+function fillTranscript(tr, e) {
+  const r = itemsFromHistory(e.events);
+  tr.items.length = 0; tr.items.push(...r.items);
+  applyMeta(tr, e.meta);
+  tr.usage = r.usage; if (r.model) tr.model = r.model;
+}
+// Bring a chat's transcript up to what the server holds. Returns true when the visible thread was rebuilt.
+// Fills an empty transcript (first open, resume after a restart), picks up turns that happened elsewhere, and attaches to a
+// reply still being written.
+function reconcile(id, e) {
   const tr = transcript(id);
-  if (tr.items.length) return;
-  try {
-    const { events, meta } = await json(`/sessions/${encodeURIComponent(id)}/history`);
-    if (!events || !events.length || tr.items.length) return;
-    const r = itemsFromHistory(events);
-    tr.items.push(...r.items);
-    applyMeta(tr, meta);
-    tr.usage = r.usage;
-    if (r.model) tr.model = r.model;
-  } catch { /* no saved history: the session starts empty */ }
+  if (!e || !Array.isArray(e.events) || state.busy.has(id)) return false;
+  tr.pending = false;
+  if (e.run && e.run.status === "running") { tr.appliedEtag = undefined; void attachRun(id, e.events); return true; } // a reply is still being written on the server
+  if (tr.appliedEtag && tr.appliedEtag === e.etag && tr.items.length) return false; // nothing changed since the last look
+  const empty = !tr.items.length;
+  applyMeta(tr, e.meta); // reactions made on another device (or before a reload) show up even when no new message did
+  const localUsers = tr.items.filter((x) => x.kind === "user").length;
+  const { behind, dones } = transcriptBehind({ events: e.events, localUsers, lastDones: tr.syncDones });
+  tr.syncDones = dones;
+  tr.appliedEtag = e.etag || undefined;
+  if (!empty && !behind) return false;
+  if (empty && !e.events.length) { if (id === tkey()) renderThread(); return false; }
+  const top = els.scroll.scrollTop, pinned = stick;
+  fillTranscript(tr, e);
+  if (id === tkey()) {
+    renderThread();
+    if (!empty && !pinned) els.scroll.scrollTop = top;
+  }
+  saveTranscriptSoon(id);
+  return true;
 }
 
 // Pull in turns that happened outside this tab (a MINDbots reply run through /api/agent/turn, another device).
@@ -406,23 +538,9 @@ async function syncCurrent() {
   if (!id || syncing || document.hidden || state.busy.has(id) || !state.online) return;
   syncing = true;
   try {
-    const { events, run, meta } = await json(`/sessions/${encodeURIComponent(id)}/history`);
-    if (id !== state.currentId || state.busy.has(id) || !Array.isArray(events)) return;
-    if (run && run.status === "running") { void attachRun(id, events); return; } // a reply is still being written on the server
-    const tr = transcript(id);
-    applyMeta(tr, meta); // reactions made on another device (or before a reload) show up even when no new message did
-    const localUsers = tr.items.filter((x) => x.kind === "user").length;
-    const { behind, dones } = transcriptBehind({ events, localUsers, lastDones: tr.syncDones });
-    tr.syncDones = dones;
-    if (!behind) return;
-    const r = itemsFromHistory(events);
-    const top = els.scroll.scrollTop, pinned = stick;
-    tr.items.length = 0; tr.items.push(...r.items);
-    applyMeta(tr, meta);
-    tr.usage = r.usage; if (r.model) tr.model = r.model;
-    renderThread();
-    if (!pinned) els.scroll.scrollTop = top;
-    saveTranscript(id);
+    const e = await getHistory(id);
+    if (id !== state.currentId || state.busy.has(id)) return;
+    reconcile(id, e);
   } catch { /* offline or no saved history yet: try again on the next tick */ }
   finally { syncing = false; }
 }
@@ -679,7 +797,7 @@ function renderSessions() {
   const shown = generalSessions(state.sessions); // bot threads live under their bot, in the Bots view
   if (!shown.length) { els.list.append(h("div", "empty-side", "No sessions yet.")); return; }
   for (const s of shown) {
-    const b = h("button", "sess"); b.type = "button";
+    const b = h("button", "sess"); b.type = "button"; b.dataset.sid = s.id;
     if (s.id === state.currentId) b.setAttribute("aria-current", "true");
     if (s.unread) { b.classList.add("unread"); b.title = "Unread"; }
     const m = h("span", "sess-m");
@@ -722,6 +840,7 @@ async function deleteSession(s) {
     if (!res.ok && res.status !== 404) throw new Error(`HTTP ${res.status}`);
   } catch (e) { if (e.message !== "unauthorized") notify(`Could not delete the session: ${e.message}`); return; }
   state.transcripts.delete(s.id);
+  hist.delete(s.id);
   try { sessionStorage.removeItem(`daebot:t:${s.id}`); } catch { /* none */ }
   const wasOpen = state.currentId === s.id;
   state.sessions = state.sessions.filter((x) => x.id !== s.id);
@@ -736,31 +855,95 @@ async function refreshSessions() {
   renderSessions(); renderHeader();
 }
 
+// Opening a chat: paint what we already hold for it right away (memory, then this tab's saved copy, then the last server read),
+// then check with the server in the background. The network is never on the path to the first frame.
+let switchSeq = 0, switchCtl = null;
+const resuming = new Map(); // chat id -> Promise: the server is bringing a saved chat back to life; a send waits for it
+function markCurrentRows() {
+  for (const b of document.querySelectorAll(".sess[aria-current]")) b.removeAttribute("aria-current");
+  const cur = state.currentId;
+  if (!cur) return;
+  for (const b of document.querySelectorAll(".sess[data-sid]")) if (b.dataset.sid === cur) b.setAttribute("aria-current", "true");
+}
+function resumeSession(s, signal) {
+  const p = (async () => {
+    const { sessionId } = await json("/sessions", { method: "POST", signal, body: JSON.stringify({ surface: "web", title: s.title, resumeId: s.id, ...(s.bot ? { bot: s.bot } : {}) }) });
+    s.live = true;
+    for (const r of state.sessions) if (r.id === s.id) r.live = true;
+    return sessionId;
+  })().finally(() => { if (resuming.get(s.id) === p) resuming.delete(s.id); });
+  resuming.set(s.id, p);
+  return p;
+}
 async function selectSession(s, opts = {}) {
   if (xchg) xchg.close("nav"); // opening a session leaves any open agent exchange
+  const seq = ++switchSeq;
+  if (switchCtl) switchCtl.abort(); // the previous chat's resume / read stops; whatever it still returns is ignored below
+  const ctl = switchCtl = new AbortController();
+  const gone = () => seq !== switchSeq;
   closeSidebar();
   suggest.clear();
-  if (!s.live) {
+  rememberScroll();
+  state.currentId = s.id;
+  state.curBot = s.bot || "";
+  const tr = transcript(s.id);
+  if (!tr.items.length) restoreTranscript(s.id); // this tab's saved copy of the thread
+  const held = hist.get(s.id);
+  if (!tr.items.length && held && !held.run) { fillTranscript(tr, held); tr.appliedEtag = undefined; }
+  tr.pending = !tr.items.length; // nothing to show yet: a blank thread, not the "What should we work on?" card
+  markCurrentRows(); bots.sync();
+  renderThread();
+  // Background: bring the saved chat back to life if needed, and read the server's copy. Both at once.
+  const resume = s.live ? null : resumeSession(s, ctl.signal);
+  const read = getHistory(s.id, { signal: ctl.signal });
+  try {
+    const e = await read;
+    if (gone()) return;
+    reconcile(s.id, e);
+  } catch (err) {
+    if (gone() || (err && (err.name === "AbortError" || err.message === "unauthorized"))) return;
+    transcript(s.id).pending = false;
+    if (!transcript(s.id).items.length) renderThread(); // no saved history: the session starts empty
+  }
+  if (resume) {
     try {
-      const { sessionId } = await json("/sessions", { method: "POST", body: JSON.stringify({ surface: "web", title: s.title, resumeId: s.id, ...(s.bot ? { bot: s.bot } : {}) }) });
-      if (sessionId !== s.id) { transcript(sessionId); }
-      state.currentId = sessionId;
-      state.curBot = s.bot || "";
-      await loadHistory(sessionId);
-    } catch (e) { return notify(`Could not resume: ${e.message}`); }
-  } else {
-    state.currentId = s.id;
-    state.curBot = s.bot || "";
-    await loadHistory(s.id);
+      const sid = await resume;
+      if (gone()) return;
+      if (sid !== s.id) { transcript(sid); state.currentId = sid; markCurrentRows(); }
+      renderSessions(); bots.renderList(); // the row now reads "live"
+    } catch (err) {
+      if (gone() || (err && (err.name === "AbortError" || err.message === "unauthorized"))) return;
+      return notify(`Could not resume: ${err.message}`);
+    }
   }
   if (opts.userClick) await clearUnread(s); // opening the thread yourself reads it; a reload that lands back on it does not
-  await refreshSessions();
-  renderThread();
+  if (gone()) return;
   if (!els.drawer.hidden) loadViolations();
-  syncCurrent();
+  whenIdle(() => { if (!gone()) { saveTranscriptSoon(state.currentId); prefetchNeighbors(); } });
+}
+// Hover, keyboard focus or the start of a press on a chat row: read that chat now, so the click that follows finds it in memory.
+{
+  let hoverT = 0;
+  const sidOf = (ev) => (ev.target && ev.target.closest ? ev.target.closest(".sess[data-sid]") : null)?.dataset.sid;
+  for (const root of [els.list, document.getElementById("bot-list")]) {
+    if (!root) continue;
+    root.addEventListener("pointerover", (ev) => { const id = sidOf(ev); if (!id) return; clearTimeout(hoverT); hoverT = setTimeout(() => prefetchHistory(id), 70); });
+    root.addEventListener("pointerout", () => clearTimeout(hoverT));
+    root.addEventListener("pointerdown", (ev) => { const id = sidOf(ev); if (id) prefetchHistory(id); });
+    root.addEventListener("focusin", (ev) => { const id = sidOf(ev); if (id) prefetchHistory(id); });
+  }
+}
+// Warm the chats on either side of the open one in the list, one at a time while the page is idle.
+function prefetchNeighbors() {
+  const rows = [...document.querySelectorAll(".sess[data-sid]")].map((b) => b.dataset.sid);
+  const i = rows.indexOf(state.currentId);
+  const near = (i < 0 ? rows.slice(0, 3) : [rows[i + 1], rows[i - 1], rows[i + 2], rows[i - 2]]).filter(Boolean);
+  const next = () => { const id = near.shift(); if (!id) return; if (hist.has(id) || histFlight.has(id) || id === state.currentId) return next(); getHistory(id).catch(() => {}).finally(() => whenIdle(next)); };
+  whenIdle(next);
 }
 function newSession() {
   if (xchg) xchg.close("nav");
+  rememberScroll();
   closeSidebar();
   suggest.clear();
   state.currentId = null;
@@ -772,6 +955,7 @@ function newSession() {
 // A new thread with one of the user's bots: a draft until the first message, like a new session.
 function newBotThread(botId) {
   if (xchg) xchg.close("nav");
+  rememberScroll();
   closeSidebar();
   suggest.clear();
   state.currentId = null;
@@ -786,7 +970,7 @@ function notify(text) { addItem(tkey(), { kind: "notice", level: "warn", text })
 // ---------- sending ----------
 let opening = null; // one in-flight session open, shared by the boot prewarm and the first send
 async function ensureSession() {
-  if (state.currentId) return state.currentId;
+  if (state.currentId) { const r = resuming.get(state.currentId); if (r) await r; return state.currentId; } // a saved chat must be live before it can take a message
   if (!opening) {
     opening = (async () => {
       const body = { surface: "web", title: "New session" };
@@ -989,14 +1173,38 @@ function answerText(tr, userItem) {
 }
 
 // Keep the visible conversation across reloads (this browser tab only).
+const TLRU_KEY = "daebot:tlru", TLRU_MAX = 14;
+// The saved copies are kept for the TLRU_MAX most recently used chats; when storage is full the oldest go first.
+function touchTranscriptLru(id, drop) {
+  let order = [];
+  try { order = JSON.parse(sessionStorage.getItem(TLRU_KEY) || "[]").filter((x) => typeof x === "string" && x !== id); } catch { order = []; }
+  if (!drop) order.push(id);
+  while (order.length > TLRU_MAX) { try { sessionStorage.removeItem(`daebot:t:${order.shift()}`); } catch { /* none */ } }
+  try { sessionStorage.setItem(TLRU_KEY, JSON.stringify(order)); } catch { /* none */ }
+  return order;
+}
 function saveTranscript(id) {
   try {
     // Photo data never goes into sessionStorage (it would fill it); a photo is shown again from the server by its id.
     const items = transcript(id).items.filter((it) => it.kind !== "notice" || it.level === "warn").map(({ node, parts, ...rest }) => (rest.photos ? { ...rest, photos: rest.photos.map(({ dataUrl, ...p }) => p) } : rest));
-    sessionStorage.setItem(`daebot:t:${id}`, JSON.stringify(items.slice(-200)));
-    sessionStorage.setItem("daebot:current", id);
-    sessionStorage.setItem("daebot:bot", state.curBot || "");
+    const val = JSON.stringify(items.slice(-200)), key = `daebot:t:${id}`;
+    try { sessionStorage.setItem(key, val); }
+    catch { // full: drop the oldest saved chats until it fits
+      for (const old of touchTranscriptLru(id, true)) { try { sessionStorage.removeItem(`daebot:t:${old}`); sessionStorage.setItem(key, val); break; } catch { /* next */ } }
+    }
+    touchTranscriptLru(id);
+    if (id === state.currentId) { // "the chat to reopen" is the one on screen, not whichever finished last in the background
+      sessionStorage.setItem("daebot:current", id);
+      sessionStorage.setItem("daebot:bot", state.curBot || "");
+    }
   } catch { /* storage unavailable: transcript stays in memory */ }
+}
+const saveQueued = new Set();
+/** saveTranscript off the click path: serialising a long chat is work the reader should not wait for. */
+function saveTranscriptSoon(id) {
+  if (saveQueued.has(id)) return;
+  saveQueued.add(id);
+  whenIdle(() => { saveQueued.delete(id); saveTranscript(id); });
 }
 function restoreTranscript(id) {
   try {
