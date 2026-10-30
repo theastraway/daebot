@@ -546,7 +546,7 @@ button.bd-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -
 .cd-toolhead { display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 13px 14px; border: 0; background: none; color: var(--ink); font: 14px var(--sans); cursor: pointer; }
 .cd-toolhead:disabled { color: var(--ink-3); cursor: default; }
 .cd-chev { transition: transform .15s; } .cd-chev.is-open { transform: rotate(180deg); }
-.cd-tools { max-height: min(40dvh, 360px); overflow: auto; }
+.cd-tools { }
 .cd-tool { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-top: 1px solid var(--line); }
 .cd-tooltext { flex: 1; min-width: 0; display: grid; gap: 1px; }
 .cd-toolname { font: 550 13.5px var(--mono, ui-monospace, monospace); overflow-wrap: anywhere; }
