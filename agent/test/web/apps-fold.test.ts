@@ -181,21 +181,26 @@ test("web wiring: ONE section, the MIND-app calls live in apps.js, DOM is textCo
   assert.doesNotMatch(css, /\.app-group|\.app-row\.is-sub|\.app-led/);
 });
 
-test("a connected MIND app with no tool connection never reads as plain Connected: it says so and offers Add tools; a broken one says tools unavailable", () => {
+test("a connected MIND app with no tool connection links itself (no Add tools): it says connecting, then why it failed with Retry; a broken one offers Retry", () => {
   const p = { provider: "github", name: "GitHub", connected: true, account: "octo", auth: "oauth" };
   const folded = { id: "mcp:github", name: "GitHub", foldedInto: "github" };
   const none = mindEntry(p, undefined, folded) as any;
-  assert.equal(none.toolsNote, "no tools yet");
-  assert.deepEqual(none.addTools, { id: "mcp:github", name: "GitHub", label: "Add tools" });
+  assert.equal(none.autoLink, true);
+  assert.equal(none.addTools, undefined);
+  assert.equal(none.retryLink, undefined);
+  assert.match(none.toolsNote, /connecting tools/);
+  const failed = mindEntry(p, undefined, folded, "GitHub's MCP server did not accept the token (HTTP 401).") as any;
+  assert.match(failed.toolsNote, /did not accept/);
+  assert.equal(failed.retryLink.label, "Retry");
   const ok = mindEntry(p, { serverId: "s1", tools: 3, enabled: true, status: "ok" }, folded) as any;
-  assert.equal(ok.addTools, undefined);
-  assert.equal(ok.tags[0].text, "Actions on: 3 tools");
+  assert.equal(ok.retryLink, undefined);
+  assert.equal(ok.tags[0].text, "3 tools");
   const bad = mindEntry(p, { serverId: "s1", tools: 3, enabled: true, status: "reauth_required" }, folded) as any;
-  assert.equal(bad.addTools.label, "Re-authenticate");
-  assert.equal(bad.addTools.stale, "s1");
+  assert.equal(bad.retryLink.label, "Retry");
+  assert.equal(bad.retryLink.stale, "s1");
   assert.match(bad.toolsNote, /tools unavailable, sign in again/);
-  assert.equal((mindEntry({ ...p, connected: false }, undefined, folded) as any).addTools, undefined, "not connected: plain Connect");
-  assert.equal((mindEntry(p, undefined, undefined) as any).addTools, undefined, "no tool connector exists for this app: nothing to add");
+  assert.equal((mindEntry({ ...p, connected: false }, undefined, folded) as any).autoLink, undefined, "not connected: plain Connect");
+  assert.equal((mindEntry(p, undefined, undefined) as any).autoLink, undefined, "no tool connector exists for this app: nothing to link");
 });
 
 test("the connector page is wired: rows open it, it is built without innerHTML, and its switches go to the per-user routes", () => {

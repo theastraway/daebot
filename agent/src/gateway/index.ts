@@ -1086,11 +1086,11 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         const b = await readJson(req);
         return sendJson(res, 200, { label: mcp.setAccountLabel(me.id, optStr(b.key, 60) ?? "", optStr(b.label, 80) ?? "") });
       }
-      // "Add tools" on a connected MIND app (GitHub): MIND tries the vendor's MCP server with the app's own token right now and says what happened.
+      // Linking the vendor tool server of a connected MIND app (GitHub); Daebot asks by itself, and Retry sends force: MIND tries the vendor's MCP server with the app's own token right now and says what happened.
       if (path === "/mcp/integrations/link") {
         if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
         const b = await readJson(req);
-        return sendJson(res, 200, await mcp.linkIntegration(me.id, optStr(b.provider, 40) ?? ""));
+        return sendJson(res, 200, await mcp.linkIntegration(me.id, optStr(b.provider, 40) ?? "", b.force === true));
       }
       // Connect on a connector: creates the same pending request a model's proposal would. The URL is looked up here by id; the body never carries one.
       if (path === "/mcp/catalog/connect") {

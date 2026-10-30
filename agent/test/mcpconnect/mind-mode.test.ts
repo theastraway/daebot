@@ -532,7 +532,7 @@ test("the Apps card: the app's one row carries the connection's tool count and M
   const rows = connectorList(providers, items, [{ provider: "github", serverId: "srv_gh", name: "github", tools: 2, enabled: true }]);
   assert.equal(rows.filter((r: any) => /github/i.test(r.name)).length, 1, "GitHub exactly once");
   const gh = rows.find((r: any) => r.name === "GitHub");
-  assert.deepEqual([gh.kind, gh.serverId, gh.manageable, gh.tags[0].text], ["mind", "srv_gh", true, "Actions on: 2 tools"]);
+  assert.deepEqual([gh.kind, gh.serverId, gh.manageable, gh.tags[0].text], ["mind", "srv_gh", true, "2 tools"]);
   assert.equal(rows.find((r: any) => r.name === "Dropbox").manageable, false);
   assert.equal(connectorList(providers, items).find((r: any) => r.name === "GitHub").manageable, false, "without a linked connection the row is exactly as before");
   assert.match(returnMessage("access_denied"), /cancelled/);
@@ -752,7 +752,7 @@ test("connector page: a MIND app shows its account, says plainly when it has no 
   const d = await g.svc.connectorDetail("alice", "github", providers);
   assert.ok(d);
   assert.deepEqual([d!.kind, d!.accounts[0].account, d!.accounts[0].status, d!.tools.length], ["mind", "octo", "connected", 0]);
-  assert.match(d!.toolsNote ?? "", /no GitHub tools yet/);
+  assert.match(d!.toolsNote ?? "", /connecting GitHub.s tools/);
   assert.equal(d!.addAccount.supported, false);
   assert.match(d!.addAccount.note, /one GitHub account/);
   providers[0].needsReconnect = true;

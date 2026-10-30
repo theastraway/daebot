@@ -162,10 +162,10 @@ function rowFor(e, handlers) {
       manage.addEventListener("click", () => handlers.onManage(e));
       actions.append(manage);
     }
-    if (e.connected && e.addTools && handlers.onAddTools) {
-      const add = el("button", "btn-primary app-btn", e.addTools.label || "Add tools"); add.type = "button";
+    if (e.connected && e.retryLink && handlers.onRetry) {
+      const add = el("button", "btn-primary app-btn", e.retryLink.label || "Retry"); add.type = "button";
       add.setAttribute("aria-label", `${add.textContent} ${e.name}`);
-      add.addEventListener("click", () => handlers.onAddTools(e, { busy: (on) => { add.disabled = on; }, say: (t, tone) => { stateEl.textContent = t; stateEl.className = `app-state is-${tone || "warn"}`; } }));
+      add.addEventListener("click", () => handlers.onRetry(e, { busy: (on) => { add.disabled = on; }, say: (t, tone) => { stateEl.textContent = t; stateEl.className = `app-state is-${tone || "warn"}`; } }));
       actions.append(add);
     }
     actions.append(btn);

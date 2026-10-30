@@ -250,8 +250,8 @@ export class MindMcpBackend {
   }
 
   /** POST /mcp/integrations/link: MIND tries each connected integration's vendor MCP server with that integration's own token. Idempotent. */
-  async linkIntegrations(uid: string, providers?: string[]): Promise<MindLinkResult[]> {
-    const j = await this.ok(uid, await this.raw(uid, "POST", "/mcp/integrations/link", { body: providers && providers.length ? { providers } : {}, timeoutMs: this.o.createTimeoutMs ?? 45_000 }));
+  async linkIntegrations(uid: string, providers?: string[], force = false): Promise<MindLinkResult[]> {
+    const j = await this.ok(uid, await this.raw(uid, "POST", "/mcp/integrations/link", { body: { ...(providers && providers.length ? { providers } : {}), ...(force ? { force: true } : {}) }, timeoutMs: this.o.createTimeoutMs ?? 45_000 }));
     const out: MindLinkResult[] = [];
     for (const r of Array.isArray(j.results) ? j.results.slice(0, 60) : []) {
       if (!r || typeof r.provider !== "string") continue;
