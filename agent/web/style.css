@@ -464,7 +464,7 @@ button.bd-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -
 .apps-sec + .apps-sec { margin-top: 22px; }
 .apps-sec h3 { margin: 0 0 8px; font: 600 11.5px var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
 .apps-note { margin: 0 0 8px; font-size: 13px; color: var(--ink-3); }
-.apps-body { display: grid; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); overflow: hidden; }
+.apps-body { display: grid; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); overflow: clip; }
 .apps-empty { margin: 0; padding: 16px; font-size: 13.5px; color: var(--ink-3); }
 .apps-signin { display: grid; gap: 10px; justify-items: start; padding: 16px; }
 .apps-signin p { margin: 0; font-size: 14px; color: var(--ink-2); }
@@ -483,12 +483,11 @@ button.bd-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -
 .app-actions { flex: none; }
 .app-btn { min-width: 104px; padding: 7px 12px; font-size: 13.5px; }
 .app-btn:disabled { opacity: .45; cursor: default; }
-.apps-card { max-height: 92dvh; overflow: auto; }
+.apps-card { max-height: 92dvh; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; } /* the card is the ONE scroll container: no scroller inside it, so wheel, trackpad and touch always reach it */
 .apps-sec[hidden] { display: none; }
 .apps-search { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; }
 .apps-search .fld { flex: 1; min-width: 0; box-sizing: border-box; font: 14px var(--sans); padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--bg); color: var(--ink); }
 .apps-count { flex: none; font-size: 12px; color: var(--ink-3); }
-.apps-sec[data-sec="connectors"] .apps-body { max-height: min(46dvh, 420px); overflow: auto; }
 .app-tags { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 3px; }
 .app-tag { font-size: 11px; line-height: 1.5; padding: 0 8px; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--ink-3); }
 .app-tag::first-letter { text-transform: uppercase; } /* "Sign in with n8n" must keep its own case */
@@ -547,7 +546,7 @@ button.bd-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -
 .cd-toolhead { display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 13px 14px; border: 0; background: none; color: var(--ink); font: 14px var(--sans); cursor: pointer; }
 .cd-toolhead:disabled { color: var(--ink-3); cursor: default; }
 .cd-chev { transition: transform .15s; } .cd-chev.is-open { transform: rotate(180deg); }
-.cd-tools { max-height: min(40dvh, 360px); overflow: auto; }
+.cd-tools { }
 .cd-tool { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-top: 1px solid var(--line); }
 .cd-tooltext { flex: 1; min-width: 0; display: grid; gap: 1px; }
 .cd-toolname { font: 550 13.5px var(--mono, ui-monospace, monospace); overflow-wrap: anywhere; }
