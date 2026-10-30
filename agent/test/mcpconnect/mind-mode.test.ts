@@ -664,7 +664,7 @@ test("a MIND key made without profile:write: reading works, changing or running 
     () => b.create("alice", { mode: "key", url: "https://n8n.example.com/mcp-server/http", token: "t" }),
     () => b.callTool("alice", "srv_1", "search_workflows", {}),
   ]) {
-    await assert.rejects(run(), (e: McpConnectError) => e.status === 502 && e.code === "mind_scope" && /profile:write/.test(e.message) && /Sign in with MIND/.test(e.message) && !e.message.includes(KEYS.alice ?? "no-key"));
+    await assert.rejects(run(), (e: McpConnectError) => e.status === 502 && e.code === "mind_scope" && /sign in with MIND again/.test(e.message) && !/profile:write/.test(e.message) && !e.message.includes(KEYS.alice ?? "no-key"));
   }
 });
 
