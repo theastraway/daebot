@@ -101,12 +101,18 @@ export async function openConnectorDetail(ctx) {
       row.append(text);
       const edit = iconBtn("pencil", `Rename ${a.label}`);
       row.append(edit);
-      let state;
-      if (a.status === "reauth") {
-        state = el("button", "cd-reconnect", "Reconnect"); state.type = "button";
-        state.addEventListener("click", () => ctx.actions.reconnect(d, a, { busy: (on) => { state.disabled = on; }, say }));
-      } else state = el("span", `cd-state is-${a.status === "connected" ? "ok" : "off"}`, a.status === "connected" ? "Connected" : "Off");
+      const state = el("span", `cd-state is-${a.status === "connected" ? "ok" : a.status === "reauth" ? "warn" : "off"}`, a.status === "connected" ? "Connected" : a.status === "reauth" ? "Needs sign-in" : "Off");
       row.append(state);
+      // Every account can be signed in again or disconnected from its own row (not only when it is broken).
+      const recon = el("button", "cd-reconnect", "Reconnect"); recon.type = "button"; recon.setAttribute("aria-label", `Reconnect ${a.label}`);
+      recon.addEventListener("click", () => ctx.actions.reconnect(d, a, { busy: (on) => { recon.disabled = on; }, say }));
+      const off = el("button", "cd-reconnect is-danger", "Disconnect"); off.type = "button"; off.setAttribute("aria-label", `Disconnect ${a.label}`);
+      off.addEventListener("click", () => {
+        if (off.dataset.sure !== "1") { off.dataset.sure = "1"; off.textContent = "Confirm disconnect"; setTimeout(() => { if (off.isConnected) { off.dataset.sure = ""; off.textContent = "Disconnect"; } }, 5000); return; }
+        off.disabled = true; off.textContent = "Disconnecting…";
+        ctx.actions.disconnect(d, a, say).finally(() => { off.disabled = false; });
+      });
+      const btns = el("div", "cd-acctbtns"); btns.append(recon, off); row.append(btns);
       if (a.note) row.append(el("p", "cd-note", a.note));
       edit.addEventListener("click", () => {
         const inp = document.createElement("input"); inp.type = "text"; inp.className = "fld cd-edit"; inp.value = a.label; inp.maxLength = 40; inp.setAttribute("aria-label", "Account label");

@@ -1195,3 +1195,6 @@ body.xv-open .top-title, body.xv-open .model-wrap, body.xv-open .top-meta, body.
 .bt-chev { flex: none; width: 13px; height: 13px; color: var(--ink-3); }
 .bot-trigger:hover .bt-chev { color: var(--ink); }
 @media (max-width: 640px) { .bot-trigger { max-width: 40%; padding: 0 5px 0 2px; } .bt-chev { display: none; } }
+
+.cd-acctbtns { display: flex; gap: 6px; margin-left: 8px; flex-wrap: wrap; }
+.cd-reconnect.is-danger { color: var(--accent); border-color: var(--accent); }

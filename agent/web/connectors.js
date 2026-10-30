@@ -231,6 +231,15 @@ export function initConnectors({ apps, json, getMcp, openDetail }) {
       if (e.form) { apps.connectForm(e); return; }
       await handlers.onConnect(e, { busy: ctl.busy, say: ctl.say }, {});
     },
+    /** Disconnects ONE account (the page stays; the list refreshes). */
+    async disconnect(d, account, say) {
+      try {
+        if (account.kind === "mind") await json(`/apps/integrations/${encodeURIComponent(d.id)}/disconnect`, { method: "POST", body: "{}" });
+        else if (account.serverId) await json(`/mcp/servers/${encodeURIComponent(account.serverId)}`, { method: "DELETE" });
+        const mcp = getMcp(); if (mcp) mcp.load();
+        apps.hideDetail(); apps.say(`Disconnected ${account.label || d.name}.`); apps.refresh();
+      } catch (err) { say(`Could not disconnect ${account.label || d.name}: ${err && err.message ? err.message : "try again"}`, "warn"); }
+    },
     addAccount() { if (e.form) apps.connectForm(e); },
     /** Disconnects every account and removes the connector. */
     async uninstall(d, say) {
