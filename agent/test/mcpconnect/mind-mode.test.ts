@@ -758,3 +758,18 @@ test("connector page: a MIND app shows its account, says plainly when it has no 
   providers[0].needsReconnect = true;
   assert.equal((await g.svc.connectorDetail("alice", "github", providers))!.accounts[0].status, "reauth");
 });
+
+test("connector page: a multi-account app lists every account with its own id and supports adding another", async () => {
+  const mind = newMind();
+  const g = gateway(mind, { catalog: async () => [] });
+  const providers: any[] = [{ provider: "github", name: "GitHub", blurb: "Repos", auth: "oauth", configured: true, connected: true, needsReconnect: false, account: "octo", multi: true, caps: ["files"],
+    accounts: [{ id: "github", label: "octo", needsReconnect: false }, { id: "github-2", label: "second", needsReconnect: true }] }];
+  await g.svc.prepare("alice");
+  const d = await g.svc.connectorDetail("alice", "github", providers);
+  assert.deepEqual(d!.accounts.map((a) => [a.provider, a.account, a.status]), [["github", "octo", "connected"], ["github-2", "second", "reauth"]]);
+  assert.equal(d!.addAccount.supported, true);
+  providers[0].multi = false; providers[0].accounts = [];
+  const single = await g.svc.connectorDetail("alice", "github", providers);
+  assert.deepEqual(single!.accounts.map((a) => a.provider), ["github"]);
+  assert.equal(single!.addAccount.supported, false);
+});

@@ -17,6 +17,9 @@ export interface AppRow {
   connected: boolean;
   needsReconnect: boolean;
   account: string | null;
+  /** True for an app that lets one user connect several accounts (GitHub); `accounts` then lists every connected one. */
+  multi?: boolean;
+  accounts?: { id: string; label: string; needsReconnect: boolean }[];
   /** What this connection syncs into MIND right now (a capability MIND offers AND the user has not switched off). Empty when not connected. */
   caps: AppCapability[];
 }
@@ -34,6 +37,14 @@ export function normalizeProviders(payload: any): { enabled: boolean; providers:
     const toggles = p.capability_toggles && typeof p.capability_toggles === "object" ? (p.capability_toggles as Record<string, unknown>) : {};
     // MIND lists a capability per provider (calendar, mail, contacts, files) and lets the user switch mail, calendar and contacts off per connection.
     const caps = connected ? CAPABILITIES.filter((c) => p[c] === true && (c === "files" || toggles[c] !== false)) : [];
+    const accounts: AppRow["accounts"] = [];
+    if (p.multi_account === true && Array.isArray(p.accounts)) {
+      for (const a of p.accounts.slice(0, 20)) {
+        const aid = str(a?.id, 40);
+        if (!PROVIDER_RE.test(aid)) continue;
+        accounts.push({ id: aid, label: str(a?.account_label, 120) || aid, needsReconnect: a?.needs_reauth === true || a?.status === "error" || a?.status === "reauth_required" });
+      }
+    }
     providers.push({
       provider: id,
       name: str(p.display_name, 60) || id,
@@ -43,6 +54,8 @@ export function normalizeProviders(payload: any): { enabled: boolean; providers:
       connected,
       needsReconnect: connected && (p.needs_reauth === true || p.reconnect_required === true || p.status === "error" || p.status === "reauth_required"),
       account: str(p.account_label, 120) || null,
+      multi: p.multi_account === true,
+      accounts,
       caps,
     });
   }

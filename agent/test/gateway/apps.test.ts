@@ -96,6 +96,18 @@ test("connect returns MIND's https OAuth URL and asks MIND to bounce back to dae
   } finally { await r.close(); }
 });
 
+test("connect passes only the two account hints to MIND: the account chooser flag and a sane login", async () => {
+  const r = await rig();
+  try {
+    const alice = await r.cookie(r.keys.alice);
+    await http(r.gw.url, "POST", "/apps/integrations/google/connect", { headers: alice, body: { addAccount: true, login: "second-user", evil: "x" } });
+    await http(r.gw.url, "POST", "/apps/integrations/google/connect", { headers: alice, body: { login: "a&prompt=none" } });
+    const seen = r.fake.seen.filter((s) => s.path === "/developer/v1/integrations/google/connect");
+    assert.deepEqual(seen[0].body, { return_to: "https://daebot.live/", select_account: true, login: "second-user" });
+    assert.deepEqual(seen[1].body, { return_to: "https://daebot.live/" }, "an unsafe login is dropped");
+  } finally { await r.close(); }
+});
+
 test("disconnect acts on the signed-in user's own connection only", async () => {
   const r = await rig();
   try {

@@ -1,7 +1,8 @@
 // Apps for Daebot: the signed-in user's MIND integrations (Google, Microsoft 365, Dropbox, GitHub, ...).
 //   GET  /apps/integrations                         every provider + this user's connected state
-//   POST /apps/integrations/:provider/connect       { authUrl } to open in a new tab (MIND's own OAuth flow)
-//   POST /apps/integrations/:provider/disconnect    drop the connection at MIND
+//   POST /apps/integrations/:provider/connect       { authUrl } to open in a new tab (MIND's own OAuth flow). Optional body { addAccount: true } shows the
+//                                                   provider's account chooser (a second GitHub account), { login } pre-selects the account being reconnected.
+//   POST /apps/integrations/:provider/disconnect    drop the connection at MIND (:provider is an account id such as github-2 for an extra account)
 //   GET  /apps/referral                             this user's MIND referral link + the real offer terms (the gift modal)
 // Every call goes to MIND's /developer/v1/integrations with the SIGNED-IN USER'S OWN MIND key as X-API-Key. The key never
 // reaches the browser and is never logged or echoed. The owner access-code login has no MIND user, so it gets a plain
@@ -57,9 +58,14 @@ function mapError(status: number): { status: number; body: Record<string, unknow
   return { status: 502, body: { error: "apps_failed", message: "MIND could not finish that request. Try again in a moment." } };
 }
 
-async function readJsonSmall(req: IncomingMessage): Promise<void> {
-  // The connect/disconnect calls take no browser input; drain whatever was sent.
-  await new Promise<void>((resolve) => { let n = 0; req.on("data", (c: Buffer) => { n += c.length; if (n > 16 * 1024) req.destroy(); }); req.on("end", () => resolve()); req.on("error", () => resolve()); req.on("close", () => resolve()); });
+/** Reads the (tiny) request body. Only two optional connect hints are ever taken from it: `addAccount` and `login` (see below); anything else is dropped. */
+async function readJsonSmall(req: IncomingMessage): Promise<{ addAccount: boolean; login: string }> {
+  const chunks: Buffer[] = [];
+  await new Promise<void>((resolve) => { let n = 0; req.on("data", (c: Buffer) => { n += c.length; if (n > 16 * 1024) req.destroy(); else chunks.push(c); }); req.on("end", () => resolve()); req.on("error", () => resolve()); req.on("close", () => resolve()); });
+  let j: any = {};
+  try { j = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"); } catch { j = {}; }
+  const login = typeof j?.login === "string" && /^[A-Za-z0-9-]{1,39}$/.test(j.login) ? j.login : "";
+  return { addAccount: j?.addAccount === true, login };
 }
 
 export function createAppsHandler(o: AppsOptions): (req: IncomingMessage, res: ServerResponse, path: string, p: Principal) => Promise<void> {
@@ -96,7 +102,7 @@ export function createAppsHandler(o: AppsOptions): (req: IncomingMessage, res: S
     const m = /^\/apps\/integrations\/([^/]+)\/(connect|disconnect)$/.exec(path);
     if (!m) return json(res, 404, { error: "not found" });
     if (method !== "POST") return json(res, 405, { error: "method not allowed" });
-    await readJsonSmall(req);
+    const hints = await readJsonSmall(req);
     let provider = "";
     try { provider = decodeURIComponent(m[1]); } catch { /* falls through to the check */ }
     if (!PROVIDER_RE.test(provider)) return json(res, 400, { error: "bad_provider", message: "Unknown app." });
@@ -106,7 +112,7 @@ export function createAppsHandler(o: AppsOptions): (req: IncomingMessage, res: S
       const r = await f(`${base}/integrations/${encodeURIComponent(provider)}/${action}`, {
         method: "POST",
         headers: { "X-API-Key": key!, "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(action === "connect" && returnTo ? { return_to: returnTo } : {}),
+        body: JSON.stringify(action === "connect" ? { ...(returnTo ? { return_to: returnTo } : {}), ...(hints.addAccount ? { select_account: true } : {}), ...(hints.login ? { login: hints.login } : {}) } : {}),
         signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
       });
       if (!r.ok) { const e = mapError(r.status); return json(res, e.status, e.body); }
