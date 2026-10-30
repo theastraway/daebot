@@ -15,6 +15,8 @@ import { createSafeFetch } from "../../src/mcpconnect/ssrf.ts";
 import type { SafeFetch } from "../../src/mcpconnect/ssrf.ts";
 import { createRuntime } from "../../src/runtime.ts";
 import { FakeProvider, baseCfg, call, collect } from "../core/helpers.ts";
+import { startFakeMind } from "../gateway/fake-mind.ts";
+import { createFileStore } from "../../src/persist.ts";
 
 const SECRET_KEY = "k".repeat(40);
 const CTX = { cwd: "/", sessionId: "s" };
@@ -305,6 +307,28 @@ test("a server connected mid-chat appears on the next round without reopening th
     assert.ok(provider.requests[1].tools.some((t) => t.name === "notion__lookup"));
     assert.match(provider.requests[1].messages[0].content, /Connecting MCP servers/);
   } finally { await m.close(); }
+});
+
+test("a bot thread gets the user's connected-app tools too (and the prompt says where they come from); mcp_connect stays main-only", async () => {
+  const m = await mockMcp();
+  process.env.DAEBOT_BOTS_ENABLED = "1";
+  const key = "mind_" + "k".repeat(24);
+  const fake = await startFakeMind({ [key]: "pat" });
+  try {
+    const { svc } = setup(m);
+    const p = await svc.propose("u1", { url: URL_OFFICIAL });
+    await svc.approve("u1", p.id, { redirectUri: REDIRECT });
+    const dir = mkdtempSync(join(tmpdir(), "mcpc-bot-"));
+    const provider = new FakeProvider([{ text: "hi" }]);
+    const rt = createRuntime(baseCfg({ mindBaseUrl: fake.base, mindApiKey: key }), { provider, store: createFileStore(dir), owner: "u1", mcpConnect: svc, bots: { dir, bus: {} }, hosted: { dailyUsdCap: 50, username: "pat", exempt: true } });
+    const bot = await rt.bots!.create({ slug: "sales", name: "Sales Bot", purpose: "owns the pipeline" });
+    const s = await rt.openSession({ surface: "web", botId: bot.id, identity: "admin" });
+    await collect(s.send("hello"));
+    const req = provider.requests[0];
+    assert.ok(req.tools.some((t) => t.name === "notion__lookup"), "the bot thread has the connected app's tools");
+    assert.ok(!req.tools.some((t) => t.name === "mcp_connect"), "a bot never proposes connections");
+    assert.match(req.messages[0].content, /Where connected-app tools come from/);
+  } finally { await fake.close(); await m.close(); }
 });
 
 test("per-user caps and the kill switch", async () => {
