@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 // @ts-expect-error plain browser module
-import { expressionFor, presetOf, lastRunText, nextRunText, pollText, filterOf, filterText, PRESETS } from "../../web/routines.js";
+import { expressionFor, presetOf, lastRunText, nextRunText, pollText, healthText, needsSetup, checkMark, filterOf, filterText, PRESETS } from "../../web/routines.js";
 
 test("presets build the 5-field expression and read it back", () => {
   assert.equal(expressionFor("m15"), "*/15 * * * *");
@@ -53,4 +53,25 @@ test("last run, next run and polling status text", () => {
   assert.equal(pollText({ enabled: true, trigger: { type: "mail_new", every: 15 }, poll: { lastPollAt: 1 } }, ago), "Looks every 15 minutes. Last look 2 min ago.");
   assert.match(pollText({ enabled: true, trigger: { type: "mind_task", every: 60 }, poll: { error: "no key" } }, ago), /every hour\. Last look failed: no key/);
   assert.match(pollText({ enabled: true, trigger: { type: "mind_task", every: 5 } }, ago), /First look is coming up/);
+});
+
+test("trigger health line: last checked / reached, last fired, last error (never silent)", () => {
+  const ago = (ms: number) => `${ms} ago`;
+  assert.equal(healthText({ kind: "timed" } as any, ago), null);
+  const a = healthText({ kind: "trigger", health: { mode: "poll", checkedAt: 5, firedAt: null, error: null } } as any, ago)!;
+  assert.equal(a.text, "Last checked 5 ago · Last fired never");
+  assert.equal(a.error, "Last error: none");
+  const b = healthText({ kind: "trigger", health: { mode: "push", checkedAt: null, firedAt: 9, error: "bad signature", errorAt: 3 } } as any, ago)!;
+  assert.equal(b.text, "Last reached never · Last fired 9 ago");
+  assert.equal(b.error, "Last error: bad signature (3 ago)");
+  assert.equal(b.bad, true);
+});
+
+test("Needs setup shows only for a trigger routine whose live requirements are not met", () => {
+  assert.equal(needsSetup({ kind: "trigger", setup: { ready: false } } as any), true);
+  assert.equal(needsSetup({ kind: "trigger", setup: { ready: true } } as any), false);
+  assert.equal(needsSetup({ kind: "trigger" } as any), false);
+  assert.equal(needsSetup({ kind: "timed", setup: { ready: false } } as any), false);
+  assert.equal(needsSetup({ kind: "trigger", builtin: "heartbeat", setup: { ready: false } } as any), false);
+  assert.deepEqual(["ok", "missing", "unknown", "info"].map(checkMark), ["✓", "!", "?", "i"]);
 });

@@ -845,5 +845,14 @@ export function initBots(ctx) {
     pickBot: (id) => { const b = botById(id); if (!b) return; if (st.view !== "bots") setView("bots", { silent: true }); selectBot(b); },
     /** Make sure the bot list is known (a bot thread can be open while the Sessions view is showing). */
     ensureLoaded: async () => { if (!st.botsLoaded) await refresh(); },
+    /** The setup link Daebot gives in chat (#setup=<bot id>/<routine id>): show the Bots view, open that bot's settings and that routine's Set up step. */
+    openSetup: async (botId, routineId) => {
+      if (!st.botsLoaded) await refresh();
+      if (!botById(botId)) return false;
+      if (st.view !== "bots") setView("bots", { silent: true });
+      if (!(st.drawerOpen && st.drawerBot === botId)) await openDrawer(botId);
+      if (routines) routines.focus(routineId);
+      return true;
+    },
   };
 }

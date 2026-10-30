@@ -550,6 +550,15 @@ ipcMain.handle("desktop:screen-open-settings", async (e) => {
   try { await shell.openExternal(url); return { ok: true }; } catch { return { ok: false }; }
 });
 
+// The routines "Choose folder" button: the OS folder picker. Returns { path } or null (cancelled). Our own UI only.
+ipcMain.handle("desktop:choose-folder", async (e) => {
+  if (!fromOurUi(e)) return null;
+  try {
+    const r = await dialog.showOpenDialog({ title: "Choose the folder Daebot should watch", properties: ["openDirectory"] });
+    return r.canceled || !r.filePaths[0] ? null : { path: r.filePaths[0] };
+  } catch { return null; }
+});
+
 // ---------- tray + menus ----------
 let keepWorkingId = null;
 function setKeepWorking(on) {
