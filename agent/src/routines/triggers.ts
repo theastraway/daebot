@@ -51,8 +51,8 @@ const EVERY: FieldDef = { key: "every", label: "How often Daebot looks", kind: "
 
 const GH_REPO: FieldDef = { key: "repo", label: "Only this repository (optional)", kind: "text", placeholder: "owner/name" };
 
-/** The GitHub receiver (/hooks/gh/<id>) is switched on by its own change; until then GitHub triggers are neither offered nor accepted. */
-export const GITHUB_LIVE = false;
+/** The GitHub receiver (/hooks/gh/<id>) is mounted by the gateway: GitHub triggers are offered on hosted deployments. */
+export const GITHUB_LIVE = true;
 
 export const CATALOG: readonly TriggerDef[] = [
   { type: "thread_message", group: "messages", label: "I message the bot", description: "Runs each time you send a message in any of this bot's threads.", fields: [] },
