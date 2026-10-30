@@ -127,6 +127,23 @@ export function pollText(r, ago) {
   return `Looks ${cadence}. Last look ${ago(p.lastPollAt)}.`;
 }
 
+/** The health line of a trigger routine: when it last looked or was reached, when it last started a run, and the last problem. */
+export function healthText(r, ago) {
+  const hl = r.health;
+  if (r.kind !== "trigger" || !hl) return null;
+  const mode = hl.mode === "poll" ? "Last checked" : hl.mode === "push" ? "Last reached" : "";
+  const parts = [];
+  if (mode) parts.push(`${mode} ${hl.checkedAt ? ago(hl.checkedAt) : "never"}`);
+  parts.push(`Last fired ${hl.firedAt ? ago(hl.firedAt) : "never"}`);
+  return { text: parts.join(" · "), error: hl.error ? `Last error: ${hl.error}${hl.errorAt ? ` (${ago(hl.errorAt)})` : ""}` : "Last error: none" , bad: !!hl.error };
+}
+
+/** "Needs setup": a trigger routine whose live requirements are not all met. */
+export const needsSetup = (r) => r.kind === "trigger" && !r.builtin && !!r.setup && r.setup.ready === false;
+
+/** The glyph of a setup check. */
+export const checkMark = (state) => (state === "ok" ? "✓" : state === "missing" ? "!" : state === "unknown" ? "?" : "i");
+
 const tzList = () => {
   try { return typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : []; } catch { return []; }
 };
@@ -142,11 +159,11 @@ export function initRoutines(ctx) {
     days: $("rt-days"), dom: $("rt-dom"), expr: $("rt-expr"), tz: $("rt-tz"), tzNote: $("rt-tznote"),
     weekdays: $("rt-weekdays"), windowOn: $("rt-window-on"), from: $("rt-from"), to: $("rt-to"), windowBox: $("rt-window"),
     preview: $("rt-preview"), pvSummary: $("rt-pv-summary"), pvNext: $("rt-pv-next"),
-    trig: $("rt-trigger"), trigDesc: $("rt-trig-desc"), trigFields: $("rt-trig-fields"),
+    trig: $("rt-trigger"), setupBox: $("rt-setup"), setupList: $("rt-setup-list"), trigDesc: $("rt-trig-desc"), trigFields: $("rt-trig-fields"),
     save: $("rt-save"), cancel: $("rt-cancel"), err: $("rt-err"), title: $("rt-form-title"),
   };
   if (!el.sec) return null;
-  const st = { bot: "", routines: [], running: new Set(), editing: "", timer: 0, pv: 0, loadSeq: 0, catalog: [], catalogSeq: 0, days: new Set([1, 2, 3, 4, 5]), pvT: 0 };
+  const st = { bot: "", routines: [], running: new Set(), editing: "", timer: 0, pv: 0, loadSeq: 0, catalog: [], catalogSeq: 0, days: new Set([1, 2, 3, 4, 5]), pvT: 0, setup: null, setupSeq: 0, setupT: 0, watch: 0, focusId: "" };
   const userTz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York"; } catch { return "America/New_York"; } })();
   const fmt = (ms, tz) => {
     try { return new Date(ms).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: tz || undefined, timeZoneName: "short" }); }
@@ -180,13 +197,18 @@ export function initRoutines(ctx) {
     const head = h("div", "rt-head");
     const nm = h("strong", "rt-name", r.name); head.append(nm);
     if (r.builtin) head.append(h("span", "rt-tag", "Built in"));
+    if (needsSetup(r)) head.append(h("span", "rt-need", "Needs setup"));
     const sw = h("label", "rt-switch"); const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = !!r.enabled;
     cb.setAttribute("aria-label", `${r.name} on or off`);
     sw.append(cb, h("span", "rt-switch-t", r.enabled ? "On" : "Off"));
     cb.addEventListener("change", async () => {
       cb.disabled = true;
-      try { await json(`${base()}/${r.id}`, { method: "PATCH", body: JSON.stringify({ enabled: cb.checked }) }); say(cb.checked ? "Turned on." : "Turned off."); }
-      catch (e) { cb.checked = !cb.checked; if (e.message !== "unauthorized") say("Could not change it.", true); }
+      try {
+        const res = await api(`${base()}/${r.id}`, { method: "PATCH", body: JSON.stringify({ enabled: cb.checked }) });
+        const out = await res.json().catch(() => ({}));
+        if (res.status === 409 && out.error === "needs_setup") { cb.checked = false; say(out.message || "Finish setting it up first.", true); load(); openForm(r); return; }
+        if (!res.ok) { cb.checked = !cb.checked; say(out.message || "Could not change it.", true); } else say(cb.checked ? "Turned on." : "Turned off.");
+      } catch (e) { cb.checked = !cb.checked; if (e.message !== "unauthorized") say("Could not change it.", true); }
       cb.disabled = false; load();
     });
     head.append(sw);
@@ -200,6 +222,13 @@ export function initRoutines(ctx) {
       const pt = pollText(r, ago);
       if (pt) { const d = h("div", "rt-next", pt); if (r.poll && r.poll.error) d.classList.add("warn"); li.append(d); }
     }
+    if (needsSetup(r)) {
+      const nl = h("div", "rt-need-lines");
+      for (const c of r.setup.checks.filter((x) => x.state === "missing")) nl.append(h("div", "", `${c.label}: ${c.detail}`));
+      li.append(nl);
+    }
+    const hl = healthText(r, ago);
+    if (hl) { const d = h("div", "rt-health", hl.text + " · "); d.append(h("span", hl.bad ? "warn" : "", hl.error)); li.append(d); }
     const nx = nextRunText(r, (ms) => fmt(ms, r.timing && r.timing.tz));
     if (nx) li.append(h("div", "rt-next", nx));
     const last = h("div", "rt-last", lastRunText(r, ago)); li.append(last);
@@ -230,7 +259,7 @@ export function initRoutines(ctx) {
       open.addEventListener("click", () => openThread({ id: r.lastThreadId, title: r.thread, bot: st.bot, surface: "routine" }));
       acts.append(open);
     }
-    const ed = h("button", "btn-quiet rt-btn", "Edit"); ed.type = "button"; ed.addEventListener("click", () => openForm(r)); acts.append(ed);
+    const ed = h("button", needsSetup(r) ? "btn-primary rt-btn" : "btn-quiet rt-btn", needsSetup(r) ? "Set up" : "Edit"); ed.type = "button"; ed.addEventListener("click", () => openForm(r)); acts.append(ed);
     if (!r.builtin) {
       const del = h("button", "btn-quiet rt-btn rt-del", "Delete"); del.type = "button";
       del.addEventListener("click", async () => {
@@ -246,6 +275,83 @@ export function initRoutines(ctx) {
 
   function render() {
     el.list.replaceChildren(...st.routines.map(row));
+    if (st.focusId) { const r = st.routines.find((x) => x.id === st.focusId); st.focusId = ""; if (r) { openForm(r); el.form.scrollIntoView({ block: "nearest" }); } }
+  }
+
+  // ---------------------------------------------------------------- Set up: what the chosen trigger needs, checked live, one click to fix each
+  const stopWatch = () => { clearInterval(st.watch); st.watch = 0; };
+  function scheduleSetup(fresh) { clearTimeout(st.setupT); st.setupT = setTimeout(() => refreshSetup(fresh), 250); }
+  async function refreshSetup(fresh) {
+    if (el.type.value !== "trigger" || el.form.hidden) { el.setupBox.hidden = true; stopWatch(); return; }
+    const seq = ++st.setupSeq;
+    let r;
+    try { r = await json(`${base()}/setup`, { method: "POST", body: JSON.stringify({ trigger: triggerValues(), routineId: st.editing || undefined, fresh: !!fresh }) }); }
+    catch { return; }
+    if (seq !== st.setupSeq) return;
+    st.setup = r;
+    renderSetup(r);
+    if (r.ready) stopWatch();
+  }
+  function btn(label, fn, primary) { const b = h("button", primary ? "btn-primary rt-btn" : "btn-quiet rt-btn", label); b.type = "button"; b.addEventListener("click", fn); return b; }
+  const deskBridge = () => (typeof window !== "undefined" ? window.mindclawDesktop : undefined);
+  function renderSetup(r) {
+    const live = st.editing ? st.routines.find((x) => x.id === st.editing) : null;
+    const routine = r.routine || live;
+    el.setupBox.hidden = false;
+    const rows = r.checks.map((c) => {
+      const row = h("div", `rt-chk ${c.state}`);
+      row.append(h("span", "rt-chk-i", checkMark(c.state)), h("div", "rt-chk-t", c.label), h("div", "rt-chk-d", c.detail));
+      const acts = h("div", "rt-chk-a");
+      for (const a of c.actions || []) acts.append(actionButton(a, routine));
+      if (acts.children.length) row.append(acts);
+      if (c.id === "webhook" && routine && routine.webhookUrl) row.append(codeLine(routine.webhookUrl, "Anyone with this address can run the routine. Keep it private."));
+      if (c.id === "github" && routine && routine.github) {
+        const g = routine.github;
+        const box = h("div", "rt-chk-a");
+        box.style.display = "grid";
+        box.append(h("div", "rt-chk-d", "Payload URL"), codeLine(g.payloadUrl), h("div", "rt-chk-d", "Secret"), codeLine(g.secret), h("div", "rt-chk-d", `Content type: ${g.contentType}. Send these events: ${g.events.join(", ")}.`));
+        row.append(box);
+      }
+      return row;
+    });
+    el.setupList.replaceChildren(...rows);
+  }
+  function codeLine(text, title) {
+    const u = h("div", "rt-url"); const code = h("code", "rt-code", text); if (title) code.title = title;
+    const cp = btn("Copy", async () => { try { await navigator.clipboard.writeText(text); cp.textContent = "Copied"; setTimeout(() => { cp.textContent = "Copy"; }, 1500); } catch { notify("Copy failed. Select the text and copy it."); } });
+    u.append(code, cp);
+    return u;
+  }
+  function actionButton(a, routine) {
+    if (a.type === "connect") return btn(a.label, () => connect(a.provider), true);
+    if (a.type === "grant") return btn(a.label, async () => { const b = deskBridge(); if (!b || !b.screen) { say("Open the Daebot desktop app to allow screen watching.", true); return; } try { await b.screen.set(true); await b.screen.openSettings(); } catch { /* the check below shows the real state */ } watchSetup(); });
+    if (a.type === "choose") return btn(a.label, async () => { const b = deskBridge(); const f = b && b.folder && b.folder.choose ? await b.folder.choose() : null; if (f && f.path) { const inp = el.trigFields.querySelector('[data-key="path"]'); if (inp) { inp.value = f.path; scheduleSetup(true); schedulePreview(); } } else if (!b || !b.folder) say("Type the folder's full path in the box above.", true); });
+    if (a.type === "test") return btn(a.label, async (ev) => {
+      const b = ev.currentTarget; b.disabled = true; b.textContent = "Sending…";
+      try { const res = await api(`${base()}/${routine.id}/test`, { method: "POST" }); const out = await res.json().catch(() => ({})); say(out.message || (res.ok ? "Test event sent." : "The test event did not run."), !res.ok); }
+      catch (e) { if (e.message !== "unauthorized") say("The test event did not run.", true); }
+      b.disabled = false; b.textContent = a.label; load(); scheduleSetup(true);
+    });
+    if (a.type === "copy") return btn(a.label, async () => { try { await navigator.clipboard.writeText(routine.webhookUrl); say("Address copied."); } catch { notify("Copy failed. Select the address and copy it."); } });
+    return btn(a.label, () => {});
+  }
+  /** Re-checks every 3 seconds (up to 10 minutes) while the person finishes the step in another tab, so the check turns green by itself. */
+  function watchSetup() {
+    stopWatch();
+    const until = Date.now() + 10 * 60_000;
+    st.watch = setInterval(() => { if (Date.now() > until || el.form.hidden) return stopWatch(); refreshSetup(true); }, 3000);
+  }
+  async function connect(provider) {
+    let win = null;
+    try { win = window.open("about:blank", "_blank"); if (win) win.opener = null; } catch { win = null; }
+    try {
+      const r = await json(`/apps/integrations/${encodeURIComponent(provider)}/connect`, { method: "POST", body: "{}" });
+      const url = r.authType === "credentials" ? r.setupUrl : r.authUrl;
+      if (!url || !/^https:\/\//.test(url)) { if (win) win.close(); say("MIND did not give a sign-in page for that app.", true); return; }
+      if (win) win.location.href = url; else location.assign(url);
+      say("Finish signing in in the new tab. This turns green by itself.");
+      watchSetup();
+    } catch (e) { if (win) win.close(); if (e.message !== "unauthorized") say(e.message || "Could not start the connection.", true); }
   }
 
   // ---------------------------------------------------------------- trigger catalog (what this deployment can really detect)
@@ -291,7 +397,7 @@ export function initRoutines(ctx) {
         inp.value = values[f.key] !== undefined ? String(values[f.key]) : "";
       }
       inp.id = id; inp.dataset.key = f.key;
-      inp.addEventListener("input", schedulePreview);
+      inp.addEventListener("input", () => { schedulePreview(); scheduleSetup(); });
       wrap.append(lab, inp);
       if (f.help) wrap.append(h("p", "drawer-fine", f.help));
       el.trigFields.append(wrap);
@@ -398,16 +504,19 @@ export function initRoutines(ctx) {
     renderTriggerFields(r && r.trigger ? r.trigger : {});
     el.trig.disabled = !!r;
     el.form.hidden = false; el.add.hidden = true;
+    st.setup = null; el.setupBox.hidden = true; stopWatch();
     syncVisible();
+    if (el.type.value === "trigger") scheduleSetup(true);
     el.name.disabled ? el.preset.focus() : el.name.focus();
   }
-  function closeForm() { el.form.hidden = true; el.add.hidden = false; st.editing = ""; }
+  function closeForm() { el.form.hidden = true; el.add.hidden = false; st.editing = ""; stopWatch(); el.setupBox.hidden = true; }
 
   el.add.addEventListener("click", () => openForm(null));
   el.cancel.addEventListener("click", closeForm);
   el.addTime.addEventListener("click", () => { if (el.times.children.length < 12) { el.times.append(timeRow("17:00")); schedulePreview(); } });
   for (const n of [el.type, el.preset, el.windowOn, el.weekdays]) n.addEventListener("change", syncVisible);
-  el.trig.addEventListener("change", () => { renderTriggerFields(); syncVisible(); });
+  el.trig.addEventListener("change", () => { renderTriggerFields(); syncVisible(); scheduleSetup(true); });
+  el.type.addEventListener("change", () => { if (el.type.value === "trigger") scheduleSetup(true); else { el.setupBox.hidden = true; stopWatch(); } });
   for (const n of [el.n, el.hours, el.minute, el.time, el.dom, el.expr, el.tz, el.from, el.to]) { n.addEventListener("input", schedulePreview); n.addEventListener("change", schedulePreview); }
   el.tz.addEventListener("input", () => { el.tzNote.textContent = `Times are in ${tzName(el.tz.value.trim() || userTz)} time.`; });
   el.form.addEventListener("submit", async (e) => {
@@ -425,13 +534,17 @@ export function initRoutines(ctx) {
     } else {
       const f = currentFilter();
       body.trigger = { ...triggerValues(), ...(f ? { filter: f, tz } : {}) };
+      // Not set up yet: it can be saved, only turned off. Finish the Set up step and turn it on from the list.
+      if (st.setup && st.setup.ready === false) { if (!st.editing) body.enabled = false; else { const cur = st.routines.find((x) => x.id === st.editing); if (cur && cur.enabled) body.enabled = false; } }
     }
     el.save.disabled = true; el.err.hidden = true;
     try {
       const res = await api(st.editing ? `${base()}/${st.editing}` : base(), { method: st.editing ? "PATCH" : "POST", body: JSON.stringify(body) });
       const out = await res.json().catch(() => ({}));
       if (!res.ok) { el.err.textContent = out.message || "Could not save the routine."; el.err.hidden = false; el.save.disabled = false; return; }
-      closeForm(); say("Saved."); load();
+      const heldOff = body.enabled === false && !timed;
+      if (!st.editing && heldOff && out.routine) st.focusId = out.routine.id;
+      closeForm(); say(heldOff ? "Saved, turned off. Finish setting it up to turn it on." : "Saved."); load();
     } catch (err) { if (err.message !== "unauthorized") { el.err.textContent = "Could not save the routine."; el.err.hidden = false; } }
     el.save.disabled = false;
   });
@@ -439,6 +552,8 @@ export function initRoutines(ctx) {
   return {
     /** Show the routines of this bot. */
     open(botId) { st.bot = botId; st.routines = []; closeForm(); say(""); el.list.replaceChildren(h("div", "drawer-fine", "Loading…")); loadCatalog(); load(); },
-    close() { clearTimeout(st.timer); st.loadSeq++; st.bot = ""; },
+    /** Opens one routine's form (the setup link from the chat). Works before or after the list has loaded. */
+    focus(routineId) { st.focusId = routineId; if (st.routines.some((x) => x.id === routineId)) render(); },
+    close() { clearTimeout(st.timer); st.loadSeq++; st.bot = ""; stopWatch(); },
   };
 }

@@ -938,6 +938,21 @@ select.fld { appearance: auto; }
 .rt-pv-run { font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .rt-tzlabel { font-size: 12.5px; color: var(--ink-3); }
 .rt-next.warn { color: var(--danger, #c0392b); }
+.rt-need { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: #fff1cc; color: #7a4b00; border: 1px solid #f0cf7a; font-weight: 600; }
+.rt-need-lines { display: grid; gap: 2px; font-size: 12.5px; color: #7a4b00; }
+.rt-health { font-size: 12.5px; color: var(--ink-3); overflow-wrap: anywhere; }
+.rt-health .warn { color: var(--danger, #c0392b); }
+.rt-setup { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface-2, var(--bg)); }
+.rt-setup-h { margin: 0; font: 650 13px var(--display); }
+.rt-setup-list { display: grid; gap: 10px; }
+.rt-chk { display: grid; grid-template-columns: 22px 1fr; gap: 2px 8px; align-items: start; }
+.rt-chk-i { grid-row: span 2; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font: 700 12px/1 var(--sans); background: var(--line); color: var(--ink-3); }
+.rt-chk.ok .rt-chk-i { background: #1f8a4c; color: #fff; }
+.rt-chk.missing .rt-chk-i { background: #c77700; color: #fff; }
+.rt-chk-t { font: 600 13.5px var(--sans); color: var(--ink); }
+.rt-chk-d { font-size: 12.5px; color: var(--ink-3); overflow-wrap: anywhere; }
+.rt-chk-a { display: flex; gap: 6px; flex-wrap: wrap; grid-column: 2; margin-top: 2px; }
+@media (prefers-color-scheme: dark) { .rt-need { background: #3a2c08; color: #ffd98a; border-color: #6b5214; } .rt-need-lines { color: #ffd98a; } }
 
 /* ---------- agent exchanges: the "Messaged <agent>" card, the read-only transcript, the Bots tab group ---------- */
 .xf { --bot: var(--led); display: inline-grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--plate); color: var(--bot); font: 700 13px/1 var(--display); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); overflow: hidden; }

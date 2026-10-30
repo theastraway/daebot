@@ -12,6 +12,7 @@
 //                                                      the permission there); onChange(cb) fires on every change, including a stop from the tray.
 //   window.mindclawDesktop.calendar.call(op, args)    Mac only: Apple Calendar through the bundled EventKit helper -> { ok, result | error }.
 //                                                      Absent on Windows and Linux, so the web UI sees no Calendar bridge there.
+//   window.mindclawDesktop.folder.choose()            the OS folder picker (routines: the folder to watch) -> { path } or null
 //   window.mindclawDesktop.titleBar.setTheme(dark)    sets the Windows/Linux window-button colors (no-op on the Mac)
 //   window.mindclawDesktop.platform / version         read-only strings
 // The desktop shell also watches confirm events itself, so the web UI does not need to call notify() at all.
@@ -53,6 +54,9 @@ contextBridge.exposeInMainWorld("mindclawDesktop", Object.freeze({
       if (typeof cb !== "function") return;
       ipcRenderer.on("desktop:screen-state", (_e, s) => { try { cb(s); } catch { /* UI bug must not break the feed */ } });
     },
+  }),
+  folder: Object.freeze({      // the OS folder picker for the routines "A file changes in a folder" trigger -> { path } or null
+    choose: () => ipcRenderer.invoke("desktop:choose-folder"),
   }),
   ...(process.platform === "darwin" ? {
     calendar: Object.freeze({
