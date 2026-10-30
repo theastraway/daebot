@@ -814,6 +814,9 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     // A routine's webhook: authenticated by the secret in the URL alone (a service calling in has no login), so it is answered before the cookie checks.
     const routineHook = /^\/hooks\/(r_[0-9a-f]{12})\/([A-Za-z0-9_-]{16,64})$/.exec(path);
     if (routineHook && routines && botsOn()) return routines.webhook(req, res, routineHook[1], routineHook[2]);
+    // GitHub's own deliveries: authenticated by the X-Hub-Signature-256 HMAC with the routine's secret, so no login either.
+    const ghHook = /^\/hooks\/gh\/(r_[0-9a-f]{12})$/.exec(path);
+    if (ghHook && routines && botsOn()) return routines.github(req, res, ghHook[1]);
 
     const hookMatch = /^\/hooks\/([^/]+)$/.exec(path);
     const hook = hookMatch ? webhooks.get(decodeURIComponent(hookMatch[1]).toLowerCase()) : undefined;
