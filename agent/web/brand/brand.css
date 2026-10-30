@@ -99,4 +99,4 @@ m-bot svg { display: block; width: 100%; height: 100%; overflow: visible; transf
 @media (pointer: coarse) { .model-badge, .mode-btn { --ctl-h: 36px; } }
 
 /* The Connectors list is the card's main content: give it room. */
-.apps-sec[data-sec="connectors"] .apps-body { max-height: min(50dvh, 500px); }
+/* no max-height here: the Apps card is the one scroll container */
