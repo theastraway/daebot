@@ -279,6 +279,8 @@ export interface Runtime {
   renameSession?(id: string, title: string): Promise<boolean>;
   /** Reactions / feedback of each message and the unread marker of a session of this owner. Undefined = unknown id. */
   messageMeta?(id: string): SessionMessageMeta | undefined;
+  /** history() and messageMeta() in one read. live = the session is running in this process (its transcript changes under the reader). */
+  historyWithMeta?(id: string): { events: HistoryEvent[]; meta: SessionMessageMeta; live: boolean } | undefined;
   /** Text of one saved message (the quote of a reply). */
   messageText?(id: string, mid: string): string | undefined;
   /** Marks the thread unread from a message (mid) or clears the marker (null). "nomsg" = that message is not in this session. */

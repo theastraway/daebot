@@ -129,6 +129,7 @@ export function createRuntimeHub(o: HubOptions): { runtimeFor(p: Principal): Run
       deleteSession: (id) => inner.deleteSession?.(id) ?? Promise.resolve(false),
       renameSession: (id, title) => inner.renameSession?.(id, title) ?? Promise.resolve(false),
       messageMeta: (id) => inner.messageMeta?.(id),
+      historyWithMeta: (id) => inner.historyWithMeta?.(id),
       messageText: (id, mid) => inner.messageText?.(id, mid),
       setUnread: (id, mid) => inner.setUnread?.(id, mid) ?? Promise.resolve("nosession"),
       reactMessage: (id, mid, emoji) => inner.reactMessage?.(id, mid, emoji) ?? Promise.resolve("nosession"),

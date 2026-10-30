@@ -34,7 +34,7 @@ import { versionInfo } from "../bots/versions.ts";
 import { createModelCatalog } from "../models.ts";
 import { McpConnectError } from "../mcpconnect/service.ts";
 import type { McpConnectService } from "../mcpconnect/service.ts";
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { validModelId } from "../settings.ts";
 import { STATIC_CSP, resolveStatic, serveEmbedded, serveFile } from "./static.ts";
 import { EMBEDDED_FILES } from "../embedded.generated.ts";
@@ -203,6 +203,26 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
     "content-type": "application/json; charset=utf-8",
     "content-length": String(Buffer.byteLength(data)),
     "cache-control": "no-store",
+    ...BASE_HEADERS,
+  });
+  res.end(data);
+}
+
+/** sendJson with an ETag over the body; a matching If-None-Match gets an empty 304. The body is still built, but nothing is sent or re-parsed by the client. */
+function sendJsonTagged(req: IncomingMessage, res: ServerResponse, body: unknown): void {
+  const data = JSON.stringify(body);
+  const etag = `"${createHash("sha1").update(data).digest("base64url").slice(0, 22)}"`;
+  const inm = req.headers["if-none-match"];
+  if (typeof inm === "string" && inm.split(",").some((t) => t.trim().replace(/^W\//, "") === etag)) {
+    res.writeHead(304, { etag, "cache-control": "no-store", ...BASE_HEADERS });
+    res.end();
+    return;
+  }
+  res.writeHead(200, {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": String(Buffer.byteLength(data)),
+    "cache-control": "no-store",
+    etag,
     ...BASE_HEADERS,
   });
   res.end(data);
@@ -1493,17 +1513,23 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (action === "history") {
       // The visible transcript, from the live session or from disk after a restart (no live session needed).
       if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-      const events = manager.runtimeOf(me.id).history?.(id);
+      const rt = manager.runtimeOf(me.id);
+      // One read of the saved record for the transcript AND its message meta (this used to load and parse the file twice per request).
+      const hm = rt.historyWithMeta?.(id);
+      const events = hm ? hm.events : rt.history?.(id);
       if (!events) return sendJson(res, 404, { error: "no such session" });
+      const meta = hm ? hm.meta : rt.messageMeta?.(id) ?? { messages: {} };
       // A turn still running on the server: hand back the transcript up to (not including) that turn plus a pointer to it,
       // so the client rebuilds the running turn from GET .../events (replay + live) and nothing is drawn twice.
       const run = runs.active(id);
+      let payload: unknown = { events, meta };
       if (run) {
         let cut = events.length;
         for (let i = events.length - 1; i >= 0; i--) if (events[i].type === "user") { cut = i; break; }
-        return sendJson(res, 200, { events: events.slice(0, cut), run: { id: run.id, status: "running", startedAt: run.startedAt }, meta: manager.runtimeOf(me.id).messageMeta?.(id) ?? { messages: {} } });
+        payload = { events: events.slice(0, cut), run: { id: run.id, status: "running", startedAt: run.startedAt }, meta };
       }
-      return sendJson(res, 200, { events, meta: manager.runtimeOf(me.id).messageMeta?.(id) ?? { messages: {} } });
+      // Conditional GET: the open chat is re-read every few seconds and on every switch; an unchanged transcript costs a 304, not a body to download and parse.
+      return sendJsonTagged(req, res, payload);
     }
     if (action === "events") {
       // Re-attach to the latest run of this session: replays what the client missed (?after=<seq>, or Last-Event-ID) and streams the rest.

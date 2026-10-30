@@ -462,6 +462,8 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     await store.save(next);
     return true;
   }
+  // Read-only reads of a saved record share one parsed copy per file (see SessionStore.loadShared); never mutate what this returns.
+  const readStored = (id: string): StoredSession | undefined => (store?.loadShared ? store.loadShared(id) : store?.load(id));
   const findMessage = (h: HistoryEvent[] | undefined, mid: string): { text: string } | undefined => {
     const it = h?.find((x) => (x.type === "text" || x.type === "user") && x.id === mid);
     return it ? { text: it.type === "text" ? it.delta : it.type === "user" ? it.text : "" } : undefined;
@@ -812,7 +814,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     history(id): HistoryEvent[] | undefined {
       const live = sessions.get(id);
       if (live) return live.recorder.events();
-      const rec = store?.load(id);
+      const rec = readStored(id);
       if (!mine(rec) || !rec) return undefined;
       const hist = withMessageIds(rec.history);
       // Saved mid-turn by a process that is gone (this one has no live session for it): say so instead of showing a cut-off reply.
@@ -821,9 +823,18 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     messageMeta(id) {
       const live = sessions.get(id);
       if (live) return { messages: live.msgMeta ?? {}, ...(live.unreadFrom ? { unreadFrom: live.unreadFrom } : {}) };
-      const rec = store?.load(id);
+      const rec = readStored(id);
       if (!rec || !mine(rec)) return undefined;
       return { messages: rec.msgMeta ?? {}, ...(rec.unreadFrom ? { unreadFrom: rec.unreadFrom } : {}) };
+    },
+    // The transcript and its message meta in ONE read of the saved record (switching chats used to load and parse the file twice).
+    historyWithMeta(id) {
+      const live = sessions.get(id);
+      if (live) return { events: live.recorder.events(), meta: { messages: live.msgMeta ?? {}, ...(live.unreadFrom ? { unreadFrom: live.unreadFrom } : {}) }, live: true };
+      const rec = readStored(id);
+      if (!rec || !mine(rec)) return undefined;
+      const hist = withMessageIds(rec.history);
+      return { events: rec.run?.status === "running" ? [...hist, interruptedNotice()] : hist, meta: { messages: rec.msgMeta ?? {}, ...(rec.unreadFrom ? { unreadFrom: rec.unreadFrom } : {}) }, live: false };
     },
     messageText(id, mid) {
       return findMessage(runtime.history?.(id), mid)?.text;
