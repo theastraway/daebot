@@ -103,7 +103,7 @@ export interface ServerView {
   integration?: string;
   status?: "ok" | "error" | "reauth_required"; lastError?: string; preset?: string;
 }
-export interface ConnectorAccount { key: string; kind: "mind" | "mcp"; serverId?: string; label: string; account: string; status: "connected" | "reauth" | "off"; note?: string; addedAt?: number }
+export interface ConnectorAccount { key: string; kind: "mind" | "mcp"; /** A MIND app account: the id Disconnect and Reconnect take ("github", "github-2"). */ provider?: string; serverId?: string; label: string; account: string; status: "connected" | "reauth" | "off"; note?: string; addedAt?: number }
 export interface ConnectorToolView { server: string; name: string; description: string; readOnly: boolean; destructive: boolean; enabled: boolean }
 export interface ConnectorDetail {
   id: string; kind: "mind" | "mcp"; name: string; description: string; developer: string;
@@ -859,17 +859,22 @@ export class McpConnectService {
     const toolsOf = (vs: ServerView[]): ConnectorToolView[] => vs.flatMap((v) => v.tools.map((t) => ({ server: v.name, name: t.name, description: cleanLine(t.description, 160), readOnly: t.readOnly, destructive: t.destructive, enabled: !this.prefs.toolOff(uid, v.name, t.name) })));
     const prov = providers.find((p) => p.provider === id);
     if (prov && (prov.connected || prov.configured !== false)) {
-      const rides = views.filter((v) => v.auth === "integration" && v.integration === prov.provider);
-      const key = `mind:${prov.provider}`;
-      const accounts: ConnectorAccount[] = prov.connected ? [{
-        key, kind: "mind", label: label(key, prov.account ?? "primary"), account: prov.account ?? "", status: prov.needsReconnect ? "reauth" : "connected",
-      }] : [];
-      for (const v of rides) if (v.status && v.status !== "ok" && accounts[0]) { accounts[0].status = "reauth"; accounts[0].note = v.status === "reauth_required" ? "Its tool connection needs you to sign in again." : (v.lastError ?? "MIND reports an error with its tool connection."); }
+      // Every account of the app (GitHub allows several) rides on its own tool server; the first account is the bare provider id, the rest are numbered ("github-2").
+      const rides = views.filter((v) => v.auth === "integration" && typeof v.integration === "string" && (v.integration === prov.provider || v.integration.replace(/-\d+$/, "") === prov.provider));
+      const multi = prov.multi === true;
+      const list = prov.connected ? (multi && prov.accounts && prov.accounts.length ? prov.accounts : [{ id: prov.provider, label: prov.account ?? "primary", needsReconnect: prov.needsReconnect }]) : [];
+      const accounts: ConnectorAccount[] = list.map((a) => {
+        const key = `mind:${a.id}`;
+        const own = rides.find((v) => v.integration === a.id);
+        const acct: ConnectorAccount = { key, kind: "mind", provider: a.id, label: label(key, a.label || "primary"), account: a.label || "", status: a.needsReconnect ? "reauth" : "connected" };
+        if (own && own.status && own.status !== "ok") { acct.status = "reauth"; acct.note = own.status === "reauth_required" ? "Its tool connection needs you to sign in again." : (own.lastError ?? "MIND reports an error with its tool connection."); }
+        return acct;
+      });
       const tools = toolsOf(rides);
       return {
         id, kind: "mind", name: prov.name, description: prov.blurb || `${prov.name} through MIND.`, developer: prov.name,
         accounts,
-        addAccount: { supported: false, note: `MIND connects one ${prov.name} account for your login. To use a different one, Uninstall and connect again.` },
+        addAccount: multi ? { supported: true, note: `Sign in to another ${prov.name} account. ${prov.name} will ask which account to use.` } : { supported: false, note: `MIND connects one ${prov.name} account for your login. To use a different one, Uninstall and connect again.` },
         tools, enabledTools: tools.filter((t) => t.enabled).length,
         toolsNote: prov.connected && !rides.length ? `Daebot is connecting ${prov.name}'s tools. If this stays, select Retry on the connector list.` : undefined,
         connect: prov.connected ? undefined : { supported: true, label: "Connect" },

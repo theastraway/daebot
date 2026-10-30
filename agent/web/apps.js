@@ -378,11 +378,13 @@ export function initApps(ctx) {
   }
   const mind = {
     handlers: {
-      async onConnect(e, ctl) {
+      /** `opts` (optional): { addAccount: true } makes the provider show its account chooser (a second account); { login } pre-selects the account being reconnected. */
+      async onConnect(e, ctl, opts) {
         ctl.busy(true);
         const pre = e.auth === "credentials" ? null : window.open("", "_blank"); // opened inside the click so the pop-up blocker allows it
         try {
-          const r = await json(`/apps/integrations/${encodeURIComponent(e.id)}/connect`, { method: "POST", body: "{}" });
+          const hints = {}; if (opts && opts.addAccount) hints.addAccount = true; if (opts && opts.login) hints.login = String(opts.login);
+          const r = await json(`/apps/integrations/${encodeURIComponent(e.id)}/connect`, { method: "POST", body: JSON.stringify(hints) });
           if (r.authType === "credentials") { if (pre) pre.close(); await openWindow(r.setupUrl, null); say(`Finish ${e.name} setup in MIND, then come back.`); }
           else { await openWindow(r.authUrl, pre); say(`Approve ${e.name} in the new tab, then come back here.`); }
         } catch (err) { if (pre) pre.close(); ctl.say(err && err.message ? err.message : `Could not start ${e.name}.`, "warn"); }

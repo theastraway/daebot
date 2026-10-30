@@ -217,7 +217,8 @@ export function initConnectors({ apps, json, getMcp, openDetail }) {
     async reconnect(d, account, ctl) {
       ctl.busy(true);
       try {
-        if (account.kind === "mind") { await mind.handlers.onConnect({ ...e, kind: "mind", id: d.id }, { busy: () => {}, say: ctl.say }); ctl.say(`Approve ${d.name} in the new tab, then come back here.`, "off"); }
+        // The account's own id (github, github-2) is what MIND reconnects; its login is passed so the provider signs in as that same account.
+        if (account.kind === "mind") { await mind.handlers.onConnect({ ...e, kind: "mind", id: account.provider || d.id }, { busy: () => {}, say: ctl.say }, account.account ? { login: account.account } : undefined); ctl.say(`Approve ${d.name} in the new tab, then come back here.`, "off"); }
         else {
           if (account.serverId) await json(`/mcp/servers/${encodeURIComponent(account.serverId)}`, { method: "DELETE" });
           apps.hideDetail();
@@ -234,19 +235,23 @@ export function initConnectors({ apps, json, getMcp, openDetail }) {
     /** Disconnects ONE account (the page stays; the list refreshes). */
     async disconnect(d, account, say) {
       try {
-        if (account.kind === "mind") await json(`/apps/integrations/${encodeURIComponent(d.id)}/disconnect`, { method: "POST", body: "{}" });
+        if (account.kind === "mind") await json(`/apps/integrations/${encodeURIComponent(account.provider || d.id)}/disconnect`, { method: "POST", body: "{}" });
         else if (account.serverId) await json(`/mcp/servers/${encodeURIComponent(account.serverId)}`, { method: "DELETE" });
         const mcp = getMcp(); if (mcp) mcp.load();
         apps.hideDetail(); apps.say(`Disconnected ${account.label || d.name}.`); apps.refresh();
       } catch (err) { say(`Could not disconnect ${account.label || d.name}: ${err && err.message ? err.message : "try again"}`, "warn"); }
     },
-    addAccount() { if (e.form) apps.connectForm(e); },
+    /** A MIND app that allows several accounts (GitHub) starts its sign-in again with the provider's account chooser forced, so a different account can be picked. */
+    async addAccount(d, ctl) {
+      if (e.kind === "mind") { const c = ctl || { busy: () => {}, say: (t) => apps.say(t) }; await mind.handlers.onConnect({ ...e, kind: "mind", id: d && d.id ? d.id : e.id }, c, { addAccount: true }); apps.say(`Choose the ${d && d.name ? d.name : e.name} account to add in the new tab, then come back here.`); return; }
+      if (e.form) apps.connectForm(e);
+    },
     /** Disconnects every account and removes the connector. */
     async uninstall(d, say) {
       const problems = [];
       for (const a of d.accounts) {
         try {
-          if (a.kind === "mind") await json(`/apps/integrations/${encodeURIComponent(d.id)}/disconnect`, { method: "POST", body: "{}" });
+          if (a.kind === "mind") await json(`/apps/integrations/${encodeURIComponent(a.provider || d.id)}/disconnect`, { method: "POST", body: "{}" });
           else if (a.serverId) await json(`/mcp/servers/${encodeURIComponent(a.serverId)}`, { method: "DELETE" });
         } catch (err) { problems.push(err && err.message ? err.message : "one account would not disconnect"); }
       }
@@ -275,6 +280,8 @@ export function initConnectors({ apps, json, getMcp, openDetail }) {
       if (m.status === "rejected" && !providers.length) message = "Your MIND apps could not be loaded right now. Try again in a moment.";
       const entries = connectorList(providers, items, linked, linkFail);
       for (const x of entries) if (x.autoLink && !linkFail[x.provider]) setTimeout(() => linkTools(x.provider, false), 0);
+      // A further account (GitHub allows several) has its own tool server: link it the moment it shows up connected without one (MIND links every account in one call).
+      for (const p of providers) if (p.multi && Array.isArray(p.accounts) && p.accounts.some((a) => !linked.some((l) => l && l.provider === a.id)) && !linkFail[p.provider]) setTimeout(() => linkTools(p.provider, false), 0);
       if (wantId) { const hit = entries.find((x) => x.id === wantId); wantId = ""; if (hit) setTimeout(() => showConnector(hit), 0); }
       if (!entries.length) return storeOff ? { entries: [], hidden: true } : { entries: [], message: message || "The MIND App Store list is not available right now. Try again in a moment." };
       return message ? { entries, message } : { entries };
