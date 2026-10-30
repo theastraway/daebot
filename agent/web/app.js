@@ -665,7 +665,13 @@ async function openMessageMenu(node, point) {
 const menu = initMessageMenu({ h, icon, host: els.thread, pick: (n) => (n && itemOfNode(n) ? n : null), onRequest: (node, point) => { void openMessageMenu(node, point); } });
 
 // ---------- header / sessions ----------
-function metaById(id) { return state.sessions.find((s) => s.id === id) || bots.threads().find((s) => s.id === id); }
+// The row of a chat: the plain list, the selected bot's threads, any bot's cached thread list, or the row that was just clicked
+// (a thread opened from a bot list that is not the selected one is in none of the lists until they refresh).
+function metaById(id) {
+  return state.sessions.find((s) => s.id === id) || bots.threads().find((s) => s.id === id)
+    || bots.cached().reduce((hit, list) => hit || list.find((s) => s.id === id), undefined)
+    || (state.openedRow && state.openedRow.id === id ? state.openedRow : undefined);
+}
 function currentMeta() { return metaById(state.currentId); }
 function renderHeader() {
   const meta = currentMeta();
@@ -886,6 +892,7 @@ async function selectSession(s, opts = {}) {
   rememberScroll();
   state.currentId = s.id;
   state.curBot = s.bot || "";
+  state.openedRow = s;
   const tr = transcript(s.id);
   if (!tr.items.length) restoreTranscript(s.id); // this tab's saved copy of the thread
   const held = hist.get(s.id);
