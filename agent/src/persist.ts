@@ -1,7 +1,7 @@
 // Server-side session persistence. One JSON file per session under DATA_DIR/sessions so a restart or redeploy
 // does not lose chats. Hosted: DATA_DIR=/data (a Render persistent disk). Local default: ~/.daebot/data.
 // Zero dependencies; writes are atomic (tmp + rename) and serialized per session.
-import { mkdirSync, readFileSync, readdirSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { rename, writeFile, mkdir, unlink } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -60,6 +60,12 @@ function metaOf(rec: StoredSession): StoredMeta {
 export interface SessionStore {
   save(rec: StoredSession): Promise<void>;
   load(id: string): StoredSession | undefined;
+  /**
+   * Read-only twin of load(): the parsed record is cached per file and revalidated by a cheap stat (mtime + size), so switching
+   * between chats does not re-read and re-parse a multi-megabyte transcript on every request. The returned object is SHARED:
+   * callers must not mutate it (history / message-meta reads only).
+   */
+  loadShared?(id: string): StoredSession | undefined;
   list(): StoredMeta[];
   /** Cheap ownership lookup (no file read after the first scan). */
   meta?(id: string): StoredMeta | undefined;
@@ -89,6 +95,8 @@ export function createFileStore(dir: string): SessionStore {
   const index = new Map<string, StoredMeta>();
   let scanned = false;
   const queues = new Map<string, Promise<void>>();
+  const shared = new Map<string, { mtimeMs: number; size: number; rec: StoredSession }>();
+  const SHARED_MAX = 12;
 
   function scan(): void {
     if (scanned) return;
@@ -128,6 +136,20 @@ export function createFileStore(dir: string): SessionStore {
         return validRecord(rec) && rec.id === id ? rec : undefined;
       } catch { return undefined; }
     },
+    loadShared(id) {
+      const file = join(root, fileNameFor(id));
+      let st;
+      try { st = statSync(file); } catch { shared.delete(id); return undefined; }
+      const hit = shared.get(id);
+      if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) { shared.delete(id); shared.set(id, hit); return hit.rec; } // refresh LRU order
+      try {
+        const rec = JSON.parse(readFileSync(file, "utf8"));
+        if (!validRecord(rec) || rec.id !== id) return undefined;
+        shared.set(id, { mtimeMs: st.mtimeMs, size: st.size, rec });
+        while (shared.size > SHARED_MAX) shared.delete(shared.keys().next().value as string);
+        return rec;
+      } catch { return undefined; }
+    },
     list() {
       scan();
       return [...index.values()].sort((a, b) => b.updatedAt - a.updatedAt);
@@ -141,6 +163,7 @@ export function createFileStore(dir: string): SessionStore {
       const prev = queues.get(id) ?? Promise.resolve();
       await prev.catch(() => {});
       index.delete(id);
+      shared.delete(id);
       await unlink(join(root, fileNameFor(id))).catch(() => {});
     },
   };

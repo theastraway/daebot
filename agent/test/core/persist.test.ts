@@ -40,6 +40,24 @@ test("store: save, load, list; a torn file is skipped", async () => {
   assert.ok(readdirSync(join(dir, "sessions")).every((f) => !f.endsWith(".tmp")));
 });
 
+test("store: loadShared reuses one parsed record until the file changes, and never outlives a delete", async () => {
+  const dir = tmp();
+  const st = createFileStore(dir);
+  const rec = { v: 1 as const, id: "s1", surface: "web", title: "T", tier: "admin", createdAt: 1, updatedAt: 5,
+    state: { messages: [{ role: "user" as const, content: "hi" }], receiptCounter: 2, totalCostUsd: 0.1, userMessageIndex: 1 }, violations: [], history: [{ type: "user" as const, text: "hi" }] };
+  await st.save(rec);
+  const a = st.loadShared!("s1");
+  assert.deepEqual(a, rec);
+  assert.equal(st.loadShared!("s1"), a, "an untouched file is served from the cache (same object)");
+  assert.notEqual(st.load("s1"), a, "load() still returns a private copy callers may mutate");
+  await st.save({ ...rec, title: "renamed to something longer", updatedAt: 9 });
+  const b = st.loadShared!("s1");
+  assert.equal(b?.title, "renamed to something longer", "a save invalidates the cached copy");
+  assert.equal(st.loadShared!("nope"), undefined);
+  await st.remove!("s1");
+  assert.equal(st.loadShared!("s1"), undefined, "a deleted chat is gone from the cache too");
+});
+
 test("repairMessages drops orphaned tool calls and results", () => {
   const m: Message[] = [
     { role: "user", content: "a" },
