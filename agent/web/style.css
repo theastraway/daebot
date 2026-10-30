@@ -951,6 +951,7 @@ select.fld { appearance: auto; }
 .rt-chk.missing .rt-chk-i { background: #c77700; color: #fff; }
 .rt-chk-t { font: 600 13.5px var(--sans); color: var(--ink); }
 .rt-chk-d { font-size: 12.5px; color: var(--ink-3); overflow-wrap: anywhere; }
+.rt-chk > .rt-url, .rt-chk > .rt-chk-a { grid-column: 2; min-width: 0; }
 .rt-chk-a { display: flex; gap: 6px; flex-wrap: wrap; grid-column: 2; margin-top: 2px; }
 @media (prefers-color-scheme: dark) { .rt-need { background: #3a2c08; color: #ffd98a; border-color: #6b5214; } .rt-need-lines { color: #ffd98a; } }
 

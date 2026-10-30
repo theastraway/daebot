@@ -1385,9 +1385,9 @@ const bots = initBots({
 });
 // A setup link from Daebot (#setup=<bot id>/<routine id>) opens that routine's Set up step.
 {
-  const openFromHash = () => { const m = /^#setup=(b_[0-9a-f]{12})\/(r_[0-9a-f]{12})$/.exec(location.hash); if (m) bots.openSetup(m[1], m[2]).then((ok) => { if (ok) history.replaceState(null, "", location.pathname + location.search); }).catch(() => {}); };
+  const openFromHash = (tries = 4) => { const m = /^#setup=(b_[0-9a-f]{12})\/(r_[0-9a-f]{12})$/.exec(location.hash); if (m) bots.openSetup(m[1], m[2]).then((ok) => { if (ok) history.replaceState(null, "", location.pathname + location.search); else if (tries > 1) setTimeout(() => openFromHash(tries - 1), 1500); }).catch(() => { if (tries > 1) setTimeout(() => openFromHash(tries - 1), 1500); }); };
   openFromHash();
-  window.addEventListener("hashchange", openFromHash);
+  window.addEventListener("hashchange", () => openFromHash());
 }
 
 xchg = initExchanges({
