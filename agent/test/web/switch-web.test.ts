@@ -51,3 +51,11 @@ test("app.js wires fast switching: paint first, resume and read in the backgroun
   assert.match(src, /"if-none-match"/);
   assert.ok(!/await refreshSessions\(\);\s*\n\s*renderThread\(\);/.test(src), "switching no longer re-lists every session before drawing");
 });
+
+test("the header finds the opened chat even when no refreshed list holds it yet (a thread opened from a bot that is not selected)", () => {
+  const src = readFileSync(new URL("../../web/app.js", import.meta.url), "utf8");
+  assert.match(src, /state\.openedRow = s;/);
+  const meta = src.slice(src.indexOf("function metaById"), src.indexOf("function currentMeta"));
+  assert.match(meta, /bots\.cached\(\)/);
+  assert.match(meta, /state\.openedRow/);
+});
