@@ -10,12 +10,15 @@ export const TRIGGER_TYPES = [
   "webhook", "thread_message", "bot_message", "keyword", "turn_done",
   "mind_document", "mind_task", "mind_task_due", "mind_contact", "mail_new",
   "app_opened", "wake", "file_changed", "screen_change",
+  "gh_issue", "gh_pr", "gh_push", "gh_comment",
 ] as const;
 export type TriggerType = (typeof TRIGGER_TYPES)[number];
 
-export type TriggerGroup = "messages" | "daebot" | "mind" | "desktop" | "web";
+export type TriggerGroup = "messages" | "daebot" | "mind" | "desktop" | "web" | "github";
+/** What a trigger needs before it can work. `setup.ts` checks each one live; the routine cannot be turned on while one is missing. */
+export type Need = "mind" | "mail" | "webhook" | "github" | "screen" | "folder";
 export interface FieldDef { key: string; label: string; kind: "text" | "select" | "path"; required?: boolean; placeholder?: string; help?: string; options?: { value: string; label: string }[]; default?: string }
-export interface TriggerDef { type: TriggerType; group: TriggerGroup; label: string; description: string; fields: FieldDef[]; desktopOnly?: boolean; poll?: boolean }
+export interface TriggerDef { type: TriggerType; group: TriggerGroup; label: string; description: string; fields: FieldDef[]; desktopOnly?: boolean; /** Needs a public address a service can call: not offered when the gateway runs on the user's own computer. */ hostedOnly?: boolean; poll?: boolean; needs?: Need[] }
 
 export interface Trigger {
   type: TriggerType;
@@ -33,6 +36,10 @@ export interface Trigger {
   sensitivity?: "low" | "medium" | "high";
   /** Polled triggers: minutes between looks. */
   every?: number;
+  /** GitHub triggers: only this repository ("owner/name"), optional. */
+  repo?: string;
+  /** gh_push: only this branch, optional. */
+  branch?: string;
   /** Optional: only react on weekdays / inside active hours (in `tz`). Works for every trigger. */
   filter?: ActiveFilter;
   tz?: string;
@@ -41,6 +48,11 @@ export interface Trigger {
 const POLL_OPTIONS = [{ value: "5", label: "Every 5 minutes" }, { value: "15", label: "Every 15 minutes" }, { value: "30", label: "Every 30 minutes" }, { value: "60", label: "Every hour" }];
 export const POLL_MINUTES = [5, 15, 30, 60] as const;
 const EVERY: FieldDef = { key: "every", label: "How often Daebot looks", kind: "select", options: POLL_OPTIONS, default: "15" };
+
+const GH_REPO: FieldDef = { key: "repo", label: "Only this repository (optional)", kind: "text", placeholder: "owner/name" };
+
+/** The GitHub receiver (/hooks/gh/<id>) is switched on by its own change; until then GitHub triggers are neither offered nor accepted. */
+export const GITHUB_LIVE = false;
 
 export const CATALOG: readonly TriggerDef[] = [
   { type: "thread_message", group: "messages", label: "I message the bot", description: "Runs each time you send a message in any of this bot's threads.", fields: [] },
@@ -54,30 +66,36 @@ export const CATALOG: readonly TriggerDef[] = [
   { type: "turn_done", group: "daebot", label: "A thread finishes a reply", description: "Runs when the bot finishes answering in one of its threads, so a follow-up routine can review, summarize or hand off the result. Routine threads never trigger it.", fields: [
     { key: "on", label: "Which endings", kind: "select", default: "done", options: [{ value: "done", label: "Finished normally" }, { value: "failed", label: "Failed" }, { value: "any", label: "Either" }] },
   ] },
-  { type: "webhook", group: "web", label: "A web address is called (webhook)", description: "Gives this routine its own secret web address. Anything that can send a web request (a form, a script, another app) runs it, and the request body reaches the bot as data.", fields: [] },
-  { type: "mind_document", group: "mind", label: "A new document appears in MIND", description: "Daebot looks at your MIND documents on a schedule and runs once for each new one.", fields: [EVERY], poll: true },
-  { type: "mind_task", group: "mind", label: "A new task is created in MIND", description: "Runs once for each new task in your MIND task list.", fields: [EVERY], poll: true },
-  { type: "mind_task_due", group: "mind", label: "A MIND task comes due", description: "Runs once when an open task reaches its due date (tasks already due when you save are not replayed).", fields: [EVERY], poll: true },
-  { type: "mind_contact", group: "mind", label: "A new contact is added to MIND CRM", description: "Runs once for each new CRM contact.", fields: [EVERY], poll: true },
-  { type: "mail_new", group: "mind", label: "A new email arrives", description: "Runs once for each new unread email in the mailbox you connected to MIND (Gmail or Outlook, set up under Apps). Email text reaches the bot as untrusted data.", fields: [EVERY], poll: true },
+  { type: "webhook", group: "web", label: "A web address is called (webhook)", description: "Gives this routine its own secret web address. Anything that can send a web request (a form, a script, another app) runs it, and the request body reaches the bot as data.", fields: [], needs: ["webhook"] },
+  { type: "mind_document", group: "mind", label: "A new document appears in MIND", description: "Daebot looks at your MIND documents on a schedule and runs once for each new one.", fields: [EVERY], poll: true, needs: ["mind"] },
+  { type: "mind_task", group: "mind", label: "A new task is created in MIND", description: "Runs once for each new task in your MIND task list.", fields: [EVERY], poll: true, needs: ["mind"] },
+  { type: "mind_task_due", group: "mind", label: "A MIND task comes due", description: "Runs once when an open task reaches its due date (tasks already due when you save are not replayed).", fields: [EVERY], poll: true, needs: ["mind"] },
+  { type: "mind_contact", group: "mind", label: "A new contact is added to MIND CRM", description: "Runs once for each new CRM contact.", fields: [EVERY], poll: true, needs: ["mind"] },
+  { type: "mail_new", group: "mind", label: "A new email arrives", description: "Runs once for each new unread email in the mailbox you connected to MIND (Gmail or Outlook, set up under Apps). Email text reaches the bot as untrusted data.", fields: [EVERY], poll: true, needs: ["mail"] },
   { type: "app_opened", group: "desktop", label: "Daebot opens on this computer", description: "Runs once each time the Daebot desktop app starts.", fields: [], desktopOnly: true },
   { type: "wake", group: "desktop", label: "This computer wakes up", description: "Runs when the computer comes back from sleep.", fields: [], desktopOnly: true },
   { type: "file_changed", group: "desktop", label: "A file changes in a folder", description: "Watches a folder on this computer and runs when files in it are added or changed (a few seconds after the changes settle).", fields: [
     { key: "path", label: "Folder to watch", kind: "path", required: true, placeholder: "/Users/you/Documents/Inbox" },
-  ], desktopOnly: true },
+  ], desktopOnly: true, needs: ["folder"] },
   { type: "screen_change", group: "desktop", label: "The screen changes", description: "While \"Let Daebot watch my screen\" is on, runs when the picture changes by more than the size you choose (at most once a minute). The bot gets the fact of the change, not a picture.", fields: [
     { key: "sensitivity", label: "How big a change counts", kind: "select", default: "medium", options: [{ value: "low", label: "Large changes only (a page or app switch)" }, { value: "medium", label: "A dialog or a loading bar" }, { value: "high", label: "Small changes too" }] },
-  ], desktopOnly: true },
+  ], desktopOnly: true, needs: ["screen"] },
+  { type: "gh_issue", group: "github", label: "A GitHub issue is opened", description: "Runs when someone opens or reopens an issue in a repository. GitHub calls Daebot the moment it happens (no waiting, no polling). You paste one address and a secret into the repository's webhook settings.", fields: [GH_REPO], hostedOnly: true, needs: ["github"] },
+  { type: "gh_pr", group: "github", label: "A GitHub pull request is opened", description: "Runs when a pull request is opened, reopened or marked ready for review. GitHub calls Daebot the moment it happens.", fields: [GH_REPO], hostedOnly: true, needs: ["github"] },
+  { type: "gh_push", group: "github", label: "Code is pushed to GitHub", description: "Runs on each push to a repository. GitHub calls Daebot the moment it happens.", fields: [GH_REPO, { key: "branch", label: "Only this branch (optional)", kind: "text", placeholder: "main" }], hostedOnly: true, needs: ["github"] },
+  { type: "gh_comment", group: "github", label: "Someone comments on GitHub", description: "Runs when a comment is added to an issue, a pull request or a commit. GitHub calls Daebot the moment it happens.", fields: [GH_REPO], hostedOnly: true, needs: ["github"] },
 ];
 
 export const DEFS: ReadonlyMap<TriggerType, TriggerDef> = new Map(CATALOG.map((d) => [d.type, d]));
 export const isPoll = (t: TriggerType | undefined): boolean => !!t && DEFS.get(t)?.poll === true;
 export const isDesktopOnly = (t: TriggerType | undefined): boolean => !!t && DEFS.get(t)?.desktopOnly === true;
+export const isHostedOnly = (t: TriggerType | undefined): boolean => !!t && DEFS.get(t)?.hostedOnly === true;
+export const isGithub = (t: TriggerType | undefined): boolean => t === "gh_issue" || t === "gh_pr" || t === "gh_push" || t === "gh_comment";
 
 /** What this deployment can detect. Hosted servers cannot see a user's computer. */
 export interface TriggerCaps { desktop: boolean }
 export function catalogFor(caps: TriggerCaps): TriggerDef[] {
-  return CATALOG.filter((d) => caps.desktop || !d.desktopOnly);
+  return CATALOG.filter((d) => (caps.desktop || !d.desktopOnly) && (!caps.desktop || !d.hostedOnly) && (GITHUB_LIVE || d.group !== "github"));
 }
 
 const str = (v: unknown, max: number): string | undefined => (typeof v === "string" && v.trim() ? v.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, max) : undefined);
@@ -86,9 +104,11 @@ const str = (v: unknown, max: number): string | undefined => (typeof v === "stri
 export function checkTrigger(v: unknown, caps: TriggerCaps): Trigger {
   const o = v && typeof v === "object" ? (v as Record<string, unknown>) : { type: v };
   const type = o.type;
-  if (typeof type !== "string" || !(TRIGGER_TYPES as readonly string[]).includes(type)) throw new TimingError(`trigger must be one of ${CATALOG.filter((d) => caps.desktop || !d.desktopOnly).map((d) => d.type).join(", ")}`);
+  if (typeof type !== "string" || !(TRIGGER_TYPES as readonly string[]).includes(type)) throw new TimingError(`trigger must be one of ${catalogFor(caps).map((d) => d.type).join(", ")}`);
   const t = type as TriggerType;
   if (isDesktopOnly(t) && !caps.desktop) throw new TimingError(`"${t}" needs the Daebot desktop app: a hosted server cannot see your computer`);
+  if (isGithub(t) && !GITHUB_LIVE) throw new TimingError(`"${t}" is not available yet`);
+  if (isHostedOnly(t) && caps.desktop) throw new TimingError(`"${t}" needs a public address GitHub can call, so it works on daebot.live, not in the desktop app`);
   const out: Trigger = { type: t };
   if (t === "bot_message") { const f = str(o.from, 32); if (f) out.from = f.toLowerCase(); }
   if (t === "keyword") {
@@ -113,6 +133,14 @@ export function checkTrigger(v: unknown, caps: TriggerCaps): Trigger {
     try { isDir = existsSync(n) && statSync(n).isDirectory(); } catch { /* unreadable = not a folder */ }
     if (!isDir) throw new TimingError(`"${n.slice(0, 80)}" is not a folder on this computer`);
     out.path = n;
+  }
+  if (isGithub(t)) {
+    const repo = str(o.repo, 140);
+    if (repo) {
+      if (!/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(repo)) throw new TimingError('the repository must look like owner/name, for example "octocat/hello"');
+      out.repo = repo.toLowerCase();
+    }
+    if (t === "gh_push") { const b = str(o.branch, 120); if (b) out.branch = b.replace(/^refs\/heads\//, ""); }
   }
   if (t === "screen_change") {
     const s = o.sensitivity === undefined || o.sensitivity === "" ? "medium" : o.sensitivity;
@@ -173,5 +201,9 @@ export function describeTrigger(t: Trigger): string {
     case "wake": return `when this computer wakes up${filt}`;
     case "file_changed": return `when a file changes in ${t.path ?? "a folder"}${filt}`;
     case "screen_change": return `when the screen changes${filt}`;
+    case "gh_issue": return `when a GitHub issue is opened${t.repo ? ` in ${t.repo}` : ""}${filt}`;
+    case "gh_pr": return `when a GitHub pull request is opened${t.repo ? ` in ${t.repo}` : ""}${filt}`;
+    case "gh_push": return `when code is pushed to GitHub${t.repo ? ` in ${t.repo}` : ""}${t.branch ? ` (branch ${t.branch})` : ""}${filt}`;
+    case "gh_comment": return `when someone comments on GitHub${t.repo ? ` in ${t.repo}` : ""}${filt}`;
   }
 }

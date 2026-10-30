@@ -135,11 +135,17 @@ export class RoutineRunner {
       if (!ts?.primed) { book.setPoll(r.id, { primed: true, seen: items.map((i) => i.id), at }); return; }   // first look: only learn what is already there
       const fresh = items.filter((i) => !seen.has(i.id)).reverse();                                          // MIND lists newest first: run oldest first
       if (!triggerOpen(r.trigger!, at)) { book.setPoll(r.id, { at }); return; }                              // outside weekdays / active hours: look again next time, forget nothing
-      book.setPoll(r.id, { seen: [...seen, ...fresh.map((i) => i.id)], at });
+      const batch = fresh.slice(0, 5);
+      // At most once: the batch is written down as seen BEFORE anything runs, so a crash right after can lose an item but never repeat one.
+      book.setPoll(r.id, { seen: [...seen, ...batch.map((i) => i.id)], at });
       const live = book.get(r.id);
       if (!live?.enabled) return;
-      for (const it of fresh.slice(0, 5)) this.fireTrigger(book, live, it.text);
-      if (fresh.length > 5) book.recordRun(r.id, { at: this.now(), source: r.trigger!.type, status: "skipped", model: false, ms: 0, result: `skipped: ${fresh.length - 5} more new items were not run (5 per look)` });
+      const refused: string[] = [];
+      for (const it of batch) if (!this.fireTrigger(book, live, it.text)) refused.push(it.id);
+      // An item that could not run (rate limit, queue full) is NOT lost: it is taken back off the seen list and tried again on the next look.
+      if (refused.length) book.setPoll(r.id, { seen: [...seen, ...batch.map((i) => i.id).filter((id) => !refused.includes(id))], at });
+      const later = fresh.length - batch.length;
+      if (later > 0) book.recordRun(r.id, { at: this.now(), source: r.trigger!.type, status: "skipped", model: false, ms: 0, result: `${later} more new item${later === 1 ? "" : "s"} will run on the next look (5 per look)` });
     } catch (e) {
       book.setPoll(r.id, { at, error: String((e as Error)?.message ?? e) });
     } finally { clearTimeout(timer); this.polling.delete(r.id); }
@@ -158,6 +164,7 @@ export class RoutineRunner {
   webhook(routineId: string, payload: string): FireResult {
     const hit = this.d.hub.find(routineId);
     if (!hit || hit.routine.kind !== "trigger" || hit.routine.trigger?.type !== "webhook") return { ok: false, code: 404, error: "no such routine" };
+    hit.book.noteHealth(routineId, { checkedAt: this.now(), deliveredAt: this.now(), error: null });
     if (!hit.routine.enabled) return { ok: false, code: 409, error: "this routine is turned off" };
     if (!triggerOpen(hit.routine.trigger, this.now())) {
       hit.book.recordRun(routineId, { at: this.now(), source: "webhook", status: "skipped", model: false, ms: 0, result: "skipped: outside this routine's weekdays / active hours" });
@@ -212,6 +219,7 @@ export class RoutineRunner {
       return { ok: false, code: 429, error: "too many routine runs this hour" };
     }
     mine.push(at);
+    if (source !== "timer" && source !== "manual") book.noteHealth(r.id, { firedAt: at });
     this.ownerRuns.set(book.owner, mine);
     this.running.set(r.id, at);
     this.stats.fired++;
