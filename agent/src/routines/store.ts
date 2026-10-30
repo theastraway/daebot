@@ -6,7 +6,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync
 import { join } from "node:path";
 import { TimingError, checkFilter, describeTiming, filterWords, nextRun, parseTiming, validTz } from "./clock.ts";
 import type { ActiveFilter } from "./clock.ts";
-import { TRIGGER_TYPES, checkTrigger as validateTrigger, describeTrigger } from "./triggers.ts";
+import { TRIGGER_TYPES, checkTrigger as validateTrigger, describeTrigger, isGithub } from "./triggers.ts";
 import type { Trigger, TriggerCaps, TriggerType } from "./triggers.ts";
 
 export { TRIGGER_TYPES };
@@ -36,8 +36,12 @@ export interface Routine {
   trigger?: Trigger;
   /** Polled triggers: what the last looks saw. `seen` are ids already reported, so each new item fires once. */
   tstate?: { primed: boolean; seen: string[]; nextPollAt?: number; lastPollAt?: number; error?: string };
-  /** Webhook only: the secret in https://<host>/hooks/<id>/<secret>. */
+  /** Webhook: the secret in https://<host>/hooks/<id>/<secret>. GitHub triggers: the secret GitHub signs its deliveries with. */
   secret?: string;
+  /** Trigger health: when anything last reached or checked this trigger, when it last started a run, and the last problem. Polled triggers also have `tstate`. */
+  health?: { checkedAt?: number; firedAt?: number; error?: string; errorAt?: number; deliveredAt?: number };
+  /** Pushed triggers (GitHub): delivery ids already handled, so GitHub's redelivery of the same event never runs twice (survives restarts: saved with the routine). */
+  push?: { seen: string[] };
   /** Title of the bot thread each run lands in. Default "Routine: <name>". */
   thread?: string;
   builtin?: "heartbeat";
@@ -214,7 +218,7 @@ export class RoutineBook {
       if (r.enabled) r.nextDueAt = this.nextOf(r.timing, t);
     } else {
       r.trigger = this.checkTrigger(input.trigger);
-      if (r.trigger.type === "webhook") r.secret = newSecret();
+      if (r.trigger.type === "webhook" || isGithub(r.trigger.type)) r.secret = newSecret();
       if (r.enabled) this.armPoll(r, t);
     }
     this.routines.push(r);
@@ -240,7 +244,7 @@ export class RoutineBook {
     if (patch.kind !== undefined && patch.kind !== r.kind) {
       if (patch.kind !== "timed" && patch.kind !== "trigger") throw new RoutineError(400, 'kind must be "timed" or "trigger"');
       r.kind = patch.kind;
-      if (r.kind === "timed") { delete r.trigger; delete r.secret; delete r.tstate; } else { delete r.timing; delete r.nextDueAt; }
+      if (r.kind === "timed") { delete r.trigger; delete r.secret; delete r.tstate; delete r.health; delete r.push; } else { delete r.timing; delete r.nextDueAt; }
     }
     if (r.kind === "timed") {
       const retimed = patch.timing !== undefined || patch.expression !== undefined || patch.tz !== undefined;
@@ -256,9 +260,11 @@ export class RoutineBook {
         const before = r.trigger;
         r.trigger = this.checkTrigger(patch.trigger ?? r.trigger);
         if (!before || before.type !== r.trigger.type || before.every !== r.trigger.every) delete r.tstate;   // a different thing to watch: look again from scratch
+        if (!before || before.type !== r.trigger.type) { delete r.health; delete r.push; }
       }
-      if (r.trigger.type === "webhook" && !r.secret) r.secret = newSecret();
-      if (r.trigger.type !== "webhook") delete r.secret;
+      const keepsSecret = r.trigger.type === "webhook" || isGithub(r.trigger.type);
+      if (keepsSecret && !r.secret) r.secret = newSecret();
+      if (!keepsSecret) delete r.secret;
       if (patch.enabled === true || !r.enabled) delete r.tstate;
       if (r.enabled) this.armPoll(r, t); else delete r.tstate;
     }
@@ -271,7 +277,7 @@ export class RoutineBook {
   /** New webhook secret; the old URL stops working at once. */
   rotateSecret(id: string): Routine {
     const r = this.mut(id);
-    if (r.kind !== "trigger" || r.trigger?.type !== "webhook") throw new RoutineError(400, "only a webhook routine has a secret URL");
+    if (r.kind !== "trigger" || !(r.trigger?.type === "webhook" || isGithub(r.trigger?.type))) throw new RoutineError(400, "only a webhook or GitHub routine has a secret");
     r.secret = newSecret();
     r.updatedAt = this.now();
     this.save();
@@ -356,6 +362,33 @@ export class RoutineBook {
     if (p.error) ts.error = p.error.slice(0, 160); else delete ts.error;
     r.tstate = ts;
     this.save();
+  }
+
+  // ---------------------------------------------------------------- trigger health + pushed deliveries
+  /** Records what happened at a trigger: reached/checked, fired a run, or failed. `error: null` clears the last problem. Writes only when something changed. */
+  noteHealth(id: string, p: { checkedAt?: number; firedAt?: number; deliveredAt?: number; error?: string | null }): void {
+    const r = this.routines.find((x) => x.id === id);
+    if (!r || r.kind !== "trigger") return;
+    const h = r.health ?? {};
+    const before = JSON.stringify(h);
+    if (p.checkedAt !== undefined) h.checkedAt = p.checkedAt;
+    if (p.firedAt !== undefined) h.firedAt = p.firedAt;
+    if (p.deliveredAt !== undefined) h.deliveredAt = p.deliveredAt;
+    if (p.error === null) { delete h.error; delete h.errorAt; }
+    else if (typeof p.error === "string") { h.error = p.error.slice(0, 160); h.errorAt = p.checkedAt ?? this.now(); }
+    r.health = h;
+    if (JSON.stringify(h) !== before) this.save();
+  }
+
+  /** True the first time a delivery id is seen (and remembers it); false for a repeat. */
+  markDelivery(id: string, deliveryId: string): boolean {
+    const r = this.routines.find((x) => x.id === id);
+    if (!r) return false;
+    const seen = r.push?.seen ?? [];
+    if (seen.includes(deliveryId)) return false;
+    r.push = { seen: [...seen, deliveryId].slice(-200) };
+    this.save();
+    return true;
   }
 
   noteLesson(): void { this.lessons++; this.save(); }

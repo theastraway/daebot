@@ -357,6 +357,14 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         readBody, readJson, sendJson, clientIp: (r) => clientIp(r),
         desktop: !hosted,
         screen: opts.screenFeed ?? screenFeed,
+        hasKey: (owner) => { const p = owner === OWNER.id ? OWNER : auth?.store.principal(owner); return !!p && !!appsKeyFor(p); },
+        integrations: async (owner) => {
+          const p = owner === OWNER.id ? OWNER : auth?.store.principal(owner);
+          const key = p ? appsKeyFor(p) : undefined;
+          if (!p || !key || !appsBase) return undefined;
+          const r = await fetchIntegrations({ baseUrl: appsBase, key, fetchImpl: opts.apps?.fetchImpl ?? opts.auth?.fetchImpl, timeoutMs: 6000 });
+          return r.ok ? r.providers : undefined;
+        },
         // Polled triggers read the owner's own MIND with the owner's own key (a hosted owner-login has none: those routines say so).
         mindCall: opts.cfg
           ? async (owner, tool, args, signal) => {

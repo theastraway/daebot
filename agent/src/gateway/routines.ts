@@ -1,6 +1,6 @@
 // Routines, gateway side: the runner's wiring to sessions (a durable server-owned turn in the bot's thread), the webhook endpoint
 // /hooks/<routineId>/<secret>, and the REST under /bots/<id>/routines for the Routines section of the bot settings.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { routineView } from "../bots/manage-tool.ts";
 import type { BotManageHooks } from "../bots/manage-tool.ts";
@@ -13,13 +13,18 @@ import { checkFilter, describeTiming, filterWords, nextRuns, parseTiming, summar
 import { RoutineRunner } from "../routines/runner.ts";
 import type { FireResult, TurnResult } from "../routines/runner.ts";
 import { RoutineError, RoutineHub, secretMatches } from "../routines/store.ts";
-import { catalogFor } from "../routines/triggers.ts";
+import { DEFS, catalogFor, checkTrigger, isGithub } from "../routines/triggers.ts";
+import { checkSetup } from "../routines/setup.ts";
+import type { SetupApp, SetupReport } from "../routines/setup.ts";
+import { githubEvent, githubWants, sampleGithub, signGithub, verifyGithubSignature } from "../routines/github.ts";
 import { pollSource } from "../routines/poll.ts";
 import type { MindCall } from "../routines/poll.ts";
 import { LocalSources } from "../routines/watchers.ts";
 import type { ScreenFeed } from "../screen/feed.ts";
 
 export const WEBHOOK_MAX_BODY = 64 * 1024;
+export const GITHUB_MAX_BODY = 1024 * 1024;
+const APPS_TTL_MS = 15_000;
 
 export interface RoutineGatewayDeps {
   hub: RoutineHub;
@@ -38,6 +43,10 @@ export interface RoutineGatewayDeps {
   clientIp(req: IncomingMessage): string;
   /** Reads one MIND list with the owner's own key (the polled triggers). Absent = polled triggers are not offered. */
   mindCall?: MindCall;
+  /** The user's MIND apps (Gmail connected? GitHub?), asked with the owner's own key. Absent or undefined = could not be asked. */
+  integrations?: (owner: string) => Promise<SetupApp[] | undefined>;
+  /** Does this owner have a MIND key of their own (the owner access-code login has none)? */
+  hasKey?: (owner: string) => boolean;
   /** The gateway runs on the user's own computer (desktop app): folder, wake, app-open and screen triggers exist. */
   desktop?: boolean;
   screen?: ScreenFeed;
@@ -112,8 +121,9 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
   manager.onTurnDone = (ls, r) => { if (ls.bot) runner.trigger(ls.owner, ls.bot, "turn_done", { text: r.text.slice(0, 2000) || (r.ok ? "(no reply)" : "the turn failed"), ok: r.ok }); };
 
   /** The hooks the runtime lends bot_manage and bot_self. */
-  const hooks: Pick<BotManageHooks, "runRoutine" | "continueThread" | "publicBase"> = {
+  const hooks: Pick<BotManageHooks, "runRoutine" | "continueThread" | "publicBase" | "setup"> = {
     publicBase: () => d.publicBase(),
+    setup: (owner, trigger, o) => setupFor(owner, trigger, o ?? {}),
     async runRoutine(owner, botId, routineId) {
       const f = runner.runNow(owner, botId, routineId);
       if (!f.ok) return { ok: false, message: f.error };
@@ -133,6 +143,78 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
       return "resumed: the thread is working on it now";
     },
   };
+
+  // ---------------------------------------------------------------- set up: what a trigger needs, checked live
+  const appsCache = new Map<string, { at: number; apps: SetupApp[] }>();
+  async function appsFor(owner: string, fresh: boolean): Promise<SetupApp[] | undefined> {
+    const hit = appsCache.get(owner);
+    if (hit && !fresh && Date.now() - hit.at < APPS_TTL_MS) return hit.apps;
+    let apps: SetupApp[] | undefined;
+    try { apps = await d.integrations?.(owner); } catch { apps = undefined; }
+    if (apps) appsCache.set(owner, { at: Date.now(), apps });
+    return apps ?? (hit && Date.now() - hit.at < 5 * 60_000 ? hit.apps : undefined);
+  }
+  /** True when the trigger is well-formed (a bad value is answered with its own 400 by the store, before any setup talk). */
+  const wellFormed = (t: unknown): boolean => { try { checkTrigger(t, d.hub.caps); return true; } catch { return false; } };
+  async function setupFor(owner: string, trigger: unknown, o: { routineId?: string; botId?: string; fresh?: boolean } = {}): Promise<SetupReport> {
+    const type = trigger && typeof trigger === "object" ? (trigger as Record<string, unknown>).type : undefined;
+    const needs = typeof type === "string" ? DEFS.get(type as never)?.needs ?? [] : [];
+    const routine = o.routineId && o.botId ? d.hub.book(owner, o.botId).get(o.routineId) : undefined;
+    return checkSetup(trigger, {
+      hasKey: d.hasKey ? d.hasKey(owner) : !!d.mindCall,
+      apps: needs.includes("mail") || needs.includes("github") ? await appsFor(owner, o.fresh === true) : undefined,
+      screen: d.screen?.state(),
+      saved: !!routine,
+      lastDeliveryAt: routine?.health?.deliveredAt,
+    });
+  }
+
+  // ---------------------------------------------------------------- GitHub: pushed to us, signed with the routine's secret
+  const ghIpLimit = new TurnRateLimiter({ max: 600, windowMs: 60_000 });   // GitHub's few sending addresses serve every user: generous
+  const ghLimit = new TurnRateLimiter({ max: 60, windowMs: 60_000 });     // per routine
+  const lastBadSig = new Map<string, number>();
+
+  /** One GitHub delivery (a real one, or the Send test event button: both go through here, signature check included). */
+  async function deliverGithub(a: { routineId: string; event: string; delivery: string; signature: string | undefined; body: Buffer }): Promise<{ status: number; body: Record<string, unknown> }> {
+    let hit = d.hub.find(a.routineId);
+    if (!hit && Date.now() - d.hub.scannedAt > 5000) { d.hub.scan(d.ownerOk); hit = d.hub.find(a.routineId); }
+    if (!hit || !isGithub(hit.routine.trigger?.type)) return { status: 404, body: { error: "not found" } };
+    const { book, routine } = hit;
+    const now = Date.now();
+    if (!verifyGithubSignature(routine.secret, a.body, a.signature)) {
+      if (now - (lastBadSig.get(routine.id) ?? 0) > 60_000) {   // one disk write a minute, however hard it is hammered
+        lastBadSig.set(routine.id, now);
+        book.noteHealth(routine.id, { checkedAt: now, error: a.signature ? "A delivery with a wrong signature was refused. The secret in GitHub must be the one shown here." : "A delivery without a signature was refused. Set the secret in GitHub's webhook settings." });
+      }
+      return { status: 401, body: { error: "bad signature" } };
+    }
+    book.noteHealth(routine.id, { checkedAt: now, deliveredAt: now, error: null });
+    if (a.event === "ping") return { status: 200, body: { ok: true, pong: true } };
+    const w = ghLimit.take(routine.id);
+    if (w > 0) return { status: 429, body: { error: "this routine is being called too fast" } };
+    let payload: unknown;
+    try { payload = JSON.parse(a.body.toString("utf8")); } catch { return { status: 400, body: { error: "the body is not JSON (set the content type to application/json)" } }; }
+    const ev = githubEvent(a.event, payload);
+    if (!ev) return { status: 202, body: { ok: true, ignored: "GitHub event not used by any trigger" } };
+    if (!githubWants(routine.trigger!, ev)) return { status: 202, body: { ok: true, ignored: "not this routine's event, repository or branch" } };
+    if (!routine.enabled) return { status: 409, body: { error: "this routine is turned off" } };
+    if (a.delivery && !book.markDelivery(routine.id, a.delivery)) return { status: 200, body: { ok: true, duplicate: true } };
+    const ran = runner.fireRoutine(book.owner, book.botId, routine.id, ev.text);
+    return { status: 202, body: { ok: true, routine: routine.id, status: ran ? "started" : "not run", ...(ran ? {} : { why: "outside this routine's weekdays and active hours, or rate limited" }) } };
+  }
+
+  async function github(req: IncomingMessage, res: ServerResponse, routineId: string): Promise<void> {
+    if ((req.method ?? "GET") !== "POST") return d.sendJson(res, 405, { error: "use POST" });
+    const wait = ghIpLimit.take(d.clientIp(req));
+    if (wait > 0) { res.setHeader("retry-after", String(wait)); return d.sendJson(res, 429, { error: "too many requests" }); }
+    const declared = Number(req.headers["content-length"] ?? 0);
+    if (declared > GITHUB_MAX_BODY) return d.sendJson(res, 413, { error: "body too large (1 MB max)" });
+    let body: Buffer;
+    try { body = await d.readBody(req, GITHUB_MAX_BODY); } catch { return d.sendJson(res, 413, { error: "body too large (1 MB max)" }); }
+    const h = (k: string): string => { const v = req.headers[k]; return (Array.isArray(v) ? v[0] : v) ?? ""; };
+    const r = await deliverGithub({ routineId, event: h("x-github-event").slice(0, 60), delivery: h("x-github-delivery").slice(0, 80), signature: h("x-hub-signature-256") || undefined, body });
+    return d.sendJson(res, r.status, r.body);
+  }
 
   // ---------------------------------------------------------------- webhook
   async function webhook(req: IncomingMessage, res: ServerResponse, routineId: string, secret: string): Promise<void> {
@@ -185,7 +267,7 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
         return d.sendJson(res, 200, { ok: false, error: e instanceof TimingError ? e.message : "bad timing" }), true;
       }
     }
-    const m = /^\/bots\/([^/]+)\/routines(?:\/(r_[0-9a-f]{12})(?:\/(run|rotate))?)?$/.exec(path);
+    const m = /^\/bots\/([^/]+)\/routines(?:\/(r_[0-9a-f]{12})(?:\/(run|rotate|test))?|\/(setup))?$/.exec(path);
     if (!m) return false;
     const bots = rt.bots;
     if (!bots) return d.sendJson(res, 404, { error: "bots are not enabled on this deployment" }), true;
@@ -193,14 +275,27 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
     try { botId = decodeURIComponent(m[1]); } catch { return d.sendJson(res, 400, { error: "bad bot id" }), true; }
     if (!bots.get(botId)) return d.sendJson(res, 404, { error: "not_found", message: "no such bot" }), true;
     const book = d.hub.book(me.id, botId);
-    const view = (rid: string) => routineView(book.get(rid)!, base(req));
+    const view = async (rid: string, fresh = false) => { const r = book.get(rid)!; return routineView(r, base(req), r.kind === "trigger" && !r.builtin ? await setupFor(me.id, r.trigger, { routineId: rid, botId, fresh }) : undefined); };
+    const needsSetup = (setup: SetupReport) => d.sendJson(res, 409, { error: "needs_setup", message: `It is not ready to turn on yet. ${setup.missing.join(" ")}`, setup });
     try {
+      if (m[4] === "setup") {
+        if (method !== "POST") return d.sendJson(res, 405, { error: "method not allowed" }), true;
+        const b = await d.readJson(req);
+        const rid = typeof b.routineId === "string" && /^r_[0-9a-f]{12}$/.test(b.routineId) && book.get(b.routineId) ? b.routineId : undefined;
+        const setup = await setupFor(me.id, b.trigger, { routineId: rid, botId, fresh: b.fresh === true });
+        return d.sendJson(res, 200, { ...setup, ...(rid ? { routine: await view(rid) } : {}) }), true;
+      }
       if (!m[2]) {
-        if (method === "GET") return d.sendJson(res, 200, { routines: book.list().map((r) => routineView(r, base(req))), running: book.list().filter((r) => runner.isRunning(r.id)).map((r) => r.id) }), true;
+        if (method === "GET") {
+          const rows = await Promise.all(book.list().map(async (r) => routineView(r, base(req), r.kind === "trigger" && !r.builtin ? await setupFor(me.id, r.trigger, { routineId: r.id, botId }) : undefined)));
+          return d.sendJson(res, 200, { routines: rows, running: book.list().filter((r) => runner.isRunning(r.id)).map((r) => r.id) }), true;
+        }
         if (method === "POST") {
           const b = await d.readJson(req);
+          // A trigger that is not set up yet can be saved, but only turned off.
+          if (b.kind === "trigger" && b.enabled !== false && wellFormed(b.trigger)) { const setup = await setupFor(me.id, b.trigger, { botId, fresh: true }); if (!setup.ready) return needsSetup(setup), true; }
           const r = book.add(b);
-          return d.sendJson(res, 200, { routine: view(r.id) }), true;
+          return d.sendJson(res, 200, { routine: await view(r.id) }), true;
         }
         return d.sendJson(res, 405, { error: "method not allowed" }), true;
       }
@@ -211,16 +306,49 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
         const f: FireResult = runner.runNow(me.id, botId, rid);
         if (!f.ok) return d.sendJson(res, f.code, { error: f.error }), true;
         await Promise.race([f.done, new Promise((r) => setTimeout(r, 6000))]);
-        return d.sendJson(res, 200, { ok: true, running: runner.isRunning(rid), routine: view(rid) }), true;
+        return d.sendJson(res, 200, { ok: true, running: runner.isRunning(rid), routine: await view(rid) }), true;
       }
       if (m[3] === "rotate") {
         if (method !== "POST") return d.sendJson(res, 405, { error: "method not allowed" }), true;
         book.rotateSecret(rid);
-        return d.sendJson(res, 200, { routine: view(rid) }), true;
+        return d.sendJson(res, 200, { routine: await view(rid) }), true;
       }
-      if (method === "PATCH") { const b = await d.readJson(req); book.update(rid, b); return d.sendJson(res, 200, { routine: view(rid) }), true; }
+      if (m[3] === "test") {
+        if (method !== "POST") return d.sendJson(res, 405, { error: "method not allowed" }), true;
+        const r = book.get(rid)!;
+        const type = r.trigger?.type;
+        if (r.kind !== "trigger" || !type || !(type === "webhook" || isGithub(type))) return d.sendJson(res, 400, { error: "no_test", message: "Only a webhook or GitHub routine has a test event. Use Run now for the others." }), true;
+        if (!r.enabled) return d.sendJson(res, 409, { error: "off", message: "Turn the routine on first, then send the test event." }), true;
+        let out: { status: number; body: Record<string, unknown> };
+        let done: Promise<void> | undefined;
+        if (type === "webhook") {
+          const f = runner.webhook(rid, JSON.stringify({ test: true, note: "Test event sent from the Routines settings in Daebot." }));
+          out = f.ok ? { status: 202, body: { ok: true, status: "started" } } : { status: f.code, body: { error: f.error } };
+          done = f.ok ? f.done : undefined;
+        } else {
+          const sample = sampleGithub(type, r.trigger?.repo ?? "", r.trigger?.branch);
+          const body = Buffer.from(sample.body);
+          out = await deliverGithub({ routineId: rid, event: sample.event, delivery: `test-${randomUUID()}`, signature: signGithub(r.secret ?? "", body), body });
+        }
+        if (done) await Promise.race([done, new Promise((x) => setTimeout(x, 8000))]);
+        else await new Promise((x) => setTimeout(x, 300));
+        const ok = out.status >= 200 && out.status < 300;
+        return d.sendJson(res, ok ? 200 : out.status, { ok, ...out.body, message: ok ? "Test event sent. The run shows in this routine's history and its thread." : String(out.body.error ?? "the test event did not run"), routine: await view(rid, true) }), true;
+      }
+      if (method === "PATCH") {
+        const b = await d.readJson(req);
+        const cur = book.get(rid)!;
+        const resulting = b.enabled !== undefined ? b.enabled === true : cur.enabled;
+        if (cur.kind === "trigger" && !cur.builtin && resulting && (b.enabled === true || b.trigger !== undefined) && wellFormed(b.trigger !== undefined ? b.trigger : cur.trigger)) {
+          const next = b.trigger !== undefined && typeof b.trigger === "object" && b.trigger ? (cur.trigger && (b.trigger as { type?: unknown }).type === cur.trigger.type ? { ...cur.trigger, ...(b.trigger as object) } : b.trigger) : cur.trigger;
+          const setup = await setupFor(me.id, next, { routineId: rid, botId, fresh: true });
+          if (!setup.ready) return needsSetup(setup), true;
+        }
+        book.update(rid, b);
+        return d.sendJson(res, 200, { routine: await view(rid) }), true;
+      }
       if (method === "DELETE") { book.remove(rid); return d.sendJson(res, 200, { ok: true }), true; }
-      if (method === "GET") return d.sendJson(res, 200, { routine: view(rid), runs: book.get(rid)!.runs ?? [] }), true;
+      if (method === "GET") return d.sendJson(res, 200, { routine: await view(rid), runs: book.get(rid)!.runs ?? [] }), true;
       return d.sendJson(res, 405, { error: "method not allowed" }), true;
     } catch (e) {
       if (e instanceof RoutineError) return d.sendJson(res, e.status, { error: "routine", message: e.message }), true;
@@ -228,5 +356,5 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
     }
   }
 
-  return { runner, hooks, webhook, api };
+  return { runner, hooks, webhook, github, api, deliverGithub, setupFor };
 }
