@@ -923,7 +923,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/board" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/");
+    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/board" || path.startsWith("/board/") || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/");
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -1482,10 +1482,46 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (path === "/account") return accountApi(res, method);
     if (path === "/usage" || path === "/usage/additional") return usageApi(req, res, path, method, me);
     if (path === "/board") {
-      // Every task across THIS signed-in user's sessions. The runtime is the user's own, so another user's sessions can never appear.
+      // Every task Daebot declared across THIS signed-in user's sessions. The runtime is the user's own, so another user's sessions can never appear.
       if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-      const tasks = manager.runtimeOf(me.id).boardRows?.() ?? [];
+      const rt = manager.runtimeOf(me.id);
+      // Statuses changed in MIND LIFE come back onto the cards first (cached for seconds; a MIND outage never fails the board).
+      try { await Promise.race([rt.boardSync?.(), new Promise((r) => setTimeout(r, 4000))]); } catch { /* the board shows what it has */ }
+      const tasks = rt.boardRows?.() ?? [];
       return sendJson(res, 200, { tasks, stopped: tasks.filter((t) => t.status === "stopped").length });
+    }
+    if (path.startsWith("/board/")) {
+      const rt = manager.runtimeOf(me.id);
+      // GET /board/decision/:id -> the OOC/EMR decision document of a task, read from the user's own MIND, as a readable page.
+      const dm = /^\/board\/decision\/([^/]+)$/.exec(path);
+      if (dm) {
+        if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+        const doc = await rt.decisionDoc?.(decodeURIComponent(dm[1]));
+        const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+        const page = doc
+          ? `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(doc.title)}</title><style>:root{color-scheme:light dark}body{font:16px/1.55 system-ui,sans-serif;max-width:46rem;margin:2rem auto;padding:0 1rem}pre{white-space:pre-wrap;word-wrap:break-word;font:inherit}h1{font-size:1.2rem}</style></head><body><h1>${esc(doc.title)}</h1><pre>${esc(doc.content)}</pre></body></html>`
+          : `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Decision not found</title></head><body style="font:16px system-ui;margin:2rem"><p>This decision document could not be read from your MIND (it may have been deleted, or it was only saved locally).</p></body></html>`;
+        res.writeHead(doc ? 200 : 404, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'", ...BASE_HEADERS });
+        return void res.end(page);
+      }
+      // POST /board/tasks/:sessionId/:taskId/cancel | DELETE /board/tasks/:sessionId/:taskId
+      const tm = /^\/board\/tasks\/([^/]+)\/([^/]+?)(?:\/(cancel))?$/.exec(path);
+      if (tm) {
+        const sid = decodeURIComponent(tm[1]), tid = decodeURIComponent(tm[2]);
+        if (tm[3] === "cancel") {
+          if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+          const r = await rt.boardCancel?.(sid, tid) ?? "nosession";
+          if (r === "nosession") return sendJson(res, 404, { error: "no such session" });
+          if (r === "notask") return sendJson(res, 404, { error: "no such task" });
+          return sendJson(res, 200, { ok: true });
+        }
+        if (method !== "DELETE") return sendJson(res, 405, { error: "method not allowed" });
+        const r = await rt.boardDelete?.(sid, tid) ?? "nosession";
+        if (r === "nosession") return sendJson(res, 404, { error: "no such session" });
+        if (r !== "ok") return sendJson(res, r.error === "notask" ? 404 : 502, { error: r.error === "notask" ? "no such task" : r.message ?? "MIND could not delete the LIFE item" });
+        return sendJson(res, 200, { ok: true });
+      }
+      return sendJson(res, 404, { error: "not found" });
     }
     if (path === "/permissions" || path.startsWith("/permissions/")) return permissionsApi(req, res, path, method, me);
     if (routines && botsOn() && (path === "/routines/preview" || path === "/routines/triggers" || /^\/bots\/[^/]+\/routines(\/|$)/.test(path))) { if (await routines.api(req, res, path, method, me)) return; }

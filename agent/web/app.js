@@ -1623,7 +1623,7 @@ bots.renderList();
 // ---------- task board (right-side drawer, sibling of the violations drawer) ----------
 const board = initBoard({
   json, h,
-  els: { btn: $("btn-board"), count: $("board-count"), drawer: $("board-drawer"), close: $("btn-board-close"), note: $("board-note"), list: $("board-list") },
+  els: { btn: $("btn-board"), count: $("board-count"), drawer: $("board-drawer"), close: $("btn-board-close"), note: $("board-note"), list: $("board-list"), filters: $("board-filters") },
   app: {
     closeOthers: () => { if (!els.drawer.hidden) toggleDrawer(false); bots.closeDrawer(); },
     openSession: async (id) => {

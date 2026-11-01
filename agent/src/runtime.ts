@@ -36,8 +36,10 @@ import { PhotoStore, messageWithPhotos } from "./photos.ts";
 import { HistoryRecorder, messageWithQuote, withMessageIds } from "./events.ts";
 import { createMcpLoader, parseMcpServers } from "./mcp/client.ts";
 import { createMcpConnectTool } from "./mcpconnect/tool.ts";
-import { BOARD_PROMPT, checkTask, createTaskBoardTool, loadTasks, resumeStopped, rowsFor } from "./board/board.ts";
+import { BOARD_PROMPT, DECISION_PROMPT, cancelTask, checkTask, createTaskBoardTool, deleteLinked, loadTasks, pushTask, resumeStopped, rowsFor } from "./board/board.ts";
 import type { BoardRow, BoardTask } from "./board/board.ts";
+import { boardStatusOf, createBoardMind } from "./board/mind.ts";
+import { createTaskDecisionTool } from "./board/decision.ts";
 import type { McpConnectService } from "./mcpconnect/service.ts";
 import type { McpServerConfig } from "./mcp/client.ts";
 import { repairMessages } from "./persist.ts";
@@ -121,6 +123,8 @@ export function composeSystemPrompt(o: {
   screenWatching?: boolean;
   /** The task_board tool is offered: adds the "## Task board" section. */
   board?: boolean;
+  /** The task_decision tool is offered (every Daebot and bot has it): adds the stock "## Deciding on a task" skill. */
+  decision?: boolean;
   /** The bot_manage tool is offered: adds the stock "## Creating a Daebot" skill. */
   botManage?: boolean;
   /** The user's own dressing of the MAIN Daebot (name, face, instructions), from the settings. Ignored in a bot's prompt. */
@@ -198,6 +202,7 @@ export function composeSystemPrompt(o: {
   if (o.toolNames) { const r = routingSection(o.toolNames, { screenWatching: o.screenWatching }); if (r.length) lines.push("", ...r); }
   if (o.photos) lines.push("", ...PHOTOS_SECTION);
   if (o.board) lines.push("", BOARD_PROMPT);
+  if (o.decision) lines.push("", DECISION_PROMPT);
   if (o.botManage) lines.push("", ...(o.bot ? [] : [BOT_SKILL_PROMPT, ""]), BOT_TOOLKIT_PROMPT);
   if (o.appleCalendar === true) {
     lines.push(
@@ -344,10 +349,13 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
   });
   const appsOn = (): boolean => (overrides.env ?? process.env).MINDCLAW_CONNECTED_APPS?.trim() !== "0";
   // The model's task board for a chat lives on the live entry and is saved with the session (persist), so it survives restarts.
-  const boardTool = createTaskBoardTool({
-    get: (sid) => sessions.get(sid)?.board ?? [],
-    set: (sid, tasks) => { const e = sessions.get(sid); if (!e) return; e.board = tasks; e.updatedAt = Date.now(); persist(sid); },
-  });
+  // Every task is mirrored into THIS runtime's own MIND (the signed-in user's key, or the server key for the owner login): never anyone else's.
+  const boardMind = createBoardMind(client, { clientNames: cfg.clientNames });
+  const boardIO = {
+    get: (sid: string): BoardTask[] => sessions.get(sid)?.board ?? [],
+    set: (sid: string, tasks: BoardTask[]): void => { const e = sessions.get(sid); if (!e) return; e.board = tasks; e.updatedAt = Date.now(); persist(sid); },
+  };
+  const boardTool = createTaskBoardTool({ ...boardIO, mind: boardMind });
   const self: { rt?: Runtime } = {};
   const clipText = (t: string, n: number): string => t.replace(/\s+/g, " ").trim().slice(0, n);
   /** Threads of one bot the user talks in (not routine runs, not bot DMs), newest first, for the Heartbeat. */
@@ -377,6 +385,54 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     if (!rec || !mine(rec) || rec.bot !== botId) return false;
     await store!.save({ ...rec, board: task(loadTasks(rec.board)), updatedAt: now });
     return true;
+  }
+  /** Reads and rewrites the task board of one session of this owner, live or saved. `touch:false` leaves the session's place in the lists alone (a sync is not activity). */
+  async function editBoard<T>(sid: string, fn: (tasks: BoardTask[]) => Promise<{ tasks?: BoardTask[]; result: T }>, touch = true): Promise<{ found: false } | { found: true; result: T }> {
+    const live = sessions.get(sid);
+    if (live) {
+      if (live.peer || live.bot) return { found: false };
+      const r = await fn(live.board ?? []);
+      if (r.tasks) { live.board = r.tasks; if (touch) live.updatedAt = Date.now(); persist(sid); boardCache.delete(sid); }
+      return { found: true, result: r.result };
+    }
+    const rec = store?.load(sid);
+    if (!rec || !mine(rec) || rec.bot || rec.peer) return { found: false };
+    const r = await fn(loadTasks(rec.board));
+    if (r.tasks) { await store!.save({ ...rec, board: r.tasks, ...(touch ? { updatedAt: Date.now() } : {}) }); boardCache.delete(sid); }
+    return { found: true, result: r.result };
+  }
+  /** Reverse sync: statuses changed in MIND LIFE come back to the card; an item deleted in MIND unlinks it. Cached for a few seconds per project. */
+  const pullCache = new Map<string, { at: number; items: Map<string, string> | null }>();
+  async function syncFromMind(rows: BoardRow[]): Promise<number> {
+    const linked = rows.filter((r) => r.lifeId && r.project?.id && !r.peer);
+    const projects = [...new Set(linked.map((r) => r.project!.id))].slice(0, 8);
+    let changed = 0;
+    for (const pid of projects) {
+      let hit = pullCache.get(pid);
+      if (!hit || Date.now() - hit.at > 8000) {
+        hit = { at: Date.now(), items: await boardMind.pull(pid).catch(() => null) };
+        pullCache.set(pid, hit);
+      }
+      if (!hit.items) continue;
+      const items = hit.items;
+      for (const r of linked.filter((x) => x.project!.id === pid)) {
+        const seen = items.get(r.lifeId!);
+        if (seen !== undefined && seen === r.lifeStatus) continue;
+        const mapped = seen === undefined || r.status === "cancelled" ? undefined : boardStatusOf(seen);
+        const done = await editBoard(r.sessionId, async (tasks) => ({
+          tasks: tasks.map((t) => {
+            if (t.id !== r.id || t.lifeId !== r.lifeId) return t;
+            if (seen === undefined) { const { lifeId: _i, lifeStatus: _s, ...rest } = t; return { ...rest, sync: "Removed from MIND LIFE" }; }
+            const next: BoardTask = { ...t, lifeStatus: seen };
+            if (mapped && mapped !== t.status) { next.status = mapped; delete next.question; delete next.peer; }
+            return next;
+          }),
+          result: true,
+        }), false);
+        if (done.found) changed++;
+      }
+    }
+    return changed;
   }
   const toolsFor = (home: string, selfBot: string | undefined, peerMain = false): Tool[] => {
     const on = botsOn();
@@ -430,7 +486,9 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       ...(appsOn() ? createAppTools({ clientFor: clientForMind, readOnly: !!selfBot, connected: connectedApps, servers: serverLites }) : []),
       ...talk, ...manage, ...self2];
     // mcp_connect is the user's own session only: a bot never proposes connections (and its turns could be peer-driven).
-    const withMcp = [...(overrides.mcpConnect && !selfBot && !peerMain ? [...every, createMcpConnectTool(overrides.mcpConnect, ownerKey)] : every), ...(selfBot || peerMain ? [] : [boardTool])];
+    // task_decision (the OOC/EMR decision skill) is stock for every Daebot and bot, like bot_manage; it files into the MIND the session is homed in.
+    const decision = peerMain ? [] : [createTaskDecisionTool({ mind: home === "main" ? boardMind : createBoardMind(clientForMind(home), { clientNames: cfg.clientNames }), board: boardIO })];
+    const withMcp = [...(overrides.mcpConnect && !selfBot && !peerMain ? [...every, createMcpConnectTool(overrides.mcpConnect, ownerKey)] : every), ...decision, ...(selfBot || peerMain ? [] : [boardTool])];
     const all = hosted ? filterHostedTools(withMcp) : withMcp;
     return selfBot ? botSessionTools(all) : all;
   };
@@ -599,6 +657,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
             screenWatching: screenFeed.active(),
             photos: tools.some((t) => t.spec.name === "view_photo"),
             board: tools.some((t) => t.spec.name === "task_board"),
+            decision: tools.some((t) => t.spec.name === "task_decision"),
             botManage: tools.some((t) => t.spec.name === "bot_manage"),
             main: botId ? undefined : settings?.get().main,
             appleCalendar: botId ? undefined : curCaps.includes("apple_calendar"),
@@ -639,7 +698,13 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
           curCaps = Array.isArray(o?.capabilities) ? o!.capabilities! : [];
           entry.updatedAt = Date.now();
           // The user is replying: whatever was stopped waiting on them goes back to in progress.
-          if (o?.origin !== "bot" && entry.board?.some((t) => t.status === "stopped")) entry.board = resumeStopped(entry.board, Date.now());
+          if (o?.origin !== "bot" && entry.board?.some((t) => t.status === "stopped")) {
+            const resumed = resumeStopped(entry.board, Date.now());
+            const was = new Set(entry.board.filter((t) => t.status === "stopped" && t.lifeId).map((t) => t.id));
+            entry.board = resumed;
+            // The same cards move in MIND LIFE too (best effort: a failure leaves a note on the card, never blocks the reply).
+            for (const t of resumed.filter((x) => was.has(x.id))) void pushTask(boardMind, t).then((n) => { if (n !== t) { const cur = entry.board ?? []; entry.board = cur.map((x) => (x.id === n.id && x.status === n.status ? n : x)); persist(id); } });
+          }
           if (userCap?.exceeded() || costCap?.exceeded()) {
             yield { type: "notice", level: "warn", text: userCap?.exceeded() ? userCap.notice() : costCap!.notice() };
             yield { type: "done", finalText: "" };
@@ -718,6 +783,35 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       for (const [id, e] of sessions) if (out.has(id) || e.recorder.events().some((h) => h.type === "user")) out.set(id, row({ id, surface: e.surface, title: e.title, updatedAt: e.updatedAt, bot: e.bot, peer: e.peer, model: e.model, ...(e.permMode ? { permMode: e.permMode } : {}), ...(e.unreadFrom ? { unread: true } : {}), ...(e.archived ? { archived: true } : {}) }));
       return [...out.values()].sort((a, b) => b.updatedAt - a.updatedAt);
     },
+    async boardCancel(sid, taskId) {
+      const r = await editBoard(sid, async (tasks) => {
+        const t = tasks.find((x) => x.id === taskId);
+        if (!t) return { result: "notask" as const };
+        if (t.status === "cancelled") return { result: "ok" as const };
+        const next = await cancelTask(boardMind, t, Date.now());
+        return { tasks: tasks.map((x) => (x.id === taskId ? next : x)), result: "ok" as const };
+      });
+      return r.found ? r.result : "nosession";
+    },
+    async boardDelete(sid, taskId) {
+      type Out = "ok" | { error: "notask" | "mind"; message?: string };
+      const r = await editBoard<Out>(sid, async (tasks) => {
+        const t = tasks.find((x) => x.id === taskId);
+        if (!t) return { result: { error: "notask" } };
+        const d = await deleteLinked(boardMind, t);
+        if (!d.ok) return { result: { error: "mind", message: d.error } };
+        return { tasks: tasks.filter((x) => x.id !== taskId), result: "ok" };
+      });
+      return r.found ? r.result : "nosession";
+    },
+    async boardSync() { return syncFromMind(this.boardRows!()); },
+    async decisionDoc(id) {
+      if (!/^[A-Za-z0-9_.-]{6,80}$/.test(id) || id.startsWith("local-")) return undefined;
+      try {
+        const d = JSON.parse(await client.call("documents", { action: "get", doc_id: id, include_content: true }));
+        return d && typeof d.content === "string" ? { title: String(d.title ?? "Decision"), content: d.content } : undefined;
+      } catch { return undefined; }
+    },
     boardRows() {
       const cutoff = Date.now() - BOARD_WINDOW_MS;
       const picks = new Map<string, { id: string; title: string; updatedAt: number }>();
@@ -738,13 +832,13 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       }
       for (const s of [...picks.values()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, BOARD_MAX_SESSIONS)) {
         const live = sessions.get(s.id);
-        if (live) { rows.push(...rowsFor(s, live.board ?? [], { history: live.recorder.events(), run: live.run, live: true })); continue; }
+        if (live) { rows.push(...rowsFor(s, live.board ?? [])); continue; }
         // A saved session only changes when it is written, so its rows are cached by updatedAt (no file read on every poll).
         const hit = boardCache.get(s.id);
         if (hit && hit.updatedAt === s.updatedAt) { rows.push(...hit.rows); continue; }
         const rec = store?.load(s.id);
         if (!rec || !mine(rec)) continue;
-        const made = rowsFor(s, loadTasks(rec.board), { history: rec.history, run: rec.run, live: false });
+        const made = rowsFor(s, loadTasks(rec.board));
         boardCache.set(s.id, { updatedAt: s.updatedAt, rows: made });
         if (boardCache.size > 200) boardCache.delete(boardCache.keys().next().value as string);
         rows.push(...made);
@@ -758,9 +852,9 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       for (const [id, e] of sessions) if (e.bot === botId && !e.peer && e.surface !== "routine" && (picks.has(id) || e.recorder.events().some((h) => h.type === "user"))) picks.set(id, { id, title: e.title, updatedAt: e.updatedAt });
       for (const s of [...picks.values()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 15)) {
         const live = sessions.get(s.id);
-        if (live) { rows.push(...rowsFor(s, live.board ?? [], { history: live.recorder.events(), run: live.run, live: true })); continue; }
+        if (live) { rows.push(...rowsFor(s, live.board ?? [])); continue; }
         const rec = store?.load(s.id);
-        if (rec && mine(rec)) rows.push(...rowsFor(s, loadTasks(rec.board), { history: rec.history, run: rec.run, live: false }));
+        if (rec && mine(rec)) rows.push(...rowsFor(s, loadTasks(rec.board)));
       }
       return rows;
     },

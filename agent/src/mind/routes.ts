@@ -84,7 +84,11 @@ export function routeFor(toolIn: string, args: Record<string, unknown>): Route {
       return { method: "POST", path: type === "document" ? "/documents" : "/entries", body };
     }
     case "documents":
+      // One document by id (title, tags, and with include_content its text). Without an id: the list.
+      if (action === "get") return { method: "GET", path: `/documents/${need(args, "doc_id", tool, action)}`, query: toQuery(clean(args, ["doc_id"])) };
       return { method: "GET", path: "/documents", query: toQuery(clean(args)) };
+    case "focuses":
+      return crud(tool, "/focuses", "focus_id", args);
     case "sense": {
       const a = (action || "state").replace(/_/g, "-");
       if (a === "acknowledge") return { method: "POST", path: `/mindsense/acknowledge/${need(args, "signal_id", tool, a)}`, body: {} };
