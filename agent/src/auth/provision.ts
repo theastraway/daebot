@@ -44,6 +44,13 @@ export class RuntimeAllowList {
   }
   has(username: string): boolean { return this.names.has(username.trim().toLowerCase()); }
   list(): string[] { return [...this.names]; }
+  remove(username: string): void {
+    const n = username.trim().toLowerCase();
+    if (!this.names.delete(n)) return;
+    const tmp = `${this.path}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify({ v: 1, users: [...this.names] }), { mode: 0o600 });
+    renameSync(tmp, this.path);
+  }
   add(username: string): void {
     const n = username.trim().toLowerCase();
     if (!n || this.names.has(n)) return;

@@ -162,3 +162,22 @@ test("provision is idempotent and mints a fresh link each call; garbage code ref
     assert.equal((await http(r.gw.url, "GET", "/auth/provision/enter", { headers: H })).status, 302);
   } finally { await r.close(); }
 });
+
+test("DELETE /auth/provision removes the user and allow-list entry; needs the token; unknown user is a harmless no-op", async () => {
+  const r = await rig();
+  try {
+    const j = JSON.parse((await r.prov(r.keys.alice)).body);
+    const del = (body: unknown, headers: Record<string, string> = { authorization: `Bearer ${r.ptoken}` }) =>
+      http(r.gw.url, "DELETE", "/auth/provision", { headers: { ...H, ...headers }, body });
+    assert.equal((await del({ username: "alice" }, {})).status, 401);
+    const ok = await del({ username: "alice" });
+    assert.equal(ok.status, 200);
+    assert.equal(JSON.parse(ok.body).removed, true);
+    assert.deepEqual(JSON.parse(readFileSync(join(r.dir, "users", "daebot-allowed.json"), "utf8")).users, []);
+    const code = new URL(j.url).searchParams.get("c")!;
+    assert.equal((await http(r.gw.url, "GET", `/auth/provision/enter?c=${code}`, { headers: H })).status, 302, "an outstanding link dies with the user");
+    assert.equal((await http(r.gw.url, "POST", "/auth/key", { headers: H, body: { key: r.keys.alice } })).status, 403);
+    assert.equal(JSON.parse((await del({ username: "alice" })).body).removed, false);
+    assert.equal((await del({})).status, 400);
+  } finally { await r.close(); }
+});
