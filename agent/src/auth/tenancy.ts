@@ -136,6 +136,10 @@ export function createRuntimeHub(o: HubOptions): { runtimeFor(p: Principal): Run
       feedbackMessage: (id, mid, f) => inner.feedbackMessage?.(id, mid, f) ?? Promise.resolve("nosession"),
       photos: inner.photos,
       boardRows: () => inner.boardRows?.() ?? [],
+      boardCancel: (sid, tid) => inner.boardCancel?.(sid, tid) ?? Promise.resolve("nosession" as const),
+      boardDelete: (sid, tid) => inner.boardDelete?.(sid, tid) ?? Promise.resolve("nosession" as const),
+      boardSync: () => inner.boardSync?.() ?? Promise.resolve(0),
+      decisionDoc: (id) => inner.decisionDoc?.(id) ?? Promise.resolve(undefined),
     };
     return slot.runtime;
   }

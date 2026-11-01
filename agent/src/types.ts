@@ -302,8 +302,16 @@ export interface Runtime {
   recordSuggestionFeedback?(id: string, fb: import("./suggest/index.ts").SuggestionFeedback): boolean;
   /** This owner's photo store (photos attached to chat messages). Absent on runtimes built without a data dir: attaching is then refused. */
   photos?: import("./photos.ts").PhotoStore;
-  /** Task board rows of this owner: tasks the model declared per session, or one derived row per session. Most recent sessions first. */
+  /** Task board rows of this owner: only the tasks Daebot declared (task_board). Most recent sessions first. */
   boardRows?(): import("./board/board.ts").BoardRow[];
+  /** Cancel a task: it stays on the board as cancelled and its MIND LIFE item is tagged. */
+  boardCancel?(sessionId: string, taskId: string): Promise<"ok" | "notask" | "nosession">;
+  /** Delete a task from the board and from MIND LIFE. "mind" = the LIFE item could not be deleted, so the card is still there. */
+  boardDelete?(sessionId: string, taskId: string): Promise<"ok" | "nosession" | { error: "notask" | "mind"; message?: string }>;
+  /** Pulls LIFE status changes made in MIND back onto the cards. Returns how many cards changed. */
+  boardSync?(): Promise<number>;
+  /** The text of a decision document filed for a task (read from the user's own MIND). */
+  decisionDoc?(id: string): Promise<{ title: string; content: string } | undefined>;
   /** Task board rows of ONE bot's own threads (the Heartbeat's cheap check reads these). */
   botBoardRows?(botId: string): import("./board/board.ts").BoardRow[];
 }

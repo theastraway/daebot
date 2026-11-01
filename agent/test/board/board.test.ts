@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createTaskBoardTool, deriveStatus, endsWithQuestion, loadTasks, resumeStopped, rowsFor, MAX_TASKS } from "../../src/board/board.ts";
+import { createTaskBoardTool, loadTasks, resumeStopped, rowsFor, MAX_TASKS } from "../../src/board/board.ts";
 import type { BoardTask } from "../../src/board/board.ts";
 import type { HistoryEvent } from "../../src/types.ts";
 
@@ -81,64 +81,14 @@ test("loadTasks drops junk from a stored record instead of throwing", () => {
   assert.deepEqual(loadTasks([{ id: "a", title: "A", status: "stopped" }, { id: "b", title: "B", status: "in_progress", updatedAt: 5 }, 7]).map((t) => t.id), ["b"]);
 });
 
-// ---------- derived status ----------
-const user = (text = "hi"): HistoryEvent => ({ type: "user", text });
-const text = (delta: string): HistoryEvent => ({ type: "text", delta });
-const permission = (id = "p1"): HistoryEvent => ({ type: "permission", id, tool: "mind_email_send", cls: "outward", title: "Send an email to Sam", detail: [], args: {}, allowOptions: [], denyOptions: [], expiresAt: 0 } as HistoryEvent);
+// ---------- rows
 
-test("derived: a session with no turns is red not started", () => {
-  assert.equal(deriveStatus({ history: [], live: true }).status, "not_started");
-  assert.equal(deriveStatus({ history: [{ type: "notice", level: "info", text: "x" }], live: false }).status, "not_started");
-});
-
-test("derived: a run in progress is yellow", () => {
-  assert.deepEqual(deriveStatus({ history: [user(), text("working")], run: { status: "running" }, live: true }), { status: "in_progress" });
-});
-
-test("derived: a finished turn is green", () => {
-  assert.deepEqual(deriveStatus({ history: [user(), text("Here is the report.")], run: { status: "done" }, live: true }), { status: "ready_to_test" });
-  assert.equal(deriveStatus({ history: [user(), text("Here is the report.")], live: false }).status, "ready_to_test");
-});
-
-test("derived: a turn waiting on an approval card is red stopped, with the card title as the question", () => {
-  const d = deriveStatus({ history: [user(), text("Sending."), permission()], run: { status: "running" }, live: true });
-  assert.equal(d.status, "stopped");
-  assert.match(d.question!, /Send an email to Sam/);
-  // once the card is answered the turn is just running again
-  const answered = deriveStatus({ history: [user(), permission(), { type: "permissionResolved", id: "p1", outcome: "allowed", by: "user" }], run: { status: "running" }, live: true });
-  assert.equal(answered.status, "in_progress");
-});
-
-test("derived: a turn that ended on a typed confirmation is red stopped", () => {
-  const d = deriveStatus({ history: [user(), { type: "confirm", id: "c1", tool: "mind_email_send", args: {}, reason: "This sends an email to a real person." }, { type: "done", finalText: "" }], run: { status: "done" }, live: true });
-  assert.equal(d.status, "stopped");
-  assert.match(d.question!, /sends an email/);
-});
-
-test("derived: a turn that ends on a question to the user is red stopped with that question", () => {
-  const d = deriveStatus({ history: [user(), text("I built two versions.\n\nWhich one should I keep?")], run: { status: "done" }, live: true });
-  assert.equal(d.status, "stopped");
-  assert.equal(d.question, "Which one should I keep?");
-  assert.equal(endsWithQuestion("Ready?)"), true);
-  assert.equal(endsWithQuestion("Is it done? Yes, it is."), false);
-});
-
-test("derived: a turn the server lost (still 'running' on disk with no live owner, or errored) is stopped, not green", () => {
-  assert.equal(deriveStatus({ history: [user(), text("part")], run: { status: "running" }, live: false }).status, "stopped");
-  assert.equal(deriveStatus({ history: [user(), text("part")], run: { status: "error" }, live: true }).status, "stopped");
-});
-
-test("rows: a session with no declared tasks is one derived card; declared tasks win and a waiting turn adds a red row only if none is stopped", () => {
-  const s = { id: "s1", title: "Landing page", updatedAt: 100 };
-  const h = [user(), text("Which headline?")];
-  const derived = rowsFor(s, [], { history: h, run: { status: "done" }, live: true });
-  assert.equal(derived.length, 1);
-  assert.deepEqual([derived[0].derived, derived[0].status, derived[0].title, derived[0].sessionTitle], [true, "stopped", "Landing page", "Landing page"]);
-
+test("rows: only declared tasks make cards; a session that declared none, however it ended, has no row", () => {
+  const s = { id: "s1", title: "Landing page" };
+  assert.deepEqual(rowsFor(s, []), [], "a conversation is not a card");
   const t = (id: string, status: BoardTask["status"], question?: string): BoardTask => ({ id, title: id, status, ...(question ? { question } : {}), updatedAt: 1 });
-  const withDone = rowsFor(s, [t("a", "ready_to_test")], { history: h, run: { status: "done" }, live: true });
-  assert.deepEqual(withDone.map((r) => [r.id, r.status]), [["a", "ready_to_test"], ["waiting", "stopped"]]);
-  const withStop = rowsFor(s, [t("a", "stopped", "Which headline?")], { history: h, run: { status: "done" }, live: true });
-  assert.deepEqual(withStop.map((r) => [r.id, r.status]), [["a", "stopped"]], "the model already stopped a task: no duplicate row");
-  assert.ok(withStop.every((r) => r.sessionId === "s1" && r.sessionTitle === "Landing page"));
+  const rows = rowsFor(s, [t("a", "ready_to_test"), t("b", "stopped", "Which headline?")]);
+  assert.deepEqual(rows.map((r) => [r.id, r.status]), [["a", "ready_to_test"], ["b", "stopped"]]);
+  assert.ok(rows.every((r) => r.sessionId === "s1" && r.sessionTitle === "Landing page"));
+  assert.ok(rows.every((r) => !("derived" in r)));
 });

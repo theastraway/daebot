@@ -37,6 +37,10 @@ export interface FakeMind {
   referralStatus?: number;
   /** GET/PUT /developer/v1/usage, per username: plan, percent used, switch state. A user missing here answers a free plan at 2% used. */
   usage: Map<string, { plan: string; percentUsed: number; unlimited?: boolean; resetAt?: string; available: boolean; enabled: boolean; automatic?: boolean; rateNote?: string; putStatus?: number }>;
+  /** LIFE board, Focuses and documents per username (GET/POST/PATCH/DELETE /life/items, /focuses, /documents). */
+  life: Map<string, { focuses: Map<string, any>; items: Map<string, any>; docs: Map<string, any> }>;
+  /** when set, /life/*, /focuses and /documents answer this HTTP status */
+  lifeStatus?: number;
   newKey(username: string): string;
   close(): Promise<void>;
 }
@@ -53,7 +57,7 @@ const json = (res: ServerResponse, status: number, v: unknown, extra: Record<str
 export async function startFakeMind(initial: Record<string, string> = {}): Promise<FakeMind> {
   const m: FakeMind = {
     url: "", base: "", seen: [], keys: new Map(Object.entries(initial)), registered: [], consentUser: "", codes: new Map(), refreshTokens: new Map(),
-    bots: new Map(), integrations: new Map(), usage: new Map(),
+    bots: new Map(), integrations: new Map(), usage: new Map(), life: new Map(),
     newKey(username) { const k = "mind_" + randomBytes(24).toString("base64url"); m.keys.set(k, username); return k; },
     close: () => new Promise((r) => { server.close(() => r()); server.closeAllConnections(); }),
   };
@@ -120,6 +124,35 @@ export async function startFakeMind(initial: Record<string, string> = {}): Promi
       const username = m.keys.get(key);
       if (!username) return json(res, 401, { detail: "Invalid or revoked API key." });
       const rest = u.pathname.slice("/developer/v1".length);
+      // ---- LIFE board, Focuses, documents (a minimal copy of MIND's developer API: per user, in memory)
+      if (rest.startsWith("/life/items") || rest.startsWith("/focuses") || rest.startsWith("/documents")) {
+        if (m.lifeStatus) return json(res, m.lifeStatus, { detail: "life is down" });
+        const L = m.life.get(username) ?? m.life.set(username, { focuses: new Map(), items: new Map(), docs: new Map() }).get(username)!;
+        const id = rest.split("/")[rest.startsWith("/life/items") ? 3 : 2];
+        const now = new Date().toISOString();
+        if (rest === "/focuses" && req.method === "GET") return json(res, 200, { focuses: [...L.focuses.values()], unfiled_project_count: 0 });
+        if (rest === "/focuses" && req.method === "POST") { const f = { focus_id: randomBytes(8).toString("hex"), name: String(parsed?.name ?? ""), created_at: now }; L.focuses.set(f.focus_id, f); return json(res, 201, f); }
+        if (rest === "/life/items" && req.method === "GET") {
+          let items = [...L.items.values()];
+          for (const k of ["item_type", "parent_id", "status"]) if (u.searchParams.get(k)) items = items.filter((i) => i[k] === u.searchParams.get(k));
+          if (u.searchParams.get("include_completed") === "false") items = items.filter((i) => !i.is_completed);
+          return json(res, 200, { items, total: items.length });
+        }
+        if (rest === "/life/items" && req.method === "POST") {
+          const it = { item_id: randomBytes(8).toString("hex"), title: String(parsed?.title ?? ""), description: parsed?.description ?? "", status: parsed?.status ?? "thought", tags: parsed?.tags ?? [], item_type: parsed?.item_type ?? "outcome", parent_id: parsed?.parent_id ?? null, focus_id: parsed?.focus_id ?? null, is_completed: false, created_at: now, updated_at: now };
+          L.items.set(it.item_id, it);
+          return json(res, 201, it);
+        }
+        if (rest.startsWith("/life/items/") && req.method === "PATCH") {
+          const it = L.items.get(id); if (!it) return json(res, 404, { detail: "Life item not found" });
+          Object.assign(it, parsed, { item_id: id, updated_at: now, is_completed: (parsed?.status ?? it.status) === "completed" });
+          return json(res, 200, it);
+        }
+        if (rest.startsWith("/life/items/") && req.method === "DELETE") { if (!L.items.delete(id)) return json(res, 404, { detail: "Life item not found" }); return json(res, 200, { status: "deleted" }); }
+        if (rest === "/documents" && req.method === "POST") { const d = { id: randomBytes(8).toString("hex"), title: String(parsed?.title ?? ""), content: String(parsed?.content ?? ""), tags: parsed?.tags ?? [] }; L.docs.set(d.id, d); return json(res, 200, { id: d.id, title: d.title, status: "PROCESSING" }); }
+        if (rest.startsWith("/documents/") && req.method === "GET") { const d = L.docs.get(id); if (!d) return json(res, 404, { detail: "Document not found" }); return json(res, 200, { id: d.id, title: d.title, tags: d.tags, ...(u.searchParams.get("include_content") === "true" ? { content: d.content } : {}) }); }
+        if (rest.startsWith("/documents/") && req.method === "DELETE") { L.docs.delete(id); return json(res, 200, { status: "deleted" }); }
+      }
       // ---- bots admin API (main key only)
       if (rest === "/bots" || rest.startsWith("/bots/")) {
         const mine = m.bots.get(username) ?? m.bots.set(username, new Map()).get(username)!;
