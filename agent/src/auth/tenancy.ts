@@ -9,6 +9,7 @@ import type { MindCredits } from "../provider/mind.ts";
 import type { BotsContext } from "../bots/types.ts";
 import { MindOAuth } from "./mind-auth.ts";
 import { OWNER } from "./users.ts";
+import type { EntryCodes, RuntimeAllowList } from "./provision.ts";
 import type { Principal, UserStore } from "./users.ts";
 
 export interface AuthContext {
@@ -17,6 +18,12 @@ export interface AuthContext {
   oauth?: MindOAuth;
   /** DAEBOT_ALLOWED_USERS (lowercased); empty = any MIND account may sign in. */
   allowedUsers: string[];
+  /** Usernames added at runtime by POST /auth/provision (persisted); unioned with allowedUsers. */
+  runtimeAllow?: RuntimeAllowList;
+  /** One-time sign-in codes minted by POST /auth/provision. */
+  entryCodes?: EntryCodes;
+  /** DAEBOT_PROVISION_TOKEN; unset = provisioning endpoint is off. */
+  provisionToken?: string;
   /** The runtime a principal acts through. Owner -> the shared server-key runtime; user -> their own. */
   runtimeFor(p: Principal): Runtime;
   /** Drops a user's cached runtime (call after they sign in again with fresh credentials). */

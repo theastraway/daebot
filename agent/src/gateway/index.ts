@@ -20,6 +20,7 @@ import type { AuthContext } from "../auth/tenancy.ts";
 import { MindAuthError, whoami } from "../auth/mind-auth.ts";
 import { WAIVER_TEXT, WAIVER_VERSION, isSessionMode } from "../permissions/index.ts";
 import { AppHandoff, appRedirect, isValidChallenge } from "../auth/app-handoff.ts";
+import { ENTER_PATH, PROVISION_PATH, bearerOf, provisionTokenOk } from "../auth/provision.ts";
 import { AGENT_SURFACE_RE, AGENT_TURN_PATH, KeyIdentityCache, TurnRateLimiter } from "./agent-api.ts";
 import { userIdFor } from "../auth/users.ts";
 import { FREE_TIER, usageLeftPct, usesOwnKey } from "../provider/mind.ts";
@@ -554,7 +555,62 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   }
 
   function mayUse(username: string): boolean {
-    return !auth || auth.allowedUsers.length === 0 || auth.allowedUsers.includes(username.trim().toLowerCase());
+    return !auth || auth.allowedUsers.length === 0 || auth.allowedUsers.includes(username.trim().toLowerCase()) || !!auth.runtimeAllow?.has(username);
+  }
+
+  // POST /auth/provision {mindKey}: server-to-server from the Astra AI client portal. Bearer DAEBOT_PROVISION_TOKEN (constant-time),
+  // no Origin allowed (a browser always sends one cross-site), https only. Validates the MIND key live, registers the user as staff,
+  // allow-lists them, and returns a one-time link that signs the client in. Idempotent: calling again re-seals the key and mints a fresh link.
+  async function provisionApi(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+    if (!auth?.store.enabled || !auth.provisionToken || !auth.entryCodes) return sendJson(res, 404, { error: "not found" });
+    if (!hostOk(req)) return sendJson(res, 403, { error: "forbidden host" });
+    if (req.headers.origin !== undefined) return sendJson(res, 403, { error: "browser origins are not allowed on the provisioning API" });
+    if (headerOne(req, "x-forwarded-proto")?.split(",")[0].trim().toLowerCase() === "http") return sendJson(res, 400, { error: "https required" });
+    const ip = clientIp(req);
+    const wait = limiter.retryAfter(ip);
+    if (wait > 0) {
+      res.setHeader("retry-after", String(wait));
+      return sendJson(res, 429, { error: "too many attempts; try again later" });
+    }
+    if (!provisionTokenOk(bearerOf(req.headers["authorization"]), auth.provisionToken)) {
+      limiter.fail(ip);
+      return sendJson(res, 401, { error: "unauthorized" });
+    }
+    const b = await readJson(req);
+    const key = typeof b.mindKey === "string" && b.mindKey.length <= 600 ? b.mindKey.trim() : "";
+    let name: string;
+    try {
+      name = (await whoami(auth.mindBaseUrl, key, auth.fetchImpl)).username;
+    } catch (e) {
+      const status = e instanceof MindAuthError ? e.status : 502;
+      return sendJson(res, status === 400 ? 422 : status, { error: e instanceof MindAuthError ? e.message : "could not check that key" });
+    }
+    limiter.success(ip);
+    auth.runtimeAllow?.add(name);
+    // Provisioned clients are staff. A username in DAEBOT_ADMINS would resolve to admin by tierFor; the portal never creates those.
+    const user = auth.store.upsert(name, { kind: "key", mindKey: key });
+    auth.evict(user.id);
+    const pub = (process.env.DAEBOT_PUBLIC_URL ?? "").trim().replace(/\/+$/, "") || `https://${[...allowedHosts][0]}`;
+    const code = auth.entryCodes.mint(user.id);
+    return sendJson(res, 200, { ok: true, username: user.username, userId: user.id, tier: user.tier, url: `${pub}${ENTER_PATH}?c=${code}`, expiresInSec: 300 });
+  }
+
+  // GET /auth/provision/enter?c=<code>: the link the portal hands the client. Single use. A 200 page that navigates itself (not a 302),
+  // so the next request is same-site and the Strict session cookie is sent.
+  function provisionEnter(req: IncomingMessage, res: ServerResponse, query: URLSearchParams): void {
+    const ip = clientIp(req);
+    if (limiter.retryAfter(ip) > 0) return loginRedirect(res, "slow");
+    const uid = auth?.entryCodes?.redeem(query.get("c"));
+    const user = uid ? auth?.store.principal(uid) : undefined;
+    if (!uid || !user) {
+      limiter.fail(ip);
+      return loginRedirect(res, "expired");
+    }
+    limiter.success(ip);
+    const body = '<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/"><title>Signed in</title><a href="/">Continue</a>';
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "set-cookie": userCookie(req, uid) });
+    res.end(body);
   }
 
   // "Use a MIND API key": validated live against MIND, then stored sealed under the key's own username.
@@ -831,6 +887,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     if (hosted && path === AGENT_TURN_PATH) return agentTurn(req, res);
+    if (hosted && path === PROVISION_PATH) return provisionApi(req, res);
 
     // A routine's webhook: authenticated by the secret in the URL alone (a service calling in has no login), so it is answered before the cookie checks.
     const routineHook = /^\/hooks\/(r_[0-9a-f]{12})\/([A-Za-z0-9_-]{16,64})$/.exec(path);
@@ -874,6 +931,9 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       } else if (path === "/auth/methods") {
         if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
         return sendJson(res, 200, { owner: true, key: !!auth?.store.enabled, oauth: !!(auth?.store.enabled && auth.oauth) });
+      } else if (path === ENTER_PATH) {
+        if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+        return provisionEnter(req, res, query);
       } else if (path === "/auth/key") {
         if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
         return keyLogin(req, res);
