@@ -3,6 +3,7 @@
 //   DATA_DIR                     the one data dir (/data on Render); the encrypted user store is DATA_DIR/users/daebot-users.json
 //   DAEBOT_ADMINS                comma list of MIND usernames that get the unrestricted tier (e.g. owner_test)
 //   DAEBOT_ALLOWED_USERS         optional comma list; empty = any MIND account may sign in
+//   DAEBOT_PROVISION_TOKEN       optional service token (24+ chars) for POST /auth/provision (Astra AI client portal); unset = off
 //   MINDCLAW_USER_DAILY_USD_CAP  per-user daily spend cap, default 1 (admins and the owner login are exempt from this and the global cap).
 //                                Ignored when DAEBOT_BILLING=mind: the user's MIND plan and credits are the cap.
 //   MIND_OAUTH_CLIENT_ID/SECRET  optional; Daebot registers itself with MIND (RFC 7591) when no client id is given
@@ -20,6 +21,7 @@ import type { SessionStore } from "../persist.ts";
 import type { BootCache } from "../mind/boot-cache.ts";
 import type { MindCredits } from "../provider/mind.ts";
 import { UserStore, parseList } from "./users.ts";
+import { EntryCodes, RuntimeAllowList } from "./provision.ts";
 
 export const DEFAULT_USER_DAILY_USD_CAP = 1;
 
@@ -58,6 +60,7 @@ export function createAuthContext(o: {
   });
   return {
     store, oauth, allowedUsers: parseList(env.DAEBOT_ALLOWED_USERS),
+    runtimeAllow: new RuntimeAllowList(dir), entryCodes: new EntryCodes(), provisionToken: (env.DAEBOT_PROVISION_TOKEN ?? "").trim() || undefined,
     credits: o.credits,
     // A user's calls are billed to their own MIND key; the owner access-code login to the server MIND_API_KEY.
     billingKey: (p) => {
