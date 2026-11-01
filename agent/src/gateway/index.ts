@@ -562,7 +562,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   // no Origin allowed (a browser always sends one cross-site), https only. Validates the MIND key live, registers the user as staff,
   // allow-lists them, and returns a one-time link that signs the client in. Idempotent: calling again re-seals the key and mints a fresh link.
   async function provisionApi(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+    if (req.method !== "POST" && req.method !== "DELETE") return sendJson(res, 405, { error: "method not allowed" });
     if (!auth?.store.enabled || !auth.provisionToken || !auth.entryCodes) return sendJson(res, 404, { error: "not found" });
     if (!hostOk(req)) return sendJson(res, 403, { error: "forbidden host" });
     if (req.headers.origin !== undefined) return sendJson(res, 403, { error: "browser origins are not allowed on the provisioning API" });
@@ -578,6 +578,18 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       return sendJson(res, 401, { error: "unauthorized" });
     }
     const b = await readJson(req);
+    // DELETE {username}: removes a provisioned user (record, runtime allow-list entry, cached runtime). Their MIND tenant is untouched.
+    if (req.method === "DELETE") {
+      const un = typeof b.username === "string" ? b.username.trim() : "";
+      if (!un || un.length > 120) return sendJson(res, 400, { error: "username required" });
+      limiter.success(ip);
+      const id = userIdFor(un);
+      const existed = !!auth.store.get(id);
+      auth.store.remove(id);
+      auth.runtimeAllow?.remove(un);
+      auth.evict(id);
+      return sendJson(res, 200, { ok: true, removed: existed });
+    }
     const key = typeof b.mindKey === "string" && b.mindKey.length <= 600 ? b.mindKey.trim() : "";
     let name: string;
     try {
