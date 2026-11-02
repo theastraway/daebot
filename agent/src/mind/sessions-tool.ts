@@ -56,6 +56,8 @@ export const isOwnerRoutine = (ctx: { origin?: string; peerReceipt?: string } | 
 export interface MindSessionsOptions {
   /** The client for the user's OWN MIND (their main key). */
   client: () => MindClient;
+  /** The client for a reply (needs the chat:write scope). Absent = the main client. The Agent Session sync key (MIND_SESSION_API_KEY) goes here. */
+  replyClient?: () => MindClient;
   /** The signed-in username, for plain error wording. */
   user?: string;
 }
@@ -137,7 +139,7 @@ export function createMindSessionsTool(o: MindSessionsOptions): Tool {
         if (!s.session_id) return fail("No such session in your MIND.");
         const shared = s.shared && typeof s.shared === "object" ? (s.shared as Row).shared_with_me === true : false;
         if (s.viewer_role !== "owner" || shared) return fail("blocked: that session is shared with you, not yours. Replies go only to sessions in your own MIND.");
-        const r = parse(await c.call("agent_sessions", { action: "reply", session_id: sid, content }));
+        const r = parse(await (o.replyClient?.() ?? c).call("agent_sessions", { action: "reply", session_id: sid, content }));
         const id = str(r.message_id ?? r.id, 64);
         return { ok: true, output: `Reply sent to "${str(s.title, 80)}" (${str(s.agent_display ?? s.source_key, 40)})${id ? `, message ${id}` : ""}. MIND stored it and wakes the bot if it has a wake webhook; check inbox to see whether it was picked up.` };
       } catch (e) {

@@ -135,3 +135,16 @@ test("reply: the owner's own routine turn (receipt starts with routine:) may rep
   assert.equal(peer.ok, false);
   assert.match(peer.output, /another bot cannot/);
 });
+
+test("reply goes through replyClient (the chat:write key) when given; reads stay on the main client", async () => {
+  const main = fakeFetch(() => json(200, { ...SESSION, viewer_role: "owner", sessions: [SESSION] }));
+  const reply = fakeFetch(() => json(200, { ok: true, message_id: "m1", seq: 3 }));
+  const mainC = createMindClient(cfg(), main.fetch, { retryDelayMs: 0 });
+  const replyC = createMindClient({ ...cfg(), mindApiKey: "mind_REPLYKEY0123456789abcdef" }, reply.fetch, { retryDelayMs: 0 });
+  const tool = createMindSessionsTool({ client: () => mainC, replyClient: () => replyC, user: "x" });
+  await tool.run({ action: "list" }, ctx);
+  await tool.run({ action: "reply", session_id: "sess-1", content: "hi" }, ctx);
+  assert.ok(main.seen.length >= 1 && main.seen.every((s) => !/reply/i.test(JSON.stringify(s.body ?? "")) ));
+  assert.ok(reply.seen.length >= 1);
+  assert.equal(reply.seen[reply.seen.length - 1].headers["x-api-key"], "mind_REPLYKEY0123456789abcdef");
+});

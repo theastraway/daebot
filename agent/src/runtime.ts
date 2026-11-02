@@ -506,7 +506,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       // mail, calendar, contacts (the apps' synced data) + mind_apps. A bot reads them as the user's main account (like mind:"main") and can change nothing.
       ...(appsOn() ? createAppTools({ clientFor: clientForMind, readOnly: !!selfBot, connected: connectedApps, servers: serverLites }) : []),
       // mind_sessions: the user's own Agent Sessions (their Grok bots). Main sessions only: a bot or a peer-driven turn never directs the user's other agents.
-      ...(!selfBot && !peerMain ? [createMindSessionsTool({ client: () => clientForMind("main"), user: hosted?.username })] : []),
+      ...(!selfBot && !peerMain ? [createMindSessionsTool({ client: () => clientForMind("main"), replyClient: () => sessionClient, user: hosted?.username })] : []),
       // astra_board: the Astra AI projects board, for the owner / admin main session only (static class outward keeps it from staff and public; a bot or a peer-driven turn never gets it). Offered only when PORTAL_DAEBOT_TOKEN is set.
       ...(!selfBot && !peerMain && cfg.portalDaebotToken ? [createAstraBoardTool({ baseUrl: cfg.astraPortalUrl, token: cfg.portalDaebotToken, fetchImpl: overrides.fetchImpl, actor: "Daebot" })] : []),
       ...talk, ...manage, ...self2];
