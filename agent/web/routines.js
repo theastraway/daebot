@@ -105,6 +105,7 @@ export function lastRunText(r, ago) {
   const when = ago(r.lastRunAt);
   if (r.lastStatus === "running") return `Running now (started ${when})`;
   if (r.lastStatus === "idle") return `Checked ${when}: ${r.lastResult || "nothing to do"} (no model call)`;
+  if (r.lastStatus === "interrupted") return `Interrupted ${when}: the run never finished (the app restarted). It will run again at its next time.`;
   if (r.lastStatus === "error") return `Failed ${when}${r.lastResult ? `: ${r.lastResult}` : ""}`;
   if (r.lastStatus === "skipped") return `Skipped ${when}${r.lastResult ? `: ${r.lastResult}` : ""}`;
   return `Ran ${when}${r.lastResult ? `: ${r.lastResult}` : ""}`;

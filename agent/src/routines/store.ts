@@ -13,7 +13,11 @@ export { TRIGGER_TYPES };
 export type { ActiveFilter, Trigger, TriggerType };
 
 export type RoutineKind = "timed" | "trigger";
-export type RunStatus = "ok" | "error" | "skipped" | "idle" | "running";
+export type RunStatus = "ok" | "error" | "skipped" | "idle" | "running" | "interrupted";
+
+/** A run of 10 minutes is the runner's own timeout; a "running" mark older than this (timeout + 2 min margin) belongs to a run that died with its process. */
+export const STALE_RUN_MS = 12 * 60_000;
+export const INTERRUPTED_TEXT = "interrupted: the run never finished (the gateway restarted or the run hung)";
 
 export interface RunRecord {
   at: number;
@@ -135,7 +139,37 @@ export class RoutineBook {
     this.onChange = o.onChange ?? (() => {});
     this.caps = o.caps ?? (() => ({ desktop: false }));
     this.load();
+    // Nothing in THIS process can have started a run yet, so any "running" mark on disk was left by a process that died mid-run.
+    this.reapInterrupted(() => false, 0);
     this.ensureHeartbeat();
+  }
+
+  /**
+   * Turns every "running" mark that cannot be live into "interrupted" and saves it, so the UI and the heartbeat stop treating it as live
+   * and the next scheduled run is never blocked by it. `live` says which routine ids the runner is really running right now.
+   */
+  reapInterrupted(live: (id: string) => boolean, minAgeMs = STALE_RUN_MS): number {
+    const t = this.now();
+    let n = 0;
+    for (const r of this.routines) {
+      if (r.lastStatus !== "running" || live(r.id)) continue;
+      const at = r.lastRunAt ?? 0;
+      if (t - at < minAgeMs) continue;
+      const rec: RunRecord = { at, source: "interrupted", status: "interrupted", model: false, ms: Math.max(0, t - at), result: INTERRUPTED_TEXT };
+      r.runs = [...(r.runs ?? []), rec].slice(-RUN_KEEP);
+      r.lastStatus = "interrupted";
+      r.lastResult = INTERRUPTED_TEXT;
+      n++;
+    }
+    if (n) { try { this.save(); } catch { /* the read-side view still shows it as interrupted */ } }
+    return n;
+  }
+
+  /** What readers see: a stale "running" mark is shown as interrupted even before the next reap pass writes it down. */
+  private view(r: Routine): Routine {
+    const c = structuredClone(r);
+    if (c.lastStatus === "running" && this.now() - (c.lastRunAt ?? 0) > STALE_RUN_MS) { c.lastStatus = "interrupted"; c.lastResult = INTERRUPTED_TEXT; }
+    return c;
   }
 
   private load(): void {
@@ -169,14 +203,14 @@ export class RoutineBook {
     try { this.save(); } catch { /* the in-memory heartbeat still runs; the next successful save writes it */ }
   }
 
-  list(): Routine[] { return this.routines.map((r) => structuredClone(r)); }
-  get(id: string): Routine | undefined { const r = ID_RE.test(id) ? this.routines.find((x) => x.id === id) : undefined; return r ? structuredClone(r) : undefined; }
+  list(): Routine[] { return this.routines.map((r) => this.view(r)); }
+  get(id: string): Routine | undefined { const r = ID_RE.test(id) ? this.routines.find((x) => x.id === id) : undefined; return r ? this.view(r) : undefined; }
   private mut(id: string): Routine {
     const r = ID_RE.test(id) ? this.routines.find((x) => x.id === id) : undefined;
     if (!r) throw new RoutineError(404, "no such routine");
     return r;
   }
-  heartbeat(): Routine { return structuredClone(this.routines.find((r) => r.builtin === "heartbeat")!); }
+  heartbeat(): Routine { return this.view(this.routines.find((r) => r.builtin === "heartbeat")!); }
 
   // ---------------------------------------------------------------- validation
   private checkPrompt(v: unknown): string {
