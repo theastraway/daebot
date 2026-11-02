@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { authorizeUrl, oauthOrigin, pkceChallenge, signInWithMind } from "../src/lib/mind-signin.mjs";
+import { authorizeUrl, oauthOrigin, pkceChallenge, signInWithMind, DEFAULT_MIND_BASE_URL, migrateMindBaseUrl } from "../src/lib/mind-signin.mjs";
 import { buildSignInHtml } from "../src/lib/signin-page.mjs";
 
 // A fake MIND OAuth server behind an injected fetch: records what Daebot sent and answers like MINDapp's mcp_oauth_routes.
@@ -33,6 +33,12 @@ const browser = (outcome = "approve", stateOverride) => async (url) => {
 test("origin and PKCE helpers", () => {
   assert.equal(oauthOrigin("https://m-i-n-d.ai/developer/v1"), "https://m-i-n-d.ai");
   assert.equal(oauthOrigin("not a url"), "https://m-i-n-d.ai");
+  assert.equal(oauthOrigin(DEFAULT_MIND_BASE_URL), "https://m-i-n-d.ai"); // direct API service: sign-in stays on the public site
+  assert.equal(oauthOrigin("https://mind.test/developer/v1"), "https://mind.test");
+  assert.equal(migrateMindBaseUrl("https://m-i-n-d.ai/developer/v1/"), DEFAULT_MIND_BASE_URL);
+  assert.equal(migrateMindBaseUrl("https://www.m-i-n-d.ai/developer/v1"), DEFAULT_MIND_BASE_URL);
+  assert.equal(migrateMindBaseUrl("https://self.example/developer/v1"), "https://self.example/developer/v1");
+  assert.equal(migrateMindBaseUrl(undefined), undefined);
   assert.equal(pkceChallenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"), "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"); // RFC 7636 appendix B
   const url = new URL(authorizeUrl({ authorize: "https://mind.test/oauth/mcp/authorize" }, { clientId: "c", redirectUri: "http://127.0.0.1:1/callback", state: "s", challenge: "x" }));
   assert.equal(url.searchParams.get("code_challenge_method"), "S256");

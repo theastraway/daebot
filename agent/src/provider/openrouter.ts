@@ -30,6 +30,14 @@ export class ProviderHttpError extends Error {
   }
 }
 
+/** An HTML body means a web edge (CDN or proxy challenge page) answered instead of the API: say that, never dump the markup. */
+export function httpErrorMessage(provider: string | undefined, model: string, status: number, body: string, contentType?: string | null): string {
+  if (/html/i.test(contentType ?? "") || /^\s*(<!doctype\s+html|<html[\s>])/i.test(body)) {
+    return `${provider === "mind" ? "MIND" : "The model service"} could not be reached (HTTP ${status} from the web edge)`;
+  }
+  return `${model}: HTTP ${status} ${body.slice(0, 300)}`;
+}
+
 const retryable = (status: number) => status === 429 || status >= 500;
 
 // Only the newest image-bearing tool results are sent as images: older screenshots are stale and cost tokens every call.
@@ -136,7 +144,7 @@ export function createOpenRouterProvider(cfg: Config, fetchImpl: typeof fetch = 
         opts.onResponse?.(res);
         if (res.ok && res.body) return res;
         const text = await res.text().catch(() => "");
-        const err = opts.errorFor?.(res.status, text, model) ?? new ProviderHttpError(res.status, `${model}: HTTP ${res.status} ${text.slice(0, 300)}`);
+        const err = opts.errorFor?.(res.status, text, model) ?? new ProviderHttpError(res.status, httpErrorMessage(opts.name, model, res.status, text, res.headers.get("content-type")));
         if (!retryable(res.status)) throw err;
         lastErr = err;
       } catch (e) {

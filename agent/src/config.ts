@@ -6,7 +6,9 @@ import { daebotHome } from "./home.ts";
 import type { Config } from "./types.ts";
 
 const DEFAULTS = {
-  mindBaseUrl: "https://m-i-n-d.ai/developer/v1",
+  // MIND's API service directly. The public site (m-i-n-d.ai) sits behind Cloudflare "block AI bots", which answers non-browser
+  // clients such as the bundled gateway binary with a 403 HTML challenge page; /developer/v1 is the same API on both hosts.
+  mindBaseUrl: "https://mindapp.onrender.com/developer/v1",
   defaultModel: "qwen/qwen3.8-flash",
   cheapModel: "qwen/qwen3.8-flash",
   fallback: ["deepseek/deepseek-v4-flash"],
@@ -72,6 +74,16 @@ function nameList(envVal: string | undefined, fileVal: unknown): string[] {
   return strList(fileVal) ?? [];
 }
 
+/** A saved config value that still points at the public site's API (the old default) moves to the direct API service. Env stays literal. */
+export function migrateMindBaseUrl(v: string | undefined): string | undefined {
+  if (!v) return v;
+  try {
+    const u = new URL(v);
+    if (/^(www\.)?m-i-n-d\.ai$/i.test(u.hostname) && u.pathname.replace(/\/+$/, "") === "/developer/v1") return DEFAULTS.mindBaseUrl;
+  } catch { /* not a URL: leave it for the caller to fail on */ }
+  return v;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const file = readFileConfig(configFilePath(env));
   const fileModels = (file.models && typeof file.models === "object" ? file.models : {}) as Record<string, unknown>;
@@ -85,7 +97,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const mindApiKey = str(env.MIND_API_KEY) ?? str(file.mindApiKey) ?? "";
   const visionFallback = nameList(env.DAEBOT_VISION_FALLBACK, undefined);
   return {
-    mindBaseUrl: (str(env.MIND_BASE_URL) ?? str(file.mindBaseUrl) ?? DEFAULTS.mindBaseUrl).replace(/\/+$/, ""),
+    mindBaseUrl: (str(env.MIND_BASE_URL) ?? migrateMindBaseUrl(str(file.mindBaseUrl)) ?? DEFAULTS.mindBaseUrl).replace(/\/+$/, ""),
     mindApiKey,
     ...(str(env.MIND_BACKEND_URL) ?? str(file.mindBackendUrl) ? { mindBackendUrl: (str(env.MIND_BACKEND_URL) ?? str(file.mindBackendUrl))!.replace(/\/+$/, "") } : {}),
     mindSessionApiKey: str(env.MIND_SESSION_API_KEY) ?? str(file.mindSessionApiKey) ?? mindApiKey,

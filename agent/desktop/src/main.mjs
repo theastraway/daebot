@@ -12,7 +12,7 @@ import { buildSpawnPlan, findBundledBinary, findNode } from "./lib/launcher.mjs"
 import { clearKey, readConfigJson, readKey, resolveSignIn, saveKey, looksLikeMindKey } from "./lib/credentials.mjs";
 import { AccountStore, accountsPath, dataDirFor } from "./lib/accounts.mjs";
 import { buildSignInPage } from "./lib/signin-page.mjs";
-import { signInWithMind } from "./lib/mind-signin.mjs";
+import { signInWithMind, DEFAULT_MIND_BASE_URL, migrateMindBaseUrl } from "./lib/mind-signin.mjs";
 import { loadConfig, saveKernelMode, saveKeepWorking, saveShortcut, saveWatchScreen, isValidAccelerator, configPath, statePath, loadState, writeJson, resolveBounds, desktopHome } from "./lib/config.mjs";
 import { isKernelMode } from "./lib/kernel.mjs";
 import { migrateHome } from "./lib/home.mjs";
@@ -309,7 +309,7 @@ ipcMain.on("desktop:notify", (e, payload) => {
 });
 
 // ---------- sign-in (first run): one pasted MIND API key ----------
-const mindBaseUrl = () => (process.env.MIND_BASE_URL || readConfigJson(join(desktopHome(), "config.json")).mindBaseUrl || "https://m-i-n-d.ai/developer/v1").replace(/\/+$/, "");
+const mindBaseUrl = () => (process.env.MIND_BASE_URL || migrateMindBaseUrl(readConfigJson(join(desktopHome(), "config.json")).mindBaseUrl) || DEFAULT_MIND_BASE_URL).replace(/\/+$/, "");
 
 /** Asks MIND whether the key works. Resolves { ok } or { ok:false, error }; the key is never echoed in the error. */
 async function checkKey(key) {
