@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createOpenRouterProvider, pickModel, toWireMessages } from "../../src/provider/index.ts";
+import { httpErrorMessage } from "../../src/provider/openrouter.ts";
 import type { StreamEvent } from "../../src/types.ts";
 import { baseCfg } from "./helpers.ts";
 
@@ -140,4 +141,11 @@ test("wire messages: tool calls, tool results, mid-conversation system folded to
 test("pickModel", () => {
   assert.equal(pickModel(baseCfg(), "default"), "m/default");
   assert.equal(pickModel(baseCfg(), "cheap"), "m/cheap");
+});
+
+test("an HTML error body reads as an unreachable service, never raw markup", () => {
+  assert.equal(httpErrorMessage("mind", "minimax/minimax-m3", 403, "<!DOCTYPE html><html>challenge</html>"), "MIND could not be reached (HTTP 403 from the web edge)");
+  assert.equal(httpErrorMessage("mind", "m", 403, "denied", "text/html; charset=utf-8"), "MIND could not be reached (HTTP 403 from the web edge)");
+  assert.equal(httpErrorMessage("openrouter", "m", 502, "  <html><body>bad gateway"), "The model service could not be reached (HTTP 502 from the web edge)");
+  assert.equal(httpErrorMessage("mind", "a/b", 500, '{"error":"boom"}'), 'a/b: HTTP 500 {"error":"boom"}');
 });

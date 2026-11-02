@@ -11,9 +11,26 @@ export const SIGNIN_TIMEOUT_MS = 5 * 60_000;
 
 export const pkceChallenge = (verifier) => createHash("sha256").update(verifier, "ascii").digest("base64url");
 
-/** The OAuth server origin for a MIND API base such as https://m-i-n-d.ai/developer/v1. */
+/** The API base the app talks to: MIND's API service directly, because the public site's Cloudflare "block AI bots" rule answers non-browser clients with a 403 HTML page. */
+export const DEFAULT_MIND_BASE_URL = "https://mindapp.onrender.com/developer/v1";
+export const OAUTH_ORIGIN = "https://m-i-n-d.ai";
+
+/** A saved base that still points at the public site's API (the old default) moves to the direct API service; anything else is kept. */
+export function migrateMindBaseUrl(v) {
+  if (typeof v !== "string" || !v.trim()) return v;
+  try {
+    const u = new URL(v.trim());
+    if (/^(www\.)?m-i-n-d\.ai$/i.test(u.hostname) && u.pathname.replace(/\/+$/, "") === "/developer/v1") return DEFAULT_MIND_BASE_URL;
+  } catch { /* leave it */ }
+  return v;
+}
+
+/** The OAuth server origin for a MIND API base. Sign-in stays on the public site (the consent page is there) when the API base is the direct service; any other base is its own OAuth server (self-hosted MIND, tests). */
 export function oauthOrigin(mindBaseUrl) {
-  try { return new URL(mindBaseUrl).origin; } catch { return "https://m-i-n-d.ai"; }
+  try {
+    const o = new URL(mindBaseUrl).origin;
+    return o === new URL(DEFAULT_MIND_BASE_URL).origin ? OAUTH_ORIGIN : o;
+  } catch { return OAUTH_ORIGIN; }
 }
 
 export async function discover(origin, fetchImpl = fetch) {

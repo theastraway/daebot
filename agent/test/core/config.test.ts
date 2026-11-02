@@ -9,7 +9,7 @@ const empty = () => ({ MINDCLAW_CONFIG: join(mkdtempSync(join(tmpdir(), "mc-")),
 
 test("defaults", () => {
   const c = loadConfig(empty());
-  assert.equal(c.mindBaseUrl, "https://m-i-n-d.ai/developer/v1");
+  assert.equal(c.mindBaseUrl, "https://mindapp.onrender.com/developer/v1");
   assert.equal(c.models.default, "qwen/qwen3.8-flash");
   assert.equal(c.models.cheap, "qwen/qwen3.8-flash");
   assert.deepEqual(c.models.fallback, ["deepseek/deepseek-v4-flash"]);
@@ -44,4 +44,15 @@ test("file config is used and env wins", () => {
   assert.deepEqual(c.models.fallback, ["a/b", "c/d"]);
   assert.equal(c.shadow, true);
   assert.equal(loadConfig({ MINDCLAW_CONFIG: f, MINDCLAW_SHADOW: "0" }).shadow, false);
+});
+
+test("a saved config still pointing at the public site migrates; env stays literal", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mc-"));
+  const f = join(dir, "c.json");
+  writeFileSync(f, JSON.stringify({ mindBaseUrl: "https://m-i-n-d.ai/developer/v1/" }));
+  assert.equal(loadConfig({ MINDCLAW_CONFIG: f }).mindBaseUrl, "https://mindapp.onrender.com/developer/v1");
+  writeFileSync(f, JSON.stringify({ mindBaseUrl: "https://self.example/developer/v1" }));
+  assert.equal(loadConfig({ MINDCLAW_CONFIG: f }).mindBaseUrl, "https://self.example/developer/v1");
+  writeFileSync(f, JSON.stringify({ mindBaseUrl: "https://m-i-n-d.ai/developer/v1" }));
+  assert.equal(loadConfig({ MINDCLAW_CONFIG: f, MIND_BASE_URL: "https://m-i-n-d.ai/developer/v1" }).mindBaseUrl, "https://m-i-n-d.ai/developer/v1");
 });
