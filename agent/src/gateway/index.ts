@@ -18,7 +18,7 @@ import { caelumToBot } from "./caelum.ts";
 import type { Principal } from "../auth/users.ts";
 import type { AuthContext } from "../auth/tenancy.ts";
 import { MindAuthError, whoami } from "../auth/mind-auth.ts";
-import { WAIVER_TEXT, WAIVER_VERSION, isSessionMode } from "../permissions/index.ts";
+import { WAIVER_TEXT, WAIVER_VERSION, STANDING_ALLOW, isSessionMode } from "../permissions/index.ts";
 import { AppHandoff, appRedirect, isValidChallenge } from "../auth/app-handoff.ts";
 import { ENTER_PATH, PROVISION_PATH, bearerOf, provisionTokenOk } from "../auth/provision.ts";
 import { AGENT_SURFACE_RE, AGENT_TURN_PATH, KeyIdentityCache, TurnRateLimiter } from "./agent-api.ts";
@@ -1441,6 +1441,14 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       }
       if (method === "DELETE") { svc.store.revokeWaiver(); return sendJson(res, 200, { ok: true, accepted: false }); }
       return sendJson(res, 405, { error: "method not allowed" });
+    }
+    if (path === "/permissions/standing") {
+      // Owner-set standing allow for ONE (tool, action) pair from a fixed table (mind_sessions reply, astra_board create/update/note/close). Routine turns honour it instead of raising a card.
+      if (method === "GET") return sendJson(res, 200, { allowed: STANDING_ALLOW, rules: svc.store.rules().filter((r) => r.matcher.kind === "action") });
+      if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+      const b = await readJson(req);
+      try { return sendJson(res, 200, { ok: true, rule: svc.addStanding(b.tool, b.action) }); }
+      catch (e) { return sendJson(res, 400, { error: String((e as Error).message ?? e).slice(0, 200), allowed: STANDING_ALLOW }); }
     }
     const dm = /^\/permissions\/([^/]+)\/decide$/.exec(path);
     if (dm) {

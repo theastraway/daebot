@@ -12,6 +12,7 @@ import type { AgentEvent, PermissionOption } from "../types.ts";
 
 export { PermissionStore, MODES, isMode, isSessionMode, WAIVER_TEXT, WAIVER_VERSION } from "./store.ts";
 export type { PermissionMode, SessionPermMode, Waiver } from "./store.ts";
+export { STANDING_ALLOW } from "./rules.ts";
 export { factsOf, evaluate, scopeOptions, validateRule, matches, patternOf } from "./rules.ts";
 export type { CallFacts, PermissionRule, ScopeOption, Evaluation, Effect } from "./rules.ts";
 
@@ -68,6 +69,12 @@ export class PermissionService {
   // ------------------------------------------------ loop side
 
   evaluate(f: CallFacts): Evaluation { return evaluate(this.store.rules(), f); }
+
+  /** Owner-set standing allow for one (tool, action) pair from the fixed STANDING_ALLOW table. Called only from the authenticated POST /permissions/standing route. */
+  addStanding(tool: unknown, action: unknown): PermissionRule {
+    const t = typeof tool === "string" ? tool : "", a = typeof action === "string" ? action.trim() : "";
+    return this.store.addRule({ effect: "allow", tool: t, matcher: { kind: "action", value: a }, scope: `${t} ${a} (standing allow set by the owner)` });
+  }
 
   noteUse(rule: PermissionRule | undefined): void { if (rule) { try { this.store.touch(rule.id, this.now()); } catch { /* counters are best effort */ } } }
 
