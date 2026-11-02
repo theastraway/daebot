@@ -224,7 +224,7 @@ export function createBotBus(o: BotBusOptions): BotBus & { _stats(): { chains: n
 
       if (detached) {
         // Deliver and return: the recipient answers in the background and the answer lands in the exchange (unread unless the user is driving).
-        const turnP = o.manager.turn(dm.id, text, onEvent, ac.signal, "bot", false, undefined, req.decisionReceipt ? { peerReceipt: req.decisionReceipt } : undefined);
+        const turnP = o.manager.turn(dm.id, text, onEvent, ac.signal, "bot", false, undefined, req.decisionReceipt && !/^routine:/i.test(req.decisionReceipt.trim()) ? { peerReceipt: req.decisionReceipt } : undefined);
         turnP.then(() => { if (!timedOut) finish(false); }, () => {}).finally(() => { clearTimeout(timer); chains.delete(dm.id); });
         if (userDriven && exchangeId) o.exchanges?.markSeen(req.owner, exchangeId);
         rememberAsk("[sent earlier; the answer is recorded in the exchange.]");
@@ -232,7 +232,7 @@ export function createBotBus(o: BotBusOptions): BotBus & { _stats(): { chains: n
       }
 
       try {
-        const turnP = o.manager.turn(dm.id, text, onEvent, ac.signal, "bot", false, undefined, req.decisionReceipt ? { peerReceipt: req.decisionReceipt } : undefined);
+        const turnP = o.manager.turn(dm.id, text, onEvent, ac.signal, "bot", false, undefined, req.decisionReceipt && !/^routine:/i.test(req.decisionReceipt.trim()) ? { peerReceipt: req.decisionReceipt } : undefined);
         turnP.catch(() => {}); // if we stop waiting, a late failure is not an unhandled rejection
         // Return the moment the signal fires (timeout or caller abort): do not wait for the recipient's generator to unwind. The abort itself is already sent.
         const aborted = new Promise<void>((res) => { if (ac.signal.aborted) res(); else ac.signal.addEventListener("abort", () => res(), { once: true }); });

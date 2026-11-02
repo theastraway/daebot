@@ -126,3 +126,12 @@ test("classes: reads are read, reply is outward; staff may use the tool, public 
   assert.ok(reply.every((v) => v.gate !== "tier"));
   assert.equal(k.preTool(state(), { id: "c", name: "mind_sessions", args: { action: "list" } }, tool).length, 0);
 });
+
+test("reply: the owner's own routine turn (receipt starts with routine:) may reply; a peer bot with any other receipt may not", async () => {
+  const mk = () => setup(() => json(200, { ...SESSION, viewer_role: "owner", ok: true, message_id: "m1", seq: 3 }));
+  const routine = await mk().tool.run({ action: "reply", session_id: "sess-1", content: "hi" }, { ...ctx, origin: "bot", peerReceipt: "routine:Routine: Prime Heartbeat" });
+  assert.doesNotMatch(routine.output, /another bot cannot/);
+  const peer = await mk().tool.run({ action: "reply", session_id: "sess-1", content: "hi" }, { ...ctx, origin: "bot", peerReceipt: "3125547d-f4a5" });
+  assert.equal(peer.ok, false);
+  assert.match(peer.output, /another bot cannot/);
+});
