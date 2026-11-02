@@ -62,6 +62,8 @@ export interface Tool {
   // a call to it on any other turn is answered with `unavailable` and never reaches a gate or a card.
   requires?: string;
   unavailable?: string;
+  /** Set only on tools that come from a connected MCP server: where the server really is and what the server calls the tool. The per-user coder grant is decided on this, never on the model's text. */
+  mcp?: { server: string; host: string; tool: string };
   run(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult>;
 }
 

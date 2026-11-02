@@ -150,7 +150,9 @@ test("tools in a bot session: same set as a session (+ bot_talk, mind_tenants); 
     assert.ok(mainNames.includes("bot_manage") && names.includes("bot_manage"));
     // bot_self (see my threads, push work along, record lessons for the Heartbeat) is the bot's own: a main session never gets it.
     assert.ok(names.includes("bot_self") && !mainNames.includes("bot_self"));
-    assert.deepEqual(mainNames.filter((n) => n !== "task_board").sort(), names.filter((n) => n !== "bot_self").sort(), "a session and a bot get the same tools");
+    // mind_sessions (read the user's Grok bots, reply to direct them) is the user's own main session only: a bot never directs the user's other agents.
+    assert.ok(mainNames.includes("mind_sessions") && !names.includes("mind_sessions"));
+    assert.deepEqual(mainNames.filter((n) => n !== "task_board" && n !== "mind_sessions").sort(), names.filter((n) => n !== "bot_self").sort(), "a session and a bot get the same tools");
     for (const n of ["bot_talk", "mind_tenants", "mind_query", "mind_remember"]) assert.ok(names.includes(n), n);
     assert.ok(calls.every((c) => !JSON.stringify(c.body ?? {}).includes('"mind"')));
     assert.ok(evs.filter((e) => e.type === "toolEnd").every((e: any) => e.ok), JSON.stringify(evs.filter((e) => e.type === "toolEnd")));

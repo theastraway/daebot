@@ -164,6 +164,9 @@ test("connect with no sign-in: stored SEALED (no url, no tool, no secret in the 
     const names = svc.tools("u1").map((t) => [t.spec.name, t.class]);
     assert.deepEqual(names, [["notion__lookup", "read"], ["notion__create_page", "outward"], ["notion__wipe", "outward"]]);
     assert.equal(svc.pending("u1").length, 0);
+    // the coder grant is decided on these facts: the server's real host and the server's own tool name, set by the connector, not by model text
+    const create = svc.tools("u1").find((t) => t.spec.name === "notion__create_page")!;
+    assert.deepEqual(create.mcp, { server: "notion", host: "mcp.notion.com", tool: "create_page" });
     // a second store on the same file with the wrong key cannot read it; the right key can
     const wrong = new McpStore({ dir: join(file, ".."), secretKey: "z".repeat(40) });
     assert.equal(wrong.list("u1").length, 0);

@@ -9,6 +9,7 @@ import type { IsolationOptions } from "./isolation.ts";
 import { createOwnerGate } from "./owner.ts";
 import { receiptGate } from "./receipt.ts";
 import { createTierGate, tierAllows } from "./tier.ts";
+import type { CoderGrant } from "./coder.ts";
 import type { Tier } from "./tier.ts";
 
 export { findClaims, validReceipts } from "./receipt.ts";
@@ -26,13 +27,14 @@ export function createKernel(opts: {
   isolation?: IsolationOptions;
   clientNames?: string[];            // optional client registry for the semantic owner check
   tier?: Tier;                       // identity tier; default admin (unrestricted)
+  coder?: CoderGrant;                // staff only: the GitHub repos this user may write to (DAEBOT_CODERS)
   hosted?: boolean;                  // public deployment: only web_fetch, view_photo and mind_* tools may run
 }): Kernel {
   const log: Violation[] = [];
   const tier: Tier = opts.tier ?? "admin";
   // dangerGate is evaluated last (and only when nothing else refused the call) so a single-use approval is
   // never consumed by a call another gate stops.
-  const preGates: Gate[] = [...(opts.hosted ? [hostedGate] : []), createTierGate(tier), bootGate, feedGate, createOwnerGate({ clientNames: opts.clientNames }), createIsolationGate(opts.isolation)];
+  const preGates: Gate[] = [...(opts.hosted ? [hostedGate] : []), createTierGate(tier, opts.coder), bootGate, feedGate, createOwnerGate({ clientNames: opts.clientNames }), createIsolationGate(opts.isolation)];
   const turnGates: Gate[] = [...preGates, dangerGate];
   const answerGates: Gate[] = [receiptGate];
   const enabled = opts.enabled;
@@ -68,7 +70,7 @@ export function createKernel(opts: {
       if (opts.hosted) tools = tools.filter((t) => hostedToolAllowed(t.spec.name));
       if (!s.booted) tools = allowedBeforeBoot(tools);
       if (!publicAllowed(s)) tools = tools.filter((t) => t.class !== "public");
-      if (tier !== "admin") tools = tools.filter((t) => tierAllows(tier, t));
+      if (tier !== "admin") tools = tools.filter((t) => tierAllows(tier, t, undefined, opts.coder));
       return tools;
     },
     preTurn(s) {
