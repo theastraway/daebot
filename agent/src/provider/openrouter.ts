@@ -1,5 +1,6 @@
 // OpenRouter chat-completions streaming provider (SSE). Retries once on 429/5xx with backoff,
 // then falls through cfg.models.fallback. fetch is injectable so tests never touch the network.
+import { ThinkFilter } from "./think-filter.ts";
 import type { Config, Message, Provider, StreamEvent, ToolCall, ToolSpec, Usage } from "../types.ts";
 import { abortError, readSse } from "./sse.ts";
 
@@ -161,6 +162,7 @@ export function createOpenRouterProvider(cfg: Config, fetchImpl: typeof fetch = 
     const calls = new Map<number, PartialCall>();
     let usage: Usage = { promptTokens: 0, completionTokens: 0, costUsd: 0 };
     let finishReason = "stop";
+    const think = new ThinkFilter();
     for await (const data of readSse(res.body!, signal)) {
       if (data.trim() === "[DONE]") break;
       let chunk: any;
@@ -169,7 +171,10 @@ export function createOpenRouterProvider(cfg: Config, fetchImpl: typeof fetch = 
       const choice = chunk.choices?.[0];
       const delta = choice?.delta;
       if (delta) {
-        if (typeof delta.content === "string" && delta.content) yield { type: "text", delta: delta.content };
+        if (typeof delta.content === "string" && delta.content) {
+          const text = think.push(delta.content);
+          if (text) yield { type: "text", delta: text };
+        }
         for (const tc of delta.tool_calls ?? []) {
           const idx = typeof tc.index === "number" ? tc.index : 0;
           let p = calls.get(idx);
@@ -188,6 +193,8 @@ export function createOpenRouterProvider(cfg: Config, fetchImpl: typeof fetch = 
         };
       }
     }
+    const tail = think.flush();
+    if (tail) yield { type: "text", delta: tail };
     const ordered = [...calls.entries()].sort((a, b) => a[0] - b[0]);
     for (const [idx, p] of ordered) {
       if (!p.name) continue;
