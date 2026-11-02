@@ -1018,6 +1018,7 @@ export class McpConnectService {
         parameters: info.schema,
       },
       class: cls,
+      mcp: { server: rec.name, host: rec.host, tool: info.name },
       run: async (args, ctx) => this.callTool(uid, rec.id, info.name, args ?? {}, ctx),
     };
   }
@@ -1359,6 +1360,7 @@ export class McpConnectService {
         parameters: cleanSchema(t.schema),
       },
       class: toolClass({ publisher: srv.publisher, allow: srv.allow }, info),
+      mcp: { server: srv.name, host: srv.host, tool: t.name },
       run: async (args, ctx) => this.callMind(uid, srv.id, info, args ?? {}, ctx),
     };
   }

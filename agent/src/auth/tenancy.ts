@@ -11,6 +11,7 @@ import { MindOAuth } from "./mind-auth.ts";
 import { OWNER } from "./users.ts";
 import type { EntryCodes, RuntimeAllowList } from "./provision.ts";
 import type { Principal, UserStore } from "./users.ts";
+import type { CoderGrant } from "../kernel/coder.ts";
 
 export interface AuthContext {
   store: UserStore;
@@ -55,6 +56,8 @@ export interface HubOptions {
   bots?: BotsContext;
   /** MCP servers users connect from the web UI. */
   mcpConnect?: import("../mcpconnect/service.ts").McpConnectService;
+  /** DAEBOT_CODERS, parsed: lowercase MIND username to the GitHub repos that user may write to. Staff only; absent = nobody. */
+  coders?: Map<string, CoderGrant>;
 }
 
 interface UserSlot { runtime: Runtime; key: string; refreshing?: Promise<boolean> }
@@ -114,6 +117,7 @@ export function createRuntimeHub(o: HubOptions): { runtimeFor(p: Principal): Run
         exempt: p.tier === "admin",
         // Learning (admin tier only, see runtime.ts) uses THIS user's client above and files their model under their MIND username.
         username: p.username,
+        coder: p.tier === "staff" ? o.coders?.get(p.username.trim().toLowerCase()) : undefined,
         userCap: p.tier === "admin" ? undefined : userCap(p.id),
         now: o.now,
         persona: `You are Daebot (Dae), a personal agent for the MIND user "${p.username}". Their MIND is your memory and the only source of truth about their world; never assume it holds anything about anyone else.`,

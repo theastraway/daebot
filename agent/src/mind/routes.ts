@@ -144,6 +144,14 @@ export function routeFor(toolIn: string, args: Record<string, unknown>): Route {
       throw new Error(`social: unsupported action '${action}'`);
     case "agent_sessions": {
       const sid = args.session_id ? enc(args.session_id) : "";
+      // Read side + reply, used by the mind_sessions tool (the user's own Agent Sessions: their Grok bots, Claude Code, Daebot).
+      if (action === "list") return { method: "GET", path: "/agent-sessions", query: toQuery(pick(args, ["source_key", "status", "q", "limit", "before"])) };
+      if (action === "get") return { method: "GET", path: `/agent-sessions/${need(args, "session_id", tool, action)}`, query: toQuery(pick(args, ["limit", "before_seq"])) };
+      // Read-only list of the owner's replies no agent has fetched yet. (The per-session /inbox route marks them delivered, so it is never used here.)
+      if (action === "pending") return { method: "GET", path: "/agent-sessions/replies/pending", query: toQuery(pick(args, ["min_age_seconds", "max_age_hours", "limit"])) };
+      // The owner's reply: role user, origin mind. This is what wakes the bot. Never re-sent after a network error.
+      if (action === "reply") return { method: "POST", path: `/agent-sessions/${need(args, "session_id", tool, action)}/reply`, body: pick(args, ["content"]), timeoutMs: 20_000, noRetry: true };
+      if (action === "wake_targets") return { method: "GET", path: "/agent-sessions/wake-targets" };
       if (action === "open") return { method: "POST", path: "/agent-sessions/open", body: clean(args), timeoutMs: 15_000 };
       if (action === "append") return { method: "POST", path: `/agent-sessions/${sid}/append`, body: clean(args, ["session_id"]), timeoutMs: 15_000 };
       if (action === "close") return { method: "POST", path: `/agent-sessions/${sid}/close`, body: clean(args, ["session_id"]), timeoutMs: 15_000 };

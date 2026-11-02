@@ -14,6 +14,7 @@ import type { HostedOptions } from "../hosted.ts";
 import type { Config, Provider, Runtime } from "../types.ts";
 import { MindOAuth, oauthSettingsFromEnv } from "./mind-auth.ts";
 import { createRuntimeHub } from "./tenancy.ts";
+import { parseCoders } from "../kernel/coder.ts";
 import type { AuthContext } from "./tenancy.ts";
 import { join } from "node:path";
 import { dataDir } from "../persist.ts";
@@ -54,9 +55,12 @@ export function createAuthContext(o: {
   const oauth = store.enabled
     ? new MindOAuth(oauthSettingsFromEnv(env, { mindBaseUrl: o.cfg.mindBaseUrl, allowedHosts: o.hosted.allowedHosts, dataDir: dir }), o.fetchImpl)
     : undefined;
+  // DAEBOT_CODERS: per-user GitHub write grants. A bad value is reported (plain lines, no values) and grants nothing.
+  const coderGrants = parseCoders(env.DAEBOT_CODERS);
+  for (const line of coderGrants.problems) process.stderr.write(`${line}\n`);
   const hub = createRuntimeHub({
     baseCfg: o.cfg, ownerRuntime: o.ownerRuntime, store, oauth, globalCap: o.globalCap,
-    userCapUsd: parseUserCap(env.MINDCLAW_USER_DAILY_USD_CAP), fetchImpl: o.fetchImpl, provider: o.provider, now: o.now, sessionStore: o.sessionStore, bootCache: o.bootCache, credits: o.credits, bots: o.bots, mcpConnect: o.mcpConnect,
+    userCapUsd: parseUserCap(env.MINDCLAW_USER_DAILY_USD_CAP), fetchImpl: o.fetchImpl, provider: o.provider, now: o.now, sessionStore: o.sessionStore, bootCache: o.bootCache, credits: o.credits, bots: o.bots, mcpConnect: o.mcpConnect, coders: coderGrants.coders,
   });
   return {
     store, oauth, allowedUsers: parseList(env.DAEBOT_ALLOWED_USERS),

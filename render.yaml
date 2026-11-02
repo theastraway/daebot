@@ -49,5 +49,7 @@ services:
         sync: false
       - key: DAEBOT_ADMINS        # MIND usernames that get the unrestricted tier; everyone else is staff
         sync: false
+      - key: DAEBOT_CODERS        # optional JSON {"username":{"repos":["owner/prefix-*"]}}: GitHub write grant per staff user, only on matching repos
+        sync: false
       - key: MINDCLAW_USER_DAILY_USD_CAP   # per signed-in user per UTC day (admins exempt); the global cap above still applies
         sync: false
