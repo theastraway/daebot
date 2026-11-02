@@ -109,7 +109,7 @@ A separate Render web service built from this same repo serves "Daebot for Astra
 - **Service:** Node web service, root directory `agent`, build `npm install --omit=dev --no-audit --no-fund`, start `node src/cli.ts serve`, health check `/health`, `NODE_VERSION=24`. No disk (sessions live in memory only; nothing is written).
 - **Do not** set `MINDCLAW_HOSTED`, `GATEWAY_TOKEN` or `DAEBOT_SECRET_KEY` on it: it has no login and no users.
 - **Embed:** `<script src="https://<widget-host>/widget.js" async></script>` on theastraway.com.
-- **Routes:** `GET /health`, `GET /widget.js`, `GET /widget` (iframe chat page), `GET /brand/daebot-avatar.png`, `POST /api/widget/turn` (SSE). Everything else is 404.
+- **Routes:** `GET /health`, `GET /widget.js`, `GET /widget[?o=<origin>]` (iframe chat page), `GET /api/widget/brand?o=<origin>` (public look of that site's brand), `GET /brand/daebot-avatar.png`, `POST /api/widget/turn` (SSE). Everything else is 404.
 
 | Key | Secret | Meaning |
 |---|---|---|
@@ -119,6 +119,7 @@ A separate Render web service built from this same repo serves "Daebot for Astra
 | `WIDGET_MODEL` | no | model id; default is `MINDCLAW_MODEL`, else the built-in default |
 | `WIDGET_PERSONA_NAME` | no | default `Daebot` |
 | `WIDGET_ALLOWED_ORIGINS` | no | CORS and iframe-embedding allowlist, default `https://theastraway.com,https://www.theastraway.com` |
+| `WIDGET_BRANDS` | no | JSON object keyed by embedding origin, one service for several sites. Each value: `org` (required), optional `name`, `blurb`, `subjects` (array), `greeting`, `placeholder`, `footer`, `color` (`#rrggbb`, dark; white text sits on it), `fallbackUrl`, `fallbackAsk`, `extraRules` (array). A branded origin is added to the allowlist automatically; its chat page can only be framed by its own site. Unset = Astra AI for everyone, unchanged. |
 | `WIDGET_RATE_LIMIT_MAX` / `WIDGET_RATE_LIMIT_WINDOW_MIN` | no | per-IP messages per window, default 20 per 10 min |
 | `WIDGET_DAILY_USD_CAP` | no | daily LLM spend cap (UTC day, in memory), default 5 |
 | `MIND_BASE_URL` | no | defaults to `https://m-i-n-d.ai/developer/v1` |
