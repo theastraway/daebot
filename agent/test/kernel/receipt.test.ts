@@ -113,3 +113,12 @@ test("validReceipts: reports validity and reasons", () => {
 test("receipt: no claims and no receipts returns undefined", () => {
   assert.equal(pre(""), undefined);
 });
+test("receipt: a bulleted, numbered or bold receipt line counts", () => {
+  assert.equal(pre("Shipped, live-verified:\n- SURFACE✓ #c1 fetched the page and saw it"), undefined);
+  assert.equal(pre("The page is deployed.\n  * SURFACE✓ #c1 fetched it"), undefined);
+  assert.equal(pre("The page is deployed.\n1. **SURFACE✓** #c1 fetched it"), undefined);
+  assert.equal(validReceipts("• MIND✓ #c2 pricing doc", [m1])[0]?.valid, true);
+});
+test("receipt: a receipt in the middle of a sentence still does not count", () => {
+  assert.equal(pre("The page is deployed, see SURFACE✓ #c1 fetched it")?.action, "block");
+});
