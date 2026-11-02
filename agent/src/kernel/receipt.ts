@@ -18,7 +18,9 @@ const FACT_PATTERNS: RegExp[] = [
   /\b(?=[0-9a-f]*\d)[0-9a-f]{8,}\b/i,                              // 8+ char hex / uuid segment / long digit id
   /\(?\b\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b/,                         // phone
 ];
-const RECEIPT_LINE = /^(MIND✓|SURFACE✓) #c(\d+)\b.*$/gm;
+// A receipt starts its line; a list marker ("- ", "* ", "• ", "1. ") or bold before it still counts.
+const RECEIPT_PREFIX = String.raw`^[ \t]*(?:[-*•]|\d+[.)])?[ \t]*(?:\*\*)?`;
+const RECEIPT_LINE = new RegExp(RECEIPT_PREFIX + String.raw`(MIND✓|SURFACE✓)(?:\*\*)? #c(\d+)\b.*$`, "gm");
 
 function normApos(s: string): string {
   return s.replace(/[‘’]/g, "'");
@@ -32,7 +34,7 @@ function stripFences(s: string): string {
 function claimText(draft: string): string {
   let t = stripFences(normApos(draft));
   t = t.replace(/`[^`\n]*`/g, " ");
-  t = t.replace(/^(MIND✓|SURFACE✓).*$/gm, " ");
+  t = t.replace(new RegExp(RECEIPT_PREFIX + "(MIND✓|SURFACE✓).*$", "gm"), " ");
   t = t.replace(/"[^"\n]{0,300}"/g, " ").replace(/“[^”\n]{0,300}”/g, " ");
   return t;
 }
