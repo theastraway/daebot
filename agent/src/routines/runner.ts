@@ -4,7 +4,7 @@
 import { TurnRateLimiter } from "../gateway/agent-api.ts";
 import { probeBot } from "./heartbeat.ts";
 import type { BoardLite, Probe, ThreadLite } from "./heartbeat.ts";
-import { RoutineHub } from "./store.ts";
+import { RoutineHub, STALE_RUN_MS } from "./store.ts";
 import type { Routine, RoutineBook, RunStatus, TriggerType } from "./store.ts";
 import { matchEvent } from "./triggers.ts";
 import type { TriggerEvent } from "./triggers.ts";
@@ -92,6 +92,7 @@ export class RoutineRunner {
     const jitter = this.d.jitterMs ?? 5000;
     const jobs: Promise<void>[] = [];
     for (const book of this.d.hub.all()) {
+      try { book.reapInterrupted((id) => this.running.has(id), (this.d.runTimeoutMs ?? 10 * 60_000) + (STALE_RUN_MS - 10 * 60_000)); } catch { /* next pass */ }
       for (const r of book.list()) {
         if (!r.enabled) continue;
         if (r.kind === "trigger") {
@@ -209,6 +210,9 @@ export class RoutineRunner {
 
   // ---------------------------------------------------------------- one run
   private start1(book: RoutineBook, r: Routine, source: string, payload?: string, at = this.now()): FireResult {
+    const started = this.running.get(r.id);
+    // A run that outlived its own timeout plus margin is dead weight (a hung turn that ignored the abort): it must never block the next run.
+    if (started !== undefined && at - started > (this.d.runTimeoutMs ?? 10 * 60_000) + (STALE_RUN_MS - 10 * 60_000)) this.running.delete(r.id);
     if (this.running.has(r.id)) {
       if (source === "timer") book.recordRun(r.id, { at, source, status: "skipped", model: false, ms: 0, result: "skipped: the previous run is still going" });
       return { ok: false, code: 409, error: "a run of this routine is still going" };
@@ -226,7 +230,7 @@ export class RoutineRunner {
     const done = this.execute(book, r, source, payload, at).catch((e) => {
       book.recordRun(r.id, { at, source, status: "error", model: false, ms: this.now() - at, result: String((e as Error)?.message ?? e).slice(0, 200) });
     }).finally(() => {
-      this.running.delete(r.id);
+      if (this.running.get(r.id) === at) this.running.delete(r.id);
       const q = this.queue.get(r.id);
       const next = q?.shift();
       if (q && !q.length) this.queue.delete(r.id);

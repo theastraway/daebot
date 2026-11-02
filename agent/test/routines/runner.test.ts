@@ -202,3 +202,51 @@ test("validation: kinds, names, prompt, timing, time zone, caps", () => {
   for (let i = 0; i < 18; i++) bk.add({ name: `n${i}`, prompt: "x", kind: "trigger", trigger: { type: "thread_message" } });
   assert.throws(() => bk.add({ name: "one-too-many", prompt: "x", kind: "trigger", trigger: { type: "thread_message" } }), /at most 20/);
 });
+
+test("a run left 'running' by a dead process is interrupted on startup and never blocks the next slot", async () => {
+  const a = rig();
+  const rt = timed(a.hub);
+  a.hub.book(OWNER, BOT).markRunning(rt.id, a.clock.t);       // the process dies right here
+  const b = rig({ dir: a.dir, t0: a.clock.t + 5 * MIN });      // redeploy 5 min later: younger than the stale window, still not live
+  const got = b.hub.book(OWNER, BOT).get(rt.id)!;
+  assert.equal(got.lastStatus, "interrupted");
+  assert.equal(got.runs!.at(-1)!.status, "interrupted");
+  b.clock.t = Date.parse("2026-10-28T12:10:00Z");
+  await b.runner.tick(b.clock.t);
+  assert.equal(b.turns.length, 1);
+  assert.equal(b.hub.book(OWNER, BOT).get(rt.id)!.lastStatus, "ok");
+});
+
+test("a stale 'running' mark is read as interrupted and reaped by the tick, a live one is left alone", async () => {
+  const r = rig({ hold: true });
+  const rt = timed(r.hub);
+  const book = r.hub.book(OWNER, BOT);
+  r.clock.t += 2 * MIN;
+  const first = r.runner.tick(r.clock.t);                      // a real run, held open
+  await new Promise((x) => setImmediate(x));
+  assert.equal(book.get(rt.id)!.lastStatus, "running");
+  r.clock.t += 11 * MIN;                                       // 11 min: inside the 12 min window
+  assert.equal(book.get(rt.id)!.lastStatus, "running");
+  r.clock.t += 5 * MIN;                                        // 16 min: past it, but the runner says it is live
+  assert.equal(book.get(rt.id)!.lastStatus, "interrupted");    // read side never shows a run older than the window as live
+  assert.equal(book.reapInterrupted((id) => r.runner.isRunning(id)), 0);  // what the tick does: a live run is not written down as interrupted
+  assert.equal((book.get(rt.id)!.runs ?? []).some((x) => x.status === "interrupted"), false);
+  r.gate.release!();
+  await first;
+  assert.equal(book.get(rt.id)!.lastStatus, "ok");
+});
+
+test("a hung run that outlives its timeout does not block the next scheduled run", async () => {
+  const r = rig({ hold: true, deps: { runTimeoutMs: 10 * MIN } });
+  const rt = timed(r.hub, "*/20 * * * *");
+  r.clock.t = Date.parse("2026-10-28T12:20:00Z");
+  void r.runner.tick(r.clock.t);
+  await new Promise((x) => setImmediate(x));
+  assert.equal(r.turns.length, 1);
+  r.clock.t = Date.parse("2026-10-28T12:40:00Z");              // the hung run is 20 min old; next slot is due
+  void r.runner.tick(r.clock.t);
+  await new Promise((x) => setImmediate(x));
+  assert.equal(r.turns.length, 2);
+  r.gate.release!();
+  void rt;
+});
