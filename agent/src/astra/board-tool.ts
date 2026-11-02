@@ -12,6 +12,7 @@
 // Static class "outward" keeps the tool away from staff and public identities (the tier gate filters by the loosest class); only admin
 // (the owner) is offered it. A to-do's text can come from meeting recaps: it is returned as data, never as instructions.
 import type { Tool, ToolClass, ToolResult } from "../types.ts";
+import { isOwnerRoutine } from "../mind/sessions-tool.ts";
 
 export const REQUIRED_TODO_FIELDS = ["task", "repo", "path", "service", "steps", "done_when", "chief_aim", "deliverable", "owner", "working_location"] as const;
 export const DEFAULT_PORTAL_URL = "https://api.theastraway.com";
@@ -204,7 +205,7 @@ export function createAstraBoardTool(o: AstraBoardOptions): Tool {
     async run(args, ctx): Promise<ToolResult> {
       const action = String(args.action ?? "");
       if (!(ACTIONS as readonly string[]).includes(action)) return fail(`astra_board: action must be one of ${ACTIONS.join(", ")}`);
-      if (!READ.has(action) && ctx?.origin === "bot") return fail("blocked: a message from another bot cannot change the Astra board. Only the owner can ask for that.");
+      if (!READ.has(action) && ctx?.origin === "bot" && !isOwnerRoutine(ctx)) return fail("blocked: a message from another bot cannot change the Astra board. Only the owner can ask for that.");
       const todoId = str(args.todo_id, 80);
       try {
         if (action === "list_clients") {
