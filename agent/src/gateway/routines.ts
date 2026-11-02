@@ -292,7 +292,7 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
     if (!bots) return d.sendJson(res, 404, { error: "bots are not enabled on this deployment" }), true;
     let botId: string;
     try { botId = decodeURIComponent(m[1]); } catch { return d.sendJson(res, 400, { error: "bad bot id" }), true; }
-    if (!bots.get(botId)) return d.sendJson(res, 404, { error: "not_found", message: "no such bot" }), true;
+    if (botId !== MAIN_BOT_ID && !bots.get(botId)) return d.sendJson(res, 404, { error: "not_found", message: "no such bot" }), true; // the main Daebot has routines too (bot_manage slug "self")
     const book = d.hub.book(me.id, botId);
     const view = async (rid: string, fresh = false) => { const r = book.get(rid)!; return routineView(r, base(req), r.kind === "trigger" && !r.builtin ? await setupFor(me.id, r.trigger, { routineId: rid, botId, fresh }) : undefined); };
     const needsSetup = (setup: SetupReport) => d.sendJson(res, 409, { error: "needs_setup", message: `It is not ready to turn on yet. ${setup.missing.join(" ")}`, setup });
