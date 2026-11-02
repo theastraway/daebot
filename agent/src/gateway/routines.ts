@@ -63,7 +63,7 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
   const ipLimit = new TurnRateLimiter({ max: 60, windowMs: 60_000 });     // per caller address, any routine
   const nudges = new Map<string, { n: number; at: number }>();
 
-  async function pump(id: string, text: string, signal: AbortSignal | undefined, origin: "user" | "bot"): Promise<{ final: string; failed: string }> {
+  async function pump(id: string, text: string, signal: AbortSignal | undefined, origin: "user" | "bot", client?: { peerReceipt?: string }): Promise<{ final: string; failed: string }> {
     const run = runs.start(id, text);
     let final = "", failed = "";
     try {
@@ -72,7 +72,7 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
         d.broadcast(id, ev);
         if (ev.type === "done") final = ev.finalText;
         else if (ev.type === "notice" && /^Turn failed/.test(ev.text)) failed = ev.text;
-      }, signal, origin);
+      }, signal, origin, false, undefined, client);
     } catch (e) {
       failed = String((e as Error)?.message ?? e).split("\n")[0].slice(0, 200);
       run.publish({ type: "notice", level: "warn", text: failed });
@@ -91,7 +91,10 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
     if (ls.busy) return bad("the thread is busy with another turn");
     const note = await d.enforceModel(p, id).catch(() => undefined);
     void note;
-    const r = await pump(id, a.text, a.signal, "bot");
+    // A routine of the MAIN Daebot was written by its owner: that authorship is the requester's side of the two-receipt rule, so an outward act
+    // the heartbeat decides on (a re-prompt to the owner's own agent session) needs only the turn's own decision receipt. It still goes through
+    // the confirmation gate (a task-board "awaiting decision" card unless the owner saved an allow rule). Bot routines keep the old behaviour.
+    const r = await pump(id, a.text, a.signal, "bot", a.botId === MAIN_BOT_ID ? { peerReceipt: `routine:${a.thread}`.slice(0, 200) } : undefined);
     return r.failed ? { ok: false, threadId: id, finalText: r.final, error: r.failed } : { ok: true, threadId: id, finalText: r.final };
   }
 
