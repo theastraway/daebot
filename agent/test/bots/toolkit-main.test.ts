@@ -162,6 +162,14 @@ test("through the gateway: the plain chat renames itself, the header profile fol
     assert.equal((await w.j("PATCH", "/settings/daebot", { face: "wizard" })).status, 400);
     assert.equal((await w.j("PATCH", "/settings/daebot", {})).status, 400);
     assert.equal((await w.j("PATCH", "/settings/daebot", { name: "Dae Two" })).json.name, "Dae Two");
+    // the instructions over REST: read what bot_manage wrote, replace it, clear it, 8 KB cap
+    assert.match((await w.j("GET", "/settings/daebot/instructions")).json.text, /Sign off with DAE\./);
+    assert.equal((await w.j("PUT", "/settings/daebot/instructions", { text: "You serve Anthony." })).status, 200);
+    assert.equal((await w.j("GET", "/settings/daebot/instructions")).json.text, "You serve Anthony.");
+    assert.equal((await w.j("PUT", "/settings/daebot/instructions", { text: "x".repeat(8 * 1024 + 1) })).status, 413);
+    assert.equal((await w.j("PUT", "/settings/daebot/instructions", { text: 5 })).status, 400);
+    assert.equal((await w.j("PUT", "/settings/daebot/instructions", { text: "" })).status, 200);
+    assert.equal((await w.j("GET", "/settings/daebot/instructions")).json.text, "");
     // the main routine: fire its webhook (the secret is in the main book on disk)
     const book = JSON.parse(readFileSync(join(w.dir, "bots", "owner", MAIN_BOT_ID, "routines.json"), "utf8"));
     assert.deepEqual(book.routines.map((r: any) => r.name), ["Hook"], "no Heartbeat in the main book");

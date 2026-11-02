@@ -995,7 +995,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/board" || path.startsWith("/board/") || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/");
+    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/board" || path.startsWith("/board/") || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/");
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -1488,6 +1488,21 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     return sendJson(res, 200, view());
   }
 
+  /** The main Daebot's own instructions (its DAEBOT.md) over REST, like /bots/:id/instructions: GET reads, PUT replaces ("" clears), 8 KB in UTF-8 bytes. */
+  async function mainInstructionsApi(req: IncomingMessage, res: ServerResponse, method: string, me: Principal): Promise<void> {
+    const settings = manager.runtimeOf(me.id).settings;
+    if (!settings) return sendJson(res, 404, { error: "settings are not enabled on this deployment" });
+    if (method === "GET") { const t = settings.get().main?.instructions ?? ""; return sendJson(res, 200, { text: t, instructions: t, bytes: Buffer.byteLength(t, "utf8"), maxBytes: 8 * 1024 }); }
+    if (method !== "PUT") return sendJson(res, 405, { error: "method not allowed" });
+    const b = await readJson(req);
+    const t = typeof b.text === "string" ? b.text : b.instructions;
+    if (typeof t !== "string") return sendJson(res, 400, { error: "bad_instructions", message: "text must be a string" });
+    if (Buffer.byteLength(t, "utf8") > 8 * 1024) return sendJson(res, 413, { error: "instructions_too_long", message: "DAEBOT.md is capped at 8 KB" });
+    settings.set({ main: { instructions: t.trim() ? t : null } });
+    const now = settings.get().main?.instructions ?? "";
+    return sendJson(res, 200, { ok: true, bytes: Buffer.byteLength(now, "utf8") });
+  }
+
   async function modelsApi(req: IncomingMessage, res: ServerResponse, path: string, method: string, me: Principal): Promise<void> {
     if (!opts.cfg) return sendJson(res, 404, { error: "models are not available here" });
     const settings = manager.runtimeOf(me.id).settings;
@@ -1600,6 +1615,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (path === "/exchanges" || path.startsWith("/exchanges/")) return exchangesApi(res, path, method, me);
     if (path === "/bots/caelum") return caelumApi(req, res, method, me);
     if (path === "/settings/daebot") return mainProfileApi(req, res, method, me);
+    if (path === "/settings/daebot/instructions") return mainInstructionsApi(req, res, method, me);
     if (path === "/bots" || path.startsWith("/bots/")) return botsApi(req, res, path, method, me);
     if (path.startsWith("/mcp/")) return mcpApi(req, res, path, method, me);
     if (path === "/models" || path.startsWith("/models/")) return modelsApi(req, res, path, method, me);
