@@ -6,7 +6,7 @@ import { callSignature } from "../kernel/util.ts";
 import type { ToolClass } from "../types.ts";
 
 export type Effect = "allow" | "deny";
-export type MatcherKind = "any" | "exact" | "prefix" | "glob" | "domain" | "recipient" | "recipients" | "cwd" | "readonly";
+export type MatcherKind = "any" | "exact" | "prefix" | "glob" | "domain" | "recipient" | "recipients" | "cwd" | "readonly" | "action";
 export interface Matcher { kind: MatcherKind; value?: string }
 
 export interface PermissionRule {
@@ -32,6 +32,8 @@ export interface CallFacts {
   url?: string;
   host?: string;
   recipients: string[];
+  /** The tool call's own `action` argument (mind_sessions reply, astra_board update...). */
+  action?: string;
   connector?: string;
   signature: string;
 }
@@ -106,6 +108,7 @@ export function factsOf(tool: string, cls: ToolClass, args: Record<string, unkno
     const u = normUrl(a.url);
     if (u) { f.url = u; f.host = new URL(u).hostname.toLowerCase(); }
   }
+  if (typeof a.action === "string" && a.action.length <= 40) f.action = a.action;
   const i = tool.indexOf("__");
   if (i > 0) f.connector = tool.slice(0, i);
   return f;
@@ -156,6 +159,18 @@ const recipientDomain = (r: string): string => r.slice(r.lastIndexOf("@") + 1);
 
 /** Which matcher kinds an ALLOW rule may use for a call of this class. Irreversible/public calls only ever by exact call; outward ones only by target. */
 export function allowKindsFor(cls: ToolClass, tool: string): MatcherKind[] {
+  // Owner-set standing allows (tool + action), only for the pairs in STANDING_ALLOW. Never offered on a card: set through POST /permissions/standing.
+  if ((cls === "outward" || cls === "write") && STANDING_ALLOW[tool]) return [...allowKindsForBase(cls, tool), "action"];
+  return allowKindsForBase(cls, tool);
+}
+
+/** The ONLY (tool, action) pairs an owner can allow as a standing rule. Everything else (email, GitHub, feed posts, deletes, connectors) can never be allowed this way. */
+export const STANDING_ALLOW: Record<string, readonly string[]> = {
+  mind_sessions: ["reply"],
+  astra_board: ["create", "update", "note", "close"],
+};
+
+function allowKindsForBase(cls: ToolClass, tool: string): MatcherKind[] {
   switch (cls) {
     case "read": return ["any", "exact", "prefix", "glob", "domain", "recipient", "recipients", "cwd", "readonly"];
     case "write": return ["any", "exact", "prefix", "glob", "domain", "recipient", "recipients", "cwd"];
@@ -201,6 +216,7 @@ export function matches(rule: PermissionRule, f: CallFacts): boolean {
       const set = new Set(m.value.toLowerCase().split(",").map((x) => x.trim()).filter(Boolean));
       return f.recipients.length > 0 && f.recipients.every((r) => set.has(r));
     }
+    case "action": return m.value !== undefined && f.action === m.value;
     case "cwd": return f.command !== undefined && !!m.value && normPath(m.value) === f.cwd;
     default: return false;
   }
@@ -208,7 +224,7 @@ export function matches(rule: PermissionRule, f: CallFacts): boolean {
 
 /** Higher = narrower. Used to credit the most specific rule and to order choices. */
 export function specificity(rule: Pick<PermissionRule, "tool" | "matcher">): number {
-  const base: Record<MatcherKind, number> = { exact: 100, recipient: 90, recipients: 85, prefix: 70, glob: 60, domain: 50, cwd: 40, any: 20, readonly: 10 };
+  const base: Record<MatcherKind, number> = { exact: 100, action: 95, recipient: 90, recipients: 85, prefix: 70, glob: 60, domain: 50, cwd: 40, any: 20, readonly: 10 };
   const len = Math.min(40, (rule.matcher.value ?? "").length) / 100; // a longer prefix/glob is narrower
   return base[rule.matcher.kind] + len + (rule.tool.startsWith("connector:") || rule.tool.startsWith("group:") ? -5 : 0);
 }
@@ -304,9 +320,9 @@ export function patternOf(f: CallFacts): { key: string; label: string; tool: str
 
 // ---------------------------------------------------------------- validation (used by the store before anything is saved)
 
-const KINDS: MatcherKind[] = ["any", "exact", "prefix", "glob", "domain", "recipient", "recipients", "cwd", "readonly"];
+const KINDS: MatcherKind[] = ["action", "any", "exact", "prefix", "glob", "domain", "recipient", "recipients", "cwd", "readonly"];
 export const isKind = (k: unknown): k is MatcherKind => typeof k === "string" && (KINDS as string[]).includes(k);
-const NEEDS_VALUE: MatcherKind[] = ["exact", "prefix", "glob", "domain", "recipient", "recipients", "cwd"];
+const NEEDS_VALUE: MatcherKind[] = ["action", "exact", "prefix", "glob", "domain", "recipient", "recipients", "cwd"];
 
 /** Throws on a rule that is malformed or that would auto-allow a class it must not (any broad allow for irreversible / public / outward-to-anyone). */
 export function validateRule(r: { effect: unknown; tool: unknown; matcher: unknown }, cls?: ToolClass): { effect: Effect; tool: string; matcher: Matcher } {
@@ -318,6 +334,11 @@ export function validateRule(r: { effect: unknown; tool: unknown; matcher: unkno
   if (!NEEDS_VALUE.includes(m.kind) && m.value !== undefined) throw new Error("matcher takes no value");
   if (m.kind === "glob" && m.value!.replace(/[*?/]/g, "") === "") throw new Error("glob too broad");
   if (m.kind === "prefix" && canonCommand(m.value!) === "") throw new Error("prefix is empty");
+  if (m.kind === "action") {
+    // A standing action rule exists only for the fixed table above, as an allow. Anything else is refused.
+    if (r.effect !== "allow") throw new Error("an action rule can only allow");
+    if (!(STANDING_ALLOW[r.tool as string] ?? []).includes(String(m.value).trim())) throw new Error("that tool and action cannot be allowed as a standing rule");
+  }
   if (r.effect === "allow") {
     if (m.kind === "readonly" && !(r.tool === "group:fs-read" || r.tool.startsWith("connector:"))) throw new Error("read-only scope needs a read-only tool group");
     if ((r.tool === "group:fs-read" || r.tool.startsWith("connector:")) && m.kind !== "readonly") throw new Error("a tool group can only be allowed read-only");

@@ -144,3 +144,14 @@ test("suggestions over HTTP: generate needs auth, feedback is validated and hand
     assert.deepEqual(feedback, [{ shown: ["Yes, send it", "b", "c"], picked: "Yes, send it", sent: "Yes, send it please", action: "edited" }]);
   } finally { await gw.close(); }
 });
+
+test("addStanding saves an owner allow for a fixed pair and refuses everything else", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "perm-standing-"));
+  const perms = new PermissionService({ dir, owner: "owner" });
+  const r1 = perms.addStanding("mind_sessions", "reply");
+  assert.equal(r1.matcher.kind, "action");
+  assert.equal(perms.addStanding("mind_sessions", "reply").id, r1.id, "idempotent");
+  assert.throws(() => perms.addStanding("mind_email", "send"));
+  assert.throws(() => perms.addStanding("astra_board", "create_project"));
+  assert.equal(perms.evaluate(factsOf("mind_sessions", "outward", { action: "reply", session_id: "s", content: "c" }, "/p")).effect, "allow");
+});

@@ -193,3 +193,31 @@ test("bash: every chaining form is non-simple, so it never matches a simple-pref
   assert.equal(matches(allow, bash("ls -la")), true);
   assert.equal(evaluate([allow], bash("ls\nrm x")).effect, "none");
 });
+
+test("standing action allow: only the fixed tool+action pairs, only as allow, and it never reaches anything else", () => {
+  const ok = validateRule({ effect: "allow", tool: "mind_sessions", matcher: { kind: "action", value: "reply" } });
+  assert.equal(ok.matcher.kind, "action");
+  for (const a of ["create", "update", "note", "close"]) validateRule({ effect: "allow", tool: "astra_board", matcher: { kind: "action", value: a } });
+  assert.throws(() => validateRule({ effect: "allow", tool: "astra_board", matcher: { kind: "action", value: "create_project" } }));
+  assert.throws(() => validateRule({ effect: "allow", tool: "mind_email", matcher: { kind: "action", value: "send" } }));
+  assert.throws(() => validateRule({ effect: "allow", tool: "bash", matcher: { kind: "action", value: "reply" } }));
+  assert.throws(() => validateRule({ effect: "allow", tool: "github__create_issue", matcher: { kind: "action", value: "create" } }));
+  assert.throws(() => validateRule({ effect: "deny", tool: "mind_sessions", matcher: { kind: "action", value: "reply" } }));
+  assert.throws(() => validateRule({ effect: "allow", tool: "mind_sessions", matcher: { kind: "action" } }));
+
+  const reply = rule("allow", "mind_sessions", "action", "reply");
+  const onReply = factsOf("mind_sessions", "outward", { action: "reply", session_id: "s1", content: "x" }, "/p");
+  assert.equal(evaluate([reply], onReply).effect, "allow");
+  assert.equal(evaluate([reply], factsOf("mind_sessions", "read", { action: "list" }, "/p")).effect, "none");
+  // the same action word on another tool is not covered
+  assert.equal(evaluate([reply], factsOf("mind_email", "outward", { action: "reply", to: "a@b.com" }, "/p")).effect, "none");
+  const upd = rule("allow", "astra_board", "action", "update");
+  assert.equal(evaluate([upd], factsOf("astra_board", "outward", { action: "update", todo_id: "t" }, "/p")).effect, "allow");
+  assert.equal(evaluate([upd], factsOf("astra_board", "outward", { action: "create_project" }, "/p")).effect, "none");
+  assert.ok(allowKindsFor("outward", "mind_sessions").includes("action"));
+  assert.ok(!allowKindsFor("outward", "mind_email").includes("action"));
+  // a hand-edited action rule on a tool outside the table is dropped by evaluate's class check
+  assert.equal(evaluate([rule("allow", "mind_email", "action", "send")], email("a@b.com")).effect, "none");
+  // a deny rule still wins
+  assert.equal(evaluate([reply, rule("deny", "mind_sessions", "exact", onReply.signature ? "call:" + onReply.signature : "x")], onReply).effect, "deny");
+});
