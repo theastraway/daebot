@@ -13,6 +13,7 @@ import { mistakeBrief } from "./gateway/mistakes.ts";
 import { dataDir, cleanTitle } from "./persist.ts";
 import { bootMind, createMindClient, createMindTools, createSessionSync } from "./mind/index.ts";
 import { createMindSessionsTool } from "./mind/sessions-tool.ts";
+import { ASTRA_BOARD_PROMPT, createAstraBoardTool } from "./astra/board-tool.ts";
 import { BotStore, botMindApi } from "./bots/store.ts";
 import { createBotTalkTool } from "./bots/talk-tool.ts";
 import { createBotManageTool } from "./bots/manage-tool.ts";
@@ -136,6 +137,8 @@ export function composeSystemPrompt(o: {
   coder?: CoderGrant;
   /** The mind_sessions tool is offered: adds the "## Your Grok bots" skill. */
   sessions?: boolean;
+  /** The astra_board tool is offered (owner / admin main session): adds the "## Astra AI projects board" skill. */
+  astraBoard?: boolean;
   /** The task_decision tool is offered (every Daebot and bot has it): adds the stock "## Deciding on a task" skill. */
   decision?: boolean;
   /** The bot_manage tool is offered: adds the stock "## Creating a Daebot" skill. */
@@ -216,6 +219,7 @@ export function composeSystemPrompt(o: {
   if (o.toolNames) { const r = routingSection(o.toolNames, { screenWatching: o.screenWatching }); if (r.length) lines.push("", ...r); }
   if (o.photos) lines.push("", ...PHOTOS_SECTION);
   if (o.sessions) lines.push("", ...SESSIONS_SECTION);
+  if (o.astraBoard) lines.push("", ...ASTRA_BOARD_PROMPT);
   if (o.board) lines.push("", BOARD_PROMPT);
   if (o.decision) lines.push("", DECISION_PROMPT);
   if (o.botManage) lines.push("", ...(o.bot ? [] : [BOT_SKILL_PROMPT, ""]), BOT_TOOLKIT_PROMPT);
@@ -503,6 +507,8 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       ...(appsOn() ? createAppTools({ clientFor: clientForMind, readOnly: !!selfBot, connected: connectedApps, servers: serverLites }) : []),
       // mind_sessions: the user's own Agent Sessions (their Grok bots). Main sessions only: a bot or a peer-driven turn never directs the user's other agents.
       ...(!selfBot && !peerMain ? [createMindSessionsTool({ client: () => clientForMind("main"), user: hosted?.username })] : []),
+      // astra_board: the Astra AI projects board, for the owner / admin main session only (static class outward keeps it from staff and public; a bot or a peer-driven turn never gets it). Offered only when PORTAL_DAEBOT_TOKEN is set.
+      ...(!selfBot && !peerMain && cfg.portalDaebotToken ? [createAstraBoardTool({ baseUrl: cfg.astraPortalUrl, token: cfg.portalDaebotToken, fetchImpl: overrides.fetchImpl, actor: "Daebot" })] : []),
       ...talk, ...manage, ...self2];
     // mcp_connect is the user's own session only: a bot never proposes connections (and its turns could be peer-driven).
     // task_decision (the OOC/EMR decision skill) is stock for every Daebot and bot, like bot_manage; it files into the MIND the session is homed in.
@@ -674,6 +680,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
             mcpBot: !!overrides.mcpConnect?.enabled() && !!botId,
             coder: tier === "staff" ? hosted?.coder : undefined,
             sessions: tools.some((t) => t.spec.name === "mind_sessions"),
+            astraBoard: tools.some((t) => t.spec.name === "astra_board"),
             toolNames: tools.map((t) => t.spec.name),
             screenWatching: screenFeed.active(),
             photos: tools.some((t) => t.spec.name === "view_photo"),
