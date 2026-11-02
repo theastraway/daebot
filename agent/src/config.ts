@@ -90,6 +90,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(str(env.MIND_BACKEND_URL) ?? str(file.mindBackendUrl) ? { mindBackendUrl: (str(env.MIND_BACKEND_URL) ?? str(file.mindBackendUrl))!.replace(/\/+$/, "") } : {}),
     mindSessionApiKey: str(env.MIND_SESSION_API_KEY) ?? str(file.mindSessionApiKey) ?? mindApiKey,
     clientNames: nameList(env.MINDCLAW_CLIENT_NAMES, file.clientNames),
+    ...(str(env.ASTRA_PORTAL_URL) ? { astraPortalUrl: str(env.ASTRA_PORTAL_URL)!.replace(/\/+$/, "") } : {}),
+    ...(str(env.PORTAL_DAEBOT_TOKEN) ? { portalDaebotToken: str(env.PORTAL_DAEBOT_TOKEN)! } : {}),
     openrouterKey: str(env.OPENROUTER_API_KEY) ?? str(file.openrouterKey) ?? "",
     billing: (str(env.DAEBOT_BILLING) ?? str(file.billing) ?? "").toLowerCase() === "mind" ? "mind" : "openrouter",
     freeModel: str(env.DAEBOT_FREE_MODEL) ?? str(file.freeModel) ?? DEFAULTS.freeModel,

@@ -51,5 +51,9 @@ services:
         sync: false
       - key: DAEBOT_CODERS        # optional JSON {"username":{"repos":["owner/prefix-*"]}}: GitHub write grant per staff user, only on matching repos
         sync: false
+      - key: PORTAL_DAEBOT_TOKEN  # optional secret (same value as on the theastraway backend): turns on the astra_board tool (Astra AI projects board) for owner/admin sessions
+        sync: false
+      - key: ASTRA_PORTAL_URL     # optional; default https://api.theastraway.com
+        sync: false
       - key: MINDCLAW_USER_DAILY_USD_CAP   # per signed-in user per UTC day (admins exempt); the global cap above still applies
         sync: false
