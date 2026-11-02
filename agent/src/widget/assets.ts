@@ -10,6 +10,13 @@ export const WIDGET_JS = String.raw`(function () {
   var origin;
   try { origin = new URL(script && script.src).origin; } catch (e) { return; }
 
+  var fallback = { key: "", name: "Daebot", title: "Daebot for Astra AI", color: "#000000" };
+  var site = "";
+  try { site = location.origin; } catch (e) {}
+
+  function start(brand) {
+  if (document.getElementById(HOST_ID)) return;
+  var color = /^#[0-9a-fA-F]{6}$/.test(brand.color || "") ? brand.color : "#000000";
   var host = document.createElement("div");
   host.id = HOST_ID;
   var root = host.attachShadow({ mode: "open" });
@@ -17,22 +24,26 @@ export const WIDGET_JS = String.raw`(function () {
     '<style>' +
     ':host{all:initial}' +
     '*{box-sizing:border-box}' +
-    '.btn{position:fixed;right:24px;bottom:calc(24px + env(safe-area-inset-bottom,0px));width:60px;height:60px;border-radius:50%;border:2px solid #fff;background:#000;padding:0;cursor:pointer;z-index:2147483000;box-shadow:0 6px 24px rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;overflow:hidden;transition:transform .15s ease,box-shadow .15s ease}' +
+    '.btn{position:fixed;right:24px;bottom:calc(24px + env(safe-area-inset-bottom,0px));width:60px;height:60px;border-radius:50%;border:2px solid #fff;background:' + color + ';padding:0;cursor:pointer;z-index:2147483000;box-shadow:0 6px 24px rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;overflow:hidden;transition:transform .15s ease,box-shadow .15s ease}' +
     '.btn:hover{transform:scale(1.06)}' +
-    '.btn:focus-visible,.x:focus-visible{outline:3px solid #fff;outline-offset:2px;box-shadow:0 0 0 5px #000}' +
+    '.btn:focus-visible,.x:focus-visible{outline:3px solid #fff;outline-offset:2px;box-shadow:0 0 0 5px ' + color + '}' +
     '.btn img{width:44px;height:44px;object-fit:contain;display:block;pointer-events:none}' +
-    '.panel{position:fixed;right:24px;bottom:calc(96px + env(safe-area-inset-bottom,0px));width:380px;height:min(560px,calc(100vh - 120px));background:#fff;border:1px solid #000;border-radius:16px;overflow:hidden;z-index:2147483001;box-shadow:0 18px 60px rgba(0,0,0,.4);display:none;flex-direction:column;opacity:0;transform:translateY(8px) scale(.98);transition:opacity .16s ease,transform .16s ease}' +
+    '.panel{position:fixed;right:24px;bottom:calc(96px + env(safe-area-inset-bottom,0px));width:380px;height:min(560px,calc(100vh - 120px));background:#fff;border:1px solid ' + color + ';border-radius:16px;overflow:hidden;z-index:2147483001;box-shadow:0 18px 60px rgba(0,0,0,.4);display:none;flex-direction:column;opacity:0;transform:translateY(8px) scale(.98);transition:opacity .16s ease,transform .16s ease}' +
     '.panel.open{display:flex}' +
     '.panel.show{opacity:1;transform:none}' +
-    '.bar{flex:none;height:44px;background:#000;color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 8px 0 14px;font:600 14px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}' +
+    '.bar{flex:none;height:44px;background:' + color + ';color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 8px 0 14px;font:600 14px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}' +
     '.x{width:36px;height:36px;border:0;border-radius:8px;background:transparent;color:#fff;font:400 24px/1 sans-serif;cursor:pointer}' +
-    '.x:hover{background:#222}' +
+    '.x:hover{background:rgba(255,255,255,.18)}' +
     'iframe{flex:1;width:100%;border:0;background:#fff}' +
     '@media (max-width:639px){.panel{inset:0;width:100%;height:100%;border:0;border-radius:0;box-shadow:none}.bar{height:52px;padding-top:env(safe-area-inset-top,0px)}}' +
     '@media (prefers-reduced-motion:reduce){.btn,.panel{transition:none}.btn:hover{transform:none}}' +
     '</style>' +
-    '<button class="btn" type="button" aria-label="Open chat with Daebot" aria-expanded="false" aria-controls="p"><img alt="" src="' + origin + '/brand/daebot-avatar.png"></button>' +
-    '<div class="panel" id="p" role="dialog" aria-label="Chat with Daebot"><div class="bar"><span>Daebot for Astra AI</span><button class="x" type="button" aria-label="Close chat">&times;</button></div></div>';
+    '<button class="btn" type="button" aria-expanded="false" aria-controls="p"><img alt="" src="' + origin + '/brand/daebot-avatar.png"></button>' +
+    '<div class="panel" id="p" role="dialog"><div class="bar"><span class="t"></span><button class="x" type="button" aria-label="Close chat">&times;</button></div></div>';
+  var label = brand.name || "Daebot";
+  root.querySelector(".t").textContent = brand.title || "Daebot for Astra AI";
+  root.querySelector(".panel").setAttribute("aria-label", "Chat with " + label);
+  root.querySelector(".btn").setAttribute("aria-label", "Open chat with " + label);
 
   var btn = root.querySelector(".btn");
   var panel = root.querySelector(".panel");
@@ -45,15 +56,15 @@ export const WIDGET_JS = String.raw`(function () {
     isOpen = true;
     if (!frame) {
       frame = document.createElement("iframe");
-      frame.title = "Daebot chat";
+      frame.title = label + " chat";
       frame.setAttribute("allow", "");
-      frame.src = origin + "/widget";
+      frame.src = origin + "/widget" + (brand.key ? "?o=" + encodeURIComponent(brand.key) : "");
       panel.appendChild(frame);
     }
     panel.classList.add("open");
     requestAnimationFrame(function () { panel.classList.add("show"); });
     btn.setAttribute("aria-expanded", "true");
-    btn.setAttribute("aria-label", "Close chat with Daebot");
+    btn.setAttribute("aria-label", "Close chat with " + label);
     try { frame.focus(); } catch (e) {}
   }
   function shut() {
@@ -62,7 +73,7 @@ export const WIDGET_JS = String.raw`(function () {
     panel.classList.remove("show");
     panel.classList.remove("open");
     btn.setAttribute("aria-expanded", "false");
-    btn.setAttribute("aria-label", "Open chat with Daebot");
+    btn.setAttribute("aria-label", "Open chat with " + label);
     try { btn.focus(); } catch (e) {}
   }
 
@@ -74,43 +85,65 @@ export const WIDGET_JS = String.raw`(function () {
   });
 
   document.body.appendChild(host);
+  }
+
+  // Ask the widget service how this site is branded, then draw. Any failure falls back to the default look.
+  var done = false;
+  function go(b) { if (done) return; done = true; start(b || fallback); }
+  try {
+    fetch(origin + "/api/widget/brand?o=" + encodeURIComponent(site), { credentials: "omit" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (b) { go(b && typeof b === "object" ? b : null); })
+      .catch(function () { go(null); });
+    setTimeout(function () { go(null); }, 4000);
+  } catch (e) { go(null); }
 })();
 `;
+
+/** The slice of a Brand the chat page needs (kept structural so assets.ts has no import cycle with index.ts). */
+export interface PanelBrand { key: string; name: string; org: string; greeting: string; placeholder: string; footer: string; color: string }
+
+function defaultPanelBrand(name: string): PanelBrand {
+  return { key: "", name, org: "Astra AI", greeting: `Hi, I'm ${name} for Astra AI. Ask me about Astra AI or MIND.`, placeholder: "Ask about Astra AI or MIND", footer: "AI assistant. Answers come from Astra AI's knowledge base.", color: "#000000" };
+}
 
 function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 /** The chat panel page (shown in the iframe). Black and white; text is always inserted with textContent. */
-export function panelHtml(nonce: string, personaName: string, maxInput: number): string {
+export function panelHtml(nonce: string, brandOrName: PanelBrand | string, maxInput: number): string {
+  const b: PanelBrand = typeof brandOrName === "string" ? defaultPanelBrand(brandOrName) : brandOrName;
+  const personaName = b.name;
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex,nofollow"><title>${esc(personaName)} for Astra AI</title>
+<meta name="robots" content="noindex,nofollow"><title>${esc(personaName)} for ${esc(b.org)}</title>
 <style nonce="${nonce}">
+:root{--a:${/^#[0-9a-fA-F]{6}$/.test(b.color) ? b.color : "#000000"}}
 *{box-sizing:border-box}html,body{height:100%;margin:0}
 body{display:flex;flex-direction:column;background:#fff;color:#000;font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 #log{flex:1;overflow-y:auto;padding:14px 14px 6px;display:flex;flex-direction:column;gap:10px}
 .m{max-width:88%;padding:9px 12px;border-radius:14px;white-space:pre-wrap;overflow-wrap:anywhere}
-.u{align-self:flex-end;background:#000;color:#fff;border-bottom-right-radius:4px}
+.u{align-self:flex-end;background:var(--a);color:#fff;border-bottom-right-radius:4px}
 .b{align-self:flex-start;background:#f2f2f2;color:#000;border-bottom-left-radius:4px}
 .b a{color:#000;text-decoration:underline}
-.b.err{background:#fff;border:1px solid #000}
+.b.err{background:#fff;border:1px solid var(--a)}
 .dots::after{content:"...";animation:d 1s steps(4,end) infinite}@keyframes d{0%{content:""}33%{content:"."}66%{content:".."}100%{content:"..."}}
-form{flex:none;display:flex;gap:8px;padding:10px 12px calc(10px + env(safe-area-inset-bottom,0px));border-top:1px solid #000;background:#fff}
-textarea{flex:1;resize:none;border:1px solid #000;border-radius:12px;padding:9px 11px;font:inherit;max-height:96px;background:#fff;color:#000}
-textarea:focus-visible,button:focus-visible{outline:3px solid #000;outline-offset:2px}
-button{flex:none;border:0;border-radius:12px;background:#000;color:#fff;padding:0 16px;font:600 14px/1 inherit;cursor:pointer}
+form{flex:none;display:flex;gap:8px;padding:10px 12px calc(10px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--a);background:#fff}
+textarea{flex:1;resize:none;border:1px solid var(--a);border-radius:12px;padding:9px 11px;font:inherit;max-height:96px;background:#fff;color:#000}
+textarea:focus-visible,button:focus-visible{outline:3px solid var(--a);outline-offset:2px}
+button{flex:none;border:0;border-radius:12px;background:var(--a);color:#fff;padding:0 16px;font:600 14px/1 inherit;cursor:pointer}
 button:disabled{opacity:.45;cursor:default}
 small{display:block;text-align:center;font-size:11px;color:#555;padding:0 12px 8px}
 @media (prefers-reduced-motion:reduce){.dots::after{animation:none;content:"..."}}
 </style></head>
-<body data-name="${esc(personaName)}" data-max="${maxInput}">
+<body data-name="${esc(personaName)}" data-greeting="${esc(b.greeting)}" data-max="${maxInput}" data-brand="${esc(b.key)}">
 <div id="log" role="log" aria-live="polite"></div>
-<form id="f" autocomplete="off"><textarea id="t" rows="1" maxlength="${maxInput}" placeholder="Ask about Astra AI or MIND" aria-label="Your message"></textarea><button id="s" type="submit">Send</button></form>
-<small>AI assistant. Answers come from Astra AI's knowledge base.</small>
+<form id="f" autocomplete="off"><textarea id="t" rows="1" maxlength="${maxInput}" placeholder="${esc(b.placeholder)}" aria-label="Your message"></textarea><button id="s" type="submit">Send</button></form>
+<small>${esc(b.footer)}</small>
 <script nonce="${nonce}">
 (function(){
-  var name=document.body.dataset.name, max=+document.body.dataset.max;
+  var name=document.body.dataset.name, max=+document.body.dataset.max, brand=document.body.dataset.brand||"";
   var log=document.getElementById("log"), f=document.getElementById("f"), t=document.getElementById("t"), s=document.getElementById("s");
   var sid="", busy=false, urlRe=/(https?:\\/\\/[^\\s)]+)/g;
   function fill(el,text){
@@ -121,7 +154,7 @@ small{display:block;text-align:center;font-size:11px;color:#555;padding:0 12px 8
     });
   }
   function add(cls,text){var d=document.createElement("div");d.className="m "+cls;fill(d,text);log.appendChild(d);log.scrollTop=log.scrollHeight;return d;}
-  add("b","Hi, I'm "+name+" for Astra AI. Ask me about Astra AI or MIND.");
+  add("b",document.body.dataset.greeting);
   t.addEventListener("input",function(){t.style.height="auto";t.style.height=Math.min(t.scrollHeight,96)+"px";});
   t.addEventListener("keydown",function(e){if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();f.requestSubmit();}});
   document.addEventListener("keydown",function(e){if(e.key==="Escape"){try{parent.postMessage({type:"daebot-widget-close"},"*");}catch(x){}}});
@@ -134,7 +167,7 @@ small{display:block;text-align:center;font-size:11px;color:#555;padding:0 12px 8
     add("u",text);
     var bot=add("b dots","");
     var got="";
-    fetch("/api/widget/turn",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:text,sessionId:sid||undefined})})
+    fetch("/api/widget/turn",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:text,sessionId:sid||undefined,brand:brand||undefined})})
     .then(function(r){
       if(!r.ok){return r.json().catch(function(){return {};}).then(function(j){throw new Error(j.error||"Something went wrong. Please try again.");});}
       var rd=r.body.getReader(),dec=new TextDecoder(),buf="";

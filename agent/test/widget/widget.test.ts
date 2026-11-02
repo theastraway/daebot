@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { startGateway } from "../../src/gateway/index.ts";
 import {
   BOOK_DEMO_URL, WIDGET_TOOL_ALLOWLIST, WidgetConfigError, WidgetSessions, buildSystemPrompt, clientIp, corsDecision, loadWidgetConfig,
-  parseOrigins, runWidgetTool, serveWidget, startWidgetServer, widgetModeOn, widgetToolAllowed,
+  parseBrands, parseOrigins, runWidgetTool, serveWidget, startWidgetServer, widgetModeOn, widgetToolAllowed,
 } from "../../src/widget/index.ts";
 import type { WidgetConfig } from "../../src/widget/index.ts";
 import { baseCfg, FakeProvider } from "../core/helpers.ts";
@@ -324,4 +324,75 @@ test("the daily spend cap stops new turns", async () => {
     assert.equal(res.status, 503);
     assert.match((await res.json()).error, /book-demo/);
   } finally { await r.close(); }
+});
+
+// ---------- per-origin branding ----------
+const YSF = "https://ysf.example.org";
+const BRANDS = JSON.stringify({ [YSF]: { org: "Young Scientist Foundation", color: "#0b3d91", fallbackUrl: "https://ysf.example.org/contact", fallbackAsk: "contacting the team", subjects: ["YSF", "its fundraising"], extraRules: ["Never promise tax advice."] } });
+
+test("brands: unset means the default Astra AI behaviour, and a branded origin joins the allowlist", () => {
+  assert.deepEqual(parseBrands(undefined), {});
+  assert.deepEqual(loadWidgetConfig({ ...ENV }).brands, {});
+  const wc = loadWidgetConfig({ ...ENV, WIDGET_BRANDS: BRANDS });
+  assert.ok(wc.allowedOrigins.includes(YSF));
+  assert.ok(wc.allowedOrigins.includes("https://theastraway.com"));
+  const b = wc.brands![YSF]!;
+  assert.equal(b.name, "Daebot");
+  assert.equal(b.color, "#0b3d91");
+  assert.match(b.greeting, /Daebot for Young Scientist Foundation/);
+});
+
+test("brands: bad config refuses to start without echoing anything secret", () => {
+  assert.throws(() => parseBrands("{nope"), WidgetConfigError);
+  assert.throws(() => parseBrands("[]"), WidgetConfigError);
+  assert.throws(() => parseBrands(JSON.stringify({ "not a url": { org: "x" } })), WidgetConfigError);
+  assert.throws(() => parseBrands(JSON.stringify({ [YSF]: {} })), WidgetConfigError);
+  assert.throws(() => parseBrands(JSON.stringify({ [YSF]: { org: "x", color: "red" } })), WidgetConfigError);
+  assert.throws(() => parseBrands(JSON.stringify({ [YSF]: { org: "x", fallbackUrl: "javascript:alert(1)" } })), WidgetConfigError);
+});
+
+test("brands: the prompt carries the brand, never Astra AI, and the default prompt is unchanged", () => {
+  const b = parseBrands(BRANDS)[YSF]!;
+  const p = buildSystemPrompt(b);
+  assert.match(p, /Daebot for Young Scientist Foundation: Young Scientist Foundation's assistant on ysf\.example\.org/);
+  assert.match(p, /suggest contacting the team at https:\/\/ysf\.example\.org\/contact/);
+  assert.match(p, /Never promise tax advice\./);
+  assert.doesNotMatch(p, /Astra AI|book-demo/);
+  assert.match(buildSystemPrompt("Daebot"), /Daebot for Astra AI: Astra AI's assistant on theastraway\.com\. Astra AI is an AI consulting firm; MIND is its knowledge platform\./);
+});
+
+test("brands: brand endpoint, chat page and turn use the right brand per origin", async () => {
+  const wc = loadWidgetConfig({ ...ENV, WIDGET_BRANDS: BRANDS });
+  const provider = new FakeProvider([{ text: "ysf answer" }, { text: "astra answer" }]);
+  const m = fakeMind();
+  const srv = await startWidgetServer({ wc: { ...wc, cfg: baseCfg({ mindApiKey: ENV.WIDGET_MIND_API_KEY }) }, provider, mind: m.mind }, { port: 0 });
+  try {
+    const br = await fetch(srv.url + "/api/widget/brand?o=" + encodeURIComponent(YSF), { headers: { origin: YSF } });
+    assert.equal(br.status, 200);
+    assert.equal(br.headers.get("access-control-allow-origin"), YSF);
+    assert.deepEqual(await br.json(), { key: YSF, name: "Daebot", title: "Daebot for Young Scientist Foundation", color: "#0b3d91" });
+    const def = await (await fetch(srv.url + "/api/widget/brand?o=" + encodeURIComponent(ORIGIN), { headers: { origin: ORIGIN } })).json();
+    assert.equal(def.key, ""); assert.equal(def.title, "Daebot for Astra AI"); assert.equal(def.color, "#000000");
+    assert.equal((await fetch(srv.url + "/api/widget/brand?o=" + encodeURIComponent(YSF), { headers: { origin: "https://evil.example" } })).status, 403);
+
+    const page = await fetch(srv.url + "/widget?o=" + encodeURIComponent(YSF));
+    const csp = page.headers.get("content-security-policy") ?? "";
+    assert.match(csp, new RegExp(`frame-ancestors 'self' ${YSF.replace(/[.]/g, "\\.")}$`));
+    const html = await page.text();
+    assert.match(html, /--a:#0b3d91/);
+    assert.match(html, /Young Scientist Foundation/);
+    assert.doesNotMatch(html, /Astra AI/);
+    const plain = await fetch(srv.url + "/widget");
+    assert.doesNotMatch(plain.headers.get("content-security-policy") ?? "", /ysf\.example\.org/);
+
+    const r1 = await fetch(srv.url + "/api/widget/turn", { method: "POST", headers: { "content-type": "application/json", origin: YSF }, body: JSON.stringify({ text: "What is this site about?", brand: YSF }) });
+    assert.equal(r1.status, 200);
+    await sse(r1);
+    assert.match(String((provider.requests[0]!.messages[0] as { content: string }).content), /Young Scientist Foundation/);
+    const r2 = await fetch(srv.url + "/api/widget/turn", { method: "POST", headers: { "content-type": "application/json", origin: ORIGIN }, body: JSON.stringify({ text: "hi" }) });
+    await sse(r2);
+    assert.match(String((provider.requests[1]!.messages[0] as { content: string }).content), /Astra AI/);
+    // an unknown brand key falls back to the default instead of erroring
+    assert.equal(provider.requests.length, 2);
+  } finally { await srv.close(); }
 });
