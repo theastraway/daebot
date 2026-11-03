@@ -90,10 +90,14 @@ export function createScreenTool(feed: ScreenFeed = screenFeed, opts: { now?: ()
       const blocked = feedBlocker(feed);
       if (blocked) return fail(`screen: ${blocked}`);
 
+      // Daebot's own window must not hide the screen it is looking at: minimize it first (the user brings it back from the taskbar, Dock or tray).
+      const hid = action === "look" || action === "wait_for_change" ? await feed.clearOwnWindow(ctx.signal) : false;
+      const hidNote = hid ? "Minimized the Daebot window first so it is not covering the screen. " : "";
+
       if (action === "look") {
         const f = feed.latest() ?? (await feed.next({ timeoutMs: FIRST_FRAME_WAIT_MS, signal: ctx.signal }));
         if (!f) return fail("screen: no frame yet. The feed is on but nothing has arrived; try again in a second.");
-        return { ok: true, output: frameLine(f, now()), images: [frameDataUrl(f)], meta: { width: f.width, height: f.height } };
+        return { ok: true, output: hidNote + frameLine(f, now()), images: [frameDataUrl(f)], meta: { width: f.width, height: f.height, ownWindowMinimized: hid } };
       }
 
       if (action === "wait_for_change") {
@@ -112,9 +116,9 @@ export function createScreenTool(feed: ScreenFeed = screenFeed, opts: { now?: ()
         const waited = (r.waitedMs / 1000).toFixed(1);
         return {
           ok: true,
-          output: r.changed
+          output: hidNote + (r.changed
             ? `The screen changed after ${waited}s (${(r.score * 100).toFixed(1)}% of ${region ? "the region" : "the screen"} differed), then settled. ${frameLine(r.frame, now())}`
-            : `No change above ${(threshold * 100).toFixed(1)}% in ${waited}s: timed out. This is the latest frame. ${frameLine(r.frame, now())}`,
+            : `No change above ${(threshold * 100).toFixed(1)}% in ${waited}s: timed out. This is the latest frame. ${frameLine(r.frame, now())}`),
           images: [frameDataUrl(r.frame)],
           meta: { changed: r.changed, waitedMs: r.waitedMs, width: r.frame.width, height: r.frame.height },
         };

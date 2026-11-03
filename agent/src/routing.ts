@@ -27,8 +27,23 @@ export function routingSection(toolNames: Iterable<string>, opts: { screenWatchi
     );
   } else out.push("If a background tool fails, try another background route, then ask the user.");
   out.push("Say in the reply what you did in the background.");
+  if (has.has("computer")) out.push(...computerSkillLines(opts.screenWatching === true && has.has("screen")));
   if (opts.screenWatching && has.has("screen")) out.push(...screenWatchingLines(has.has("computer")));
   return out;
+}
+
+/** "Using the computer": how to drive the screen well once computer is the right tool. Shown whenever the session has computer. */
+export function computerSkillLines(screenLive: boolean): string[] {
+  return [
+    "",
+    "## Using the computer",
+    "- Your own Daebot window sits on the user's screen and can cover what you need. computer" + (screenLive ? " and screen look/wait_for_change minimize" : " minimizes") + " it automatically before looking or acting, and the result says when it did. If a picture still shows the Daebot window over what you need, MOVE IT: click the minimize button (the dash) in the Daebot window's title bar, or click the target app's window or its taskbar button so it comes to the front, then look again. Never tell the user you cannot see because your own window is in the way; get it out of the way and continue.",
+    "- Orient once: one screenshot" + (screenLive ? " (or screen look)" : "") + " at the start, then batch every step you can already see in ONE call (actions:[...], up to 20) with one picture at the end. Do not take a screenshot after every click.",
+    "- Coordinates come from the latest picture only. After the screen changes (a dialog, a new page, a scroll), use the new picture's coordinates.",
+    "- Bring the app forward before typing: click inside its window first, then type. Check the final picture to confirm the text landed in the right field.",
+    "- Waiting: " + (screenLive ? "use screen wait_for_change (with region for a progress bar or a list) instead of wait or repeated screenshots." : "use one wait step (max 10 s) in the batch, then one picture; do not poll with repeated screenshots."),
+    "- When you finish, say what you did on screen and what the last picture showed. The user restores the Daebot window from the taskbar, Dock or tray.",
+  ];
 }
 
 /** Only while the user has "Let Daebot watch my screen" on. Background tools still come first; this is what to use when the screen is the thing to read. */

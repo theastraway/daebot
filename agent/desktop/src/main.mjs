@@ -489,6 +489,18 @@ async function setKernelMode(mode) {
 // item stops it. Capture runs here in the main process (desktopCapturer); frames go to the local gateway's in-memory ring buffer and nowhere else.
 // macOS Screen Recording permission is the USER's to grant in System Settings; we only read its state and open that pane when they click the button.
 let screenState = { watching: false, permission: "unknown", error: undefined };
+// Daebot's own window covers what the agent is trying to see or click. Each frame tells the gateway whether the window is showing; when a tool
+// asks, the gateway's reply says hide and the window is minimized (the user brings it back from the taskbar, Dock or tray). The minimize
+// animation counts as still showing, so the agent waits for a frame without the window in it.
+const MINIMIZE_SETTLE_MS = 500;
+let ownHiddenAt = 0;
+const ownWindowShowing = () => (!!win && !win.isDestroyed() && win.isVisible() && !win.isMinimized()) || Date.now() - ownHiddenAt < MINIMIZE_SETTLE_MS;
+function hideOwnWindowForAgent() {
+  if (!win || win.isDestroyed() || !win.isVisible() || win.isMinimized()) return;
+  ownHiddenAt = Date.now();
+  if (win.isMinimizable()) win.minimize(); else win.hide();
+  log("minimized the Daebot window so the agent can see and use the screen");
+}
 const screenGatewayPut = async (body) => {
   if (!gatewayInfo) return;
   try {
@@ -500,8 +512,9 @@ const screenCapture = new ScreenCapture({
   getAccess: () => screenAccess({ platform: process.platform, status: process.platform === "darwin" ? systemPreferences.getMediaAccessStatus("screen") : undefined }),
   post: async (f) => {
     if (!gatewayInfo) return;
-    const r = await fetch(new URL(`/screen/frame?${frameQuery(f)}`, gatewayInfo.url), { method: "POST", headers: { authorization: `Bearer ${gatewayInfo.token}`, "content-type": "image/jpeg" }, body: f.jpeg });
+    const r = await fetch(new URL(`/screen/frame?${frameQuery(f)}&own=${ownWindowShowing() ? 1 : 0}`, gatewayInfo.url), { method: "POST", headers: { authorization: `Bearer ${gatewayInfo.token}`, "content-type": "image/jpeg" }, body: f.jpeg });
     if (!r.ok && r.status !== 409) throw new Error(`gateway refused the frame (${r.status})`);
+    if (r.status === 200) { const j = await r.json().catch(() => ({})); if (j && j.hide === true) hideOwnWindowForAgent(); }
   },
   report: (s) => {
     screenState = { watching: s.watching, permission: s.permission, error: s.error };

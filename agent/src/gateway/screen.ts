@@ -1,7 +1,8 @@
 // Local-only routes the desktop shell uses to feed the screen ring buffer (see screen/feed.ts):
 //   GET  /screen/state   what the feed is doing
 //   PUT  /screen/state   {watching, permission, fps, error?}  the shell reports the user's switch and the OS permission
-//   POST /screen/frame   one JPEG (the body), meta in the query: w h sw sh cx cy sig (base64url of SIG_LEN luma bytes)
+//   POST /screen/frame   one JPEG (the body), meta in the query: w h sw sh cx cy sig (base64url of SIG_LEN luma bytes), own (1 = the Daebot window
+//                        was on screen). 204, or 200 {hide:true} when a tool asked the shell to minimize the Daebot window.
 // All need the gateway token like every other API route. The hosted deployment never mounts them (404), so a public server cannot be fed
 // frames, and a frame is dropped unless the user's switch is on AND the OS permission is granted.
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -45,8 +46,12 @@ export async function screenApi(req: IncomingMessage, res: ServerResponse, path:
     if (!width || !height || width < 1 || height < 1 || !screenWidth || !screenHeight) return d.sendJson(res, 400, { error: "w, h, sw and sh are required" });
     const sig = Buffer.from(query.get("sig") ?? "", "base64url");
     if (sig.length !== SIG_LEN) return d.sendJson(res, 400, { error: `sig must be ${SIG_LEN} bytes (base64url)` });
-    const ok = feed.ingest({ jpeg: body, width, height, screenWidth, screenHeight, cursorX, cursorY, sig: new Uint8Array(sig) });
-    return ok ? void (res.writeHead(204, { "cache-control": "no-store" }), res.end()) : d.sendJson(res, 400, { error: "frame rejected" });
+    const own = query.get("own");
+    const ownVisible = own === "1" ? true : own === "0" ? false : undefined;
+    const ok = feed.ingest({ jpeg: body, width, height, screenWidth, screenHeight, cursorX, cursorY, sig: new Uint8Array(sig), ...(ownVisible === undefined ? {} : { ownVisible }) });
+    if (!ok) return d.sendJson(res, 400, { error: "frame rejected" });
+    if (feed.takeHide()) return d.sendJson(res, 200, { hide: true });
+    res.writeHead(204, { "cache-control": "no-store" }); res.end();
   }
   return d.sendJson(res, 404, { error: "not found" });
 }

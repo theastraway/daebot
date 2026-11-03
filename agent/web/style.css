@@ -54,6 +54,7 @@ code, pre, kbd { font-family: var(--mono); }
 .win-overlay .gate-token { -webkit-app-region: drag; }
 .win-overlay .gate-token :is(button, a, input, textarea) { -webkit-app-region: no-drag; }
 .win-overlay .drawer { top: var(--wco-h); -webkit-app-region: no-drag; }
+.win-overlay .screen-pill { -webkit-app-region: no-drag; }
 .win-overlay .screen-pill:not(.placed) { top: calc(var(--wco-h) + 8px); }
 
 /* sidebar */
@@ -1070,7 +1071,7 @@ body.xv-open .top-title, body.xv-open .model-wrap, body.xv-open .top-meta, body.
 .am-screen[hidden] { display: none; }
 .screen-pill { position: fixed; z-index: 60; top: 8px; right: 12px; display: flex; align-items: center; gap: 8px; padding: 5px 6px 5px 10px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line-strong); box-shadow: 0 2px 10px rgba(0,0,0,.15); font: 550 12.5px var(--sans); color: var(--ink); }
 .screen-pill[hidden] { display: none; }
-.screen-pill { cursor: grab; user-select: none; touch-action: none; -webkit-app-region: no-drag; }
+.screen-pill { cursor: grab; user-select: none; touch-action: none; }
 .screen-pill.dragging { cursor: grabbing; }
 .screen-pill.placed { right: auto; }
 .screen-pill .pill-min { background: transparent; color: var(--ink); padding: 2px 8px; font: 600 14px/1 var(--sans); }

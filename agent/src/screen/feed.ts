@@ -42,6 +42,8 @@ export interface Frame {
   cursorX: number;
   cursorY: number;
   sig: Uint8Array;
+  /** The desktop shell's own Daebot window was on screen (shown, not minimized) when this frame was captured. Undefined from an older shell. */
+  ownVisible?: boolean;
 }
 
 export interface FeedState {
@@ -247,6 +249,42 @@ export class ScreenFeed {
       files.push(name);
     }
     return { dir, files };
+  }
+
+  // Daebot's own window gets in the way of what it is trying to see or click. A tool asks for it to be minimized; the request rides back
+  // to the desktop shell on the reply to its next frame POST (the only channel from here to the shell), and the shell minimizes the window.
+  private hideAsked = false;
+  private hideSentAt = 0;
+
+  /** Ask the shell to minimize the Daebot window. Delivered with the next frame reply. */
+  requestHide(): void { this.hideAsked = true; }
+  /** The frame route calls this once per frame: true hands the pending request to the shell. */
+  takeHide(): boolean {
+    if (!this.hideAsked) return false;
+    this.hideAsked = false;
+    this.hideSentAt = this.now();
+    return true;
+  }
+
+  /**
+   * Make sure the Daebot window is not covering the screen before a tool looks or clicks. Does nothing (returns false) when the feed is not live
+   * or the latest frame says the window is not showing. Otherwise asks the shell to minimize it and waits (up to about 3 s) for a frame captured
+   * after the window is gone. Returns true when it minimized the window.
+   */
+  async clearOwnWindow(signal?: AbortSignal, timeoutMs = 3000): Promise<boolean> {
+    if (!this.live() || this.latest()?.ownVisible !== true) return false;
+    this.requestHide();
+    const deadline = this.now() + timeoutMs;
+    let cursor = this.latest();
+    for (;;) {
+      const left = deadline - this.now();
+      if (left <= 0 || signal?.aborted) { this.hideAsked = false; return false; }
+      const f = await this.next({ afterId: cursor?.id, timeoutMs: left, signal });
+      if (!f) { this.hideAsked = false; return false; }
+      cursor = f;
+      // A frame captured after the request went out, and the shell says the window is down: the screen behind it is what this frame shows.
+      if (this.hideSentAt && f.t > this.hideSentAt && f.ownVisible === false) return true;
+    }
   }
 
   /** Drop everything (stop, sign out, shutdown). */
