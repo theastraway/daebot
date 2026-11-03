@@ -26,6 +26,64 @@ export function screenView(s) {
   };
 }
 
+/** Keep a dragged pill fully inside the window. Pure so it is unit tested. */
+export function clampPillPos(x, y, w, h, vw, vh, pad = 4) {
+  const cx = Math.min(Math.max(pad, x), Math.max(pad, vw - w - pad));
+  const cy = Math.min(Math.max(pad, y), Math.max(pad, vh - h - pad));
+  return { x: Math.round(cx), y: Math.round(cy) };
+}
+
+const PILL_KEY = "daebot.screenPill";
+function loadPill() { try { const v = JSON.parse(localStorage.getItem(PILL_KEY) || "{}"); return v && typeof v === "object" ? v : {}; } catch { return {}; } }
+function savePill(v) { try { localStorage.setItem(PILL_KEY, JSON.stringify(v)); } catch { /* storage blocked: position just is not remembered */ } }
+
+// Drag anywhere on the pill to move it; the minus button shrinks it to the red dot and a click on the dot opens it again.
+function makePillMovable(pill) {
+  const pref = loadPill();
+  const minBtn = pill.querySelector(".pill-min");
+  function setMin(m) {
+    pill.classList.toggle("min", m);
+    minBtn.setAttribute("aria-expanded", String(!m));
+    pill.title = m ? "Daebot is watching your screen. Click to open, drag to move" : "Drag to move";
+    pref.min = m; savePill(pref);
+    if (pill.classList.contains("placed")) requestAnimationFrame(() => place(pref.x, pref.y, false));
+  }
+  function place(x, y, save = true) {
+    const r = pill.getBoundingClientRect();
+    const p = clampPillPos(x, y, r.width, r.height, window.innerWidth, window.innerHeight);
+    pill.classList.add("placed");
+    pill.style.left = p.x + "px"; pill.style.top = p.y + "px";
+    if (save) { pref.x = p.x; pref.y = p.y; savePill(pref); }
+  }
+  minBtn.addEventListener("click", (e) => { e.stopPropagation(); setMin(true); });
+  let drag = null; let moved = false;
+  pill.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || e.target.closest(".pill-stop, .pill-min")) return;
+    const r = pill.getBoundingClientRect();
+    drag = { dx: e.clientX - r.left, dy: e.clientY - r.top, sx: e.clientX, sy: e.clientY };
+    moved = false;
+    pill.setPointerCapture(e.pointerId);
+  });
+  pill.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    if (!moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 4) return;
+    moved = true; pill.classList.add("dragging");
+    place(e.clientX - drag.dx, e.clientY - drag.dy, false);
+  });
+  const end = (e) => {
+    if (!drag) return;
+    drag = null; pill.classList.remove("dragging");
+    try { pill.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+    if (moved) { const r = pill.getBoundingClientRect(); place(r.left, r.top); }
+    else if (pill.classList.contains("min")) setMin(false);
+  };
+  pill.addEventListener("pointerup", end);
+  pill.addEventListener("pointercancel", end);
+  window.addEventListener("resize", () => { if (pill.classList.contains("placed") && !pill.hidden) place(pref.x, pref.y); });
+  if (pref.min) setMin(true);
+  return { restore() { if (typeof pref.x === "number" && typeof pref.y === "number") requestAnimationFrame(() => place(pref.x, pref.y, false)); } };
+}
+
 export function initScreen(o) {
   const bridge = typeof window !== "undefined" && window.mindclawDesktop && window.mindclawDesktop.screen;
   if (!bridge || typeof bridge.get !== "function") return { available: false };
@@ -69,7 +127,9 @@ export function initScreen(o) {
     sw.classList.toggle("on", v.checked);
     item.setAttribute("aria-checked", String(v.checked));
     note.textContent = v.note;
+    const wasHidden = pill.hidden;
     pill.hidden = !v.pill;
+    if (wasHidden && v.pill) mover.restore();
     if (v.card) openCard(v); else closeCard();
   }
 
@@ -77,7 +137,8 @@ export function initScreen(o) {
     const next = !(state && state.watching);
     bridge.set(next).then((s) => { if (s) apply(s); }).catch(() => {});
   });
-  pill.querySelector("button").addEventListener("click", () => { bridge.set(false).then((s) => { if (s) apply(s); }).catch(() => {}); });
+  const mover = makePillMovable(pill);
+  pill.querySelector(".pill-stop").addEventListener("click", () => { bridge.set(false).then((s) => { if (s) apply(s); }).catch(() => {}); });
   if (typeof bridge.onChange === "function") bridge.onChange(apply);
   bridge.get().then((s) => { if (s) apply(s); }).catch(() => {});
   return { available: true, state: () => state };
