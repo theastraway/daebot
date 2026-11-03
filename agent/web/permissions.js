@@ -279,6 +279,7 @@ export function initPermissions({ json, h, icon, notify, button }) {
 /**
  * The waiver modal. Resolves true only after the box is ticked, the button pressed AND the server recorded the acceptance (POST /permissions/waiver).
  * The button stays disabled until the box is ticked; the server refuses bypass without a recorded waiver no matter what this page does.
+ * It shows every time Bypass is picked until the user also ticks "Don't show this again" (recorded with the waiver).
  */
 export function askWaiver({ json, h, icon, notify, info }) {
   return new Promise((resolve) => {
@@ -294,6 +295,10 @@ export function askWaiver({ json, h, icon, notify, info }) {
     const box = document.createElement("input"); box.type = "checkbox"; box.id = "waiver-box";
     lab.append(box, h("span", "", "I have read this and I accept."));
     card.append(lab);
+    const lab2 = h("label", "waiver-check waiver-skip");
+    const skip = document.createElement("input"); skip.type = "checkbox"; skip.id = "waiver-skip";
+    lab2.append(skip, h("span", "", "Don't show this again"));
+    card.append(lab2);
     const err = h("p", "err", ""); err.hidden = true; err.setAttribute("role", "alert");
     card.append(err);
     const row = h("div", "row");
@@ -307,6 +312,7 @@ export function askWaiver({ json, h, icon, notify, info }) {
     const close = (v) => { document.removeEventListener("keydown", onKey); modal.remove(); try { prev && prev.focus && prev.focus(); } catch { /* gone */ } resolve(v); };
     const onKey = (e) => { if (e.key === "Escape") close(false); };
     document.addEventListener("keydown", onKey);
+    if (info && info.accepted) { box.checked = true; go.disabled = false; } // accepted before: one click to confirm
     box.addEventListener("change", () => { go.disabled = !box.checked; });
     no.addEventListener("click", () => close(false));
     modal.addEventListener("click", (e) => { if (e.target === modal) close(false); });
@@ -314,8 +320,8 @@ export function askWaiver({ json, h, icon, notify, info }) {
       if (!box.checked) return;
       go.disabled = true; err.hidden = true;
       try {
-        await json("/permissions/waiver", { method: "POST", body: JSON.stringify({ acknowledged: true, version }) });
-        close(true);
+        await json("/permissions/waiver", { method: "POST", body: JSON.stringify({ acknowledged: true, version, dontShowAgain: skip.checked }) });
+        close({ dontShowAgain: skip.checked });
       } catch (e) {
         err.textContent = `Could not record your acceptance: ${e.message}`; err.hidden = false; go.disabled = !box.checked;
       }
@@ -395,10 +401,11 @@ export function initChatMode({ json, h, icon, notify, ids, ensureSession, getSes
     try { id = await ensureSession(); } catch (e) { notify(`Could not start a chat: ${e.message}`); return; }
     if (!id) return;
     try {
-      if (mode === "bypass" && !(snap.waiver && snap.waiver.accepted)) {
+      // Ask every time until the waiver is accepted AND "Don't show this again" was ticked once.
+      if (mode === "bypass" && !(snap.waiver && snap.waiver.accepted && snap.waiver.dontShowAgain)) {
         const ok = await askWaiver({ json, h, icon, notify, info: snap.waiver });
         if (!ok) return;
-        snap.waiver = { ...(snap.waiver || {}), accepted: true };
+        snap.waiver = { ...(snap.waiver || {}), accepted: true, dontShowAgain: ok.dontShowAgain === true };
       }
       await patch(id, mode === snap.mode ? null : mode);
     } catch (e) {
