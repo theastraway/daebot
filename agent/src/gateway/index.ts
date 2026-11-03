@@ -1431,13 +1431,13 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       return sendJson(res, 200, { ok: true, mode: svc.store.mode() });
     }
     if (path === "/permissions/waiver") {
-      if (method === "GET") return sendJson(res, 200, { accepted: svc.waiverAccepted(), at: svc.store.waiver()?.at ?? null, version: WAIVER_VERSION, text: WAIVER_TEXT });
+      if (method === "GET") return sendJson(res, 200, { accepted: svc.waiverAccepted(), at: svc.store.waiver()?.at ?? null, dontShowAgain: svc.store.waiver()?.dontShowAgain === true, version: WAIVER_VERSION, text: WAIVER_TEXT });
       if (method === "POST") {
         // The checkbox is the consent: the request must say so for THIS version of the text. Recorded on the account, with a timestamp.
         const b = await readJson(req);
         if (b.acknowledged !== true || b.version !== WAIVER_VERSION) return sendJson(res, 400, { error: "waiver_not_acknowledged", message: "Tick the box to accept the waiver.", version: WAIVER_VERSION });
-        const w = svc.store.acceptWaiver();
-        return sendJson(res, 200, { ok: true, accepted: true, at: w.at, version: w.version });
+        const w = svc.store.acceptWaiver(Date.now(), b.dontShowAgain === true);
+        return sendJson(res, 200, { ok: true, accepted: true, at: w.at, version: w.version, dontShowAgain: w.dontShowAgain === true });
       }
       if (method === "DELETE") { svc.store.revokeWaiver(); return sendJson(res, 200, { ok: true, accepted: false }); }
       return sendJson(res, 405, { error: "method not allowed" });

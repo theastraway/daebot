@@ -77,6 +77,8 @@ test("web wiring: account.js and the waiver build DOM with textContent only, sig
   assert.match(app, /from "\/account\.js"/); assert.match(app, /initChatMode/);
   assert.match(perms, /\/permissions\/waiver/); assert.match(perms, /acknowledged: true/);
   assert.match(perms, /go\.disabled = true/); assert.match(perms, /go\.disabled = !box\.checked/);
+  assert.match(perms, /Don't show this again/); assert.match(perms, /dontShowAgain: skip\.checked/);
+  assert.match(perms, /snap\.waiver\.accepted && snap\.waiver\.dontShowAgain/, "asks every time until Don't show this again was ticked");
   const preload = readFileSync(fileURLToPath(new URL("../../desktop/src/preload.cjs", import.meta.url)), "utf8");
   assert.match(preload, /accounts: Object\.freeze/); assert.match(preload, /desktop:account-switch/);
 });

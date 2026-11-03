@@ -185,7 +185,7 @@ export class PermissionService {
       rules: this.store.rules().sort((a, b) => b.createdAt - a.createdAt),
       learned: this.store.learnedDenies().map((p) => ({ key: p.key, label: p.label, deny: p.deny, allow: p.allow })),
       pending: this.pendingList(),
-      waiver: { accepted: this.waiverAccepted(), at: this.store.waiver()?.at ?? null, version: WAIVER_VERSION, text: WAIVER_TEXT },
+      waiver: { accepted: this.waiverAccepted(), at: this.store.waiver()?.at ?? null, dontShowAgain: this.store.waiver()?.dontShowAgain === true, version: WAIVER_VERSION, text: WAIVER_TEXT },
     };
   }
 

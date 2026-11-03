@@ -50,6 +50,18 @@ test("waiver: recorded per account with a timestamp, survives a reload, only cou
   assert.equal(a.waiverAccepted(), false);
 });
 
+test("waiver: \"Don't show this again\" is recorded with the acceptance, read back, and cleared when the waiver is withdrawn", () => {
+  const dir = tmp("bypass-skip-");
+  const a = new PermissionService({ dir, owner: "u1" });
+  assert.equal(a.snapshot().waiver.dontShowAgain, false);
+  a.store.acceptWaiver(1, false);
+  assert.equal(new PermissionService({ dir, owner: "u1" }).snapshot().waiver.dontShowAgain, false, "accepted but still asks every time");
+  assert.deepEqual(a.store.acceptWaiver(2, true), { at: 2, version: WAIVER_VERSION, dontShowAgain: true });
+  assert.equal(new PermissionService({ dir, owner: "u1" }).snapshot().waiver.dontShowAgain, true, "read back from the file");
+  a.store.revokeWaiver();
+  assert.equal(a.snapshot().waiver.dontShowAgain, false);
+});
+
 test("effectiveMode: a stored bypass without a waiver falls back to the account default, never to bypass", () => {
   const perms = new PermissionService({ dir: tmp("bypass-e-"), owner: "u1" });
   perms.store.setMode("writes");
@@ -198,6 +210,10 @@ test("HTTP: bypass is refused (403 waiver_required) until the waiver is recorded
     assert.equal((await http(gw.url, "POST", "/permissions/waiver", { headers: h, body: { acknowledged: true, version: WAIVER_VERSION + 1 } })).status, 400);
     assert.equal(perms.waiverAccepted(), false);
     const acc = await http(gw.url, "POST", "/permissions/waiver", { headers: h, body: { acknowledged: true, version: WAIVER_VERSION } });
+    assert.equal(JSON.parse(acc.body).dontShowAgain, false);
+    const skip = await http(gw.url, "POST", "/permissions/waiver", { headers: h, body: { acknowledged: true, version: WAIVER_VERSION, dontShowAgain: true } });
+    assert.equal(JSON.parse(skip.body).dontShowAgain, true);
+    assert.equal(JSON.parse((await http(gw.url, "GET", "/permissions/waiver", { headers: h })).body).dontShowAgain, true);
     assert.equal(acc.status, 200);
     assert.ok(JSON.parse(acc.body).at > 0);
     assert.equal(perms.waiverAccepted(), true);

@@ -21,7 +21,8 @@ const MAX_PATTERNS = 400;
 
 export interface PatternStat { label: string; tool: string; matcher: Matcher; allow: number; deny: number; lastAt: number }
 /** The Bypass waiver: recorded per account, server side. Without one the server refuses to honor bypass anywhere. */
-export interface Waiver { at: number; version: number }
+/** dontShowAgain: the user ticked "Don't show this again", so turning on Bypass in a chat no longer asks for a confirmation. */
+export interface Waiver { at: number; version: number; dontShowAgain?: boolean }
 /** Bump when the waiver text changes: an older acceptance no longer counts. */
 export const WAIVER_VERSION = 1;
 export const WAIVER_TEXT = "I understand this gives the AI permission to take any action without asking, including sending messages, deleting data and spending money, and that every action it takes is my responsibility.";
@@ -40,7 +41,7 @@ function clean(raw: unknown): FileShape {
   if (!raw || typeof raw !== "object") return out;
   const j = raw as Partial<FileShape>;
   if (isMode(j.mode)) out.mode = j.mode;
-  if (j.waiver && typeof j.waiver === "object" && Number.isFinite(Number(j.waiver.at)) && Number.isInteger(Number(j.waiver.version))) out.waiver = { at: Number(j.waiver.at), version: Number(j.waiver.version) };
+  if (j.waiver && typeof j.waiver === "object" && Number.isFinite(Number(j.waiver.at)) && Number.isInteger(Number(j.waiver.version))) out.waiver = { at: Number(j.waiver.at), version: Number(j.waiver.version), ...(j.waiver.dontShowAgain === true ? { dontShowAgain: true } : {}) };
   for (const r of Array.isArray(j.rules) ? j.rules : []) {
     try {
       const v = validateRule({ effect: r.effect, tool: r.tool, matcher: r.matcher });
@@ -98,9 +99,9 @@ export class PermissionStore {
 
   /** The recorded waiver, only when it is for the current text. */
   waiver(): Waiver | undefined { const w = this.load().waiver; return w && w.version === WAIVER_VERSION ? { ...w } : undefined; }
-  acceptWaiver(now = Date.now()): Waiver {
+  acceptWaiver(now = Date.now(), dontShowAgain = false): Waiver {
     const d = this.load();
-    const w: Waiver = { at: now, version: WAIVER_VERSION };
+    const w: Waiver = { at: now, version: WAIVER_VERSION, ...(dontShowAgain ? { dontShowAgain: true } : {}) };
     this.save({ ...d, waiver: w });
     return { ...w };
   }
