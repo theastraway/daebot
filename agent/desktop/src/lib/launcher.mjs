@@ -50,7 +50,8 @@ export function findBundledBinary({ resourcesPath, platform = process.platform, 
  * @param {string} [o.home] working directory for the binary (the user's home by default)
  */
 export function buildSpawnPlan(o) {
-  const env = { ...o.baseEnv, ...envForKernelMode(o.kernelMode), MINDCLAW_AGENT_ROOT: o.agentRoot, MINDCLAW_PARENT_PIPE: "1" };
+  // DAEBOT_DESKTOP_PID: this (Electron main) process owns the Daebot window; the computer tool minimizes it before it looks or clicks.
+  const env = { ...o.baseEnv, ...envForKernelMode(o.kernelMode), MINDCLAW_AGENT_ROOT: o.agentRoot, MINDCLAW_PARENT_PIPE: "1", DAEBOT_DESKTOP_PID: String(o.desktopPid ?? process.pid) };
   if (o.mindKey) { env.DAEBOT_BILLING = "mind"; env.MIND_API_KEY = o.mindKey; }
   if (o.dataDir) env.DATA_DIR = o.dataDir;
   // Match daebot.live: Bots (Sessions | Bots toggle, bot_talk) is on in the app. An explicit value in the environment still wins.

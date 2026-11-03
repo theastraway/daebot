@@ -47,5 +47,5 @@ test("screen pill: minimize button, drag clamps inside the window", () => {
   assert.deepEqual(clampPillPos(950, 900, 200, 30, 1000, 800), { x: 796, y: 766 });
   const css = read("style.css");
   assert.match(css, /\.screen-pill\.min :is\(\.pill-text, \.pill-min, \.pill-stop\) \{ display: none; \}/);
-  assert.match(css, /\.screen-pill \{[^}]*-webkit-app-region: no-drag/);
+  assert.match(css, /\.win-overlay \.screen-pill \{ -webkit-app-region: no-drag; \}/);
 });

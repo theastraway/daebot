@@ -252,15 +252,41 @@ function liveResult(head: string, frames: Frame[], note?: string): ToolResult {
   return {
     ok: true,
     output: f
-      ? `${head}. Frame ${f.width}x${f.height} (screen ${f.screenWidth}x${f.screenHeight}), cursor at ${f.cursorX},${f.cursorY}. Use coordinates in this frame.`
+      ? `${note ? note + " " : ""}${head}. Frame ${f.width}x${f.height} (screen ${f.screenWidth}x${f.screenHeight}), cursor at ${f.cursorX},${f.cursorY}. Use coordinates in this frame.`
       : `${head}. ${note ?? "No screenshot was taken."}`,
     images: frames.map(frameDataUrl),
     meta: f ? { width: f.width, height: f.height, live: true } : { live: true },
   };
 }
 
-export function createComputerTool(run?: ScriptRunner, feed: ScreenFeed = screenFeed, opts: { settleMs?: number } = {}): Tool {
+const OWN_HIDDEN_NOTE = "Minimized the Daebot window first so it is not covering the screen (the user brings it back from the taskbar).";
+
+/**
+ * PowerShell prelude: minimize the Daebot desktop window (owned by process `pid`) when it is showing, so it does not cover what the
+ * actions look at or click. Prints DAEBOT_OWN_HIDDEN when it did. Never fails the script.
+ */
+export function ownWindowPrelude(pid: number): string {
+  return `try {
+Add-Type -Namespace DaebotOwn -Name W -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr h, int n);
+[DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+[DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+'@
+$__own = (Get-Process -Id ${pid} -ErrorAction Stop).MainWindowHandle
+if ($__own -ne [IntPtr]::Zero -and [DaebotOwn.W]::IsWindowVisible($__own) -and -not [DaebotOwn.W]::IsIconic($__own)) { [void][DaebotOwn.W]::ShowWindowAsync($__own, 6); Start-Sleep -Milliseconds 400; Write-Output 'DAEBOT_OWN_HIDDEN' }
+} catch { }
+`;
+}
+
+/** The desktop app's process id, when this gateway runs inside the Daebot desktop app. */
+export function desktopPid(env: NodeJS.ProcessEnv = process.env): number | undefined {
+  const n = Number(env.DAEBOT_DESKTOP_PID);
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
+export function createComputerTool(run?: ScriptRunner, feed: ScreenFeed = screenFeed, opts: { settleMs?: number; desktopPid?: number } = {}): Tool {
   const settleMs = opts.settleMs ?? SETTLE_MS;
+  const ownPid = "desktopPid" in opts ? opts.desktopPid : desktopPid();
   return {
     class: "write",
     receipt: "surface",
@@ -308,16 +334,22 @@ export function createComputerTool(run?: ScriptRunner, feed: ScreenFeed = screen
       // screenshot. A batch returns only its final frame. Feed off or stale: everything below is exactly the old path.
       const live = feed.live();
       if (live) for (const st of steps) st.shot = false;
+      // Daebot's own window must not cover what it looks at or clicks: minimize it first (live feed: the desktop shell does it; otherwise the script's prelude).
+      const looksOrActs = steps.some((s) => s.action !== "wait");
+      const hidLive = live && looksOrActs ? await feed.clearOwnWindow(ctx.signal) : false;
+      const note = (s?: string) => [hidLive ? OWN_HIDDEN_NOTE : "", s ?? ""].filter(Boolean).join(" ") || undefined;
       if (live && steps.every((s) => s.action === "screenshot")) {
         const f = wantFinal ? feed.latest() : undefined;
-        return liveResult(steps.length === 1 ? "Screenshot taken from the live feed" : `Looked ${steps.length} times (live feed)`, f ? [f] : [], f ? undefined : "No screenshot was taken.");
+        return liveResult(steps.length === 1 ? "Screenshot taken from the live feed" : `Looked ${steps.length} times (live feed)`, f ? [f] : [], note(f ? undefined : "No screenshot was taken."));
       }
       const scriptShot = wantFinal && !live;
       const built = batch || !scriptShot || live ? buildBatchScript(steps, scriptShot) : buildScript(steps[0].action, steps[0].args);
       if ("error" in built) return fail(`computer: ${built.error}`);
       if (ctx.signal?.aborted) return fail("computer: aborted before start");
       const runner = run ?? makeRunner(Math.min(120_000, SCRIPT_TIMEOUT_MS + steps.length * 3000));
-      const r = await runner(built.script, ctx.signal);
+      const script = !live && looksOrActs && ownPid ? ownWindowPrelude(ownPid) + built.script : built.script;
+      const r = await runner(script, ctx.signal);
+      const hid = hidLive || /^DAEBOT_OWN_HIDDEN/m.test(r.stdout);
       const done = Math.max(0, ...[...r.stdout.matchAll(/^DAEBOT_STEP (\d+)/gm)].map((m) => Number(m[1])));
       const refused = parseBlocked(r.stdout);
       if (refused) return fail(`${blockedMessage("computer", refused)} Completed ${done} of ${steps.length} actions before it.`);
@@ -330,21 +362,21 @@ export function createComputerTool(run?: ScriptRunner, feed: ScreenFeed = screen
       if (live && wantFinal) {
         // The frame must be captured AFTER the screen settled from these actions, not one that was already in the buffer.
         const f = await feed.next({ afterT: Date.now() + settleMs, timeoutMs: settleMs + LIVE_FRAME_WAIT_MS, signal: ctx.signal });
-        if (f) return liveResult(describeHead(steps) + " (live feed)", [f]);
+        if (f) return liveResult(describeHead(steps) + " (live feed)", [f], note());
         // The feed went quiet (switched off, or capture stalled): take the screenshot the old way so the model still sees the result.
         const fb = buildScript("screenshot", {});
         if ("script" in fb) shots = parseShots((await runner(fb.script, ctx.signal)).stdout);
         if (!shots.length) return fail("computer: the actions ran, but the live feed stopped delivering frames and a fallback screenshot failed. Call screenshot again.");
       } else if (live) {
-        return liveResult(describeHead(steps), [], "No screenshot was taken.");
+        return liveResult(describeHead(steps), [], note("No screenshot was taken."));
       }
       const last = shots[shots.length - 1];
       const head = describeHead(steps);
       return {
         ok: true,
         output: last
-          ? `${head}. Screenshot ${last.width}x${last.height} (screen ${last.screenWidth}x${last.screenHeight}), cursor at ${last.cursorX},${last.cursorY}. Use coordinates in this screenshot.${shots.length > 1 ? ` ${shots.length} screenshots, in order; the last is the current screen.` : ""}`
-          : `${head}. No screenshot was taken.`,
+          ? `${hid ? OWN_HIDDEN_NOTE + " " : ""}${head}. Screenshot ${last.width}x${last.height} (screen ${last.screenWidth}x${last.screenHeight}), cursor at ${last.cursorX},${last.cursorY}. Use coordinates in this screenshot.${shots.length > 1 ? ` ${shots.length} screenshots, in order; the last is the current screen.` : ""}`
+          : `${hid ? OWN_HIDDEN_NOTE + " " : ""}${head}. No screenshot was taken.`,
         images: shots.map((x) => `data:image/jpeg;base64,${x.jpegBase64}`),
         meta: last ? { width: last.width, height: last.height } : undefined,
       };
