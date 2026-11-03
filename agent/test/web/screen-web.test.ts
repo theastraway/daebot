@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 // @ts-expect-error plain browser module
-import { screenView } from "../../web/screen.js";
+import { screenView, clampPillPos } from "../../web/screen.js";
 
 const read = (p: string) => readFileSync(fileURLToPath(new URL(`../../web/${p}`, import.meta.url)), "utf8");
 
@@ -35,4 +35,17 @@ test("screen switch markup: hidden until the desktop shell shows it, the pill ha
   assert.doesNotMatch(js, /innerHTML|insertAdjacentHTML|eval\(|new Function|document\.write|fetch\(/);
   assert.match(js, /window\.mindclawDesktop && window\.mindclawDesktop\.screen/);
   assert.match(read("app.js"), /initScreen\(/);
+});
+
+test("screen pill: minimize button, drag clamps inside the window", () => {
+  const html = read("index.html");
+  const pill = html.slice(html.indexOf('id="screen-pill"'), html.indexOf('id="app"'));
+  assert.match(pill, /<button[^>]*class="pill-min"[^>]*aria-label="Minimize"/);
+  assert.match(pill, /class="pill-stop"/);
+  assert.deepEqual(clampPillPos(100, 50, 200, 30, 1000, 800), { x: 100, y: 50 });
+  assert.deepEqual(clampPillPos(-50, -20, 200, 30, 1000, 800), { x: 4, y: 4 });
+  assert.deepEqual(clampPillPos(950, 900, 200, 30, 1000, 800), { x: 796, y: 766 });
+  const css = read("style.css");
+  assert.match(css, /\.screen-pill\.min :is\(\.pill-text, \.pill-min, \.pill-stop\) \{ display: none; \}/);
+  assert.match(css, /\.screen-pill \{[^}]*-webkit-app-region: no-drag/);
 });
