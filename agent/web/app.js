@@ -10,6 +10,7 @@ import { initScrollbars } from "/scrollbars.js";
 import { initModels } from "/models.js";
 import { initApps } from "/apps.js";
 import { initMcp } from "/mcp.js";
+import { buildAppCard } from "/appcard.js";
 import { initConnectors } from "/connectors.js";
 import { openConnectorDetail } from "/connector-detail.js";
 import { transcriptBehind } from "/sync.js";
@@ -244,6 +245,7 @@ function buildItem(it, tr) {
     case "confirm": node = buildConfirm(it); break;
     case "permission": node = buildPermissionCard(it, { json, h, notify, onChange: () => toBottom() }); break;
     case "mcp": node = mcp.buildCard(it.pending, () => { it.done = true; }); if (it.done) node.classList.add("done"); break;
+    case "appcard": node = buildAppCard({ provider: it.provider, h, apps, onDone: () => { it.done = true; } }); if (it.done) node.classList.add("done"); break; // Authorize card for a MIND app (Google, Dropbox, ...)
     case "exchange": case "xin": node = xchg ? xchg.buildCard(it) : h("div", "notice", "Agent exchange"); break; // bot_talk cards: "Messaged <agent>" and "<agent> messaged you"
     default: // a billing notice carries an upgrade link; anything else stays plain text
       node = h("div", `notice ${it.level === "warn" ? "warn" : ""}`, /https?:\/\//.test(it.text) ? undefined : it.text);
@@ -1257,6 +1259,8 @@ function onEvent(id, ev, asst, toolByReceipt) {
       // Daebot proposed an MCP server: put the consent card in the thread (only the card's Connect button can connect it).
       if (ev.tool === "task_board") board.poke(); // the board changed: refresh it if it is open
       if (ev.tool === "bot_manage") bots.refresh(); // Daebot just made, changed or deleted a bot: the Bots tab shows it without a reload
+      // Daebot put an Authorize card for a MIND app in the chat (the click on it is the only thing that connects anything).
+      if (ev.tool === "mcp_connect" && ev.ok && it && it.args && it.args.action === "connect_app" && typeof it.args.provider === "string") addItem(id, { kind: "appcard", provider: it.args.provider.trim().toLowerCase() });
       if (ev.tool === "mcp_connect" && ev.ok) mcp.newPending().then((ps) => { for (const p of ps) addItem(id, { kind: "mcp", pending: p }); }).catch(() => {});
       return asst;
     }

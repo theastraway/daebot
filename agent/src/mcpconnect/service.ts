@@ -135,7 +135,9 @@ export type CatalogAuth = "none" | "oauth" | "key" | "oauth_or_key" | "url_token
 /** One MIND App Store remote MCP connector. `official` comes only from MIND's own tier field for the entry, never from the server. */
 export interface CatalogEntry { name: string; url: string; official: boolean; description?: string; id?: string; category?: string; auth?: CatalogAuth;
   /** MIND marks this connector as not connectable right now. The Apps card does not list it (unless this user already has it connected). */
-  unavailable?: boolean }
+  unavailable?: boolean;
+  /** A MIND app (kind mind_integration: Google, Dropbox, ...). `id` is its provider id and `url` is empty: it connects through MIND's own OAuth (POST /apps/integrations/:id/connect), never as an MCP server. */
+  app?: boolean }
 /** What the Apps card shows for one connector (no URL query, no secrets). `connected`/`serverId`/`pendingId` are this user's own state. */
 export interface CatalogItemView {
   id: string; name: string; blurb: string; category: string; publisher: "official" | "community"; auth: CatalogAuth; host: string;
@@ -409,14 +411,14 @@ export class McpConnectService {
     if (OFFICIAL_HOSTS.has(host)) return "official";
     try {
       const entries = (await this.catalogFn?.(uid)) ?? [];
-      const hit = entries.find((e) => { try { const u = new URL(e.url); return u.host === host && u.pathname.replace(/\/+$/, "") === new URL(url).pathname.replace(/\/+$/, ""); } catch { return false; } });
+      const hit = entries.find((e) => { if (e.app) return false; try { const u = new URL(e.url); return u.host === host && u.pathname.replace(/\/+$/, "") === new URL(url).pathname.replace(/\/+$/, ""); } catch { return false; } });
       if (hit) return hit.official ? "official" : "community";
     } catch { /* the catalog is optional */ }
     return "unknown";
   }
 
   async catalog(uid: string): Promise<CatalogEntry[]> {
-    try { return ((await this.catalogFn?.(uid)) ?? []).slice(0, 40); } catch { return []; }
+    try { return ((await this.catalogFn?.(uid)) ?? []).slice(0, 80); } catch { return []; }
   }
 
   /** The whole App Store remote-MCP list for the Apps card, each row marked with this user's own connected / waiting state.
@@ -447,6 +449,7 @@ export class McpConnectService {
       });
     }
     for (const e of entries) {
+      if (e.app) continue; // MIND apps have their own rows (the Apps card reads /apps/integrations)
       const id = e.id || e.name;
       if (!CATALOG_ID.test(id)) continue;
       let u: URL;
@@ -467,7 +470,7 @@ export class McpConnectService {
   async proposeFromCatalog(uid: string, id: string): Promise<PendingView> {
     this.requireEnabled();
     const entries = (await this.catalogFn?.(uid).catch(() => [] as CatalogEntry[])) ?? [];
-    const hit = CATALOG_ID.test(id) ? entries.find((e) => (e.id || e.name) === id) : undefined;
+    const hit = CATALOG_ID.test(id) ? entries.find((e) => !e.app && (e.id || e.name) === id) : undefined;
     if (!hit) throw new McpConnectError("That connector is not in the MIND App Store list any more. Refresh the Apps card.", 404);
     return this.propose(uid, { url: hit.url, reason: hit.description, source: "catalog", nameHint: (hit.id || hit.name).replace(/^mcp:/, "") });
   }
