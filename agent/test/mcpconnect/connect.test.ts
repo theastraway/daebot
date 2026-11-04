@@ -309,6 +309,9 @@ test("a server connected mid-chat appears on the next round without reopening th
     await collect(s.send("two"));
     assert.ok(provider.requests[1].tools.some((t) => t.name === "notion__lookup"));
     assert.match(provider.requests[1].messages[0].content, /Connecting MCP servers/);
+    // Asked about an app it lacks (Render), the model checks the App Store catalog before saying there is no connector.
+    assert.match(provider.requests[1].messages[0].content, /call mcp_connect action catalog with its name/);
+    assert.match(provider.requests[1].messages[0].content, /Connectors are the same in MIND and in Daebot/);
   } finally { await m.close(); }
 });
 
