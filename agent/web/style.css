@@ -57,6 +57,13 @@ code, pre, kbd { font-family: var(--mono); }
 .win-overlay .screen-pill { -webkit-app-region: no-drag; }
 .win-overlay .screen-pill:not(.placed) { top: calc(var(--wco-h) + 8px); }
 
+/* Desktop app on Mac (html.mac-inset, set by shell.js): the native title bar is hidden, so the top bar and the sidebar brand are the
+   window's drag handles. Controls inside them stay clickable. */
+.mac-inset .topbar, .mac-inset .brand { -webkit-app-region: drag; }
+.mac-inset .topbar :is(button, a, input, select, textarea, label, .model-wrap, .top-meta, .bot-badge),
+.mac-inset .brand :is(button, a) { -webkit-app-region: no-drag; }
+.mac-inset .drawer, .mac-inset .screen-pill { -webkit-app-region: no-drag; }
+
 /* sidebar */
 .sidebar { background: var(--bg-side); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; padding: calc(16px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left)); }
 .brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px 16px; }
