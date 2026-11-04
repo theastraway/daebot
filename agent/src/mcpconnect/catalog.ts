@@ -25,7 +25,19 @@ export function parseCatalog(body: unknown): CatalogEntry[] {
   for (const r of rows.slice(0, 300)) {
     const o = r as Record<string, unknown> | null;
     const conn = (o?.connect && typeof o.connect === "object" ? o.connect : {}) as Record<string, unknown>;
-    if (typeof o?.kind === "string" && o.kind !== "remote_mcp") continue; // MIND's own integrations are not MCP servers
+    if (o?.kind === "mind_integration") { // MIND's own apps (Google, Dropbox, ...): no MCP URL; Daebot offers an Authorize card for them (MIND's OAuth, never an MCP proposal)
+      const pid = typeof o.id === "string" ? o.id : "", pname = typeof o.name === "string" ? o.name : "";
+      if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(pid) || !pname) continue;
+      out.push({
+        name: pname.slice(0, 80), url: "", app: true, official: String(o.tier ?? "").toLowerCase() === "official", id: pid,
+        description: typeof o.description === "string" ? o.description.slice(0, 200) : undefined,
+        category: typeof o.category === "string" ? o.category.slice(0, 30) : undefined,
+        auth: String(conn.auth ?? "").toLowerCase() === "credentials" ? "key" : "oauth",
+        ...(unavailableRow(o) ? { unavailable: true } : {}),
+      });
+      continue;
+    }
+    if (typeof o?.kind === "string" && o.kind !== "remote_mcp") continue; // any other kind is not something Daebot can connect
     const url = [conn.mcp_url, o?.mcp_url, o?.mcpUrl, o?.url, o?.endpoint, o?.server_url].find((x) => typeof x === "string") as string | undefined;
     const name = [o?.name, o?.title, o?.slug].find((x) => typeof x === "string") as string | undefined;
     if (!url || !name) continue;

@@ -32,9 +32,11 @@ const LIVE = {
   ],
 };
 
-test("parseCatalog reads the live shape: only remote MCP items, the nested mcp_url, tier decides official, auth maps", () => {
+test("parseCatalog reads the live shape: MCP items with the nested mcp_url, the MIND integration kept as an app row, tier decides official, auth maps", () => {
   const rows = parseCatalog(LIVE);
-  assert.deepEqual(rows.map((r) => r.id), ["mcp:notion", "mcp:sentry", "mcp:acme"], "the MIND integration (no MCP url) is not an MCP connector");
+  assert.deepEqual(rows.map((r) => r.id), ["google", "mcp:notion", "mcp:sentry", "mcp:acme"], "the MIND integration (no MCP url) stays, marked as an app, so Daebot can offer its Authorize card");
+  assert.equal(rows[0].app, true);
+  assert.equal(rows.filter((r) => !r.app).length, 3);
   const by = Object.fromEntries(rows.map((r) => [r.id!, r]));
   assert.equal(by["mcp:notion"].url, "https://mcp.notion.com/mcp");
   assert.equal(by["mcp:notion"].official, true);
@@ -58,22 +60,22 @@ test("createMindCatalog: asks MIND with the user's own key, falls back to the pu
     return new Response(JSON.stringify(LIVE), { status: 200 });
   }) as unknown as typeof fetch;
   const cat = createMindCatalog({ baseUrl: "https://mind.test/developer/v1/", keyFor: (uid) => (uid === "u_alice" ? "mind_alice" : undefined), fetchImpl: f, now: () => t });
-  assert.equal((await cat("u_alice")).length, 3);
+  assert.equal((await cat("u_alice")).length, 4);
   assert.deepEqual(seen, ["mind_alice"]);
   await cat("u_alice"); assert.equal(seen.length, 1, "cached");
-  assert.equal((await cat("u_bob")).length, 3);
+  assert.equal((await cat("u_bob")).length, 4);
   assert.deepEqual(seen.slice(1), [undefined], "a user without a key still gets the public list");
   mode = "reject";
-  assert.equal((await cat("u_carl")).length, 3);
+  assert.equal((await cat("u_carl")).length, 4);
   const carl = createMindCatalog({ baseUrl: "https://mind.test/developer/v1", keyFor: () => "sign-in-token", fetchImpl: f });
   seen.length = 0;
-  assert.equal((await carl("u")).length, 3);
+  assert.equal((await carl("u")).length, 4);
   assert.deepEqual(seen, ["sign-in-token", undefined], "401 on the key retries without it");
   mode = "down"; t = 0;
   const flaky = createMindCatalog({ baseUrl: "https://mind.test/developer/v1", keyFor: () => "k", fetchImpl: f, now: () => t });
   assert.deepEqual(await flaky("z"), []);
   mode = "ok"; t = 31_000;
-  assert.equal((await flaky("z")).length, 3, "an empty answer is retried after 30 seconds, not cached for 10 minutes");
+  assert.equal((await flaky("z")).length, 4, "an empty answer is retried after 30 seconds, not cached for 10 minutes");
 });
 
 // ---- a tiny MCP server and a SafeFetch that routes every https name to it

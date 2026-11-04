@@ -126,7 +126,7 @@ test("the model's tool can propose and list but has no way to approve; a bot-ori
   try {
     const { svc, store } = setup(m);
     const tool = createMcpConnectTool(svc, "u1");
-    assert.deepEqual((tool.spec.parameters as any).properties.action.enum, ["propose", "list", "catalog"]);
+    assert.deepEqual((tool.spec.parameters as any).properties.action.enum, ["propose", "list", "catalog", "connect_app"]);
     const bot = await tool.run({ action: "propose", url: URL_PLAIN }, { ...CTX, origin: "bot" });
     assert.equal(bot.ok, false);
     assert.match(bot.output, /another bot cannot/);
