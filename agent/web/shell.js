@@ -30,6 +30,10 @@
     if (wco && wco.addEventListener) wco.addEventListener("geometrychange", fitWco);
   }
 
+  // Daebot for Mac: the title bar is hidden (hiddenInset, traffic lights over the page), so nothing on the page was a drag handle
+  // and the window could not be moved. html.mac-inset makes the top bar and the sidebar brand drag the window, like win-overlay.
+  if (desk && desk.platform === "darwin") root.classList.add("mac-inset");
+
   if (inApp) root.classList.add("in-app");
   if (iosApp) {
     root.classList.add("ios-app");
