@@ -53,7 +53,10 @@ test("F-1: bot sessions have no bash, write_file or edit_file (in every mode); w
   const names = (ts: Tool[]) => ts.map((t) => t.spec.name);
   assert.ok(["bash", "write_file", "edit_file", "web_fetch", "read_file"].every((n) => names(all).includes(n)));
   const bot = botSessionTools(all);
-  for (const n of ["bash", "write_file", "edit_file"]) assert.ok(!names(bot).includes(n), n);
+  for (const n of ["bash", "process", "terminal", "write_file", "edit_file"]) assert.ok(!names(bot).includes(n), n);
+  const local = botSessionTools(all, { localTools: true });
+  for (const n of ["bash", "process", "terminal", "write_file", "edit_file"]) assert.ok(names(local).includes(n), `${n} kept for a local gateway`);
+  assert.ok(!names(local).includes("apple_calendar"));
   for (const n of ["web_fetch", "read_file", "grep", "glob"]) assert.ok(names(bot).includes(n), n);
   const wf = bot.find((t) => t.spec.name === "web_fetch")!;
   assert.equal(effectiveClass(wf, { url: "https://example.com/page" }), "read");
@@ -75,14 +78,15 @@ async function runtimeWorld(over: { dir?: string } = {}) {
   return { fake, key, dir, provider, store, cfg, mk, runtime: mk() };
 }
 
-test("F-1: a real local (non-hosted) bot session is not offered bash / write_file / edit_file; a plain session is", async () => {
+test("F-1: a real local (non-hosted) bot session is offered the machine tools (shell, process, terminal, file write/edit) like a plain session, never apple_calendar; a plain session is too", async () => {
   const w = await runtimeWorld();
   try {
     const bot = await w.runtime.bots!.create({ slug: "sales" });
     const s = await w.runtime.openSession({ surface: "web", botId: bot.id, identity: "admin" });
     await collect(s.send("hi"));
     const botTools = w.provider.requests[0].tools.map((t) => t.name);
-    for (const n of ["bash", "write_file", "edit_file"]) assert.ok(!botTools.includes(n), n);
+    for (const n of ["bash", "process", "terminal", "write_file", "edit_file", "read_file"]) assert.ok(botTools.includes(n), `${n} on a local bot thread`);
+    assert.ok(!botTools.includes("apple_calendar"));
     assert.ok(botTools.includes("mind_remember") && botTools.includes("bot_talk"));
     const m = await w.runtime.openSession({ surface: "web", identity: "admin" });
     await collect(m.send("hi"));
