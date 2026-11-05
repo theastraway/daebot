@@ -30,7 +30,8 @@ export function shellCommand(command: string, platform: string = process.platfor
   }
   return winShell === "bash"
     ? { file: "bash", args: ["-c", command], label: "bash" }
-    : { file: "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command], label: "powershell" };
+    // Windows PowerShell 5.1 aliases curl to Invoke-WebRequest (different flags). Drop the alias so `curl` is the real curl.exe that ships with Windows 10+.
+    : { file: "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", `Remove-Item Alias:curl -ErrorAction SilentlyContinue; ${command}`], label: "powershell" };
 }
 
 export const bashTool: Tool = {
@@ -39,7 +40,7 @@ export const bashTool: Tool = {
   spec: {
     name: "bash",
     description: process.platform === "win32"
-      ? "Run a shell command in the working directory (bash if installed, otherwise Windows PowerShell; the output's first line says which). 120s default timeout, output capped at 30k chars. Prefer read_file/grep/glob for reading. This is how you run commands, scripts, tests, git and file conversions: never type them into a terminal on the screen (the computer tool). A job over about a minute goes to the process tool instead."
+      ? "Run a shell command in the working directory (bash if installed, otherwise Windows PowerShell; the output's first line says which; curl is the real curl.exe). 120s default timeout, output capped at 30k chars. Prefer read_file/grep/glob for reading. This is how you run commands, scripts, tests, git and file conversions: never type them into a terminal on the screen (the computer tool). A job over about a minute goes to the process tool instead."
       : "Run a shell command (bash -c) in the working directory. 120s default timeout, output capped at 30k chars. Prefer read_file/grep/glob for reading. This is how you run commands, scripts, tests, git and file conversions: never type them into a terminal on the screen (the computer tool). A job over about a minute goes to the process tool instead.",
     parameters: {
       type: "object",
