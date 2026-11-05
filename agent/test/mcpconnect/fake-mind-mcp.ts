@@ -25,7 +25,7 @@ export interface FakeVendor {
 }
 
 export interface FakeRec {
-  id: string; name: string; url: string; host: string; publisher: string; auth: string; integration: string | null; enabled: boolean;
+  id: string; name: string; url: string; host: string; publisher: string; auth: string; integration: string | null; account?: string | null; enabled: boolean;
   added_at: number; updated_at: number; preset: string | null; truncated: boolean; status: string; last_error: string | null; allow: string[];
   tools: FakeTool[];
   /** The sealed credential: only in here, never in a reply. */
@@ -81,11 +81,11 @@ export function createFakeMind(opts: FakeMindOptions) {
   };
   const defaultAllow = (tools: FakeTool[]) => tools.filter((t) => t.read_only && !t.destructive).map((t) => t.name);
 
-  function addServer(user: string, v: FakeVendor, o: { name: string; auth: string; sealed?: string; preset?: string | null; integration?: string | null; allow?: string[]; publisher?: string }): FakeRec {
+  function addServer(user: string, v: FakeVendor, o: { name: string; auth: string; sealed?: string; preset?: string | null; integration?: string | null; account?: string | null; allow?: string[]; publisher?: string }): FakeRec {
     const host = new URL(v.url).host;
     const rec: FakeRec = {
       id: "srv_" + randomBytes(6).toString("hex"), name: uniqueName(user, o.name), url: v.url, host,
-      publisher: o.publisher ?? (o.preset ? "self" : v.official ? "official" : "unknown"), auth: o.auth, integration: o.integration ?? null, enabled: true,
+      publisher: o.publisher ?? (o.preset ? "self" : v.official ? "official" : "unknown"), auth: o.auth, integration: o.integration ?? null, account: o.account ?? null, enabled: true,
       added_at: tick(), updated_at: tick(), preset: o.preset ?? null, truncated: false, status: "ok", last_error: null,
       allow: (o.allow ?? defaultAllow(v.tools)).filter((n) => v.tools.some((t) => t.name === n)), tools: v.tools.map((t) => ({ ...t })), sealed: o.sealed,
     };
@@ -220,7 +220,7 @@ export function createFakeMind(opts: FakeMindOptions) {
       return addServer(user, v, { name, auth: "oauth", sealed: "oauth-access-token-sealed-in-mind" });
     },
     /** A connection made at MIND itself (another surface). */
-    seed(user: string, v: FakeVendor, o: { name: string; auth?: string; sealed?: string; preset?: string | null }): FakeRec { return addServer(user, v, { name: o.name, auth: o.auth ?? "key", sealed: o.sealed, preset: o.preset }); },
+    seed(user: string, v: FakeVendor, o: { name: string; auth?: string; sealed?: string; preset?: string | null; integration?: string | null; account?: string | null }): FakeRec { return addServer(user, v, { name: o.name, auth: o.auth ?? "key", sealed: o.sealed, preset: o.preset, integration: o.integration, account: o.account }); },
     tick,
   };
 }
