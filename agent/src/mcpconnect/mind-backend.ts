@@ -17,7 +17,7 @@ export interface MindTool { name: string; description: string; readOnly: boolean
 export interface MindToolFull extends MindTool { schema: Record<string, unknown> }
 /** A connection as MIND holds it. No credential, no tool schemas. */
 export interface MindServer {
-  id: string; name: string; url: string; host: string; publisher: Publisher; auth: MindAuth; integration: string | null; enabled: boolean;
+  id: string; name: string; url: string; host: string; publisher: Publisher; auth: MindAuth; integration: string | null; /** The account the connection acts as (the app's login), when MIND knows it. */ account: string | null; enabled: boolean;
   addedAt: number; updatedAt: number; preset: string | null; truncated: boolean; status: MindStatus; lastError: string | null;
   allow: string[]; toolCount: number; tools: MindTool[];
 }
@@ -83,6 +83,7 @@ export function parseMindServer(raw: any): MindServer | undefined {
     publisher: PUBLISHERS.has(raw.publisher) ? (raw.publisher as Publisher) : "unknown", // a publisher MIND did not name is not trusted
     auth: AUTHS.has(raw.auth) ? (raw.auth as MindAuth) : "key",
     integration: typeof raw.integration === "string" && /^[a-z0-9][a-z0-9-]{0,39}$/.test(raw.integration) ? raw.integration : null,
+    account: typeof raw.account === "string" && raw.account.trim() ? raw.account.trim().slice(0, 120) : null,
     enabled: raw.enabled !== false,
     addedAt: added, updatedAt: num(raw.updated_at, added),
     preset: typeof raw.preset === "string" && raw.preset ? raw.preset.slice(0, 40) : null,

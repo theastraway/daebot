@@ -101,6 +101,8 @@ export interface ServerView {
   toolCount?: number;
   /** The MIND app this connection rides on (auth "integration"), e.g. "github". */
   integration?: string;
+  /** The account the connection acts as (for a MIND app: the app's login, e.g. the GitHub username). */
+  account?: string;
   status?: "ok" | "error" | "reauth_required"; lastError?: string; preset?: string;
 }
 export interface ConnectorAccount { key: string; kind: "mind" | "mcp"; /** A MIND app account: the id Disconnect and Reconnect take ("github", "github-2"). */ provider?: string; serverId?: string; label: string; account: string; status: "connected" | "reauth" | "off"; note?: string; addedAt?: number }
@@ -881,7 +883,9 @@ export class McpConnectService {
       const accounts: ConnectorAccount[] = list.map((a) => {
         const key = `mind:${a.id}`;
         const own = rides.find((v) => v.integration === a.id) ?? (a.id === prov.provider ? rides.find((v) => v.auth !== "integration") : undefined);
-        const acct: ConnectorAccount = { key, kind: "mind", provider: a.id, label: label(key, a.label || "primary"), account: a.label || "", status: a.needsReconnect ? "reauth" : "connected" };
+        const login = a.label || own?.account || ""; // the app's own login first; the tool connection's account fills a blank one
+        const acct: ConnectorAccount = { key, kind: "mind", provider: a.id, label: label(key, login || "primary"), account: login, status: a.needsReconnect ? "reauth" : "connected" };
+        if (own?.account && login && own.account.toLowerCase() !== login.toLowerCase()) acct.note = `Its tools act as ${own.account}, not ${login}. Select Retry on the connector list to link them to this account.`;
         if (own && own.status && own.status !== "ok") { acct.status = "reauth"; acct.note = own.status === "reauth_required" ? "Its tool connection needs you to sign in again." : (own.lastError ?? "MIND reports an error with its tool connection."); }
         return acct;
       });
@@ -1342,7 +1346,7 @@ export class McpConnectService {
       id: s.id, name: s.name, url: s.url, host: s.host, publisher: s.publisher, auth: s.auth, enabled: s.enabled, addedAt: s.addedAt,
       tools: s.tools.map((t) => ({ name: t.name, description: cleanLine(t.description, 300), readOnly: t.readOnly, destructive: t.destructive, allowed: s.allow.includes(t.name), runsWithoutAsking: toolClass(rec, t) === "read" })),
       truncated: s.truncated, via: "mind", toolCount: s.toolCount, status: s.status,
-      ...(s.integration ? { integration: s.integration } : {}), ...(s.lastError ? { lastError: cleanLine(s.lastError, 200) } : {}), ...(s.preset ? { preset: s.preset } : {}),
+      ...(s.integration ? { integration: s.integration } : {}), ...(s.account ? { account: s.account } : {}), ...(s.lastError ? { lastError: cleanLine(s.lastError, 200) } : {}), ...(s.preset ? { preset: s.preset } : {}),
     };
   }
 

@@ -784,6 +784,24 @@ test("MIND apps: GitHub connected with a key-saved tool server (Atlas) lists its
   assert.ok(g.svc.tools("alice").some((t) => t.spec.name === "github__list_issues"));
 });
 
+test("MIND apps: the tool connection's account is read, fills a blank app login, and a mismatch is said plainly", async () => {
+  assert.equal(parseMindServer({ id: "srv_x", name: "github", url: "https://h.example/mcp", account: " atlasadjustments " })!.account, "atlasadjustments");
+  assert.equal(parseMindServer({ id: "srv_x", name: "github", url: "https://h.example/mcp" })!.account, null);
+  const mind = newMind();
+  const gh = mind.addVendor(vendor("https://api.githubcopilot.com/mcp", [{ name: "list_issues", read_only: true }], { bearer: "ghp_saved_key", official: true }));
+  mind.seed("alice", gh, { name: "github", auth: "key", sealed: "ghp_saved_key", integration: "github", account: "atlasadjustments" });
+  const g = gateway(mind, { catalog: async () => [] });
+  const app = (account: string): any[] => [{ provider: "github", name: "GitHub", blurb: "Repos", auth: "oauth", configured: true, connected: true, needsReconnect: false, account, caps: ["files"] }];
+  await g.svc.prepare("alice");
+  assert.equal(g.svc.list("alice")[0].account, "atlasadjustments");
+  const same = (await g.svc.connectorDetail("alice", "github", app("AtlasAdjustments")))!.accounts[0];
+  assert.deepEqual([same.account, same.note], ["AtlasAdjustments", undefined], "same login in another case: no warning");
+  const blank = (await g.svc.connectorDetail("alice", "github", app("")))!.accounts[0];
+  assert.equal(blank.account, "atlasadjustments", "the tool connection's account fills a blank app login");
+  const other = (await g.svc.connectorDetail("alice", "github", app("someoneelse")))!.accounts[0];
+  assert.match(other.note ?? "", /tools act as atlasadjustments, not someoneelse/);
+});
+
 test("MIND apps: a key-saved connection to another host never stands in for an app's tool server", async () => {
   const mind = newMind();
   const other = mind.addVendor(vendor("https://mcp.example.com/mcp", [{ name: "x" }], { bearer: "k1" }));
