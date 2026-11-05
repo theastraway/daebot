@@ -759,6 +759,40 @@ test("connector page: a MIND app shows its account, says plainly when it has no 
   assert.equal((await g.svc.connectorDetail("alice", "github", providers))!.accounts[0].status, "reauth");
 });
 
+test("MIND apps: GitHub connected with a key-saved tool server (Atlas) lists its tools under the app's one row and on the connector page", async () => {
+  const mind = newMind();
+  // The vendor takes the saved key only; the app's own token is refused, so MIND never links an integration server (the Atlas account's real state).
+  const gh = mind.addVendor(vendor("https://api.githubcopilot.com/mcp", [{ name: "list_issues", read_only: true }, { name: "get_file", read_only: true }, { name: "create_issue" }], { bearer: "ghp_saved_key", official: true }));
+  mind.seed("alice", gh, { name: "github", auth: "key", sealed: "ghp_saved_key" });
+  mind.connectIntegration("alice", "github", "gho_not_accepted");
+  const providers: any[] = [{ provider: "github", name: "GitHub", blurb: "Repos", auth: "oauth", configured: true, connected: true, needsReconnect: false, account: "atlasadjustments", caps: ["files"] }];
+  const g = gateway(mind, { catalog: async () => [{ id: "mcp:github", name: "GitHub", url: "https://api.githubcopilot.com/mcp/", official: true, auth: "oauth_or_key" }] });
+  await g.svc.prepare("alice");
+  const [row] = g.svc.list("alice");
+  assert.deepEqual([row.auth, row.integration, row.toolCount], ["key", undefined, 3]);
+  assert.deepEqual(g.svc.integrationServers("alice").map((s) => [s.provider, s.serverId, s.tools, s.enabled, s.status]), [["github", row.id, 3, true, "ok"]]);
+  const d = await g.svc.connectorDetail("alice", "github", providers);
+  assert.equal(d!.tools.length, 3);
+  assert.equal(d!.toolsNote, undefined);
+  assert.deepEqual(d!.serverIds, [row.id]);
+  // The Apps row says how many tools Daebot has, never "connecting tools".
+  const items: any[] = [{ id: "mcp:github", name: "GitHub", foldedInto: "github", connected: true, serverId: row.id }];
+  const [entry] = connectorList(providers, items, g.svc.integrationServers("alice")).filter((e: any) => e.kind === "mind");
+  assert.deepEqual([entry.serverId, entry.manageable, entry.tags[0].text, entry.autoLink], [row.id, true, "3 tools", undefined]);
+  // And the model can call them.
+  await until(() => g.svc.tools("alice").length === 3);
+  assert.ok(g.svc.tools("alice").some((t) => t.spec.name === "github__list_issues"));
+});
+
+test("MIND apps: a key-saved connection to another host never stands in for an app's tool server", async () => {
+  const mind = newMind();
+  const other = mind.addVendor(vendor("https://mcp.example.com/mcp", [{ name: "x" }], { bearer: "k1" }));
+  mind.seed("alice", other, { name: "github", auth: "key", sealed: "k1" });
+  const g = gateway(mind, { catalog: async () => [] });
+  await g.svc.prepare("alice");
+  assert.deepEqual(g.svc.integrationServers("alice"), []);
+});
+
 test("connector page: a multi-account app lists every account with its own id and supports adding another", async () => {
   const mind = newMind();
   const g = gateway(mind, { catalog: async () => [] });

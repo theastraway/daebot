@@ -340,6 +340,18 @@ const MODE_TTL_MS = 5 * 60_000;       // how long a "MIND holds them" / "it does
 const MODE_RETRY_MS = 30_000;         // a failed check is asked again soon
 const SERVERS_TTL_MS = 20_000;        // how long a read of the user's list is fresh (another surface's change shows up within this)
 const SERVERS_RETRY_MS = 15_000;
+/** The vendor's own MCP host for a MIND app. A connection to that host that the user (or an older Daebot) saved with a key, not through the app's sign-in, is still that app's tool server. */
+const VENDOR_MCP_HOST: Record<string, string> = { github: "api.githubcopilot.com", dropbox: "mcp.dropbox.com" };
+
+/** True when this connection is the tool server of the MIND app `provider`: linked through the app (auth "integration", "github" or "github-2"), or a key-saved
+ *  connection to the vendor's own MCP host. Without the second case a GitHub app that is Connected shows "connecting tools" forever while its 46 tools sit in the list under another auth kind. */
+export function ridesOnApp(s: { auth: string; integration?: string | null; url: string }, provider: string): boolean {
+  if (s.auth === "integration") return typeof s.integration === "string" && (s.integration === provider || s.integration.replace(/-\d+$/, "") === provider);
+  const host = VENDOR_MCP_HOST[provider];
+  if (!host) return false;
+  try { return new URL(s.url).host.toLowerCase() === host; } catch { return false; }
+}
+
 const LINK_TTL_MS = 60 * 60_000;      // integrations are linked at most once an hour per user (MIND caches a rejection for an hour too)
 const LINK_RETRY_MS = 5 * 60_000;
 const MIGRATE_RETRY_MS = 10 * 60_000;
@@ -863,12 +875,12 @@ export class McpConnectService {
     const prov = providers.find((p) => p.provider === id);
     if (prov && (prov.connected || prov.configured !== false)) {
       // Every account of the app (GitHub allows several) rides on its own tool server; the first account is the bare provider id, the rest are numbered ("github-2").
-      const rides = views.filter((v) => v.auth === "integration" && typeof v.integration === "string" && (v.integration === prov.provider || v.integration.replace(/-\d+$/, "") === prov.provider));
+      const rides = views.filter((v) => ridesOnApp(v, prov.provider));
       const multi = prov.multi === true;
       const list = prov.connected ? (multi && prov.accounts && prov.accounts.length ? prov.accounts : [{ id: prov.provider, label: prov.account ?? "primary", needsReconnect: prov.needsReconnect }]) : [];
       const accounts: ConnectorAccount[] = list.map((a) => {
         const key = `mind:${a.id}`;
-        const own = rides.find((v) => v.integration === a.id);
+        const own = rides.find((v) => v.integration === a.id) ?? (a.id === prov.provider ? rides.find((v) => v.auth !== "integration") : undefined);
         const acct: ConnectorAccount = { key, kind: "mind", provider: a.id, label: label(key, a.label || "primary"), account: a.label || "", status: a.needsReconnect ? "reauth" : "connected" };
         if (own && own.status && own.status !== "ok") { acct.status = "reauth"; acct.note = own.status === "reauth_required" ? "Its tool connection needs you to sign in again." : (own.lastError ?? "MIND reports an error with its tool connection."); }
         return acct;
@@ -1242,7 +1254,15 @@ export class McpConnectService {
   integrationServers(uid: string): { provider: string; serverId: string; name: string; tools: number; enabled: boolean; status: "ok" | "error" | "reauth_required"; lastError?: string }[] {
     const st = this.active(uid);
     if (!st) return [];
-    return st.servers.filter((s) => s.auth === "integration" && s.integration).map((s) => ({ provider: s.integration as string, serverId: s.id, name: s.name, tools: s.toolCount, enabled: s.enabled, status: s.status, ...(s.lastError ? { lastError: cleanLine(s.lastError, 200) } : {}) }));
+    const row = (provider: string, s: (typeof st.servers)[number]) => ({ provider, serverId: s.id, name: s.name, tools: s.toolCount, enabled: s.enabled, status: s.status, ...(s.lastError ? { lastError: cleanLine(s.lastError, 200) } : {}) });
+    const out = st.servers.filter((s) => s.auth === "integration" && s.integration).map((s) => row(s.integration as string, s));
+    // A key-saved connection to a vendor's own MCP host stands in for the app's tool server when the app has none linked through it.
+    for (const provider of Object.keys(VENDOR_MCP_HOST)) {
+      if (out.some((r) => r.provider === provider)) continue;
+      const s = st.servers.find((x) => x.auth !== "integration" && ridesOnApp(x, provider));
+      if (s) out.push(row(provider, s));
+    }
+    return out;
   }
 
   /** The Apps card's "Add tools" on a connected MIND app (GitHub): ask MIND now to link the vendor's MCP server with the app's own token (the hourly background link may have
@@ -1258,7 +1278,7 @@ export class McpConnectService {
     const r = rs.find((x) => x.provider === provider) ?? { provider, status: "unavailable" as const, serverId: null, reason: "MIND did not answer for that app." };
     st.serversDueAt = 0; st.linkDueAt = this.now() + LINK_TTL_MS;
     await this.prepare(uid);
-    const srv = this.active(uid)?.servers.find((x) => x.auth === "integration" && x.integration === provider);
+    const srv = this.active(uid)?.servers.find((x) => x.auth === "integration" && x.integration === provider) ?? this.active(uid)?.servers.find((x) => ridesOnApp(x, provider));
     return { status: r.status, tools: srv?.toolCount ?? 0, reason: cleanLine(r.reason, 300) };
   }
 
