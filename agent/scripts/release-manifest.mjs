@@ -27,6 +27,7 @@ export function fillManifest(manifest, version, dir, base = DEFAULT_BASE) {
   for (const [key, plat] of Object.entries(out.platforms)) {
     (plat.files ?? []).forEach((f, i) => {
       f.file = names[key]?.[i] ?? f.file;
+      f.version = version; // each file carries the release version (0.3.30 shipped files labelled 0.3.29)
       const p = join(dir, f.file);
       if (existsSync(p)) {
         f.size = statSync(p).size;
