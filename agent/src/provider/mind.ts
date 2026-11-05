@@ -5,6 +5,7 @@
 import { createHash } from "node:crypto";
 import type { Config, Provider, StreamEvent } from "../types.ts";
 import { createOpenRouterProvider, ProviderHttpError } from "./openrouter.ts";
+import { edgeFallbackFetch } from "./edge-fallback.ts";
 
 export const FREE_TIER = "free";
 export const DEFAULT_FREE_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
@@ -92,7 +93,7 @@ export class MindCredits {
   constructor(o: { mindBaseUrl: string; fetchImpl?: typeof fetch; ttlMs?: number; now?: () => number }) {
     this.base = o.mindBaseUrl.replace(/\/+$/, "");
     this.origin = (() => { try { return new URL(this.base).origin; } catch { return this.base; } })();
-    this.doFetch = o.fetchImpl ?? ((...a) => fetch(...a));
+    this.doFetch = edgeFallbackFetch(o.fetchImpl ?? ((...a) => fetch(...a)));
     this.ttl = o.ttlMs ?? CREDITS_TTL_MS;
     this.now = o.now ?? Date.now;
   }
@@ -183,7 +184,7 @@ export interface MindProviderOptions {
 export function createMindProvider(cfg: Config, o: MindProviderOptions): Provider {
   const freeModel = cfg.freeModel || DEFAULT_FREE_MODEL;
   const url = mindLlmUrl(cfg);
-  const f = o.fetchImpl ?? fetch;
+  const f = edgeFallbackFetch(o.fetchImpl ?? ((...x) => fetch(...x)));
 
   const shared = {
     url, name: "mind", backoffMs: o.backoffMs,
