@@ -1,9 +1,14 @@
-// MIND is reachable at two public addresses that sit behind different web edges: the API service itself
+// MIND is reachable at two public addresses behind different web edges: the API service itself
 // (mindapp.onrender.com, Render's CDN) and the public site (m-i-n-d.ai, which proxies /developer/v1 to the same
-// service). Either edge can answer a desktop with an HTML block page (HTTP 403 challenge) for one network while the
-// other lets it through: 0.3.24 moved off m-i-n-d.ai for that reason, and on 2026-11-05 a Windows desktop got
-// "MIND could not be reached (HTTP 403 from the web edge)" from mindapp.onrender.com while every other client passed.
-// This wrapper retries such a request once on the other address and remembers the one that worked for the session.
+// service). Both edges run managed rules that answer an HTML 403 when a plain-text request body contains
+// SQL-, path-traversal- or shell-looking text (measured 2026-11-05: "' OR 1=1", "../../etc/passwd", "| bash").
+// An agent conversation quotes code and logs constantly, so on the Atlas account every turn died with
+// "MIND could not be reached (HTTP 403 from the web edge)". A gzip-compressed body passes both edges, and MIND
+// decompresses `Content-Encoding: gzip` (MINDapp PR 2978).
+//
+// On an edge block this wrapper retries: same address gzipped, then the other address plain, then the other
+// address gzipped. The first combination that gets through is used first for the rest of the session.
+import { gzipSync } from "node:zlib";
 
 const PAIRS: Record<string, string> = {
   "mindapp.onrender.com": "m-i-n-d.ai",
@@ -30,31 +35,55 @@ export function alternateMindUrl(url: string): string | undefined {
   }
 }
 
+const withHost = (url: string, host: string): string => { const u = new URL(url); u.host = host; return u.toString(); };
+
+/** The same request init with the string body gzipped and `Content-Encoding: gzip` set. */
+export function gzipInit(init: RequestInit): RequestInit {
+  const headers = new Headers(init.headers ?? {});
+  headers.set("Content-Encoding", "gzip");
+  return { ...init, headers, body: gzipSync(Buffer.from(String(init.body), "utf8")) };
+}
+
+interface Route { host: string; gzip: boolean }
+
 /**
- * Wrap fetch so a MIND call blocked by a web edge is retried once on the other MIND address. After a retry
- * succeeds, later calls go to the working address first (per wrapper instance). Non-MIND URLs pass through.
- * Bodies must be replayable (strings, as every MIND JSON call sends); a stream body is not retried.
+ * Wrap fetch so a MIND call blocked by a web edge is retried (gzip on the same address, then the other address
+ * plain and gzipped). The working route is remembered per blocked host for this wrapper instance. Non-MIND URLs
+ * pass through. Only string bodies (every MIND JSON call) are replayed or compressed.
  */
 export function edgeFallbackFetch(base: typeof fetch = (...a) => fetch(...a)): typeof fetch {
-  const preferred = new Map<string, string>(); // blocked host -> host that worked
+  const preferred = new Map<string, Route>(); // blocked host -> route that worked
   const wrapped = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     if (input instanceof Request) return base(input, init);
     const url = String(input);
     let host: string;
     try { host = new URL(url).hostname.toLowerCase(); } catch { return base(input, init); }
     if (!PAIRS[host]) return base(input, init);
-    const pref = preferred.get(host);
-    const first = pref ? url.replace(new URL(url).host, pref) : url;
-    const res = await base(first, init);
-    if (!isEdgeBlock(res)) return res;
+    const hasBody = typeof init?.body === "string" && init.body.length > 0;
     const replayable = init?.body === undefined || init?.body === null || typeof init.body === "string";
-    const alt = alternateMindUrl(first);
-    if (!alt || !replayable) return res;
-    let second: Response;
-    try { second = await base(alt, init); } catch { return res; }
-    if (isEdgeBlock(second)) return res;
-    preferred.set(host, new URL(alt).host);
-    return second;
+    const send = (r: Route): Promise<Response> => base(withHost(url, r.host), r.gzip && hasBody ? gzipInit(init!) : init);
+
+    const pref = preferred.get(host);
+    const first: Route = pref ?? { host: new URL(url).host, gzip: false };
+    const res = await send(first);
+    if (!isEdgeBlock(res) || !replayable) return res;
+
+    const origHost = new URL(url).host;
+    const altUrl = alternateMindUrl(url);
+    const altHost = altUrl ? new URL(altUrl).host : undefined;
+    const tries: Route[] = [];
+    if (hasBody) tries.push({ host: origHost, gzip: true });
+    if (altHost) tries.push({ host: altHost, gzip: false });
+    if (altHost && hasBody) tries.push({ host: altHost, gzip: true });
+    for (const r of tries) {
+      if (r.host === first.host && r.gzip === first.gzip) continue;
+      let next: Response;
+      try { next = await send(r); } catch { continue; }
+      if (isEdgeBlock(next)) continue;
+      preferred.set(host, r);
+      return next;
+    }
+    return res;
   };
   return wrapped as typeof fetch;
 }
