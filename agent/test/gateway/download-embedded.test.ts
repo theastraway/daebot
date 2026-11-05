@@ -151,6 +151,7 @@ test("release-manifest fills size, sha256 and the public URL only for files that
   assert.equal(dmg.size, 8);
   assert.match(dmg.sha256, /^[0-9a-f]{64}$/);
   assert.equal(out.platforms.windows.files[0].url, "");
+  for (const plat of Object.values(out.platforms) as Array<{ files?: Array<{ version?: string }> }>) for (const f of plat.files ?? []) assert.equal(f.version, "9.9.9"); // every file labelled with the release
   assert.equal(base.version === "9.9.9", false); // input not mutated
   assert.notEqual(base.platforms.mac.files[0].file, dmg.file);
 });
