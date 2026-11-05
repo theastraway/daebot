@@ -230,6 +230,15 @@ kbd { font-size: 10.5px; background: var(--surface-2); border: 1px solid var(--l
 
 /* machinery rows that run in sequence read as one cluster */
 .tool + .tool, .tool + .gate, .gate + .tool, .gate + .gate { margin-top: -12px; }
+/* Actions roll like a rolodex (toolroll.js): a run of tool rows shows its newest 4, the oldest rolls out as a new one rolls in. */
+.tool[data-fold="1"] { display: none; }
+.tool[data-roll="in"] { animation: tool-roll-in .3s cubic-bezier(.2, .8, .2, 1) both; }
+.tool[data-roll="out"] { overflow: hidden; animation: tool-roll-out .24s ease-in both; }
+@keyframes tool-roll-in { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+@keyframes tool-roll-out { from { opacity: 1; transform: none; max-height: 80px; } to { opacity: 0; transform: translateY(-14px); max-height: 0; margin-top: -22px; border-width: 0; } }
+.tool-more { align-self: flex-start; margin-top: -12px; border: 0; background: transparent; color: var(--ink-3); font: 12.5px/1 var(--sans, inherit); padding: 6px 10px; border-radius: 999px; cursor: pointer; }
+.tool-more:hover { color: var(--ink-2); background: var(--surface); }
+.tool-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .logout { margin-left: auto; padding: 4px 10px; font-size: 12px; border-radius: 8px; }
 .side-who { padding: 12px 8px 0; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .side-update { display: flex; align-items: center; gap: 8px; padding: 10px 8px 0; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-2); }

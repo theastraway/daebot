@@ -29,6 +29,7 @@ import { initSearch } from "/search.js";
 import { initPhotos, normQueue, packQueue, queueLabel, SAYS as PHOTO_SAYS } from "/photos.js";
 import { calendarCapabilities, createDeviceCalls } from "/device-calendar.js";
 import { initMessageMenu, copyText } from "/msgmenu.js";
+import { initToolRoll } from "/toolroll.js";
 initScrollbars(); // scrollbars stay hidden until the user scrolls
 
 const $ = (id) => document.getElementById(id);
@@ -216,6 +217,7 @@ const photos = initPhotos({
 });
 
 // ---------- thread rendering ----------
+initToolRoll(els.thread); // a run of action rows shows the newest 4 and rolls; "See all" opens the rest
 let stick = true;
 els.scroll.addEventListener("scroll", () => {
   stick = els.scroll.scrollHeight - els.scroll.scrollTop - els.scroll.clientHeight < 80;

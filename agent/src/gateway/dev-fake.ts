@@ -20,6 +20,16 @@ const sleep = (ms: number, signal?: AbortSignal) =>
     signal?.addEventListener("abort", () => { clearTimeout(t); reject(new Error("aborted")); }, { once: true });
   });
 
+const MANY_HISTORY: HistoryEvent[] = [
+  { type: "user", text: "Run many actions" },
+  ...Array.from({ length: 15 }, (_, i): HistoryEvent[] => [
+    { type: "toolStart", receiptId: `m${i + 1}`, tool: `action_${i + 1}`, args: { step: i + 1 } },
+    { type: "toolEnd", receiptId: `m${i + 1}`, tool: `action_${i + 1}`, ok: true, preview: `result ${i + 1}` },
+  ]).flat(),
+  { type: "text", delta: "Ran 15 actions." },
+  { type: "done", finalText: "" },
+];
+
 const SEED_HISTORY: HistoryEvent[] = [
   { type: "user", text: "Triage the new TCPA claims in the queue" },
   { type: "text", delta: "Checking MIND before I answer.\n\n" },
@@ -91,6 +101,13 @@ export function createFakeRuntime(opts: { speed?: number } = {}): Runtime {
             yield { type: "done", finalText: final };
             return;
           }
+          if (/many actions/i.test(msg)) {
+            // Dev/verification script: a turn with 15 actions, to see the rolodex fold (newest 4 + "See all").
+            for (let i = 1; i <= 15; i++) yield* tool(`action_${i}`, { step: i }, true, `result ${i}`);
+            yield* say("Ran 15 actions.");
+            yield { type: "done", finalText: final };
+            return;
+          }
           yield* say("Checking MIND before I answer.\n\n");
           yield* tool("mind_query", { query: "What is the current state of the gateway work?" }, true,
             "Gateway: HTTP + WebSocket, token auth, static web UI. Open item: channel webhook adapters.");
@@ -130,6 +147,7 @@ export function createFakeRuntime(opts: { speed?: number } = {}): Runtime {
     photos,
     history(id): HistoryEvent[] | undefined {
       if (id === "seed-claims") return SEED_HISTORY;
+      if (id === "seed-many") return MANY_HISTORY;
       return recorders.get(id)?.events();
     },
   };
@@ -139,6 +157,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const runtime = createFakeRuntime();
   // seed one older, non-live session so resume can be tried
   void runtime.openSession({ surface: "web", title: "Earlier: claims triage", resumeId: "seed-claims" }).then((s) => s.close());
+  void runtime.openSession({ surface: "web", title: "Earlier: 15 actions", resumeId: "seed-many" }).then((s) => s.close());
   const gw = await startGateway({
     runtime,
     port: 0, // the real gateway sits behind the bots/models fake below (a pass-through proxy), on a private port
