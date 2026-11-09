@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { MindClient, Tool, ToolClass, ToolResult, ToolSpec } from "../types.ts";
 
 const MAX_OUT = 24_000;
+export const MIND_QUERY_MIN_TOKENS = 4000;
 
 /** Which MINDs a tool set can reach. `home` is where WRITES always go ("main" or a bot slug); reads may name another one. */
 export interface TenantResolver {
@@ -279,12 +280,14 @@ export function createMindTools(source: MindClient | TenantResolver, opts: MindT
     properties: {
       query: { type: "string", description: "Full-sentence question" },
       mode: { type: "string", enum: ["hybrid", "mix", "global", "local", "naive"], description: "Retrieval mode (default hybrid)" },
-      max_context_tokens: { type: "integer", minimum: 1000, description: "Context budget (min 1000, default 4000)" },
+      max_context_tokens: { type: "integer", minimum: 4000, description: "Context budget (default and minimum 4000; raise it for broad questions, never lower)" },
     },
     required: ["query"], cls: "read", receipt: "mind",
     run: (c, a) => {
       if (typeof a.query !== "string" || !a.query.trim()) throw new Error("mind_query needs a non-empty query");
-      return c.query(a.query, { mode: a.mode as string | undefined, maxContextTokens: a.max_context_tokens as number | undefined });
+      // The model may raise the budget, never shrink it below the default (it was choosing 2500 on its own).
+      const asked = typeof a.max_context_tokens === "number" ? a.max_context_tokens : 0;
+      return c.query(a.query, { mode: a.mode as string | undefined, maxContextTokens: Math.max(MIND_QUERY_MIN_TOKENS, asked) });
     },
   });
 
