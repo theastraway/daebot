@@ -17,7 +17,16 @@ export interface BotRecord {
   version?: number;
   /** LLM override: every turn of THIS bot's threads runs on this model, whatever the header/global choice is. Absent = no override. */
   model?: string;
+  /** Remote: this bot's desktop is reachable from other devices (phone, web). Messages sent to it there run on the desktop, with its local tools. Absent = off. */
+  remote?: boolean;
+  /** When `remote` last changed (ms, the writer's clock). Last writer wins between a desktop and daebot.live. */
+  remoteAt?: number;
+  /** The last few Remote changes, newest last, so the user sees when and why it turned on (for example "turned on automatically"). */
+  remoteLog?: RemoteLogEntry[];
 }
+
+export interface RemoteLogEntry { at: number; remote: boolean; by: "user" | "auto"; note: string }
+export const MAX_REMOTE_LOG = 20;
 
 /** One line of the roster shown to the model (sessions and bots alike). */
 export interface RosterEntry { slug: string; name: string; purpose: string }
@@ -45,10 +54,12 @@ export interface BotsApi {
   bySlug(slug: string): BotRecord | undefined;
   create(a: { slug: string; name?: string; purpose?: string; color?: string; face?: unknown }): Promise<BotRecord>;
   /** `model`: a model id sets the override; null or "" clears it. The caller checks the id against the user's model list; the store checks its shape. */
-  update(id: string, patch: { name?: string; purpose?: string; color?: string; face?: unknown; model?: string | null; pinned?: boolean }): BotRecord;
+  update(id: string, patch: { name?: string; purpose?: string; color?: string; face?: unknown; model?: string | null; pinned?: boolean; remote?: boolean }): BotRecord;
   remove(id: string): Promise<void>;
   /** Moves a bot to the latest definition. Keeps its DAEBOT.md, threads and MIND data. */
   upgrade(id: string): BotRecord;
+  /** Turns Remote on or off and logs why. `at` lets a change that happened on another device keep its own time. */
+  setRemote?(id: string, remote: boolean, o: { by: "user" | "auto"; note?: string; at?: number }): BotRecord;
   instructions(id: string): string;
   setInstructions(id: string, text: string): void;
   roster(): RosterEntry[];

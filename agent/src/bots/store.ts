@@ -9,7 +9,7 @@ import type { MindClient } from "../types.ts";
 import { LATEST_BOT_VERSION } from "./versions.ts";
 import { isFaceId } from "./faces.ts";
 import { validModelId } from "../settings.ts";
-import { BotError, MAX_INSTRUCTIONS_BYTES, SLUG_RE, safeUpgradeUrl } from "./types.ts";
+import { BotError, MAX_INSTRUCTIONS_BYTES, MAX_REMOTE_LOG, SLUG_RE, safeUpgradeUrl } from "./types.ts";
 import type { BotRecord, BotsApi, RosterEntry } from "./types.ts";
 
 /** The MIND side: POST/GET/DELETE /developer/v1/bots, always with the user's MAIN key. */
@@ -242,7 +242,7 @@ export class BotStore implements BotsApi {
     return { ...rec };
   }
 
-  update(id: string, patch: { name?: string; purpose?: string; color?: string; face?: unknown; model?: string | null; pinned?: boolean }): BotRecord {
+  update(id: string, patch: { name?: string; purpose?: string; color?: string; face?: unknown; model?: string | null; pinned?: boolean; remote?: boolean }): BotRecord {
     const b = ID_RE.test(id) ? this.bots[id] : undefined;
     if (!b) throw new BotError(404, "not_found", "no such bot");
     if (patch.name !== undefined) {
@@ -268,8 +268,29 @@ export class BotStore implements BotsApi {
       if (typeof patch.pinned !== "boolean") throw new BotError(400, "bad_pinned", "pinned must be true or false");
       if (patch.pinned) { if (!b.pinnedAt) b.pinnedAt = this.now(); } else delete b.pinnedAt;
     }
-    // Pinning is a view preference, not an edit: a pin-only change does not move "updated".
-    if (Object.keys(patch).some((k) => k !== "pinned" && (patch as Record<string, unknown>)[k] !== undefined)) b.updatedAt = this.now();
+    if (patch.remote !== undefined) {
+      if (typeof patch.remote !== "boolean") throw new BotError(400, "bad_remote", "remote must be true or false");
+      this.applyRemote(b, patch.remote, { by: "user" });
+    }
+    // Pinning and Remote are view/connection preferences, not edits: they do not move "updated".
+    if (Object.keys(patch).some((k) => k !== "pinned" && k !== "remote" && (patch as Record<string, unknown>)[k] !== undefined)) b.updatedAt = this.now();
+    this.save();
+    return { ...b };
+  }
+
+  private applyRemote(b: BotRecord, remote: boolean, o: { by: "user" | "auto"; note?: string; at?: number }): void {
+    const at = o.at ?? this.now();
+    if (!!b.remote === remote) { if (b.remoteAt !== undefined || remote) b.remoteAt = Math.max(b.remoteAt ?? 0, at); return; } // no change: nothing to log
+    b.remote = remote;
+    b.remoteAt = at;
+    const note = o.note ?? (o.by === "user" ? (remote ? "Turned on in settings." : "Turned off in settings.") : remote ? "Turned on automatically." : "Turned off automatically.");
+    b.remoteLog = [...(b.remoteLog ?? []), { at, remote, by: o.by, note: note.slice(0, 200) }].slice(-MAX_REMOTE_LOG);
+  }
+
+  setRemote(id: string, remote: boolean, o: { by: "user" | "auto"; note?: string; at?: number }): BotRecord {
+    const b = ID_RE.test(id) ? this.bots[id] : undefined;
+    if (!b) throw new BotError(404, "not_found", "no such bot");
+    this.applyRemote(b, remote, o);
     this.save();
     return { ...b };
   }

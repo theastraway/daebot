@@ -18,6 +18,8 @@ export class Run {
   readonly startedAt: number;
   readonly userText: string;
   readonly userPhotos: PhotoRef[] | undefined;
+  /** The turn runs on another device (a remote bot): its user message reaches the saved transcript only when that device syncs. */
+  external = false;
   constructor(id: string, sessionId: string, startedAt: number, userText: string, userPhotos?: PhotoRef[]) {
     this.id = id; this.sessionId = sessionId; this.startedAt = startedAt; this.userText = userText; this.userPhotos = userPhotos;
   }
