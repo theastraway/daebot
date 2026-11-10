@@ -4,7 +4,14 @@ const MAX_QUEUE = 50;
 const MAX_MESSAGE_CHARS = 20_000;
 const SECRET_RE = /(api[_-]?key|secret|token|password)\s*=\s*\S+/gi;
 
-function redact(s: string): string {
+/** Replies typed in MIND Chat that the transcript logger (session-log.ts) received in a response: handed to the live session by id. */
+const replyBox = new Map<string, string[]>();
+export function pushReplies(sessionId: string, replies: string[]): void {
+  replyBox.set(sessionId, [...(replyBox.get(sessionId) ?? []), ...replies].slice(-50));
+  if (replyBox.size > 500) replyBox.delete(replyBox.keys().next().value as string);
+}
+
+export function redact(s: string): string {
   return s.replace(SECRET_RE, (_m, k) => `${k}=[redacted]`).replace(/mind_[A-Za-z0-9]{12,}/g, "[key]");
 }
 
@@ -16,7 +23,7 @@ interface Msg { role: "user" | "assistant"; content: string }
 //   POST /:id/close  {summary, status:"ended"}
 // pending_replies are marked delivered server-side the moment they are returned, so every response
 // is harvested into an in-memory inbox and handed out exactly once by pendingReplies().
-export function createSessionSync(client: MindClient, sourceKey: string): SessionSync {
+export function createSessionSync(client: MindClient, sourceKey: string, o: { append?: boolean } = {}): SessionSync {
   let title = "";
   let externalId = sourceKey;
   let mindSessionId = "";
@@ -91,6 +98,7 @@ export function createSessionSync(client: MindClient, sourceKey: string): Sessio
     },
     async append(role, content) {
       if (!title) throw new Error("session not opened: call open({title, sourceKey}) first");
+      if (o.append === false) return; // the transcript logger (session-log.ts) writes the messages, once, from the saved session
       const text = redact(content).slice(0, MAX_MESSAGE_CHARS);
       if (!text.trim()) return;
       await serial(async () => {
@@ -101,6 +109,8 @@ export function createSessionSync(client: MindClient, sourceKey: string): Sessio
     },
     async pendingReplies() {
       await serial(async () => { if (queue.length) await flush(); });
+      const boxed = replyBox.get(externalId);
+      if (boxed?.length) { replyBox.delete(externalId); inbox.push(...boxed); }
       return inbox.splice(0, inbox.length);
     },
     async close(summary) {

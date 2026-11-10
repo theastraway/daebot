@@ -1,6 +1,7 @@
 import type { Config, MindClient } from "../types.ts";
 import { routeFor } from "./routes.ts";
 import type { Route } from "./routes.ts";
+import { edgeFallbackFetch } from "../provider/edge-fallback.ts";
 
 export interface MindClientOpts {
   timeoutMs?: number;        // default 60_000
@@ -49,7 +50,8 @@ function isRetryable(e: unknown): boolean {
 }
 
 export function createMindClient(cfg: Config, fetchImpl?: typeof fetch, opts: MindClientOpts = {}): MindClient {
-  const doFetch: typeof fetch = fetchImpl ?? ((...a) => fetch(...a));
+  // MIND's web edges answer an HTML 403 to bodies that look like code or shell; a gzipped retry (and the other MIND address) gets through. Non-MIND hosts pass straight through.
+  const doFetch: typeof fetch = edgeFallbackFetch(fetchImpl ?? ((...a) => fetch(...a)));
   const curKey = (): string => opts.getKey?.() ?? cfg.mindApiKey;
   const base = (cfg.mindBaseUrl || "https://m-i-n-d.ai/developer/v1").replace(/\/+$/, "");
   const origin = (() => { try { return new URL(base).origin; } catch { return base; } })();

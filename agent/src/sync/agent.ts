@@ -207,7 +207,7 @@ export class SyncAgent {
     const changed = !local || recordSig(merged) !== recordSig(local) || merged.history.length !== local.history.length;
     this.synced.set(id, recordSig(merged));
     if (changed) {
-      await this.deps.store.save(merged);
+      await this.deps.store.save(merged, { origin: "sync" });
       this.status.pulled++;
       await this.deps.afterWrite?.(id).catch(() => {});
     }

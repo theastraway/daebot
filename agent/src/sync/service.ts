@@ -130,7 +130,7 @@ export class SyncService {
           out.push({ id: rec.id, status: "same", sig: recordSig(existing) });
           continue;
         }
-        await this.deps.store.save(merged);
+        await this.deps.store.save(merged, { origin: "sync" });
         await this.deps.afterWrite?.(owner, rec.id).catch(() => {});
         out.push({ id: rec.id, status: "ok", sig: recordSig(merged) });
       } catch {

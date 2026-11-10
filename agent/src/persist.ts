@@ -62,7 +62,8 @@ function metaOf(rec: StoredSession): StoredMeta {
 }
 
 export interface SessionStore {
-  save(rec: StoredSession): Promise<void>;
+  /** `origin: "sync"` marks a record written by device sync (the other device already ran and logged those turns). */
+  save(rec: StoredSession, opts?: { origin?: "sync" }): Promise<void>;
   load(id: string): StoredSession | undefined;
   /**
    * Read-only twin of load(): the parsed record is cached per file and revalidated by a cheap stat (mtime + size), so switching
@@ -76,7 +77,7 @@ export interface SessionStore {
   /** Deletes a saved session (used when a bot is deleted: its threads go with it). */
   remove?(id: string): Promise<void>;
   /** Called after every successful save (the record as written). Used by device sync. Returns the unsubscribe function. */
-  subscribe?(fn: (rec: StoredSession) => void): () => void;
+  subscribe?(fn: (rec: StoredSession, origin?: "sync") => void): () => void;
   /** Called after a session was deleted from the store (id and the owner it had). Used by device sync to write a tombstone. */
   subscribeRemove?(fn: (id: string, owner: string | undefined) => void): () => void;
 }
@@ -105,7 +106,7 @@ export function createFileStore(dir: string): SessionStore {
   const queues = new Map<string, Promise<void>>();
   const shared = new Map<string, { mtimeMs: number; size: number; rec: StoredSession }>();
   const SHARED_MAX = 12;
-  const listeners = new Set<(rec: StoredSession) => void>();
+  const listeners = new Set<(rec: StoredSession, origin?: "sync") => void>();
   const removeListeners = new Set<(id: string, owner: string | undefined) => void>();
 
   function scan(): void {
@@ -123,7 +124,7 @@ export function createFileStore(dir: string): SessionStore {
   }
 
   return {
-    save(rec) {
+    save(rec, opts) {
       const file = join(root, fileNameFor(rec.id));
       // Screenshots are sent to the model once and never written to disk (size, and they can show anything on screen).
       const data = JSON.stringify(rec, (k, v) => (k === "images" ? undefined : v));
@@ -134,7 +135,7 @@ export function createFileStore(dir: string): SessionStore {
         await writeFile(tmp, data, { mode: 0o600 });
         await rename(tmp, file);
         index.set(rec.id, metaOf(rec));
-        for (const fn of [...listeners]) { try { fn(rec); } catch { /* a listener never blocks a save */ } }
+        for (const fn of [...listeners]) { try { fn(rec, opts?.origin); } catch { /* a listener never blocks a save */ } }
       });
       queues.set(rec.id, next);
       return next.finally(() => { if (queues.get(rec.id) === next) queues.delete(rec.id); });
