@@ -217,6 +217,13 @@
         <p class="drawer-fine" id="bd-model-note">Applies to this bot's threads only. Main Daebot and other bots keep their own choice.</p>
         <span class="inline-state" id="bd-model-state" role="status" aria-live="polite"></span>
       </section>
+      <section class="dsec" id="bd-remote-sec">
+        <h3>Remote</h3>
+        <label class="rt-check"><input type="checkbox" id="bd-remote" aria-describedby="bd-remote-note"> <span>Reachable from my other devices</span></label>
+        <p class="drawer-fine" id="bd-remote-note">On: messages sent to this bot from your phone or the web run on the computer where this bot lives, with its local tools. Off: this bot answers only on the device you are using.</p>
+        <ul class="drawer-fine" id="bd-remote-log" aria-label="Recent Remote changes"></ul>
+        <span class="inline-state" id="bd-remote-state" role="status" aria-live="polite"></span>
+      </section>
       <section class="dsec">
         <label class="fld-label" for="instr-text">DAEBOT.md</label>
         <textarea class="fld-area" id="instr-text" rows="14" spellcheck="false" autocomplete="off"></textarea>

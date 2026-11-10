@@ -115,6 +115,12 @@ export class SyncAgent {
 
   private bots(): BotsApi | undefined { return this.deps.bots(); }
 
+  /** Brings one session up to date from the server right now (a remote job needs the thread as it is on the other device). */
+  async pullSession(id: string): Promise<void> {
+    if (this.running) await this.running.catch(() => {});
+    await this.pullRow(id, undefined);
+  }
+
   private async pull(full: boolean): Promise<void> {
     let since = full ? 0 : this.cursor;
     const seen = new Set<string>();

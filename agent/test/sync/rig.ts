@@ -34,7 +34,7 @@ export async function hostedRig(o: { script?: ConstructorParameters<typeof FakeP
   const ownerRuntime = createRuntime(cfg, { provider, store, bootCache, bots, hosted: { dailyUsdCap: 50, sharedCap: globalCap, exempt: true } });
   const env: NodeJS.ProcessEnv = { DATA_DIR: dir, DAEBOT_SECRET_KEY: rnd() + rnd(), DAEBOT_ADMINS: "", MIND_OAUTH_BASE_URL: fake.url, DAEBOT_PUBLIC_URL: "https://daebot.live" };
   const auth = createAuthContext({ env, cfg, hosted: hostedOpts, ownerRuntime, globalCap, provider, sessionStore: store, bootCache, bots });
-  const gw = await startGateway({ runtime: ownerRuntime, cfg, port: 0, host: "127.0.0.1", staticDir: st.dir, hosted: hostedOpts, auth, sessionStore: store, bots, botsEnabled: () => true });
+  const gw = await startGateway({ runtime: ownerRuntime, cfg, port: 0, host: "127.0.0.1", staticDir: st.dir, hosted: hostedOpts, auth, sessionStore: store, bots, botsEnabled: () => true, remoteDir: dir });
   /** What a device does: a fetch that carries the allowlisted Host over https and lands on the in-process hosted gateway. */
   const bridge = (): typeof fetch => (async (input: string | URL | Request, init?: RequestInit) => {
     const u = new URL(String(input));
@@ -42,12 +42,20 @@ export async function hostedRig(o: { script?: ConstructorParameters<typeof FakeP
     const r = await http(gw.url, (init?.method ?? "GET") as string, u.pathname + u.search, { headers, body: init?.body ? JSON.parse(String(init.body)) : undefined });
     return new Response(r.body, { status: r.status, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
-  return { gw, fake, keys, store, dir, provider, bridge, host: (key: string, method: string, path: string, body?: unknown) => http(gw.url, method, path, { headers: { ...H, "x-mind-key": key }, body }), close: async () => { await gw.close(); await fake.close(); } };
+  /** Signs in as a user the way the web/phone app does (POST /auth/key) and returns the session cookie. */
+  const cookieFor = async (key: string): Promise<Record<string, string>> => {
+    const r = await http(gw.url, "POST", "/auth/key", { headers: H, body: { key } });
+    const sc = r.headers["set-cookie"];
+    const first = (Array.isArray(sc) ? sc[0] : String(sc ?? "")).split(";")[0];
+    return { ...H, cookie: first };
+  };
+  const as = async (key: string) => { const h = await cookieFor(key); return (method: string, path: string, body?: unknown) => http(gw.url, method, path, { headers: h, body }); };
+  return { gw, fake, keys, store, dir, provider, bridge, as, host: (key: string, method: string, path: string, body?: unknown) => http(gw.url, method, path, { headers: { ...H, "x-mind-key": key }, body }), close: async () => { await gw.close(); await fake.close(); } };
 }
 
 export type HostedRig = Awaited<ReturnType<typeof hostedRig>>;
 
-export async function deskRig(hosted: HostedRig, userKey: string, o: { script?: ConstructorParameters<typeof FakeProvider>[0]; intervalMs?: number; sync?: boolean } = {}) {
+export async function deskRig(hosted: HostedRig, userKey: string, o: { script?: ConstructorParameters<typeof FakeProvider>[0]; intervalMs?: number; sync?: boolean; deviceId?: string; deviceName?: string } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "daebot-desk-"));
   const provider = new FakeProvider(o.script ?? [{ text: "desktop says hi" }]);
   const cfg = baseCfg({ mindBaseUrl: hosted.fake.base, mindApiKey: userKey });
@@ -57,7 +65,7 @@ export async function deskRig(hosted: HostedRig, userKey: string, o: { script?: 
   const st = tmpStatic();
   const gw = await startGateway({
     runtime, cfg, port: 0, staticDir: st.dir, tokenPath: join(dir, "tok"), bots: bots as never, botsEnabled: () => true, sessionStore: store,
-    sync: o.sync === false ? undefined : { enabled: true, url: "https://daebot.live", fetchImpl: hosted.bridge(), intervalMs: o.intervalMs ?? 150 },
+    sync: o.sync === false ? undefined : { enabled: true, url: "https://daebot.live", fetchImpl: hosted.bridge(), intervalMs: o.intervalMs ?? 150, deviceId: o.deviceId ?? "d_" + "1".repeat(16), deviceName: o.deviceName ?? "Test Mac", remoteWaitSec: 2 },
   });
   const a = bearer(gw.token);
   return { gw, store, dir, provider, a, api: (method: string, path: string, body?: unknown) => http(gw.url, method, path, { headers: a, body }), close: () => gw.close() };

@@ -154,7 +154,7 @@ export function initBots(ctx) {
     drawer: $("instr-drawer"), drawerTitle: $("instr-title"), drawerClose: $("instr-close"),
     text: $("instr-text"), count: $("instr-count"), stateEl: $("instr-state"), save: $("instr-save"), revert: $("instr-revert"),
     name: $("bd-name"), purpose: $("bd-purpose"), colors: $("bd-colors"), saveDetails: $("bd-save"), detailsState: $("bd-state"),
-    model: $("bd-model"), modelState: $("bd-model-state"), faces: $("bd-faces"), faceDesc: $("bd-face-desc"), bnFaces: $("bn-faces"), bnFaceDesc: $("bn-face-desc"), bnColors: $("bn-colors"),
+    model: $("bd-model"), modelState: $("bd-model-state"), remote: $("bd-remote"), remoteNote: $("bd-remote-note"), remoteLog: $("bd-remote-log"), remoteState: $("bd-remote-state"), faces: $("bd-faces"), faceDesc: $("bd-face-desc"), bnFaces: $("bn-faces"), bnFaceDesc: $("bn-face-desc"), bnColors: $("bn-colors"),
     del: $("bd-delete"), verText: $("bd-ver-text"), verCurrent: $("bd-ver-current"), verNotes: $("bd-ver-notes"), verBtn: $("bd-update"),
     card: $("bot-new"), cardForm: $("bot-new-form"), bnName: $("bn-name"), bnPurpose: $("bn-purpose"), bnInstr: $("bn-instr"),
     bnErr: $("bn-err"), bnCreate: $("bn-create"), bnCancel: $("bn-cancel"),
@@ -620,7 +620,7 @@ export function initBots(ctx) {
     el.purpose.value = bot ? bot.purpose || "" : "";
     st.color = safeColor(bot && bot.color);
     st.face = faceOf(bot && bot.face) ? bot.face : "";
-    paintColors(); paintFaces(); paintModel(bot);
+    paintColors(); paintFaces(); paintModel(bot); paintRemote(bot);
     if (el.modelState) el.modelState.textContent = "";
     el.detailsState.textContent = "";
     el.saveDetails.disabled = true;
@@ -651,6 +651,37 @@ export function initBots(ctx) {
     }
     sel.value = cur;
   }
+  /** Remote: on/off for this bot, who carries it (hosted knows its desktops), and the last few changes with the reason (for example "turned on automatically"). */
+  function paintRemote(bot) {
+    if (!el.remote || !bot) return;
+    el.remote.checked = !!bot.remote;
+    el.remote.disabled = false;
+    const devs = Array.isArray(bot.remoteDevices) ? bot.remoteDevices : null;
+    el.remoteState.textContent = bot.remote && devs ? (devs.length ? (devs.some((d) => d.online) ? `Online: ${devs.filter((d) => d.online).map((d) => d.name).join(", ")}` : `Offline: ${devs.map((d) => d.name).join(", ")}. Messages wait until it is back.`) : "No computer has registered this bot yet.") : "";
+    el.remoteLog.textContent = "";
+    for (const e of Array.isArray(bot.remoteLog) ? bot.remoteLog.slice(-3).reverse() : []) {
+      const li = document.createElement("li");
+      li.textContent = `${ago(e.at)}: ${e.note}`;
+      el.remoteLog.append(li);
+    }
+  }
+  el.remote && el.remote.addEventListener("change", async () => {
+    const id = st.drawerBot, bot = botById(id);
+    if (!bot) return;
+    const want = el.remote.checked;
+    if (!!bot.remote === want) return;
+    el.remote.disabled = true; el.remoteState.textContent = "Saving…";
+    try {
+      const res = await api(`/bots/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ remote: want }) });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) { el.remoteState.textContent = botErrorMessage(res.status, body).text; el.remote.checked = !!bot.remote; el.remote.disabled = false; return; }
+      Object.assign(bot, body.bot || body, { id });
+      paintRemote(bot);
+      el.remoteState.textContent = want ? "Remote is on." : "Remote is off.";
+      renderList(); sync();
+      app.botChanged(bot);
+    } catch (e) { if (e.message !== "unauthorized") { el.remoteState.textContent = "Could not save. Try again."; el.remote.checked = !!bot.remote; } el.remote.disabled = false; }
+  });
   function paintModel(bot) {
     if (!el.model) return;
     fillModelSelect(bot);

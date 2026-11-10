@@ -65,6 +65,12 @@ import { MAX_PHOTO_BODY, checkPhotos, cleanName, isPhotoId } from "../photos.ts"
 import type { SessionStore } from "../persist.ts";
 import { SyncService } from "../sync/service.ts";
 import { SyncAgent } from "../sync/agent.ts";
+import { SyncHttp } from "../sync/http.ts";
+import { RemoteAgent, loadDeviceId } from "../sync/remote-agent.ts";
+import { RemoteHub } from "../remote/hub.ts";
+import type { RemoteJob } from "../remote/hub.ts";
+import { daebotHome } from "../home.ts";
+import { hostname } from "node:os";
 
 // ---------- inbound webhooks (channel adapters register here) ----------
 export interface WebhookRequest {
@@ -114,8 +120,10 @@ export interface GatewayOptions {
   auth?: AuthContext;
   /** The shared session store (DATA_DIR/sessions); lets ownership of persisted sessions be checked without a live session. */
   sessionStore?: { meta?(id: string): { owner?: string } | undefined };
+  /** Where the hosted remote-bot hub keeps its device list and queued messages (default DATA_DIR). Tests. */
+  remoteDir?: string;
   /** Device sync (desktop <-> daebot.live). Local gateways start it only when `enabled` is true (the CLI sets it); tests inject `fetchImpl`/`url`/`key`. */
-  sync?: { enabled?: boolean; url?: string; key?: string; intervalMs?: number; fetchImpl?: typeof fetch };
+  sync?: { enabled?: boolean; url?: string; key?: string; intervalMs?: number; fetchImpl?: typeof fetch; deviceId?: string; deviceName?: string; remoteWaitSec?: number };
   /** MIND Voice (/voice/stt, /voice/tts). Defaults from cfg + auth; pass to override (tests). */
   voice?: Partial<VoiceOptions>;
   /** Apps card (/apps/integrations): MIND integrations proxied with the signed-in user's own key. Defaults from cfg + auth; pass to override (tests). */
@@ -383,6 +391,47 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       })
     : undefined;
   const syncLimiter = new TurnRateLimiter({ max: 1200 });
+
+  // ---- Remote bots (see src/remote/hub.ts, src/sync/remote-agent.ts). Hosted: the hub queues messages for a user's desktop and relays its reply into the sender's run feed.
+  const remoteRuns = new Map<string, { run: Run; owner: string; sessionId: string }>();
+  const remoteHub = hosted && auth?.store.enabled
+    ? new RemoteHub({
+        dir: opts.remoteDir ?? dataDir(),
+        onStalled: (job) => {
+          const e = remoteRuns.get(job.id);
+          if (!e) return;
+          remoteRuns.delete(job.id);
+          e.run.publish({ type: "notice", level: "warn", text: `Turn failed: ${job.error ?? "the device did not answer"}.` });
+          e.run.finish();
+        },
+      })
+    : undefined;
+  const remoteSweep = remoteHub ? setInterval(() => remoteHub.sweep(), 30_000) : undefined;
+  remoteSweep?.unref();
+  /** Desktop: runs one message of a remote bot thread on this machine. */
+  async function runRemoteJob(job: RemoteJob, emit: (ev: AgentEvent) => void, signal: AbortSignal): Promise<void> {
+    const bots = manager.runtimeOf(OWNER.id).bots;
+    if (!bots) throw new Error("bots are not available on this device");
+    let bot = bots.bySlug(job.botSlug);
+    if (!bot) { try { await bots.list(); } catch { /* MIND unreachable */ } bot = bots.bySlug(job.botSlug); }
+    if (!bot) throw new Error(`this device has no bot "${job.botSlug}"`);
+    await syncAgent?.pullSession(job.sessionId); // the thread as it is on the other device
+    const ls = await manager.open({ surface: job.surface || "web", title: job.title || undefined, resumeId: job.sessionId, owner: OWNER.id, bot: bot.id });
+    for (let i = 0; ls.busy && i < 100; i++) await new Promise((r) => setTimeout(r, 200));
+    await manager.turn(ls.id, job.text, emit, signal, "user", false, undefined, undefined, job.quote ? { ...(job.quote.id ? { id: job.quote.id } : {}), text: job.quote.text } : undefined);
+  }
+  const remoteAgent = syncAgent
+    ? new RemoteAgent({
+        http: new SyncHttp({ baseUrl: opts.sync?.url ?? ((process.env.DAEBOT_SYNC_URL ?? "").trim() || "https://daebot.live"), key: syncKey, fetchImpl: opts.sync?.fetchImpl }),
+        deviceId: opts.sync?.deviceId ?? loadDeviceId(join(daebotHome(), "device-id")),
+        deviceName: opts.sync?.deviceName ?? (hostname() || "Desktop"),
+        bots: () => manager.runtimeOf(OWNER.id).bots,
+        runJob: runRemoteJob,
+        afterJob: (id) => syncAgent.round(false).then(() => undefined),
+        waitSec: opts.sync?.remoteWaitSec,
+        log: (l) => process.stderr.write(`${l}\n`),
+      })
+    : undefined;
   const wsConns = new Set<WsConnection>();
   const SESSION_ROUTE = /^\/sessions\/([^/]+)(?:\/(send|abort|violations|history|events|suggest|suggest-feedback|device-result))?$/;
   const MSG_ROUTE = /^\/sessions\/([^/]+)\/messages\/([^/]+)\/(react|feedback|report)$/;
@@ -817,6 +866,83 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     return principal;
   }
 
+  // POST /api/sync/device/poll {deviceId, name, bots:[{slug,remote,at}], wait}: a desktop checks in, trades Remote flags (last writer wins), and waits for work.
+  async function devicePoll(req: IncomingMessage, res: ServerResponse, me: Principal): Promise<void> {
+    if (!remoteHub) return sendJson(res, 404, { error: "remote bots are not available on this deployment" });
+    const b = parseJsonObject(await readBody(req, 256 * 1024));
+    const deviceId = typeof b.deviceId === "string" && /^d_[0-9a-f]{16}$/.test(b.deviceId) ? b.deviceId : "";
+    if (!deviceId) return sendJson(res, 400, { error: "deviceId required" });
+    const name = optStr(b.name, 60) ?? "Desktop";
+    const flags = Array.isArray(b.bots) ? b.bots.filter((f): f is { slug: string; remote: boolean; at: number } => !!f && typeof f.slug === "string" && typeof f.remote === "boolean" && typeof f.at === "number").slice(0, 200) : [];
+    const bots = manager.runtimeOf(me.id).bots;
+    if (bots && flags.some((f) => !bots.bySlug(f.slug))) { try { await bots.list(); } catch { /* MIND unreachable: unknown bots wait for the next poll */ } }
+    remoteHub.heartbeat(me.id, { id: deviceId, name, slugs: flags.map((f) => f.slug) });
+    if (bots?.setRemote) {
+      for (const f of flags) {
+        const hb = bots.bySlug(f.slug);
+        if (hb && f.at > (hb.remoteAt ?? 0) && f.remote !== !!hb.remote) { bots.setRemote(hb.id, f.remote, { by: "user", note: `${f.remote ? "Turned on" : "Turned off"} on ${name}.`, at: f.at }); remoteHub.nudge(me.id); }
+      }
+    }
+    const waitMs = Math.min(25, Math.max(0, Number(b.wait) || 0)) * 1000;
+    const ac = new AbortController();
+    req.on("close", () => ac.abort());
+    const jobs = await remoteHub.wait(me.id, deviceId, waitMs, ac.signal);
+    if (ac.signal.aborted) return;
+    remoteHub.heartbeat(me.id, { id: deviceId, name, slugs: flags.map((f) => f.slug) });
+    // What the device does not know yet (a flag turned on here, or automatically): computed after the wait so a change made while it waited is in this answer.
+    const reply: { slug: string; remote: boolean; at: number; by?: string; note?: string }[] = [];
+    for (const f of flags) {
+      const hb = bots?.bySlug(f.slug);
+      if (hb && (hb.remoteAt ?? 0) > f.at) { const last = hb.remoteLog?.[hb.remoteLog.length - 1]; reply.push({ slug: hb.slug, remote: !!hb.remote, at: hb.remoteAt!, by: last?.by, note: last?.note }); }
+    }
+    return sendJson(res, 200, { ok: true, bots: reply, jobs });
+  }
+
+  // POST /api/sync/device/jobs/:id/events {events, done?, error?}: the device streams the reply of a job it ran; the sender's run feed gets it live.
+  async function deviceJobEvents(req: IncomingMessage, res: ServerResponse, me: Principal, jobId: string): Promise<void> {
+    if (!remoteHub) return sendJson(res, 404, { error: "remote bots are not available on this deployment" });
+    const b = parseJsonObject(await readBody(req, 4 * 1024 * 1024));
+    const job = remoteHub.job(me.id, jobId);
+    if (!job) return sendJson(res, 404, { error: "no such job" });
+    const error = typeof b.error === "string" ? b.error : undefined;
+    const upd = remoteHub.progress(me.id, job.deviceId, jobId, { done: b.done === true, error });
+    if (!upd) return sendJson(res, 409, { error: "job is not running" });
+    const e = remoteRuns.get(jobId);
+    if (e) {
+      const evs = Array.isArray(b.events) ? b.events.slice(0, 1000) : [];
+      for (const ev of evs) {
+        if (!ev || typeof ev !== "object" || typeof (ev as { type?: unknown }).type !== "string") continue;
+        e.run.publish(ev as AgentEvent);
+        broadcast(e.sessionId, ev as AgentEvent);
+      }
+      if (b.done === true) {
+        if (error) e.run.publish({ type: "notice", level: "warn", text: `Turn failed: ${error.slice(0, 200)}` });
+        remoteRuns.delete(jobId);
+        e.run.finish();
+      }
+    }
+    return sendJson(res, 200, { ok: true, abort: upd.abort === true });
+  }
+
+  /** A message to a bot thread whose desktop is reachable: it becomes a job for that desktop. false = not a remote thread (the hosted server answers as before). */
+  async function routeRemote(res: ServerResponse, me: Principal, sessionId: string, bot: string, surface: string, title: string, text: string, quote: MessageQuote | undefined, hasPhotos: boolean): Promise<boolean> {
+    if (!remoteHub) return false;
+    const rec = manager.runtimeOf(me.id).bots?.get(bot);
+    if (!rec) return false;
+    const devs = remoteHub.devicesFor(me.id, rec.slug);
+    if (!devs.length || !rec.remote) return false;
+    if (hasPhotos) { sendJson(res, 409, { error: "remote_photos", message: "Photos cannot be sent to a remote bot yet. Turn Remote off for this bot to send a photo." }); return true; }
+    const dev = devs[0];
+    const job = remoteHub.enqueue(me.id, { deviceId: dev.id, sessionId, botSlug: rec.slug, surface, title, text, ...(quote ? { quote } : {}) });
+    const run = runs.start(sessionId, text);
+    run.external = true;
+    remoteRuns.set(job.id, { run, owner: me.id, sessionId });
+    res.writeHead(200, sseHeaders({ "x-daebot-remote": dev.name }));
+    run.publish({ type: "notice", level: "info", text: dev.online ? `Sent to ${dev.name}.` : `Waiting for ${dev.name}: it is offline. It will answer when it is back.` });
+    attachRun(res, run, 0, undefined);
+    return true;
+  }
+
   // /api/sync/*: device session sync. GET sessions?since&limit (rows), GET sessions/:id (one record), POST sessions {records} (merge in).
   async function syncApi(req: IncomingMessage, res: ServerResponse, path: string, query: URLSearchParams): Promise<void> {
     const me = await keyPrincipal(req, res);
@@ -836,6 +962,9 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       }
       return sendJson(res, 405, { error: "method not allowed" });
     }
+    if (path === "/api/sync/device/poll" && method === "POST") return devicePoll(req, res, me);
+    const jm = /^\/api\/sync\/device\/jobs\/(rj_[0-9a-f]{16})\/events$/.exec(path);
+    if (jm && method === "POST") return deviceJobEvents(req, res, me, jm[1]);
     const m = /^\/api\/sync\/sessions\/([^/]+)$/.exec(path);
     if (m && method === "GET") {
       let id: string;
@@ -1348,7 +1477,11 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   }
 
   // ---------- bots + models REST (same cookie auth and origin rules as /sessions; one owner's bots are invisible to everyone else) ----------
-  const botView = (b: BotRecord) => ({ id: b.id, slug: b.slug, name: b.name, purpose: b.purpose, color: b.color, face: b.face ?? null, model: b.model ?? null, pinned: !!b.pinnedAt, pinnedAt: b.pinnedAt ?? null, createdAt: b.createdAt, updatedAt: b.updatedAt, ...versionInfo(b) });
+  const botView = (b: BotRecord) => ({ id: b.id, slug: b.slug, name: b.name, purpose: b.purpose, color: b.color, face: b.face ?? null, model: b.model ?? null, pinned: !!b.pinnedAt, pinnedAt: b.pinnedAt ?? null, remote: !!b.remote, remoteAt: b.remoteAt ?? null, remoteLog: (b.remoteLog ?? []).slice(-5), createdAt: b.createdAt, updatedAt: b.updatedAt, ...versionInfo(b) });
+
+  /** Hosted: which of the user's desktops carry this bot and whether they are online (the Remote switch shows it). */
+  const remoteView = (owner: string, b: BotRecord): { remoteDevices?: { name: string; online: boolean }[] } =>
+    remoteHub ? { remoteDevices: remoteHub.devicesFor(owner, b.slug).map((d) => ({ name: d.name, online: d.online })) } : {};
 
   function botFail(res: ServerResponse, e: unknown): void {
     if (e instanceof BotError) return sendJson(res, e.status, { error: e.code, message: e.message, ...(e.extra ?? {}) });
@@ -1389,7 +1522,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (!botsOn() || !bots) return sendJson(res, 404, { error: "bots are not enabled on this deployment" });
     try {
       if (path === "/bots") {
-        if (method === "GET") return sendJson(res, 200, { bots: (await bots.list()).map((b) => ({ ...botView(b), ...manager.botState(me.id, b.id) })) });
+        if (method === "GET") return sendJson(res, 200, { bots: (await bots.list()).map((b) => ({ ...botView(b), ...manager.botState(me.id, b.id), ...remoteView(me.id, b) })) });
         if (method === "POST") {
           const b = await readJson(req);
           // The web UI sends only a name: the slug is derived from it (made unique with a numeric suffix).
@@ -1444,7 +1577,10 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
           if (model) { const bad = await modelProblem(me, model); if (bad) return sendJson(res, bad.status === 402 ? 403 : bad.status, bad.body); }
         }
         if (b.pinned !== undefined && typeof b.pinned !== "boolean") return sendJson(res, 400, { error: "bad_pinned", message: "pinned must be true or false" });
-        return sendJson(res, 200, { bot: botView(bots.update(id, { name: optStr(b.name, 120), purpose: optStr(b.purpose, 1000), color: optStr(b.color, 20), face: b.face, model, pinned: b.pinned })) });
+        if (b.remote !== undefined && typeof b.remote !== "boolean") return sendJson(res, 400, { error: "bad_remote", message: "remote must be true or false" });
+        if (b.remote !== undefined) { remoteHub?.nudge(me.id); remoteAgent?.kick(); }
+        const upd = bots.update(id, { name: optStr(b.name, 120), purpose: optStr(b.purpose, 1000), color: optStr(b.color, 20), face: b.face, model, pinned: b.pinned, remote: b.remote });
+        return sendJson(res, 200, { bot: { ...botView(upd), ...remoteView(me.id, upd) } });
       }
       if (method === "DELETE") {
         await bots.remove(id);
@@ -1798,6 +1934,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       if (run) {
         let cut = events.length;
         for (let i = events.length - 1; i >= 0; i--) if (events[i].type === "user") { cut = i; break; }
+        // A turn that runs on another device: its user message is in the saved transcript only once that device has synced. Until then nothing is cut.
+        if (run.external && cut < events.length && (events[cut] as { text?: string }).text !== run.userText) cut = events.length;
         payload = { events: events.slice(0, cut), run: { id: run.id, status: "running", startedAt: run.startedAt }, meta };
       }
       // Conditional GET: the open chat is re-read every few seconds and on every switch; an unchanged transcript costs a 304, not a body to download and parse.
@@ -1892,7 +2030,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
     if (action === "abort") {
       if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
-      return sendJson(res, 200, { aborted: manager.abort(id) });
+      return sendJson(res, 200, { aborted: manager.abort(id) || (remoteHub?.requestAbort(me.id, id) ?? false) });
     }
     if (action === "suggest") {
       // 1-3 replies Dae predicts the user will send next. Empty when the last message does not wait on them. Never sends anything.
@@ -1925,7 +2063,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       const check = checkPhotos(b.photos);
       if (!check.ok) return sendJson(res, check.status, { error: check.error });
       if (!text.trim() && check.photos.length === 0) return sendJson(res, 400, { error: "text required" });
-      if (ls.busy) return sendJson(res, 409, { error: "session is busy with another turn" });
+      if (ls.busy || remoteHub?.activeFor(me.id, id)) return sendJson(res, 409, { error: "session is busy with another turn" });
       let refs: PhotoRef[] | undefined;
       if (check.photos.length) {
         const photos = manager.runtimeOf(me.id).photos;
@@ -1946,6 +2084,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         const qtext = (saved ?? optStr((qb as any).text, 600) ?? "").trim().slice(0, 600);
         if (qtext) quote = { ...(qid ? { id: qid } : {}), text: qtext };
       }
+      if (ls.bot && remoteHub && (await routeRemote(res, me, id, ls.bot, ls.surface, ls.title, text, quote, check.photos.length > 0))) return;
       return streamTurn(res, id, text, {}, refs ? { type: "photos", photos: refs } : undefined, me, true, refs, parseCapabilities(b.capabilities), quote); // the web/desktop/mobile UI can answer a permission card
     } finally {
       if (big) photoBodies--;
@@ -2120,6 +2259,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   });
   routines?.runner.start(); // the one timer loop (unref'd; stopped in close)
   syncAgent?.start();
+  remoteAgent?.start();
   const addr = server.address() as AddressInfo;
   const shownHost = host === "::1" ? "[::1]" : host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
   const url = `http://${shownHost}:${addr.port}`;
@@ -2135,6 +2275,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       clearInterval(pinger);
       routines?.runner.stop();
       syncAgent?.stop();
+      remoteAgent?.stop();
+      if (remoteSweep) clearInterval(remoteSweep);
       mindFeed?.stop();
       for (const c of wsConns) c.close(1001, "server shutting down");
       await manager.closeAll();
