@@ -1,5 +1,7 @@
 // Runtime: wires MindClient, boot, kernel, tools and provider into AgentSessions.
 import { createHash, randomUUID } from "node:crypto";
+import { hostname } from "node:os";
+import { join as joinPath } from "node:path";
 import { DailyCostCap, filterHostedTools } from "./hosted.ts";
 import { createKernel, parseTier } from "./kernel/index.ts";
 import type { Tier } from "./kernel/index.ts";
@@ -12,6 +14,7 @@ import type { Learning } from "./learn/index.ts";
 import { mistakeBrief } from "./gateway/mistakes.ts";
 import { dataDir, cleanTitle } from "./persist.ts";
 import { bootMind, createMindClient, createMindTools, createSessionSync } from "./mind/index.ts";
+import { loggerFor } from "./mind/session-log.ts";
 import { createMindSessionsTool } from "./mind/sessions-tool.ts";
 import { ASTRA_BOARD_PROMPT, createAstraBoardTool } from "./astra/board-tool.ts";
 import { BotStore, botMindApi } from "./bots/store.ts";
@@ -290,6 +293,8 @@ export interface HostedRuntimeOptions {
 }
 
 export interface RuntimeOverrides {
+  /** false = do not log this owner's sessions to their MIND (default on whenever there is a store and a data dir). */
+  sessionLog?: boolean;
   env?: NodeJS.ProcessEnv;
   provider?: Provider;
   fetchImpl?: typeof fetch;
@@ -353,6 +358,16 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     ? createViewPhotoTool({
         store: photoStore, provider, vision: cfg.vision ?? DEFAULT_VISION,
         isFree: mindBilled && credits ? async () => (await credits.get(billingKey()))?.tier === FREE_TIER : undefined,
+      })
+    : undefined;
+  // Every session of this owner is logged to their own MIND as an Agent Session, from every device (see mind/session-log.ts). Off only when
+  // there is no data dir to remember the cursors in, or the host says so (tests).
+  const sessionLog = overrides.store?.subscribe && stateDir && overrides.sessionLog !== false && cfg.mindApiKey
+    ? loggerFor({
+        client: () => sessionClient, store: overrides.store!, owner: overrides.owner ?? "owner",
+        sourceKeyOf: (rec) => (rec.peer ? undefined : rec.bot ? (botStore?.get(rec.bot)?.slug ? `daebot-bot-${botStore.get(rec.bot)!.slug}` : undefined) : "daebot"),
+        stateFile: joinPath(stateDir, "mind-log", `${(overrides.owner ?? "owner").replace(/[^A-Za-z0-9._-]/g, "_")}.json`),
+        device: hosted ? { kind: "web", label: "daebot.live" } : { kind: process.platform === "darwin" ? "mac" : process.platform === "win32" ? "windows" : "linux", label: hostname() || "Daebot desktop" },
       })
     : undefined;
   const suggestCache = new Map<string, { key: string; replies: string[] }>();
@@ -627,11 +642,12 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       const home = botRec ? botRec.slug : "main";
       const title = stored?.title || opts.title || `Daebot ${opts.surface} session`;
       const cwd = process.cwd();
-      const sourceKey = botRec ? `daebot-bot-${botRec.slug}` : hosted?.sourceKey ? hosted.sourceKey(opts.surface, id) : `mindclaw-${opts.surface}-${id}`;
+      // The same key on every device: with the session id as external id, MIND's idempotent open gives ONE Agent Session per Daebot session.
+      const sourceKey = botRec ? `daebot-bot-${botRec.slug}` : sessionLog ? "daebot" : hosted?.sourceKey ? hosted.sourceKey(opts.surface, id) : `mindclaw-${opts.surface}-${id}`;
       // MIND Chat sync uses the MAIN key (sessionClient); the bot's name is only the source label.
       // Human <-> bot threads sync to MAIN (the user's own chat history, source daebot-bot-<slug>). Bot-to-bot DM threads (peer set) do NOT:
       // what bots say to each other never lands in MAIN, which every other agent of the user can read.
-      const sync: SessionSync = peer ? noSync : createSessionSync(sessionClient, sourceKey);
+      const sync: SessionSync = peer ? noSync : createSessionSync(sessionClient, sourceKey, { append: !sessionLog });
       // Tools a tier may not use are neither offered nor executable (the loop only knows this list).
       const sessionTools = toolsFor(home, botRec?.id, !botRec && !!peer, !peer); // a bot's message to the main Daebot runs without bot_manage, mcp_connect and the board: a peer can ask, never reconfigure
       const allWithMcp = mcp.configured ? [...sessionTools, ...(await mcp.tools())] : sessionTools;

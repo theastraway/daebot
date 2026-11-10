@@ -50,7 +50,7 @@ test("a message to a remote bot from the web runs on the desktop, streams back, 
     assert.equal(evs.at(-1).type, "done");
     assert.equal(hosted.provider.requests.length, 0, "the server's model never ran it");
     assert.equal(desk.provider.requests.length, 1, "the desktop's model ran it");
-    const local = desk.store.load(sessionId)!;
+    const local = (await until(() => desk.store.load(sessionId)))!; // the desktop saves in the background
     assert.ok(local.history.some((e: any) => e.type === "user" && e.text === "do the thing"));
     // the transcript reaches the hosted store via sync, once
     await until(() => hosted.store.load(sessionId)?.history.some((e: any) => e.type === "text" && /ran on the desktop/.test(e.delta)));

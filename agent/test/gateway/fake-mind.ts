@@ -7,7 +7,11 @@ import type { AddressInfo } from "node:net";
 
 export interface Seen { method: string; path: string; key: string; body: any; bot?: string }
 
+export interface FakeAgentSession { id: string; user: string; source_key: string; external_session_id: string; title: string; status: string; summary?: string; messages: { role: string; content: string }[] }
+
 export interface FakeMind {
+  /** Agent Sessions (open is idempotent per user + source_key + external_session_id; append/close keep what they were given) */
+  agentSessions: Map<string, FakeAgentSession>;
   url: string;            // origin
   base: string;           // /developer/v1
   seen: Seen[];
@@ -57,7 +61,7 @@ const json = (res: ServerResponse, status: number, v: unknown, extra: Record<str
 export async function startFakeMind(initial: Record<string, string> = {}): Promise<FakeMind> {
   const m: FakeMind = {
     url: "", base: "", seen: [], keys: new Map(Object.entries(initial)), registered: [], consentUser: "", codes: new Map(), refreshTokens: new Map(),
-    bots: new Map(), integrations: new Map(), usage: new Map(), life: new Map(),
+    agentSessions: new Map(), bots: new Map(), integrations: new Map(), usage: new Map(), life: new Map(),
     newKey(username) { const k = "mind_" + randomBytes(24).toString("base64url"); m.keys.set(k, username); return k; },
     close: () => new Promise((r) => { server.close(() => r()); server.closeAllConnections(); }),
   };
@@ -219,7 +223,21 @@ export async function startFakeMind(initial: Record<string, string> = {}): Promi
       if (rest === "/profile") return json(res, 200, { username, bio: "" });
       if (rest === "/profile/models" && m.models) return json(res, 200, { models: m.models, current: m.models[0]?.id });
       if (rest === "/context") return json(res, 200, { sections: [{ section: "soul", items: [{ text: `MIND of ${username}` }] }] });
-      if (rest === "/agent-sessions/open") return json(res, 200, { session_id: `ms-${username}`, pending_replies: [] });
+      if (rest === "/agent-sessions/open") {
+        const k = `${username}|${parsed?.source_key}|${parsed?.external_session_id}`;
+        const had = m.agentSessions.get(k);
+        const row = had ?? { id: `as_${m.agentSessions.size + 1}_${username}`, user: username, source_key: String(parsed?.source_key), external_session_id: String(parsed?.external_session_id), title: String(parsed?.title ?? ""), status: "active", messages: [] };
+        m.agentSessions.set(k, row);
+        return json(res, 200, { session_id: row.id, resumed: !!had, message_count: row.messages.length, pending_replies: [] });
+      }
+      const asm = /^\/agent-sessions\/([^/]+)\/(append|close)$/.exec(rest);
+      if (asm) {
+        const row = [...m.agentSessions.values()].find((r) => r.id === asm[1] && r.user === username);
+        if (!row) return json(res, 404, { detail: "no such session" });
+        if (asm[2] === "append") { row.messages.push(...(Array.isArray(parsed?.messages) ? parsed.messages : [])); if (parsed?.title) row.title = String(parsed.title); row.status = "active"; }
+        else { row.status = String(parsed?.status ?? "ended"); row.summary = String(parsed?.summary ?? ""); }
+        return json(res, 200, { ok: true, pending_replies: [] });
+      }
       return json(res, 200, { ok: true });
     }
     // Caelum (MINDapp backend/routes/agentbuilder_routes.py): brief -> AgentSpec.

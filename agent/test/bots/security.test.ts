@@ -197,6 +197,7 @@ test("F-6: bot-to-bot DM threads are NOT synced to MAIN; human<->bot threads sti
     assert.equal(w.fake.seen.filter((x) => x.path.startsWith("/developer/v1/agent-sessions")).length, 0, "nothing from the DM thread reached MAIN");
     const human = await w.runtime.openSession({ surface: "web", botId: bot.id, identity: "admin" });
     await collect(human.send("hello from the human"));
+    await new Promise((r) => setTimeout(r, 400)); // the transcript logger writes from the saved session, a moment after the turn
     const syncs = w.fake.seen.filter((x) => x.path.startsWith("/developer/v1/agent-sessions"));
     assert.ok(syncs.length >= 2, "open + append");
     assert.ok(syncs.every((x) => x.key === w.key && x.bot === undefined), "on the MAIN key, no bot header");
