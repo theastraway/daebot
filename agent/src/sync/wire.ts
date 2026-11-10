@@ -8,8 +8,8 @@ export type WireRecord = Omit<StoredSession, "owner" | "bot" | "peer" | "run" | 
 
 export const MAX_RECORD_BYTES = 6 * 1024 * 1024;
 export const MAX_HISTORY_EVENTS = 50_000;
-/** Routine runs are per-runtime bookkeeping (each side has its own routines): they never sync. */
-export const NOT_SYNCED_SURFACES: ReadonlySet<string> = new Set(["routine"]);
+/** Surfaces that never sync. Routine run threads DO sync now (they are sessions like any other: a run on the desktop shows on daebot.live and the phone). */
+export const NOT_SYNCED_SURFACES: ReadonlySet<string> = new Set();
 
 /** `undefined` = this thread cannot be mapped to a slug yet (its bot is unknown here), so it is not sent. */
 export function toWire(rec: StoredSession, bots: BotsApi | undefined): WireRecord | undefined {

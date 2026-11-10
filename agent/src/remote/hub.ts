@@ -24,6 +24,8 @@ export interface RemoteJob {
   title: string;
   text: string;
   quote?: { id?: string; text: string };
+  /** Photos attached to this message: already stored on daebot.live under the same session (the device fetches the bytes). */
+  photos?: { id: string; name: string; width: number; height: number }[];
   createdAt: number;
   state: JobState;
   deliveredAt?: number;

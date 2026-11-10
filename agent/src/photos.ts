@@ -238,6 +238,36 @@ export class PhotoStore {
     });
   }
 
+  /** Device sync: stores a photo that was made on another device, under the SAME id (the transcript names photos by id). Idempotent. */
+  importPhoto(sessionId: string, meta: PhotoMeta, data: Buffer): Promise<AddResult> {
+    return this.serial(sessionId, async (): Promise<AddResult> => {
+      if (!isPhotoId(meta.id)) return { ok: false, status: 400, error: "bad photo id" };
+      if (!(PHOTO_MIMES as readonly string[]).includes(meta.mime)) return { ok: false, status: 415, error: "unsupported image type" };
+      if (data.length === 0 || data.length > MAX_PHOTO_BYTES) return { ok: false, status: 413, error: "photo too large" };
+      const size = imageSize(data, meta.mime);
+      if (!size || size.width < 1 || size.height < 1) return { ok: false, status: 400, error: "not a valid image" };
+      const idx = this.readIndex(sessionId);
+      const have = idx.photos.find((p) => p.id === meta.id);
+      if (have) return { ok: true, photos: [have] };
+      if (idx.photos.length + 1 > MAX_SESSION_PHOTOS) return { ok: false, status: 413, error: "this chat already holds too many photos" };
+      if (this.ownerBytes() + data.length > MAX_OWNER_BYTES) return { ok: false, status: 413, error: "photo storage is full" };
+      const dir = this.sdir(sessionId);
+      const n = Number(/^p(\d+)$/.exec(meta.id)?.[1] ?? 0);
+      const kept: PhotoMeta = { id: meta.id, name: cleanName(meta.name, meta.id), width: size.width, height: size.height, mime: meta.mime, bytes: data.length, at: Number(meta.at) || Date.now() };
+      try {
+        await mkdir(dir, { recursive: true, mode: 0o700 });
+        await writeFile(join(dir, `${meta.id}.bin`), data, { mode: 0o600 });
+        idx.photos.push(kept);
+        idx.next = Math.max(idx.next, n + 1);
+        const tmp = join(dir, `index.json.${process.pid}.tmp`);
+        await writeFile(tmp, JSON.stringify(idx), { mode: 0o600 });
+        await rename(tmp, join(dir, "index.json"));
+      } catch { return { ok: false, status: 500, error: "could not save the photo" }; }
+      if (this.used !== undefined) this.used += data.length;
+      return { ok: true, photos: [kept] };
+    });
+  }
+
   /** Deletes every photo of a session (the chat was deleted). */
   async removeSession(sessionId: string): Promise<void> {
     await this.serial(sessionId, async () => {
