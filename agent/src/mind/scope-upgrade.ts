@@ -29,3 +29,15 @@ export async function upgradeChatScopes(o: UpgradeOpts): Promise<boolean> {
     return res.ok;
   } catch { return false; }
 }
+
+/** Desktop: a local gateway has no admin key, so it asks daebot.live (which has one) to upgrade the user's own key. daebot.live checks the key against MIND first, like every sync call. */
+export async function upgradeViaDaebot(o: { url: string; key: string; fetchImpl?: typeof fetch }): Promise<boolean> {
+  if (!o.key || !o.url) return false;
+  try {
+    const f = o.fetchImpl ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
+    const res = await f(`${o.url.replace(/\/+$/, "")}/api/sync/chat-scopes`, {
+      method: "POST", headers: { "X-MIND-Key": o.key, "content-type": "application/json", Accept: "application/json" }, body: "{}", signal: AbortSignal.timeout(20_000),
+    });
+    return res.ok;
+  } catch { return false; }
+}

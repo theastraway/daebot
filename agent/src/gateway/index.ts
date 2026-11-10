@@ -67,6 +67,7 @@ import type { SessionStore } from "../persist.ts";
 import { SyncService } from "../sync/service.ts";
 import { SyncAgent } from "../sync/agent.ts";
 import { RoutineSyncService } from "../sync/routines.ts";
+import { upgradeChatScopes } from "../mind/scope-upgrade.ts";
 import { SyncHttp } from "../sync/http.ts";
 import { RemoteAgent, loadDeviceId } from "../sync/remote-agent.ts";
 import { TombstoneBook } from "../sync/tombstones.ts";
@@ -1034,6 +1035,13 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         return sendJson(res, 200, { results: await syncSvc.push(me.id, b.records) });
       }
       return sendJson(res, 405, { error: "method not allowed" });
+    }
+    // POST /api/sync/chat-scopes: a desktop whose key lacks chat:read/chat:write (MIND 403) asks this server, which holds an admin key, to add them to the
+    // key it just presented (already checked against MIND above). Nothing else about the key changes.
+    if (path === "/api/sync/chat-scopes" && method === "POST") {
+      const key = (headerOne(req, "x-mind-key") ?? "").trim();
+      const ok = !!opts.cfg?.mindApiKey && await upgradeChatScopes({ baseUrl: opts.cfg.mindBaseUrl, adminKey: opts.cfg.mindApiKey, key, fetchImpl: opts.auth?.fetchImpl ?? opts.fetchImpl });
+      return ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 502, { error: "could not add the chat scopes to this key" });
     }
     if (path === "/api/sync/routines") {
       if (!routineSync) return sendJson(res, 404, { error: "routine sync is not available on this deployment" });

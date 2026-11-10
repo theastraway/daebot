@@ -156,7 +156,7 @@ async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promis
       mcpConnect = new McpConnectService({ store, catalog: createMindCatalog({ baseUrl: cfg.mindBaseUrl, keyFor: (uid) => catalogKey.of(uid) }), mind: { baseUrl: cfg.mindBaseUrl, keyFor: (uid) => catalogKey.of(uid) } });
     } catch (e) { process.stderr.write(`${e instanceof HostedConfigError ? e.message : "invalid MCP connect configuration"}\n`); return 1; }
   }
-  const runtime = createRuntime(cfg, { mcpConnect, hosted: hostedRt ? { ...hostedRt, sharedCap: globalCap, exempt: true, adminKey: cfg.mindApiKey || undefined, username: process.env.DAEBOT_OWNER_USERNAME?.trim() || (process.env.DAEBOT_ADMINS ?? "").split(",")[0]?.trim() || "owner" } : undefined, store: sessionStore, credits, bots });
+  const runtime = createRuntime(cfg, { mcpConnect, hosted: hostedRt ? { ...hostedRt, sharedCap: globalCap, exempt: true, adminKey: cfg.mindApiKey || undefined, username: process.env.DAEBOT_OWNER_USERNAME?.trim() || (process.env.DAEBOT_ADMINS ?? "").split(",")[0]?.trim() || "owner" } : undefined, store: sessionStore, credits, bots, ...(!hosted ? { scopeUpgrade: (key: string) => import("./mind/scope-upgrade.ts").then((m) => m.upgradeViaDaebot({ url: (process.env.DAEBOT_SYNC_URL ?? "").trim() || "https://daebot.live", key })) } : {}) });
   let auth: AuthContext | undefined;
   if (hosted && globalCap) {
     try {
