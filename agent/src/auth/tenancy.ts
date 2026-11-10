@@ -122,6 +122,7 @@ export function createRuntimeHub(o: HubOptions): { runtimeFor(p: Principal): Run
         now: o.now,
         persona: `You are Daebot (Dae), a personal agent for the MIND user "${p.username}". Their MIND is your memory and the only source of truth about their world; never assume it holds anything about anyone else.`,
         sourceKey: (surface) => `daebot-${surface}`,
+        adminKey: o.baseCfg.mindApiKey || undefined,
         mindClient: { getKey: () => slot.key, onUnauthorized: creds.kind === "oauth" ? refresher(p.id, slot) : undefined },
       },
     });

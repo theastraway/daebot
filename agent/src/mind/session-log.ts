@@ -11,6 +11,7 @@ import { dirname } from "node:path";
 import type { StoredSession, SessionStore } from "../persist.ts";
 import type { HistoryEvent, MindClient } from "../types.ts";
 import { pushReplies, redact } from "./session.ts";
+import { isChatScopeError } from "./scope-upgrade.ts";
 
 export const MAX_MESSAGE_CHARS = 20_000;
 const BATCH = 20;
@@ -57,6 +58,8 @@ export interface SessionLoggerDeps {
   owner: string;
   /** undefined = this session is never logged (a bot-to-bot DM). */
   sourceKeyOf(rec: Pick<StoredSession, "bot" | "peer">): string | undefined;
+  /** MIND answered 403 "lacks chat scope" on this owner's key: ask MIND to add the chat scopes to it (see scope-upgrade.ts). true = upgraded, retry. */
+  upgradeScopes?(): Promise<boolean>;
   stateFile?: string;
   device?: { kind: string; label: string };
   retryMs?: number;
@@ -71,7 +74,7 @@ export class SessionLogger {
   private timer?: NodeJS.Timeout;
   private unsubs: (() => void)[] = [];
   private seenReplies = new Set<string>();
-  readonly stats = { opened: 0, appended: 0, closed: 0, errors: 0, lastError: "" };
+  readonly stats = { opened: 0, appended: 0, closed: 0, errors: 0, upgraded: 0, lastError: "" };
 
   constructor(d: SessionLoggerDeps) {
     this.d = d;
@@ -162,8 +165,17 @@ export class SessionLogger {
   }
   private stopFlag(): boolean { return false; }
 
-  private call(args: Record<string, unknown>): Promise<any> {
-    return this.d.client().call("agent_sessions", args).then((t) => { try { return JSON.parse(t); } catch { return {}; } });
+  private lastUpgradeAt = 0;
+  private async call(args: Record<string, unknown>): Promise<any> {
+    const once = () => this.d.client().call("agent_sessions", args).then((t) => { try { return JSON.parse(t); } catch { return {}; } });
+    try { return await once(); } catch (e) {
+      // A key without the chat scopes: have MIND add them (at most once every 10 minutes), then the same call once more.
+      if (this.d.upgradeScopes && isChatScopeError(e) && Date.now() - this.lastUpgradeAt > 10 * 60_000) {
+        this.lastUpgradeAt = Date.now();
+        if (await this.d.upgradeScopes()) { this.stats.upgraded++; return await once(); }
+      }
+      throw e;
+    }
   }
 
   private harvest(id: string, data: any): void {

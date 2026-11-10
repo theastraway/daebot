@@ -14,6 +14,7 @@ import { mistakeBrief } from "./gateway/mistakes.ts";
 import { dataDir, cleanTitle } from "./persist.ts";
 import { bootMind, createMindClient, createMindTools, createSessionSync } from "./mind/index.ts";
 import { loggerFor } from "./mind/session-log.ts";
+import { upgradeChatScopes } from "./mind/scope-upgrade.ts";
 import { createMindSessionsTool } from "./mind/sessions-tool.ts";
 import { ASTRA_BOARD_PROMPT, createAstraBoardTool } from "./astra/board-tool.ts";
 import { BotStore, botMindApi } from "./bots/store.ts";
@@ -289,6 +290,8 @@ export interface HostedRuntimeOptions {
   sourceKey?: (surface: string, sessionId: string) => string;
   /** Per-user MIND client options (live key + refresh on 401). */
   mindClient?: MindClientOpts;
+  /** This server's own admin MIND key: used only to ask MIND to add chat:read/chat:write to the key a user handed Daebot (see mind/scope-upgrade.ts). */
+  adminKey?: string;
 }
 
 export interface RuntimeOverrides {
@@ -365,6 +368,9 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     ? loggerFor({
         client: () => sessionClient, store: overrides.store!, owner: overrides.owner ?? "owner",
         sourceKeyOf: (rec) => (rec.peer ? undefined : rec.bot ? (botStore?.get(rec.bot)?.slug ? `daebot-bot-${botStore.get(rec.bot)!.slug}` : undefined) : "daebot"),
+        upgradeScopes: hosted?.adminKey
+          ? () => upgradeChatScopes({ baseUrl: cfg.mindBaseUrl, adminKey: hosted.adminKey!, key: (cfg.mindSessionApiKey && cfg.mindSessionApiKey !== cfg.mindApiKey ? cfg.mindSessionApiKey : billingKey()), fetchImpl: overrides.fetchImpl })
+          : undefined,
         stateFile: joinPath(stateDir, "mind-log", `${(overrides.owner ?? "owner").replace(/[^A-Za-z0-9._-]/g, "_")}.json`),
         log: (l) => process.stderr.write(`${l}\n`),
       })

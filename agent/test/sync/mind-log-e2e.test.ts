@@ -69,6 +69,26 @@ test("a bot thread is logged under daebot-bot-<slug>; a bot-to-bot DM is never l
   } finally { await desk.close(); await hosted.close(); }
 });
 
+test("a signed-in user whose key lacks the chat scopes: hosted asks MIND to add them (admin key), then logs the chat; the first 403 never loses a message", async () => {
+  const hosted = await hostedRig({ script: [{ text: "logged anyway" }] });
+  try {
+    hosted.fake.adminKeys.add(hosted.cfgKey);
+    hosted.fake.chatScopeless.add(hosted.keys.alice);
+    const web = await hosted.as(hosted.keys.alice);
+    const { sessionId } = JSON.parse((await web("POST", "/sessions", { surface: "web", title: "No scope yet" })).body);
+    await web("POST", `/sessions/${sessionId}/send`, { text: "hello from the web" });
+    await until(() => mindRows(hosted).some((r) => r.external_session_id === sessionId && said(r).includes("assistant:logged anyway")));
+    assert.equal(hosted.fake.chatScopeless.has(hosted.keys.alice), false, "MIND upgraded the user's key");
+    const up = hosted.fake.seen.filter((x) => x.path === "/developer/v1/agent-sessions/daebot-scopes");
+    assert.equal(up.length, 1, "asked once");
+    assert.equal(up[0].key, hosted.cfgKey, "with the server's admin key, not the user's");
+    assert.equal(up[0].body.key, hosted.keys.alice);
+    assert.deepEqual(said(mindRows(hosted).find((r) => r.external_session_id === sessionId)!), ["user:hello from the web", "assistant:logged anyway"]);
+    // bob's key was never touched
+    assert.equal(hosted.fake.seen.some((x) => x.path.endsWith("daebot-scopes") && x.body?.key === hosted.keys.bob), false);
+  } finally { await hosted.close(); }
+});
+
 test("BACKFILL: sessions saved before logging existed are logged on first run, not twice on the second", async () => {
   const hosted = await hostedRig();
   const dir = mkdtempSync(join(tmpdir(), "desk-old-"));
