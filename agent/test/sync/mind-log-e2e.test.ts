@@ -68,6 +68,8 @@ test("a bot thread is logged under daebot-bot-<slug>; a bot-to-bot DM is logged 
     const dm = mindRows(hosted).find((r) => r.external_session_id === "dm_1")!;
     assert.equal(dm.source_key, "daebot-bot-to-bot", "its own source, labelled bot to bot");
     assert.equal(dm.title, "Bot to bot: Scout to Daebot");
+    assert.deepEqual(hosted.fake.seen.find((x) => x.path.endsWith("/agent-sessions/open") && x.body?.external_session_id === "dm_1")?.body.tags, ["bot-to-bot"], "tagged bot-to-bot in MIND");
+    assert.equal(hosted.fake.seen.filter((x) => x.path.endsWith("/agent-sessions/open") && x.body?.external_session_id === sessionId).every((x) => x.body.tags === undefined), true, "an ordinary bot thread carries no such tag");
     assert.ok(said(dm).some((x) => x.includes("status between bots")));
     assert.ok(!mindRows(hosted).some((r) => r.source_key === "daebot" && JSON.stringify(r.messages).includes("status between bots")), "never in the MAIN session");
     assert.equal(mindRows(hosted).filter((r) => r.external_session_id === "dm_1").length, 1);
