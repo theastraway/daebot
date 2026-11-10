@@ -13,6 +13,8 @@ import { TombstoneBook } from "./tombstones.ts";
 import type { PhotoStore } from "../photos.ts";
 import { photoIdsIn, reconcilePhotos } from "./photos.ts";
 import type { PushResult, SyncRow } from "./service.ts";
+import { RoutineSyncAgent } from "./routines.ts";
+import type { RoutineHub } from "../routines/store.ts";
 
 export const SYNC_OWNER = "owner";
 
@@ -30,6 +32,10 @@ export interface SyncAgentDeps {
   photos?(): PhotoStore | undefined;
   /** Where this device remembers its deletes (a restart or an offline stretch must not lose them). Default: in memory. */
   tombstones?: TombstoneBook;
+  /** This device's routines (late-bound: the hub is built after the sync agent). Present = routine definitions and run records sync too. */
+  routines?(): RoutineHub | undefined;
+  /** Where this device remembers its routine deletes. Default: in memory. */
+  routineTombstones?: TombstoneBook;
   fetchImpl?: typeof fetch;
   intervalMs?: number;
   fullEveryMs?: number;
@@ -58,11 +64,14 @@ export class SyncAgent {
   private applying = new Set<string>(); // deletes this agent is applying from the server (not echoed back)
   readonly tombs: TombstoneBook;
   readonly status: SyncStatus;
+  private routineAgent?: RoutineSyncAgent;
+  private routineErr = "";
 
   constructor(deps: SyncAgentDeps) {
     this.deps = deps;
     this.http = new SyncHttp({ baseUrl: deps.baseUrl, key: deps.key, fetchImpl: deps.fetchImpl });
     this.tombs = deps.tombstones ?? new TombstoneBook();
+    if (deps.routines) this.routineAgent = new RoutineSyncAgent({ http: this.http, hub: deps.routines, owner: SYNC_OWNER, bots: () => deps.bots(), tombstones: deps.routineTombstones ?? new TombstoneBook(), log: deps.log });
     this.status = { enabled: true, url: this.http.url, lastOkAt: 0, lastError: "", pulled: 0, pushed: 0, dirty: 0, rounds: 0 };
   }
 
@@ -147,6 +156,7 @@ export class SyncAgent {
       await this.pull(full);
       await this.flush();
       if (this.retryPull.size) await this.pull(false);
+      await this.routineRound(full);
       this.fails = 0;
       this.status.lastOkAt = Date.now();
       this.status.lastError = "";
@@ -162,6 +172,19 @@ export class SyncAgent {
   }
 
   private bots(): BotsApi | undefined { return this.deps.bots(); }
+
+  /** Routines trade after the sessions. A problem here is logged and retried next round; it never fails the session sync. */
+  private async routineRound(full: boolean): Promise<void> {
+    if (!this.routineAgent) return;
+    try { await this.routineAgent.round(full); this.routineErr = ""; } catch (e) {
+      const msg = String((e as Error)?.message ?? e).slice(0, 160);
+      if (msg !== this.routineErr) this.deps.log?.(`sync routines: ${msg}`);
+      this.routineErr = msg;
+    }
+  }
+
+  /** Routine counters (pulled/pushed/deleted since start). */
+  get routineStats(): { pulled: number; pushed: number; deleted: number; error: string } | undefined { return this.routineAgent ? { ...this.routineAgent.stats, error: this.routineErr } : undefined; }
 
   /** Brings one session up to date from the server right now (a remote job needs the thread as it is on the other device). */
   async pullSession(id: string): Promise<void> {

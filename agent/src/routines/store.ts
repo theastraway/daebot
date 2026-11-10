@@ -49,6 +49,8 @@ export interface Routine {
   /** Title of the bot thread each run lands in. Default "Routine: <name>". */
   thread?: string;
   builtin?: "heartbeat";
+  /** Device sync: this routine was made on another device of the same user and arrived by sync. That device runs it; here it is only shown (definition, status, runs) and can be edited or deleted, which travels back. */
+  foreign?: boolean;
   createdAt: number;
   updatedAt: number;
   /** Timed: the next instant a run is due. Advanced and saved BEFORE the run starts, so a restart can never fire a slot twice. */
@@ -117,6 +119,12 @@ export function heartbeatMinute(botId: string): number {
   return createHash("sha256").update(botId).digest()[0] % 60;
 }
 
+const RUN_STATUSES = new Set(["ok", "error", "skipped", "idle", "running", "interrupted"]);
+function validRun(x: unknown): x is RunRecord {
+  const r = x as Partial<RunRecord> | null;
+  return !!r && typeof r === "object" && typeof r.at === "number" && Number.isFinite(r.at) && typeof r.source === "string" && r.source.length <= 40 && RUN_STATUSES.has(String(r.status)) && typeof r.model === "boolean" && typeof r.ms === "number";
+}
+
 export class RoutineBook {
   readonly owner: string;
   readonly botId: string;
@@ -127,9 +135,10 @@ export class RoutineBook {
   lessons = 0;
   private now: () => number;
   private onChange: (b: RoutineBook) => void;
+  private onRemoved: (b: RoutineBook, id: string) => void;
   private caps: () => TriggerCaps;
 
-  constructor(o: { dir: string; owner: string; botId: string; now?: () => number; onChange?: (b: RoutineBook) => void; caps?: () => TriggerCaps }) {
+  constructor(o: { dir: string; owner: string; botId: string; now?: () => number; onChange?: (b: RoutineBook) => void; onRemoved?: (b: RoutineBook, id: string) => void; caps?: () => TriggerCaps }) {
     if (!BOT_RE.test(o.botId)) throw new RoutineError(404, "no such bot");
     this.owner = o.owner;
     this.botId = o.botId;
@@ -137,6 +146,7 @@ export class RoutineBook {
     this.file = join(this.dir, "routines.json");
     this.now = o.now ?? Date.now;
     this.onChange = o.onChange ?? (() => {});
+    this.onRemoved = o.onRemoved ?? (() => {});
     this.caps = o.caps ?? (() => ({ desktop: false }));
     this.load();
     // Nothing in THIS process can have started a run yet, so any "running" mark on disk was left by a process that died mid-run.
@@ -152,7 +162,7 @@ export class RoutineBook {
     const t = this.now();
     let n = 0;
     for (const r of this.routines) {
-      if (r.lastStatus !== "running" || live(r.id)) continue;
+      if (r.lastStatus !== "running" || live(r.id) || r.foreign) continue; // a foreign routine's run is another device's to finish
       const at = r.lastRunAt ?? 0;
       if (t - at < minAgeMs) continue;
       const rec: RunRecord = { at, source: "interrupted", status: "interrupted", model: false, ms: Math.max(0, t - at), result: INTERRUPTED_TEXT };
@@ -327,6 +337,103 @@ export class RoutineBook {
     this.routines = this.routines.filter((x) => x !== r);
     this.save();
     this.onChange(this);
+    this.onRemoved(this, r.id);
+  }
+
+  // ---------------------------------------------------------------- device sync (see src/sync/routines.ts)
+  /** Routines that travel between devices: every one except the built-in Heartbeat (each device keeps its own). */
+  syncable(): Routine[] { return this.routines.filter((r) => r.builtin !== "heartbeat").map((r) => this.view(r)); }
+
+  /** A delete that came from another device: removed here without being sent back. false = not here (or the Heartbeat). */
+  deleteSynced(id: string): boolean {
+    const r = ID_RE.test(id) ? this.routines.find((x) => x.id === id) : undefined;
+    if (!r || r.builtin === "heartbeat") return false;
+    this.routines = this.routines.filter((x) => x !== r);
+    this.save();
+    this.onChange(this);
+    return true;
+  }
+
+  /**
+   * Merges one routine that arrived from another device. Definition (name, prompt, on/off, timing, trigger, thread): the newer updatedAt wins.
+   * Run records: the union (by time + source + status), the latest 20; the "last run" fields follow the newest run. A routine that is new
+   * here is marked `foreign` when `foreignIfNew`: the device that made it keeps running it (nothing fires twice). Secrets and polling state never travel.
+   */
+  applySynced(w: { id: string; name: string; prompt: string; enabled: boolean; kind: RoutineKind; timing?: Routine["timing"]; trigger?: Trigger; thread?: string; createdAt: number; updatedAt: number; runs?: RunRecord[]; lastRunAt?: number; lastStatus?: RunStatus; lastResult?: string; lastThreadId?: string }, foreignIfNew: boolean): "created" | "updated" | "same" | "invalid" {
+    if (!ID_RE.test(w.id)) return "invalid";
+    let name: string, prompt: string, timing: Routine["timing"] | undefined, trigger: Trigger | undefined;
+    try {
+      name = this.checkName(w.name);
+      prompt = this.checkPrompt(w.prompt);
+      if (w.kind === "timed") timing = this.checkTiming(w.timing?.expression, w.timing?.tz, DEFAULT_TZ, w.timing?.filter);
+      else if (w.kind === "trigger") trigger = this.checkTrigger(w.trigger);
+      else return "invalid";
+    } catch { return "invalid"; }
+    const runs = (Array.isArray(w.runs) ? w.runs : []).filter(validRun).map((x) => ({ ...x, ...(x.result ? { result: String(x.result).slice(0, 400) } : {}) }));
+    const have = this.routines.find((x) => x.id === w.id);
+    const t = this.now();
+    if (!have) {
+      if (this.routines.length >= MAX_ROUTINES_PER_BOT) return "invalid";
+      let nm = name;
+      for (let i = 2; this.routines.some((x) => x.name.toLowerCase() === nm.toLowerCase()); i++) nm = `${name.slice(0, 70)} (${i})`;
+      const r: Routine = { id: w.id, name: nm, prompt, enabled: w.enabled === true, kind: w.kind, createdAt: Number(w.createdAt) || t, updatedAt: Number(w.updatedAt) || t, ...(foreignIfNew ? { foreign: true } : {}) };
+      if (typeof w.thread === "string" && w.thread.trim()) r.thread = oneLine(w.thread, 60);
+      if (timing) { r.timing = timing; if (r.enabled && !r.foreign) r.nextDueAt = this.nextOf(timing, t); }
+      if (trigger) { r.trigger = trigger; if ((trigger.type === "webhook" || isGithub(trigger.type)) && !r.foreign) r.secret = newSecret(); if (r.enabled && !r.foreign) this.armPoll(r, t); }
+      this.applyRuns(r, runs, w);
+      this.routines.push(r);
+      this.save();
+      this.onChange(this);
+      return "created";
+    }
+    if (have.builtin) return "invalid";
+    const before = JSON.stringify(have);
+    if ((Number(w.updatedAt) || 0) > have.updatedAt) {
+      if (name.toLowerCase() !== have.name.toLowerCase() && !this.routines.some((x) => x.id !== have.id && x.name.toLowerCase() === name.toLowerCase())) have.name = name;
+      have.prompt = prompt;
+      have.thread = typeof w.thread === "string" && w.thread.trim() ? oneLine(w.thread, 60) : undefined;
+      const wasEnabled = have.enabled;
+      have.enabled = w.enabled === true;
+      if (w.kind !== have.kind) { have.kind = w.kind; delete have.trigger; delete have.timing; delete have.nextDueAt; delete have.secret; delete have.tstate; delete have.health; delete have.push; }
+      if (timing) {
+        const retimed = JSON.stringify(have.timing) !== JSON.stringify(timing);
+        have.timing = timing;
+        if (!have.foreign && (retimed || wasEnabled !== have.enabled || have.nextDueAt === undefined)) have.nextDueAt = have.enabled ? this.nextOf(timing, t) : undefined;
+      } else if (trigger) {
+        if (!have.trigger || have.trigger.type !== trigger.type || have.trigger.every !== trigger.every) delete have.tstate;
+        have.trigger = trigger;
+        if (!have.foreign) {
+          const keeps = trigger.type === "webhook" || isGithub(trigger.type);
+          if (keeps && !have.secret) have.secret = newSecret();
+          if (!keeps) delete have.secret;
+          if (have.enabled) this.armPoll(have, t); else delete have.tstate;
+        }
+      }
+      have.updatedAt = Number(w.updatedAt);
+    }
+    this.applyRuns(have, runs, w);
+    if (JSON.stringify(have) === before) return "same";
+    this.save();
+    this.onChange(this);
+    return "updated";
+  }
+
+  /** Union of run records and the "last run" fields from the newest one. */
+  private applyRuns(r: Routine, incoming: RunRecord[], w: { lastRunAt?: number; lastStatus?: RunStatus; lastResult?: string; lastThreadId?: string }): void {
+    const key = (x: RunRecord): string => `${x.at}|${x.source}|${x.status}`;
+    const all = new Map<string, RunRecord>();
+    for (const x of [...(r.runs ?? []), ...incoming]) if (!all.has(key(x))) all.set(key(x), x);
+    const runs = [...all.values()].sort((a, b) => a.at - b.at).slice(-RUN_KEEP);
+    if (runs.length) r.runs = runs;
+    const theirs = Number(w.lastRunAt) || 0;
+    const mine = r.lastRunAt ?? 0;
+    // The newer "last run" wins; at the same instant a finished run beats a "running" mark.
+    if (theirs > mine || (theirs === mine && theirs > 0 && r.lastStatus === "running" && w.lastStatus && w.lastStatus !== "running")) {
+      r.lastRunAt = theirs;
+      if (w.lastStatus) r.lastStatus = w.lastStatus; else delete r.lastStatus;
+      if (w.lastResult) r.lastResult = String(w.lastResult).slice(0, 400); else delete r.lastResult;
+      if (w.lastThreadId) r.lastThreadId = w.lastThreadId;
+    }
   }
 
   // ---------------------------------------------------------------- run bookkeeping (called by the timer and the runner)
@@ -336,7 +443,7 @@ export class RoutineBook {
    */
   claimSlot(id: string, now: number, jitterMs = 0): number | undefined {
     const r = this.routines.find((x) => x.id === id);
-    if (!r || !r.enabled || r.kind !== "timed" || !r.timing) return undefined;
+    if (!r || !r.enabled || r.kind !== "timed" || !r.timing || r.foreign) return undefined; // a foreign routine is run by the device that made it
     if (r.nextDueAt === undefined) { r.nextDueAt = this.nextOf(r.timing, now); this.save(); return undefined; }
     if (now < r.nextDueAt + jitterMs) return undefined;
     const slot = r.nextDueAt;
@@ -438,6 +545,7 @@ export class RoutineHub {
   private index = new Map<string, string>();     // routine id -> book key
   private now: () => number;
   private listeners = new Set<(b: RoutineBook) => void>();
+  private removeListeners = new Set<(owner: string, botId: string, routineId: string) => void>();
   private lastScanAt = 0;
   /** What this deployment can detect; the gateway sets desktop:true when it runs on the user's own computer. */
   readonly caps: TriggerCaps = { desktop: false };
@@ -453,7 +561,7 @@ export class RoutineHub {
     const k = this.key(owner, botId);
     let b = this.books.get(k);
     if (!b) {
-      b = new RoutineBook({ dir: this.dir, owner, botId, now: this.now, onChange: (x) => this.reindex(x), caps: () => this.caps });
+      b = new RoutineBook({ dir: this.dir, owner, botId, now: this.now, onChange: (x) => this.reindex(x), onRemoved: (x, id) => { for (const l of this.removeListeners) { try { l(x.owner, x.botId, id); } catch { /* a listener never blocks a delete */ } } }, caps: () => this.caps });
       this.books.set(k, b);
       this.reindex(b);
     }
@@ -468,6 +576,8 @@ export class RoutineHub {
   }
 
   onChange(fn: (b: RoutineBook) => void): () => void { this.listeners.add(fn); return () => this.listeners.delete(fn); }
+  /** A routine was deleted here (by the user or a bot), not by device sync. */
+  onRemoved(fn: (owner: string, botId: string, routineId: string) => void): () => void { this.removeListeners.add(fn); return () => this.removeListeners.delete(fn); }
 
   /** The book holding a routine id (a webhook arrives with an id only). */
   find(routineId: string): { book: RoutineBook; routine: Routine } | undefined {

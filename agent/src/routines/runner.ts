@@ -94,7 +94,7 @@ export class RoutineRunner {
     for (const book of this.d.hub.all()) {
       try { book.reapInterrupted((id) => this.running.has(id), (this.d.runTimeoutMs ?? 10 * 60_000) + (STALE_RUN_MS - 10 * 60_000)); } catch { /* next pass */ }
       for (const r of book.list()) {
-        if (!r.enabled) continue;
+        if (!r.enabled || r.foreign) continue; // a foreign routine (made on another device, arrived by sync) is run there
         if (r.kind === "trigger") {
           const due = r.tstate?.nextPollAt;
           if (r.trigger?.every && this.d.poll && due !== undefined && now >= due && !this.polling.has(r.id)) jobs.push(this.pollOne(book, r, now));
@@ -164,7 +164,7 @@ export class RoutineRunner {
   /** A webhook call (already authenticated by the caller). 409 while a run of the same routine is still going. */
   webhook(routineId: string, payload: string): FireResult {
     const hit = this.d.hub.find(routineId);
-    if (!hit || hit.routine.kind !== "trigger" || hit.routine.trigger?.type !== "webhook") return { ok: false, code: 404, error: "no such routine" };
+    if (!hit || hit.routine.kind !== "trigger" || hit.routine.trigger?.type !== "webhook" || hit.routine.foreign) return { ok: false, code: 404, error: "no such routine" };
     hit.book.noteHealth(routineId, { checkedAt: this.now(), deliveredAt: this.now(), error: null });
     if (!hit.routine.enabled) return { ok: false, code: 409, error: "this routine is turned off" };
     if (!triggerOpen(hit.routine.trigger, this.now())) {
@@ -197,6 +197,7 @@ export class RoutineRunner {
 
   private fireTrigger(book: RoutineBook, r: Routine, text: string): boolean {
     const type = r.trigger?.type;
+    if (r.foreign) return false; // another device runs it
     if (!type || !triggerOpen(r.trigger!, this.now())) return false;                                          // outside weekdays / active hours: not a run, not recorded
     if (this.triggerHits.take(r.id, this.now()) > 0) { book.recordRun(r.id, { at: this.now(), source: type, status: "skipped", model: false, ms: 0, result: "rate limited: more than 30 triggers in an hour" }); return false; }
     const f = this.start1(book, r, type, text);
