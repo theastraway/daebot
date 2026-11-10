@@ -18,7 +18,7 @@ export class SyncHttp {
     this.timeoutMs = o.timeoutMs ?? 20_000;
   }
   get url(): string { return this.base; }
-  async json<T>(method: "GET" | "POST", path: string, body?: unknown, timeoutMs?: number, signal?: AbortSignal): Promise<T> {
+  async json<T>(method: "GET" | "POST" | "DELETE", path: string, body?: unknown, timeoutMs?: number, signal?: AbortSignal): Promise<T> {
     const res = await this.f(this.base + path, {
       method,
       headers: { "x-mind-key": this.key, accept: "application/json", ...(body !== undefined ? { "content-type": "application/json" } : {}) },

@@ -49,15 +49,18 @@ export function mergeHistory(primary: HistoryEvent[], other: HistoryEvent[]): Hi
   return out;
 }
 
+/** The time of the latest change of a record: a new message (updatedAt) or a rename / archive (metaAt). */
+export const changeAt = (r: Pick<StoredSession, "updatedAt" | "metaAt">): number => Math.max(r.updatedAt, r.metaAt ?? 0);
+
 /** A cheap fingerprint of a record: equal sigs mean "nothing to exchange". */
-export function recordSig(rec: Pick<StoredSession, "updatedAt" | "history">): string {
+export function recordSig(rec: Pick<StoredSession, "updatedAt" | "history"> & { metaAt?: number }): string {
   const h = rec.history;
   const last = h.length ? baseKey(h[h.length - 1]) : "";
-  return `${rec.updatedAt}:${h.length}:${last}`;
+  return `${changeAt(rec)}:${h.length}:${last}`;
 }
 
 function pickWinner(a: StoredSession, b: StoredSession): { win: StoredSession; lose: StoredSession } {
-  if (a.updatedAt !== b.updatedAt) return a.updatedAt > b.updatedAt ? { win: a, lose: b } : { win: b, lose: a };
+  if (changeAt(a) !== changeAt(b)) return changeAt(a) > changeAt(b) ? { win: a, lose: b } : { win: b, lose: a };
   if (a.history.length !== b.history.length) return a.history.length > b.history.length ? { win: a, lose: b } : { win: b, lose: a };
   return { win: b, lose: a }; // a tie: the incoming side (b) wins, so repeated merges settle instead of flipping
 }
@@ -74,6 +77,7 @@ export function mergeRecords(a: StoredSession | undefined, b: StoredSession): St
     tier: a.tier, // the local identity tier always stands
     createdAt: Math.min(a.createdAt || b.createdAt, b.createdAt || a.createdAt),
     updatedAt: Math.max(a.updatedAt, b.updatedAt),
+    ...(Math.max(a.metaAt ?? 0, b.metaAt ?? 0) ? { metaAt: Math.max(a.metaAt ?? 0, b.metaAt ?? 0) } : {}),
     history,
     state: moreComplete.state,
     violations: moreComplete.violations,

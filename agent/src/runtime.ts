@@ -256,7 +256,7 @@ export function composeSystemPrompt(o: {
   return lines.join("\n");
 }
 
-interface Entry { session: AgentSession; surface: string; title: string; updatedAt: number; tier: Tier; recorder: HistoryRecorder; createdAt: number; bot?: string; peer?: string; model?: string; permMode?: SessionPermMode; titleSet?: boolean; run?: RunMark; board?: BoardTask[]; msgMeta?: Record<string, MessageMeta>; unreadFrom?: string; archived?: boolean; learn?: Learning }
+interface Entry { session: AgentSession; surface: string; title: string; updatedAt: number; tier: Tier; recorder: HistoryRecorder; createdAt: number; bot?: string; peer?: string; model?: string; permMode?: SessionPermMode; titleSet?: boolean; run?: RunMark; board?: BoardTask[]; msgMeta?: Record<string, MessageMeta>; unreadFrom?: string; archived?: boolean; metaAt?: number; learn?: Learning }
 
 export const INTERRUPTED_TEXT = "Interrupted: the server restarted while this reply was being written. Your message is saved above; send it again to retry.";
 const interruptedNotice = (): AgentEvent => ({ type: "notice", level: "warn", text: INTERRUPTED_TEXT });
@@ -569,7 +569,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       v: 1, id, surface: e.surface, title: e.title, tier: e.tier, owner: ownerId, createdAt: e.createdAt, updatedAt: e.updatedAt,
       state: st, violations: e.session.violations(), history: e.recorder.events(),
       ...(e.bot ? { bot: e.bot } : {}), ...(e.peer ? { peer: e.peer } : {}), ...(e.model ? { model: e.model } : {}), ...(e.permMode ? { permMode: e.permMode } : {}), ...(e.titleSet ? { titleSet: true } : {}), ...(e.run ? { run: { ...e.run } } : {}), ...(e.board?.length ? { board: e.board } : {}),
-      ...(e.msgMeta && Object.keys(e.msgMeta).length ? { msgMeta: e.msgMeta } : {}), ...(e.unreadFrom ? { unreadFrom: e.unreadFrom } : {}), ...(e.archived ? { archived: true } : {}),
+      ...(e.msgMeta && Object.keys(e.msgMeta).length ? { msgMeta: e.msgMeta } : {}), ...(e.unreadFrom ? { unreadFrom: e.unreadFrom } : {}), ...(e.archived ? { archived: true } : {}), ...(e.metaAt ? { metaAt: e.metaAt } : {}),
     }).catch((err) => process.stderr.write(`persist: could not save a session (${String((err as Error)?.message ?? err).split("\n")[0].slice(0, 120)})\n`));
   }
 
@@ -722,7 +722,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         bot: botRec?.id, peer, model: explicitModel, permMode: curPerm,
         ...(stored?.titleSet ? { titleSet: true } : {}),
         ...(stored?.board?.length ? { board: loadTasks(stored.board) } : {}),
-        ...(stored?.msgMeta ? { msgMeta: stored.msgMeta } : {}), ...(stored?.unreadFrom ? { unreadFrom: stored.unreadFrom } : {}), ...(stored?.archived ? { archived: true } : {}), ...(learn && "feedback" in learn ? { learn: learn as Learning } : {}),
+        ...(stored?.msgMeta ? { msgMeta: stored.msgMeta } : {}), ...(stored?.unreadFrom ? { unreadFrom: stored.unreadFrom } : {}), ...(stored?.archived ? { archived: true } : {}), ...(stored?.metaAt ? { metaAt: stored.metaAt } : {}), ...(learn && "feedback" in learn ? { learn: learn as Learning } : {}),
       };
       if (wasInterrupted && stored) {
         entry.recorder.push(interruptedNotice());
@@ -966,6 +966,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       if (live) {
         live.title = title;
         live.titleSet = true;
+        live.metaAt = Date.now(); // other devices pick the rename up (device sync), without reordering the list
         persist(id);
         return true;
       }
@@ -973,13 +974,14 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       if (!store || !meta || !mine(meta)) return false; // unknown, or another owner's: indistinguishable
       const rec = store.load(id);
       if (!rec || !mine(rec)) return false;
-      await store.save({ ...rec, title, titleSet: true });
+      await store.save({ ...rec, title, titleSet: true, metaAt: Date.now() });
       return true;
     },
     async archiveSession(id, on) {
       const live = sessions.get(id);
       if (live) {
         if (on) live.archived = true; else delete live.archived;
+        live.metaAt = Date.now();
         persist(id);
         return true;
       }
@@ -989,6 +991,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       if (!rec || !mine(rec)) return false;
       const next = { ...rec } as StoredSession;
       if (on) next.archived = true; else delete next.archived;
+      next.metaAt = Date.now();
       await store.save(next);
       return true;
     },

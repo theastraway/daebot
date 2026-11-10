@@ -77,7 +77,7 @@ export async function deskRig(hosted: HostedRig, userKey: string, o: { script?: 
   const st = tmpStatic();
   const gw = await startGateway({
     runtime, cfg, port: 0, staticDir: st.dir, tokenPath: join(dir, "tok"), bots: bots as never, botsEnabled: () => true, sessionStore: store,
-    sync: o.sync === false ? undefined : { enabled: true, url: "https://daebot.live", fetchImpl: hosted.bridge(), intervalMs: o.intervalMs ?? 150, deviceId: o.deviceId ?? "d_" + "1".repeat(16), deviceName: o.deviceName ?? "Test Mac", remoteWaitSec: 2 },
+    sync: o.sync === false ? undefined : { enabled: true, stateFile: join(dir, "sync-state.json"), url: "https://daebot.live", fetchImpl: hosted.bridge(), intervalMs: o.intervalMs ?? 150, deviceId: o.deviceId ?? "d_" + "1".repeat(16), deviceName: o.deviceName ?? "Test Mac", remoteWaitSec: 2 },
   });
   const a = bearer(gw.token);
   return { gw, store, dir, provider, a, api: (method: string, path: string, body?: unknown) => http(gw.url, method, path, { headers: a, body }), close: () => gw.close() };

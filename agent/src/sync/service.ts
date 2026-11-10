@@ -6,9 +6,10 @@ import type { BotsApi } from "../bots/types.ts";
 import { mergeRecords, recordSig } from "./merge.ts";
 import { MAX_RECORD_BYTES, NOT_SYNCED_SURFACES, fromWire, toWire } from "./wire.ts";
 import type { WireRecord } from "./wire.ts";
+import { TombstoneBook } from "./tombstones.ts";
 
-export interface SyncRow { id: string; touchedAt: number; updatedAt: number; sig: string; title: string }
-export type PushStatus = "ok" | "same" | "busy" | "forbidden" | "invalid" | "nobot" | "toolarge" | "error";
+export interface SyncRow { id: string; touchedAt: number; updatedAt: number; sig: string; title: string; /** The session was deleted (a tombstone): the device deletes its copy. */ deleted?: true }
+export type PushStatus = "ok" | "same" | "busy" | "forbidden" | "invalid" | "nobot" | "toolarge" | "error" | "deleted";
 export interface PushResult { id: string; status: PushStatus; sig?: string }
 
 export interface SyncServiceDeps {
@@ -19,6 +20,10 @@ export interface SyncServiceDeps {
   isBusy(id: string): boolean;
   /** The identity tier this owner's sessions run at here (a tier never travels in a sync). */
   tierOf(owner: string): string;
+  /** Deletes a session of this owner for good (closes a live copy, removes the record and its photos). false = unknown here. */
+  deleteSession?(owner: string, id: string): Promise<boolean>;
+  /** Where deletes are remembered (default: in memory only). */
+  tombstones?: TombstoneBook;
   /** Called after a merge wrote a session: a live idle copy must be reloaded from the store. */
   afterWrite?(owner: string, id: string): Promise<void>;
   now?: () => number;
@@ -29,10 +34,14 @@ export class SyncService {
   private last = 0;
   private chains = new Map<string, Promise<unknown>>();
   private deps: SyncServiceDeps;
+  readonly tombs: TombstoneBook;
 
   constructor(deps: SyncServiceDeps) {
     this.deps = deps;
+    this.tombs = deps.tombstones ?? new TombstoneBook();
     deps.store.subscribe?.((rec) => this.noteSaved(rec));
+    // Any delete of a stored session (the web, the phone, a bot being deleted, a device's own delete) leaves a tombstone for every other device.
+    deps.store.subscribeRemove?.((id, owner) => { this.tombs.mark(owner ?? "owner", id, this.tick()); });
   }
 
   private tick(): number {
@@ -51,13 +60,31 @@ export class SyncService {
   list(owner: string, since: number, limit = 200): { now: number; rows: SyncRow[]; more: boolean } {
     const mine = this.deps.store.list().filter((m) => (m.owner ?? "owner") === owner && !NOT_SYNCED_SURFACES.has(m.surface));
     const cands = mine.map((m) => ({ m, at: this.touched.get(m.id) ?? m.updatedAt })).filter((x) => x.at > since).sort((a, b) => a.at - b.at);
+    const dead = this.tombs.since(owner, since).map((t) => ({ tomb: true as const, id: t.id, at: t.at }));
+    const all: ({ tomb?: false; m: (typeof mine)[number]; at: number; id: string } | { tomb: true; id: string; at: number })[] = [
+      ...cands.filter((c) => !this.tombs.has(owner, c.m.id)).map((c) => ({ m: c.m, at: c.at, id: c.m.id })),
+      ...dead,
+    ].sort((a, b) => a.at - b.at);
     const rows: SyncRow[] = [];
-    for (const { m, at } of cands.slice(0, limit)) {
-      const rec = this.deps.store.loadShared ? this.deps.store.loadShared(m.id) : this.deps.store.load(m.id);
+    for (const x of all.slice(0, limit)) {
+      if (x.tomb) { rows.push({ id: x.id, touchedAt: x.at, updatedAt: x.at, sig: "", title: "", deleted: true }); continue; }
+      const rec = this.deps.store.loadShared ? this.deps.store.loadShared(x.id) : this.deps.store.load(x.id);
       if (!rec) continue;
-      rows.push({ id: m.id, touchedAt: at, updatedAt: rec.updatedAt, sig: recordSig(rec), title: rec.title });
+      rows.push({ id: x.id, touchedAt: x.at, updatedAt: rec.updatedAt, sig: recordSig(rec), title: rec.title });
     }
-    return { now: this.tick(), rows, more: cands.length > limit };
+    return { now: this.tick(), rows, more: all.length > limit };
+  }
+
+  /** A device deleted this session: it is removed here too, and a tombstone stops any other device from bringing it back. */
+  async remove(owner: string, id: string): Promise<"ok" | "forbidden"> {
+    const rec = this.deps.store.meta?.(id) ?? this.deps.store.load(id);
+    if (rec && (rec.owner ?? "owner") !== owner) return "forbidden";
+    if (rec) {
+      if (this.deps.deleteSession) await this.deps.deleteSession(owner, id);
+      else await this.deps.store.remove?.(id);
+    }
+    this.tombs.mark(owner, id, this.tick());
+    return "ok";
   }
 
   async get(owner: string, id: string): Promise<WireRecord | undefined> {
@@ -84,6 +111,7 @@ export class SyncService {
     for (const raw of records.slice(0, 50)) {
       const id = typeof (raw as { id?: unknown })?.id === "string" ? (raw as { id: string }).id : "";
       try {
+        if (id && this.tombs.has(owner, id)) { out.push({ id, status: "deleted" }); continue; }
         if (id && JSON.stringify(raw).length > MAX_RECORD_BYTES) { out.push({ id, status: "toolarge" }); continue; }
         let m = fromWire(raw, bots, owner, this.deps.tierOf(owner));
         if (!m.ok && m.reason === "nobot" && !reconciled && bots) {
