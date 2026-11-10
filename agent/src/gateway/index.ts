@@ -62,6 +62,7 @@ import { screenApi } from "./screen.ts";
 import { screenFeed } from "../screen/feed.ts";
 import type { ScreenFeed } from "../screen/feed.ts";
 import { MAX_PHOTO_BODY, checkPhotos, cleanName, isPhotoId } from "../photos.ts";
+import type { PhotoMeta } from "../photos.ts";
 import type { SessionStore } from "../persist.ts";
 import { SyncService } from "../sync/service.ts";
 import { SyncAgent } from "../sync/agent.ts";
@@ -389,6 +390,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         isBusy: (id) => !!manager.get(id)?.busy,
         afterWrite: (id) => refreshLive(OWNER.id, id),
         deleteLocal: async (id) => { await manager.deleteSession(id, OWNER.id); },
+        photos: () => manager.runtimeOf(OWNER.id).photos,
         tombstones: new TombstoneBook({ file: opts.sync?.stateFile ?? join(dataDir(), "sync-state.json") }),
         fetchImpl: opts.sync?.fetchImpl,
         intervalMs: opts.sync?.intervalMs,
@@ -422,9 +424,11 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (!bot) { try { await bots.list(); } catch { /* MIND unreachable */ } bot = bots.bySlug(job.botSlug); }
     if (!bot) throw new Error(`this device has no bot "${job.botSlug}"`);
     await syncAgent?.pullSession(job.sessionId); // the thread as it is on the other device
+    const refs = job.photos?.length ? job.photos.slice(0, 5) : undefined;
+    if (refs) await syncAgent?.fetchPhotos(job.sessionId, refs.map((r) => r.id)); // the photos sent with the message live on daebot.live
     const ls = await manager.open({ surface: job.surface || "web", title: job.title || undefined, resumeId: job.sessionId, owner: OWNER.id, bot: bot.id });
     for (let i = 0; ls.busy && i < 100; i++) await new Promise((r) => setTimeout(r, 200));
-    await manager.turn(ls.id, job.text, emit, signal, "user", false, undefined, undefined, job.quote ? { ...(job.quote.id ? { id: job.quote.id } : {}), text: job.quote.text } : undefined);
+    await manager.turn(ls.id, job.text, emit, signal, "user", false, refs, undefined, job.quote ? { ...(job.quote.id ? { id: job.quote.id } : {}), text: job.quote.text } : undefined);
   }
   const remoteAgent = syncAgent
     ? new RemoteAgent({
@@ -932,7 +936,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   }
 
   /** A message to a bot thread whose desktop is reachable: it becomes a job for that desktop. false = not a remote thread (the hosted server answers as before). */
-  async function routeRemote(res: ServerResponse, me: Principal, sessionId: string, bot: string, surface: string, title: string, text: string, quote: MessageQuote | undefined, hasPhotos: boolean, extra: { headers?: Record<string, string>; first?: Record<string, unknown> } = {}): Promise<boolean> {
+  async function routeRemote(res: ServerResponse, me: Principal, sessionId: string, bot: string, surface: string, title: string, text: string, quote: MessageQuote | undefined, photos: PhotoRef[] | undefined, extra: { headers?: Record<string, string>; first?: Record<string, unknown> } = {}): Promise<boolean> {
     if (!remoteHub) return false;
     const rec = manager.runtimeOf(me.id).bots?.get(bot);
     if (!rec) return false;
@@ -944,16 +948,46 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       manager.runtimeOf(me.id).bots?.setRemote?.(rec.id, true, { by: "auto", note: `Turned on automatically: a message arrived from ${from} while Remote was off.` });
       remoteHub.nudge(me.id);
     }
-    if (hasPhotos) { sendJson(res, 409, { error: "remote_photos", message: "Photos cannot be sent to a remote bot yet. Turn Remote off for this bot to send a photo." }); return true; }
     const dev = devs[0];
-    const job = remoteHub.enqueue(me.id, { deviceId: dev.id, sessionId, botSlug: rec.slug, surface, title, text, ...(quote ? { quote } : {}) });
-    const run = runs.start(sessionId, text);
+    const job = remoteHub.enqueue(me.id, { deviceId: dev.id, sessionId, botSlug: rec.slug, surface, title, text, ...(quote ? { quote } : {}), ...(photos?.length ? { photos } : {}) });
+    const run = runs.start(sessionId, text, photos);
     run.external = true;
     remoteRuns.set(job.id, { run, owner: me.id, sessionId, waiting: !dev.online });
     res.writeHead(200, sseHeaders({ ...(extra.headers ?? {}), "x-daebot-remote": dev.name }));
     run.publish({ type: "notice", level: "info", text: dev.online ? `Sent to ${dev.name}.` : `Waiting for ${dev.name}: it is offline. It will answer when it is back.` });
-    attachRun(res, run, 0, extra.first);
+    attachRun(res, run, 0, extra.first ?? (photos?.length ? { type: "photos", photos } : undefined));
     return true;
+  }
+
+  // /api/sync/photos/:sid (list) and /api/sync/photos/:sid/:pid (GET {meta,data base64} | POST {meta,data}): the photos of one of THIS user's sessions.
+  async function syncPhotos(req: IncomingMessage, res: ServerResponse, method: string, me: Principal, sid: string, pid: string | undefined): Promise<void> {
+    if (sid.length > 200) return sendJson(res, 400, { error: "bad session id" });
+    const store = manager.runtimeOf(me.id).photos;
+    if (!store) return sendJson(res, 404, { error: "photos are not available on this deployment" });
+    const mine = manager.access(sid, me.id);
+    if (mine === "forbidden") return sendJson(res, 403, { error: "forbidden" });
+    if (!pid) {
+      if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+      return sendJson(res, 200, { photos: store.list(sid) });
+    }
+    if (!isPhotoId(pid)) return sendJson(res, 400, { error: "bad photo id" });
+    if (method === "GET") {
+      const hit = await store.read(sid, pid);
+      return hit ? sendJson(res, 200, { meta: hit.meta, data: hit.data.toString("base64") }) : sendJson(res, 404, { error: "no such photo" });
+    }
+    if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+    // The session must already be on this server (the device pushes the chat first), so a photo can never be parked under an id nobody owns.
+    if (!mine && !manager.runtimeOf(me.id).sessionInfo?.(sid)) return sendJson(res, 404, { error: "no such session" });
+    if (photoBodies >= MAX_BIG_BODIES) { res.setHeader("retry-after", "5"); return sendJson(res, 429, { error: "too many photo uploads at once; try again in a moment" }); }
+    photoBodies++;
+    try {
+      const b = parseJsonObject(await readBody(req, 12 * 1024 * 1024));
+      const meta = b.meta as PhotoMeta | undefined;
+      if (!meta || typeof meta !== "object" || meta.id !== pid || typeof b.data !== "string") return sendJson(res, 400, { error: "meta and data required" });
+      const data = Buffer.from(b.data, "base64");
+      const r = await store.importPhoto(sid, meta, data);
+      return r.ok ? sendJson(res, 200, { ok: true }) : sendJson(res, r.status, { error: r.error });
+    } finally { photoBodies--; }
   }
 
   // /api/sync/*: device session sync. GET sessions?since&limit (rows), GET sessions/:id (one record), POST sessions {records} (merge in).
@@ -978,6 +1012,9 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (path === "/api/sync/device/poll" && method === "POST") return devicePoll(req, res, me);
     const jm = /^\/api\/sync\/device\/jobs\/(rj_[0-9a-f]{16})\/events$/.exec(path);
     if (jm && method === "POST") return deviceJobEvents(req, res, me, jm[1]);
+    const pl = /^\/api\/sync\/photos\/([^/]+)$/.exec(path);
+    const pp = /^\/api\/sync\/photos\/([^/]+)\/([^/]+)$/.exec(path);
+    if (pl || pp) return syncPhotos(req, res, method, me, decodeURIComponent((pl ?? pp)![1]), pp ? decodeURIComponent(pp[2]) : undefined);
     const m = /^\/api\/sync\/sessions\/([^/]+)$/.exec(path);
     if (m && method === "DELETE") {
       let id: string;
@@ -1094,7 +1131,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       return sendJson(res, 502, { error: e instanceof Error ? e.message.slice(0, 300) : "could not open a session" });
     }
     if (ls.busy || remoteHub?.activeFor(principal.id, ls.id)) return sendJson(res, 409, { error: "session is busy with another turn", sessionId: ls.id });
-    if (ls.bot && remoteHub && (await routeRemote(res, principal, ls.id, ls.bot, ls.surface, ls.title, text, undefined, false, { headers: { "x-daebot-session": ls.id }, first: { type: "session", sessionId: ls.id } }))) return;
+    if (ls.bot && remoteHub && (await routeRemote(res, principal, ls.id, ls.bot, ls.surface, ls.title, text, undefined, undefined, { headers: { "x-daebot-session": ls.id }, first: { type: "session", sessionId: ls.id } }))) return;
     return streamTurn(res, ls.id, text, { "x-daebot-session": ls.id }, { type: "session", sessionId: ls.id }, principal);
   }
 
@@ -2151,7 +2188,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         const qtext = (saved ?? optStr((qb as any).text, 600) ?? "").trim().slice(0, 600);
         if (qtext) quote = { ...(qid ? { id: qid } : {}), text: qtext };
       }
-      if (ls.bot && remoteHub && (await routeRemote(res, me, id, ls.bot, ls.surface, ls.title, text, quote, check.photos.length > 0))) return;
+      if (ls.bot && remoteHub && (await routeRemote(res, me, id, ls.bot, ls.surface, ls.title, text, quote, refs))) return;
       return streamTurn(res, id, text, {}, refs ? { type: "photos", photos: refs } : undefined, me, true, refs, parseCapabilities(b.capabilities), quote); // the web/desktop/mobile UI can answer a permission card
     } finally {
       if (big) photoBodies--;

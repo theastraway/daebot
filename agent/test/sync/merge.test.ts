@@ -64,6 +64,6 @@ test("wire: bots travel by slug and map to each side's own id; owner never trave
   const unknown = fromWire({ ...w, botSlug: "ghost" }, host, "u_abc", "staff");
   assert.ok(!unknown.ok && unknown.reason === "nobot");
   assert.equal(toWire(rec("x", { bot: "b_unknown" }), desk), undefined, "an unmappable bot is held back, not sent wrong");
-  assert.equal(toWire(rec("x", { surface: "routine" }), desk), undefined, "routine runs never sync");
+  assert.equal(toWire(rec("x", { surface: "routine" }), desk)?.surface, "routine", "routine run threads sync like any session");
   assert.ok(!fromWire({ junk: true }, host, "u", "staff").ok);
 });

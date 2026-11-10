@@ -10,6 +10,8 @@ import { NOT_SYNCED_SURFACES, fromWire, toWire } from "./wire.ts";
 import type { WireRecord } from "./wire.ts";
 import { SyncHttp } from "./http.ts";
 import { TombstoneBook } from "./tombstones.ts";
+import type { PhotoStore } from "../photos.ts";
+import { photoIdsIn, reconcilePhotos } from "./photos.ts";
 import type { PushResult, SyncRow } from "./service.ts";
 
 export const SYNC_OWNER = "owner";
@@ -24,6 +26,8 @@ export interface SyncAgentDeps {
   afterWrite?(id: string): Promise<void>;
   /** The other side deleted this session: delete it here (close a live copy, remove the record and its photos). */
   deleteLocal?(id: string): Promise<void>;
+  /** This device's photo store: photos attached in a chat travel with the chat. */
+  photos?(): PhotoStore | undefined;
   /** Where this device remembers its deletes (a restart or an offline stretch must not lose them). Default: in memory. */
   tombstones?: TombstoneBook;
   fetchImpl?: typeof fetch;
@@ -50,6 +54,7 @@ export class SyncAgent {
   private stopped = false;
   private unsub?: () => void;
   private unsubRemove?: () => void;
+  private photoSig = new Map<string, string>(); // session id -> the photo ids already traded with the server
   private applying = new Set<string>(); // deletes this agent is applying from the server (not echoed back)
   readonly tombs: TombstoneBook;
   readonly status: SyncStatus;
@@ -185,7 +190,7 @@ export class SyncAgent {
     if (this.tombs.has(SYNC_OWNER, id)) return; // deleted here: never brought back (the delete itself is sent in flush)
     const local = this.deps.store.load(id);
     if (local && (local.owner ?? SYNC_OWNER) !== SYNC_OWNER) return;
-    if (local && remoteSig && recordSig(local) === remoteSig) { this.synced.set(id, remoteSig); this.dirty.delete(id); return; }
+    if (local && remoteSig && recordSig(local) === remoteSig) { this.synced.set(id, remoteSig); this.dirty.delete(id); await this.syncPhotos(id, local.history); return; }
     if (this.deps.isBusy(id)) { this.retryPull.add(id); return; }
     let w: WireRecord;
     try { w = (await this.http.json<{ session: WireRecord }>("GET", `/api/sync/sessions/${encodeURIComponent(id)}`)).session; } catch (e) {
@@ -207,6 +212,36 @@ export class SyncAgent {
       await this.deps.afterWrite?.(id).catch(() => {});
     }
     if (recordSig(merged) !== recordSig(m.rec) || merged.history.length !== m.rec.history.length) this.dirty.add(id); else this.dirty.delete(id);
+    await this.syncPhotos(id, merged.history);
+  }
+
+  /** Trades the photos of one session with the server (those the transcript names, and those only this device holds). A failure retries next round. */
+  private async syncPhotos(id: string, history: StoredSession["history"]): Promise<void> {
+    const photos = this.deps.photos?.();
+    if (!photos) return;
+    const want = photoIdsIn(history);
+    const local = photos.list(id).map((p) => p.id);
+    if (!want.length && !local.length) return;
+    const key = [...new Set([...want, ...local])].sort().join(",");
+    if (this.photoSig.get(id) === key) return;
+    try {
+      const r = await reconcilePhotos({ http: this.http, photos, sessionId: id, want });
+      if (r.refused.length) this.deps.log?.(`sync: ${r.refused.length} photo(s) of a chat could not be copied (too large, or storage is full)`);
+      this.photoSig.set(id, [...new Set([...want, ...photos.list(id).map((p) => p.id)])].sort().join(","));
+    } catch (e) {
+      this.retryPull.add(id); // transport trouble: look at this session again next round
+      void e;
+    }
+  }
+
+  /** A remote job names photos that live on daebot.live: fetch them into this device's store before the turn runs. */
+  async fetchPhotos(sessionId: string, ids: string[]): Promise<void> {
+    const photos = this.deps.photos?.();
+    if (!photos || !ids.length) return;
+    const r = await reconcilePhotos({ http: this.http, photos, sessionId, want: ids });
+    const have = new Set(photos.list(sessionId).map((p) => p.id));
+    const missing = ids.filter((i) => !have.has(i));
+    if (missing.length) throw new Error(`could not fetch photo ${missing[0]} from daebot.live${r.refused.includes(missing[0]) ? " (too large or storage is full)" : ""}`);
   }
 
   private retryAfter(id: string): void {
@@ -246,6 +281,7 @@ export class SyncAgent {
           this.dirty.delete(x.id);
           this.retries.delete(x.id);
           if (x.status === "ok") this.status.pushed++;
+          if (local) await this.syncPhotos(x.id, local.history);
           if (x.status === "ok" && x.sig && local && recordSig(local) !== x.sig) this.retryPull.add(x.id); // the server merged in more than we sent
         } else if (x.status === "deleted") {
           await this.applyRemoteDelete(x.id).catch(() => {});
