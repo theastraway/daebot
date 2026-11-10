@@ -187,18 +187,22 @@ test("F-3: a staff user's bot_talk recipient session really is staff (no outward
 });
 
 // ---------- F-6 ----------
-test("F-6: bot-to-bot DM threads are NOT synced to MAIN; human<->bot threads still are, under daebot-bot-<slug>", async () => {
+test("F-6: bot-to-bot DM threads are logged under their own source (daebot-bot-to-bot), never in MAIN or a bot's own source; human<->bot threads still go under daebot-bot-<slug>", async () => {
   const w = await runtimeWorld();
   try {
     const bot = await w.runtime.bots!.create({ slug: "sales" });
     const dm = await w.runtime.openSession({ surface: "bot", botId: bot.id, peer: "main", identity: "admin", resumeId: "dm_test_thread" });
     await collect(dm.send("peer request", { origin: "bot" }));
     await dm.close();
-    assert.equal(w.fake.seen.filter((x) => x.path.startsWith("/developer/v1/agent-sessions")).length, 0, "nothing from the DM thread reached MAIN");
+    await new Promise((r) => setTimeout(r, 400));
+    const dmCalls = w.fake.seen.filter((x) => x.path.startsWith("/developer/v1/agent-sessions"));
+    assert.ok(dmCalls.length >= 2, "the DM thread is logged (open + append)");
+    assert.ok(dmCalls.every((x) => (x.body?.source_key ?? "daebot-bot-to-bot") === "daebot-bot-to-bot"), "only under the bot-to-bot source");
+    assert.ok(dmCalls.some((x) => JSON.stringify(x.body).includes("peer request")));
     const human = await w.runtime.openSession({ surface: "web", botId: bot.id, identity: "admin" });
     await collect(human.send("hello from the human"));
     await new Promise((r) => setTimeout(r, 400)); // the transcript logger writes from the saved session, a moment after the turn
-    const syncs = w.fake.seen.filter((x) => x.path.startsWith("/developer/v1/agent-sessions"));
+    const syncs = w.fake.seen.filter((x) => x.path.startsWith("/developer/v1/agent-sessions")).filter((x) => !JSON.stringify(x.body).includes("peer request") && x.body?.source_key !== "daebot-bot-to-bot" && !/\/as_1_/.test(x.path));
     assert.ok(syncs.length >= 2, "open + append");
     assert.ok(syncs.every((x) => x.key === w.key && x.bot === undefined), "on the MAIN key, no bot header");
     assert.equal(syncs[0].body.source_key, "daebot-bot-sales");
