@@ -153,7 +153,7 @@ export function healthOf(r: Routine): Record<string, unknown> | null {
 export function routineView(r: Routine, base: string, setup?: SetupReport): Record<string, unknown> {
   const root = base.replace(/\/+$/, "");
   return {
-    id: r.id, name: r.name, kind: r.kind, enabled: r.enabled, builtin: r.builtin ?? null, when: describeRoutine(r),
+    id: r.id, name: r.name, kind: r.kind, enabled: r.enabled, builtin: r.builtin ?? null, ...(r.foreign ? { foreign: true } : {}), when: describeRoutine(r),
     ...(r.timing ? { timing: r.timing, summary: summarizeTiming(r.timing.expression, r.timing.filter) } : {}), ...(r.trigger ? { trigger: r.trigger } : {}),
     ...(r.tstate ? { poll: { primed: r.tstate.primed, lastPollAt: r.tstate.lastPollAt ?? null, nextPollAt: r.tstate.nextPollAt ?? null, error: r.tstate.error ?? null } } : {}),
     ...(r.trigger?.type === "webhook" && r.secret ? { webhookUrl: `${root}/hooks/${r.id}/${r.secret}` } : {}),

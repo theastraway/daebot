@@ -66,6 +66,7 @@ import type { PhotoMeta } from "../photos.ts";
 import type { SessionStore } from "../persist.ts";
 import { SyncService } from "../sync/service.ts";
 import { SyncAgent } from "../sync/agent.ts";
+import { RoutineSyncService } from "../sync/routines.ts";
 import { SyncHttp } from "../sync/http.ts";
 import { RemoteAgent, loadDeviceId } from "../sync/remote-agent.ts";
 import { TombstoneBook } from "../sync/tombstones.ts";
@@ -392,6 +393,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         deleteLocal: async (id) => { await manager.deleteSession(id, OWNER.id); },
         photos: () => manager.runtimeOf(OWNER.id).photos,
         tombstones: new TombstoneBook({ file: opts.sync?.stateFile ?? join(dataDir(), "sync-state.json") }),
+        routines: () => opts.bots?.routines,
+        routineTombstones: new TombstoneBook({ file: opts.sync?.stateFile ? `${opts.sync.stateFile}.routines` : join(dataDir(), "sync-routines-state.json") }),
         fetchImpl: opts.sync?.fetchImpl,
         intervalMs: opts.sync?.intervalMs,
         log: (l) => process.stderr.write(`${l}\n`),
@@ -494,6 +497,14 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
               return createMindClient(opts.cfg!, opts.fetchImpl, { getKey: () => appsKeyFor(p) ?? key }).call(tool, args, signal);
             }
           : undefined,
+      })
+    : undefined;
+  // Hosted: the routines of every user are exchanged with their devices (definitions + run records), deletes as tombstones.
+  const routineSync = hosted && auth?.store.enabled && routineHub
+    ? new RoutineSyncService({
+        hub: routineHub, bots: (owner) => manager.runtimeOf(owner).bots,
+        ownerOk: (seg) => (seg === OWNER.id ? OWNER.id : auth?.store.principal(seg) ? seg : undefined),
+        tombstones: new TombstoneBook({ file: join(opts.remoteDir ?? dataDir(), "sync-routine-tombstones.json") }),
       })
     : undefined;
   if (routines && opts.bots) {
@@ -1024,6 +1035,18 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       }
       return sendJson(res, 405, { error: "method not allowed" });
     }
+    if (path === "/api/sync/routines") {
+      if (!routineSync) return sendJson(res, 404, { error: "routine sync is not available on this deployment" });
+      if (method === "GET") return sendJson(res, 200, routineSync.list(me.id, Math.max(0, Number(query.get("since") ?? 0) || 0)));
+      if (method === "POST") {
+        const b = parseJsonObject(await readBody(req, 4 * 1024 * 1024));
+        if (!Array.isArray(b.routines)) return sendJson(res, 400, { error: "routines must be an array" });
+        return sendJson(res, 200, { results: await routineSync.push(me.id, b.routines, Array.isArray(b.deletes) ? b.deletes : []) });
+      }
+      return sendJson(res, 405, { error: "method not allowed" });
+    }
+    const rdel = /^\/api\/sync\/routines\/(r_[0-9a-f]{12})$/.exec(path);
+    if (rdel && method === "DELETE") return routineSync ? sendJson(res, 200, { ok: routineSync.remove(me.id, rdel[1]) === "ok" }) : sendJson(res, 404, { error: "routine sync is not available on this deployment" });
     if (path === "/api/sync/device/poll" && method === "POST") return devicePoll(req, res, me);
     const jm = /^\/api\/sync\/device\/jobs\/(rj_[0-9a-f]{16})\/events$/.exec(path);
     if (jm && method === "POST") return deviceJobEvents(req, res, me, jm[1]);
@@ -1936,7 +1959,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     const me = who(req);
-    if (path === "/sync/status") return method === "GET" ? sendJson(res, 200, syncAgent ? { ...syncAgent.status } : { enabled: false }) : sendJson(res, 405, { error: "method not allowed" });
+    if (path === "/sync/status") return method === "GET" ? sendJson(res, 200, syncAgent ? { ...syncAgent.status, ...(syncAgent.routineStats ? { routines: syncAgent.routineStats } : {}) } : { enabled: false }) : sendJson(res, 405, { error: "method not allowed" });
     if (path === "/sync/now") {
       if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
       if (!syncAgent) return sendJson(res, 404, { error: "sync is not on for this gateway" });
