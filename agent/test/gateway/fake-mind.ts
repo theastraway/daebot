@@ -7,7 +7,7 @@ import type { AddressInfo } from "node:net";
 
 export interface Seen { method: string; path: string; key: string; body: any; bot?: string }
 
-export interface FakeAgentSession { id: string; user: string; source_key: string; external_session_id: string; title: string; status: string; summary?: string; messages: { role: string; content: string }[] }
+export interface FakeAgentSession { id: string; user: string; source_key: string; external_session_id: string; title: string; status: string; summary?: string; messages: { role: string; content: string; client_message_id?: string }[] }
 
 export interface FakeMind {
   /** Agent Sessions (open is idempotent per user + source_key + external_session_id; append/close keep what they were given) */
@@ -242,11 +242,21 @@ export async function startFakeMind(initial: Record<string, string> = {}): Promi
         m.agentSessions.set(k, row);
         return json(res, 200, { session_id: row.id, resumed: !!had, message_count: row.messages.length, pending_replies: [] });
       }
+      const asg = /^\/agent-sessions\/([^/]+)$/.exec(rest);
+      if (asg && req.method === "GET") {
+        const row = [...m.agentSessions.values()].find((r) => r.id === asg[1] && r.user === username);
+        if (!row) return json(res, 404, { detail: "Agent session not found" });
+        const limit = Math.max(1, Math.min(1000, Number(u.searchParams.get("limit") ?? 200)));
+        const before = u.searchParams.get("before_seq") ? Number(u.searchParams.get("before_seq")) : undefined;
+        const all = row.messages.map((x, i) => ({ ...x, seq: i + 1 })).filter((x) => before === undefined || x.seq < before);
+        const win = all.slice(-limit);
+        return json(res, 200, { session_id: row.id, status: row.status, message_count: row.messages.length, messages: win, has_more_before: all.length > win.length });
+      }
       const asm = /^\/agent-sessions\/([^/]+)\/(append|close)$/.exec(rest);
       if (asm) {
         const row = [...m.agentSessions.values()].find((r) => r.id === asm[1] && r.user === username);
         if (!row) return json(res, 404, { detail: "no such session" });
-        if (asm[2] === "append") { row.messages.push(...(Array.isArray(parsed?.messages) ? parsed.messages : [])); if (parsed?.title) row.title = String(parsed.title); row.status = "active"; }
+        if (asm[2] === "append") { for (const x of (Array.isArray(parsed?.messages) ? parsed.messages : [])) { if (x.client_message_id && row.messages.some((y) => y.client_message_id === x.client_message_id)) continue; row.messages.push(x); } if (parsed?.title) row.title = String(parsed.title); row.status = "active"; }
         else { row.status = String(parsed?.status ?? "ended"); row.summary = String(parsed?.summary ?? ""); }
         return json(res, 200, { ok: true, pending_replies: [] });
       }

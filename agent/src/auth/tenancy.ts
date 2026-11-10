@@ -151,6 +151,7 @@ export function createRuntimeHub(o: HubOptions): { runtimeFor(p: Principal): Run
       boardCancel: (sid, tid) => inner.boardCancel?.(sid, tid) ?? Promise.resolve("nosession" as const),
       boardDelete: (sid, tid) => inner.boardDelete?.(sid, tid) ?? Promise.resolve("nosession" as const),
       boardSync: () => inner.boardSync?.() ?? Promise.resolve(0),
+      mindReconcile: (o) => inner.mindReconcile?.(o) ?? Promise.resolve(undefined),
       decisionDoc: (id) => inner.decisionDoc?.(id) ?? Promise.resolve(undefined),
     };
     return slot.runtime;

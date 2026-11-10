@@ -6,6 +6,7 @@
 // transcript from the session store, keeps a cursor per session, and only logs what THIS device wrote itself (a record that arrived by device
 // sync was already logged by the device that ran it). A first run backfills every saved session. A delete closes the MIND session with a note;
 // its history stays. Calls go through the MIND client (edge-fallback: gzip, other address) with the tenant's own key.
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { StoredSession, SessionStore } from "../persist.ts";
@@ -48,8 +49,35 @@ export function messagesFrom(history: HistoryEvent[], from: number, complete = f
   return { msgs, upTo };
 }
 
-interface Entry { mid?: string; n: number; title?: string; closed?: boolean }
+/** `rc` = how many transcript events the hosted reconciler last proved to be in MIND (see reconcile below). */
+interface Entry { mid?: string; n: number; title?: string; closed?: boolean; rc?: number }
 interface Persisted { v: 1; sessions: Record<string, Entry> }
+
+/** What the reconciler found for one Daebot session. `missing` = messages MIND did not hold; `appended` = how many it then wrote (0 on a dry run). */
+export interface ReconcileSessionResult {
+  id: string;
+  status: "current" | "appended" | "empty" | "gone" | "closed" | "unlogged" | "error";
+  /** Messages this session should have in MIND (its whole saved transcript). */
+  want: number;
+  /** Messages MIND held before this run. */
+  had?: number;
+  missing: number;
+  appended: number;
+  mid?: string;
+  error?: string;
+}
+export interface ReconcileSummary { owner: string; sessions: number; current: number; appended: number; messagesAppended: number; empty: number; skipped: number; errors: number; results: ReconcileSessionResult[] }
+
+/** A stable id for one logged message: the same transcript position and text always gives the same id, so MIND stores a retried or repeated append once. */
+export function messageIdFor(sessionId: string, index: number, m: LogMsg): string {
+  return `dbt1:${sessionId}:${index}:${createHash("sha1").update(`${m.role}\0${m.content}`).digest("hex").slice(0, 16)}`;
+}
+
+/** The messages a saved session should have in MIND, redacted and capped exactly as the live logger writes them. */
+export function wantedMessages(rec: Pick<StoredSession, "history" | "run">): LogMsg[] {
+  const { msgs } = messagesFrom(rec.history, 0, rec.run?.status !== "running");
+  return msgs.map((m) => ({ role: m.role, content: redact(m.content).slice(0, MAX_MESSAGE_CHARS) })).filter((m) => m.content.trim());
+}
 
 export interface SessionLoggerDeps {
   client: () => MindClient;
@@ -67,6 +95,8 @@ export interface SessionLoggerDeps {
   stateFile?: string;
   device?: { kind: string; label: string };
   retryMs?: number;
+  /** Hosted only: reconcile a session this many ms after a device pushed it (see reconcile). undefined = never (desktop: the device that ran a turn logs it). */
+  reconcileSyncMs?: number;
   log?: (line: string) => void;
 }
 
@@ -111,11 +141,12 @@ export class SessionLogger {
     this.kick();
   }
 
-  stop(): void { for (const u of this.unsubs) u(); this.unsubs = []; if (this.timer) clearTimeout(this.timer); }
+  stop(): void { for (const u of this.unsubs) u(); this.unsubs = []; if (this.timer) clearTimeout(this.timer); for (const t of this.reconcileTimers.values()) clearTimeout(t); this.reconcileTimers.clear(); }
 
   noteSaved(rec: StoredSession, origin?: "sync"): void {
     if (!this.mine(rec) || this.st.sessions[rec.id]?.closed) return;
     if (origin === "sync") {
+      if (this.d.reconcileSyncMs !== undefined) this.reconcileSoon(rec.id, this.d.reconcileSyncMs); // hosted: make MIND hold what the device may not have logged
       // Written by device sync: the device that ran these turns logged them. Move the cursor past them so a later local turn logs only its own.
       const e = this.st.sessions[rec.id];
       if (e) { e.n = Math.max(e.n, rec.history.length); this.save(); }
@@ -151,7 +182,7 @@ export class SessionLogger {
       let failed = false;
       for (const id of [...this.queue]) {
         this.queue.delete(id);
-        try { await this.syncOne(id); } catch (e) {
+        try { await this.serial(() => this.syncOne(id)); } catch (e) {
           failed = true;
           this.stats.errors++;
           const msg = String((e as Error)?.message ?? e).slice(0, 160);
@@ -168,6 +199,123 @@ export class SessionLogger {
     return this.running;
   }
   private stopFlag(): boolean { return false; }
+
+  // Every write to MIND for this owner (the live logger and the reconciler) takes this lock, so two never append to one session at once.
+  private lock: Promise<unknown> = Promise.resolve();
+  private serial<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.lock.then(fn, fn);
+    this.lock = run.catch(() => undefined);
+    return run;
+  }
+
+  // ---------------------------------------------------------------------------------------------------------------------------------------
+  // RECONCILE (hosted). A session that reached this server by device sync is assumed logged by the device that ran it, and noteSaved skips it.
+  // A device whose key lacked chat:write (before 0.3.35) never logged some, so MIND could hold a session with no messages, or none at all.
+  // reconcile() makes MIND match the saved transcript, whoever wrote it: it reads what MIND holds for the session, and appends only the messages
+  // MIND does not have (by position and text; every message it writes carries a stable client_message_id, so a retry or a race stores it once).
+  // A session that is not in the store (deleted in Daebot) is never touched: its MIND session stays closed, with its history.
+  // ---------------------------------------------------------------------------------------------------------------------------------------
+  private reconcileTimers = new Map<string, NodeJS.Timeout>();
+
+  /** Reconciles this session after a quiet moment (a sync push can land several times in a row). */
+  reconcileSoon(id: string, delayMs = 20_000): void {
+    if (this.reconcileTimers.has(id)) return;
+    const t = setTimeout(() => { this.reconcileTimers.delete(id); void this.reconcile({ ids: [id] }).catch(() => {}); }, delayMs);
+    t.unref?.();
+    this.reconcileTimers.set(id, t);
+  }
+
+  /** Every transcript message MIND holds for one session (newest window first, paged back by seq). */
+  private async existing(mid: string): Promise<{ role: string; content: string; cid?: string }[]> {
+    const out: { role: string; content: string; cid?: string }[] = [];
+    let before: number | undefined;
+    for (let page = 0; page < 200; page++) {
+      const data = await this.call({ action: "get", session_id: mid, limit: 1000, ...(before !== undefined ? { before_seq: before } : {}) });
+      const msgs: any[] = Array.isArray(data?.messages) ? data.messages : [];
+      for (const m of msgs) out.unshift({ role: String(m?.role ?? ""), content: String(m?.content ?? ""), cid: typeof m?.client_message_id === "string" ? m.client_message_id : undefined });
+      const first = msgs.length ? Number(msgs[0]?.seq) : NaN;
+      if (!data?.has_more_before || !Number.isFinite(first)) break;
+      before = first;
+    }
+    return out;
+  }
+
+  private async reconcileOne(id: string, o: { dryRun?: boolean; force?: boolean }): Promise<ReconcileSessionResult> {
+    const base: ReconcileSessionResult = { id, status: "current", want: 0, missing: 0, appended: 0 };
+    const rec = this.d.store.load(id);
+    if (!rec || !this.mine(rec)) return { ...base, status: "gone" };
+    const entry = this.st.sessions[id];
+    if (entry?.closed) return { ...base, status: "closed", mid: entry.mid };
+    const key = this.d.sourceKeyOf(rec);
+    if (!key) return { ...base, status: "unlogged" };
+    const want = wantedMessages(rec);
+    if (!want.length) return { ...base, status: "empty" };
+    if (!o.force && entry?.mid && entry.rc === rec.history.length) return { ...base, status: "current", want: want.length, mid: entry.mid };
+    const e = (this.st.sessions[id] ??= { n: 0 });
+    const title = (this.d.titleOf ? this.d.titleOf(rec) : rec.title || "Daebot session").slice(0, 200);
+    if (!e.mid) {
+      if (o.dryRun) return { ...base, status: "appended", want: want.length, missing: want.length };
+      const data = await this.call({
+        action: "open", source_key: key, external_session_id: id, runtime: "mindclaw", title,
+        ...(this.d.tagsOf?.(rec)?.length ? { tags: this.d.tagsOf(rec) } : {}),
+      });
+      if (!data?.session_id) throw new Error("MIND did not return a session id");
+      e.mid = String(data.session_id);
+      this.stats.opened++;
+      this.harvest(id, data);
+      this.save();
+    }
+    const have = await this.existing(e.mid);
+    // What MIND holds, as a multiset of (role, text): a message another device logged without an id still counts as present.
+    const held = new Map<string, number>();
+    const cids = new Set<string>();
+    for (const m of have) { const k = `${m.role}\0${m.content}`; held.set(k, (held.get(k) ?? 0) + 1); if (m.cid) cids.add(m.cid); }
+    const missing: { role: string; content: string; client_message_id: string }[] = [];
+    want.forEach((m, i) => {
+      const k = `${m.role}\0${m.content}`;
+      const cid = messageIdFor(id, i, m);
+      if ((held.get(k) ?? 0) > 0) { held.set(k, held.get(k)! - 1); return; }
+      if (cids.has(cid)) return;
+      missing.push({ ...m, client_message_id: cid });
+    });
+    const res: ReconcileSessionResult = { ...base, status: missing.length ? "appended" : "current", want: want.length, had: have.length, missing: missing.length, mid: e.mid };
+    if (o.dryRun) return res;
+    for (let i = 0; i < missing.length; i += BATCH) {
+      const batch = missing.slice(i, i + BATCH);
+      const data = await this.call({ action: "append", session_id: e.mid, messages: batch, title });
+      this.stats.appended += batch.length;
+      res.appended += batch.length;
+      this.harvest(id, data);
+    }
+    // The live logger's cursor moves past everything now in MIND, so a later local turn logs only its own messages.
+    const { upTo } = messagesFrom(rec.history, 0, rec.run?.status !== "running");
+    e.n = Math.max(e.n, upTo);
+    e.title = title;
+    e.rc = rec.history.length;
+    this.save();
+    return res;
+  }
+
+  /** Makes MIND hold every saved session of this owner (all of them, or `ids`), message by message. Safe to run any number of times. */
+  async reconcile(o: { ids?: string[]; dryRun?: boolean; force?: boolean } = {}): Promise<ReconcileSummary> {
+    const ids = o.ids ?? this.d.store.list().filter((m) => this.mine(m)).map((m) => m.id);
+    const sum: ReconcileSummary = { owner: this.d.owner, sessions: ids.length, current: 0, appended: 0, messagesAppended: 0, empty: 0, skipped: 0, errors: 0, results: [] };
+    for (const id of ids) {
+      let r: ReconcileSessionResult;
+      try { r = await this.serial(() => this.reconcileOne(id, o)); } catch (e) {
+        this.stats.errors++;
+        r = { id, status: "error", want: 0, missing: 0, appended: 0, error: String((e as Error)?.message ?? e).slice(0, 200) };
+        this.stats.lastError = r.error!;
+      }
+      sum.results.push(r);
+      if (r.status === "current") sum.current++;
+      else if (r.status === "appended") { if (r.appended || o.dryRun) sum.appended++; sum.messagesAppended += r.appended; }
+      else if (r.status === "empty") sum.empty++;
+      else if (r.status === "error") sum.errors++;
+      else sum.skipped++;
+    }
+    return sum;
+  }
 
   private lastUpgradeAt = 0;
   private async call(args: Record<string, unknown>): Promise<any> {

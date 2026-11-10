@@ -314,6 +314,8 @@ export interface Runtime {
   boardDelete?(sessionId: string, taskId: string): Promise<"ok" | "nosession" | { error: "notask" | "mind"; message?: string }>;
   /** Pulls LIFE status changes made in MIND back onto the cards. Returns how many cards changed. */
   boardSync?(): Promise<number>;
+  /** Hosted: makes this owner's MIND hold every saved session, message by message (all sessions, or `ids`). Idempotent; `dryRun` only reports. */
+  mindReconcile?(o?: { ids?: string[]; dryRun?: boolean; force?: boolean }): Promise<import("./mind/session-log.ts").ReconcileSummary | undefined>;
   /** The text of a decision document filed for a task (read from the user's own MIND). */
   decisionDoc?(id: string): Promise<{ title: string; content: string } | undefined>;
   /** Task board rows of ONE bot's own threads (the Heartbeat's cheap check reads these). */
