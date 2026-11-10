@@ -41,6 +41,8 @@ export interface StoredSession {
   board?: BoardTask[];
   createdAt: number;
   updatedAt: number;
+  /** When a non-transcript field last changed by the user's hand (rename, archive). Device sync orders such changes by it; it does not reorder the sidebar like updatedAt does. */
+  metaAt?: number;
   state: SessionState;
   violations: Violation[];
   history: HistoryEvent[];
@@ -75,6 +77,8 @@ export interface SessionStore {
   remove?(id: string): Promise<void>;
   /** Called after every successful save (the record as written). Used by device sync. Returns the unsubscribe function. */
   subscribe?(fn: (rec: StoredSession) => void): () => void;
+  /** Called after a session was deleted from the store (id and the owner it had). Used by device sync to write a tombstone. */
+  subscribeRemove?(fn: (id: string, owner: string | undefined) => void): () => void;
 }
 
 export function dataDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -102,6 +106,7 @@ export function createFileStore(dir: string): SessionStore {
   const shared = new Map<string, { mtimeMs: number; size: number; rec: StoredSession }>();
   const SHARED_MAX = 12;
   const listeners = new Set<(rec: StoredSession) => void>();
+  const removeListeners = new Set<(id: string, owner: string | undefined) => void>();
 
   function scan(): void {
     if (scanned) return;
@@ -168,13 +173,19 @@ export function createFileStore(dir: string): SessionStore {
       listeners.add(fn);
       return () => { listeners.delete(fn); };
     },
+    subscribeRemove(fn) {
+      removeListeners.add(fn);
+      return () => { removeListeners.delete(fn); };
+    },
     async remove(id) {
       scan();
       const prev = queues.get(id) ?? Promise.resolve();
       await prev.catch(() => {});
+      const had = index.get(id);
       index.delete(id);
       shared.delete(id);
       await unlink(join(root, fileNameFor(id))).catch(() => {});
+      for (const fn of [...removeListeners]) { try { fn(id, had?.owner); } catch { /* a listener never blocks a delete */ } }
     },
   };
 }

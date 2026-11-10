@@ -67,6 +67,7 @@ import { SyncService } from "../sync/service.ts";
 import { SyncAgent } from "../sync/agent.ts";
 import { SyncHttp } from "../sync/http.ts";
 import { RemoteAgent, loadDeviceId } from "../sync/remote-agent.ts";
+import { TombstoneBook } from "../sync/tombstones.ts";
 import { RemoteHub } from "../remote/hub.ts";
 import type { RemoteJob } from "../remote/hub.ts";
 import { daebotHome } from "../home.ts";
@@ -125,7 +126,7 @@ export interface GatewayOptions {
   /** How recent a poll makes a desktop "online" (default 45 s). Tests. */
   remoteOnlineMs?: number;
   /** Device sync (desktop <-> daebot.live). Local gateways start it only when `enabled` is true (the CLI sets it); tests inject `fetchImpl`/`url`/`key`. */
-  sync?: { enabled?: boolean; url?: string; key?: string; intervalMs?: number; fetchImpl?: typeof fetch; deviceId?: string; deviceName?: string; remoteWaitSec?: number };
+  sync?: { enabled?: boolean; stateFile?: string; url?: string; key?: string; intervalMs?: number; fetchImpl?: typeof fetch; deviceId?: string; deviceName?: string; remoteWaitSec?: number };
   /** MIND Voice (/voice/stt, /voice/tts). Defaults from cfg + auth; pass to override (tests). */
   voice?: Partial<VoiceOptions>;
   /** Apps card (/apps/integrations): MIND integrations proxied with the signed-in user's own key. Defaults from cfg + auth; pass to override (tests). */
@@ -376,7 +377,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     await manager.open({ surface, resumeId: id, owner, bot });
   };
   const syncSvc = hosted && auth?.store.enabled && storeOk
-    ? new SyncService({ store: fullStore!, bots: (owner) => manager.runtimeOf(owner).bots, isBusy: (id) => !!manager.get(id)?.busy, tierOf: (owner) => (owner === OWNER.id ? OWNER.tier : auth?.store.principal(owner)?.tier ?? "staff"), afterWrite: refreshLive })
+    ? new SyncService({ store: fullStore!, bots: (owner) => manager.runtimeOf(owner).bots, isBusy: (id) => !!manager.get(id)?.busy, tierOf: (owner) => (owner === OWNER.id ? OWNER.tier : auth?.store.principal(owner)?.tier ?? "staff"), afterWrite: refreshLive, deleteSession: (owner, id) => manager.deleteSession(id, owner), tombstones: new TombstoneBook({ file: join(opts.remoteDir ?? dataDir(), "sync-tombstones.json") }) })
     : undefined;
   const syncKey = opts.sync?.key ?? opts.cfg?.mindApiKey ?? "";
   const syncAgent = !hosted && storeOk && opts.sync?.enabled === true && syncKey
@@ -387,6 +388,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         bots: () => manager.runtimeOf(OWNER.id).bots,
         isBusy: (id) => !!manager.get(id)?.busy,
         afterWrite: (id) => refreshLive(OWNER.id, id),
+        deleteLocal: async (id) => { await manager.deleteSession(id, OWNER.id); },
+        tombstones: new TombstoneBook({ file: opts.sync?.stateFile ?? join(dataDir(), "sync-state.json") }),
         fetchImpl: opts.sync?.fetchImpl,
         intervalMs: opts.sync?.intervalMs,
         log: (l) => process.stderr.write(`${l}\n`),
@@ -976,6 +979,14 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     const jm = /^\/api\/sync\/device\/jobs\/(rj_[0-9a-f]{16})\/events$/.exec(path);
     if (jm && method === "POST") return deviceJobEvents(req, res, me, jm[1]);
     const m = /^\/api\/sync\/sessions\/([^/]+)$/.exec(path);
+    if (m && method === "DELETE") {
+      let id: string;
+      try { id = decodeURIComponent(m[1]); } catch { return sendJson(res, 400, { error: "bad session id" }); }
+      if (id.length > 200) return sendJson(res, 400, { error: "bad session id" });
+      const r = await syncSvc.remove(me.id, id);
+      subscribers.delete(id);
+      return r === "ok" ? sendJson(res, 200, { ok: true }) : sendJson(res, 403, { error: "forbidden" });
+    }
     if (m && method === "GET") {
       let id: string;
       try { id = decodeURIComponent(m[1]); } catch { return sendJson(res, 400, { error: "bad session id" }); }

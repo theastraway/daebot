@@ -9,6 +9,7 @@ import { mergeRecords, recordSig } from "./merge.ts";
 import { NOT_SYNCED_SURFACES, fromWire, toWire } from "./wire.ts";
 import type { WireRecord } from "./wire.ts";
 import { SyncHttp } from "./http.ts";
+import { TombstoneBook } from "./tombstones.ts";
 import type { PushResult, SyncRow } from "./service.ts";
 
 export const SYNC_OWNER = "owner";
@@ -21,6 +22,10 @@ export interface SyncAgentDeps {
   isBusy(id: string): boolean;
   /** A session was rewritten from the other side: reload a live idle copy. */
   afterWrite?(id: string): Promise<void>;
+  /** The other side deleted this session: delete it here (close a live copy, remove the record and its photos). */
+  deleteLocal?(id: string): Promise<void>;
+  /** Where this device remembers its deletes (a restart or an offline stretch must not lose them). Default: in memory. */
+  tombstones?: TombstoneBook;
   fetchImpl?: typeof fetch;
   intervalMs?: number;
   fullEveryMs?: number;
@@ -44,17 +49,23 @@ export class SyncAgent {
   private lastFull = 0;
   private stopped = false;
   private unsub?: () => void;
+  private unsubRemove?: () => void;
+  private applying = new Set<string>(); // deletes this agent is applying from the server (not echoed back)
+  readonly tombs: TombstoneBook;
   readonly status: SyncStatus;
 
   constructor(deps: SyncAgentDeps) {
     this.deps = deps;
     this.http = new SyncHttp({ baseUrl: deps.baseUrl, key: deps.key, fetchImpl: deps.fetchImpl });
+    this.tombs = deps.tombstones ?? new TombstoneBook();
     this.status = { enabled: true, url: this.http.url, lastOkAt: 0, lastError: "", pulled: 0, pushed: 0, dirty: 0, rounds: 0 };
   }
 
   start(): void {
     this.stopped = false;
     this.unsub = this.deps.store.subscribe?.((rec) => this.noteSaved(rec));
+    this.unsubRemove = this.deps.store.subscribeRemove?.((id, owner) => this.noteRemoved(id, owner));
+    if (this.tombs.pending().length) this.kick();
     const loop = () => {
       if (this.stopped) return;
       const full = Date.now() - this.lastFull > (this.deps.fullEveryMs ?? 10 * 60_000);
@@ -73,12 +84,44 @@ export class SyncAgent {
     if (this.timer) clearTimeout(this.timer);
     if (this.kickTimer) clearTimeout(this.kickTimer);
     this.unsub?.();
+    this.unsubRemove?.();
+  }
+
+  private kick(): void {
+    if (this.kickTimer || this.stopped) return;
+    this.kickTimer = setTimeout(() => { this.kickTimer = undefined; void this.round(false); }, 400);
+    this.kickTimer.unref?.();
+  }
+
+  /** A session was deleted on this device: remember it (so it is never pulled back) and tell the server soon. */
+  noteRemoved(id: string, owner: string | undefined): void {
+    if ((owner ?? SYNC_OWNER) !== SYNC_OWNER) return;
+    this.tombs.mark(SYNC_OWNER, id);
+    this.dirty.delete(id);
+    this.synced.delete(id);
+    if (this.applying.has(id)) return; // the server already knows
+    this.tombs.addPending(id);
+    this.kick();
+  }
+
+  private async applyRemoteDelete(id: string): Promise<void> {
+    this.tombs.mark(SYNC_OWNER, id);
+    this.dirty.delete(id);
+    const local = this.deps.store.meta?.(id) ?? this.deps.store.load(id);
+    if (!local || (local.owner ?? SYNC_OWNER) !== SYNC_OWNER) return;
+    this.applying.add(id);
+    try {
+      if (this.deps.deleteLocal) await this.deps.deleteLocal(id);
+      else await this.deps.store.remove?.(id);
+      this.status.pulled++;
+    } finally { this.applying.delete(id); }
   }
 
   /** A save on this device: send it soon (debounced), unless it is exactly what the server already has. */
   noteSaved(rec: StoredSession): void {
     if (NOT_SYNCED_SURFACES.has(rec.surface)) return;
     if ((rec.owner ?? SYNC_OWNER) !== SYNC_OWNER) return;
+    if (this.tombs.has(SYNC_OWNER, rec.id)) return;
     if (this.synced.get(rec.id) === recordSig(rec)) return;
     this.dirty.add(rec.id);
     this.status.dirty = this.dirty.size;
@@ -126,15 +169,20 @@ export class SyncAgent {
     const seen = new Set<string>();
     for (let page = 0; page < 200; page++) {
       const r = await this.http.json<{ now: number; rows: SyncRow[]; more: boolean }>("GET", `/api/sync/sessions?since=${since}&limit=200`);
-      for (const row of r.rows) { seen.add(row.id); await this.pullRow(row.id, row.sig); }
+      for (const row of r.rows) {
+        seen.add(row.id);
+        if (row.deleted) { await this.applyRemoteDelete(row.id); continue; }
+        await this.pullRow(row.id, row.sig);
+      }
       if (r.rows.length) { since = r.rows[r.rows.length - 1].touchedAt; this.cursor = Math.max(this.cursor, since); }
       if (!r.more) break;
     }
     for (const id of [...this.retryPull]) { this.retryPull.delete(id); await this.pullRow(id, undefined); }
-    if (full) for (const m of this.deps.store.list()) if (!seen.has(m.id) && !NOT_SYNCED_SURFACES.has(m.surface) && (m.owner ?? SYNC_OWNER) === SYNC_OWNER) this.dirty.add(m.id);
+    if (full) for (const m of this.deps.store.list()) if (!seen.has(m.id) && !this.tombs.has(SYNC_OWNER, m.id) && !NOT_SYNCED_SURFACES.has(m.surface) && (m.owner ?? SYNC_OWNER) === SYNC_OWNER) this.dirty.add(m.id);
   }
 
   private async pullRow(id: string, remoteSig: string | undefined): Promise<void> {
+    if (this.tombs.has(SYNC_OWNER, id)) return; // deleted here: never brought back (the delete itself is sent in flush)
     const local = this.deps.store.load(id);
     if (local && (local.owner ?? SYNC_OWNER) !== SYNC_OWNER) return;
     if (local && remoteSig && recordSig(local) === remoteSig) { this.synced.set(id, remoteSig); this.dirty.delete(id); return; }
@@ -167,7 +215,21 @@ export class SyncAgent {
     if (n < 6) this.retryPull.add(id);
   }
 
+  private async flushDeletes(): Promise<void> {
+    for (const id of this.tombs.pending()) {
+      try {
+        await this.http.json<{ ok: boolean }>("DELETE", `/api/sync/sessions/${encodeURIComponent(id)}`);
+        this.tombs.clearPending(id);
+      } catch (e) {
+        const st = (e as { status?: number }).status;
+        if (st === 403 || st === 404) this.tombs.clearPending(id); // not ours / not there: nothing to tell
+        else throw e;
+      }
+    }
+  }
+
   private async flush(): Promise<void> {
+    await this.flushDeletes();
     if (!this.dirty.size) return;
     const ids = [...this.dirty];
     let batch: WireRecord[] = [];
@@ -185,6 +247,9 @@ export class SyncAgent {
           this.retries.delete(x.id);
           if (x.status === "ok") this.status.pushed++;
           if (x.status === "ok" && x.sig && local && recordSig(local) !== x.sig) this.retryPull.add(x.id); // the server merged in more than we sent
+        } else if (x.status === "deleted") {
+          await this.applyRemoteDelete(x.id).catch(() => {});
+          this.retries.delete(x.id);
         } else if (x.status === "busy" || x.status === "nobot" || x.status === "error") {
           const n = (this.retries.get(x.id) ?? 0) + 1;
           this.retries.set(x.id, n);
@@ -195,6 +260,7 @@ export class SyncAgent {
       }
     };
     for (const id of ids) {
+      if (this.tombs.has(SYNC_OWNER, id)) { this.dirty.delete(id); continue; }
       const rec = this.deps.store.load(id);
       if (!rec) { this.dirty.delete(id); continue; }
       let w = toWire(rec, this.bots());
