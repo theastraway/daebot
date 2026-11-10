@@ -9,7 +9,8 @@ import { parseSse } from "../gateway/helpers.ts";
 async function botOnBoth(hosted: Awaited<ReturnType<typeof hostedRig>>, desk: Awaited<ReturnType<typeof deskRig>>, slug = "scout") {
   const bot = JSON.parse((await desk.api("POST", "/bots", { slug, name: "Scout" })).body).bot;
   const web = await hosted.as(hosted.keys.alice);
-  const hostBot = await until(async () => JSON.parse((await web("GET", "/bots")).body).bots.find((b: any) => b.slug === slug));
+  // daebot.live sees the bot AND knows which computer carries it (the desktop registered it)
+  const hostBot = await until(async () => JSON.parse((await web("GET", "/bots")).body).bots.find((b: any) => b.slug === slug && b.remoteDevices?.length));
   return { bot, web, hostBot };
 }
 
@@ -60,14 +61,83 @@ test("a message to a remote bot from the web runs on the desktop, streams back, 
   } finally { await desk.close(); await hosted.close(); }
 });
 
-test("a bot with Remote off (and no desktop involvement) is answered by the server as before", async () => {
+test("a bot no desktop carries is answered by the server as before", async () => {
   const hosted = await hostedRig({ script: [{ text: "server answered" }] });
   const desk = await deskRig(hosted, hosted.keys.alice, { script: [{ text: "desktop" }] });
   try {
-    const { web, hostBot } = await botOnBoth(hosted, desk);
-    const { sessionId } = JSON.parse((await web("POST", "/sessions", { surface: "web", bot: hostBot.id })).body);
+    const web = await hosted.as(hosted.keys.alice);
+    const made = JSON.parse((await web("POST", "/bots", { name: "Hosted only" })).body).bot; // created on daebot.live: no desktop has it
+    const { sessionId } = JSON.parse((await web("POST", "/sessions", { surface: "web", bot: made.id })).body);
     const res = await web("POST", `/sessions/${sessionId}/send`, { text: "hi" });
-    assert.ok((parseSse(res.body) as any[]).some((e) => e.type === "text" && /server answered/.test(e.delta)));
+    assert.ok((parseSse(res.body) as any[]).some((e) => e.type === "text" && /server answered/.test(e.delta)), res.body);
     assert.equal(desk.provider.requests.length, 0);
   } finally { await desk.close(); await hosted.close(); }
+});
+
+test("AUTO-WAKE: a message from the web to a bot whose Remote is OFF turns Remote on, logs it on both sides, and the desktop answers", async () => {
+  const hosted = await hostedRig({ script: [{ text: "SERVER SHOULD NOT ANSWER" }] });
+  const desk = await deskRig(hosted, hosted.keys.alice, { script: [{ text: "woke up and answered" }] });
+  try {
+    const { bot, web, hostBot } = await botOnBoth(hosted, desk);
+    assert.equal(hostBot.remote, false);
+    assert.equal(bot.remote, false);
+    const { sessionId } = JSON.parse((await web("POST", "/sessions", { surface: "ios", bot: hostBot.id })).body);
+    const res = await web("POST", `/sessions/${sessionId}/send`, { text: "anyone home?" });
+    const evs = parseSse(res.body) as any[];
+    assert.ok(evs.some((e) => e.type === "text" && /woke up and answered/.test(e.delta)), res.body);
+    assert.equal(hosted.provider.requests.length, 0);
+    // hosted flag + log
+    const h = JSON.parse((await web("GET", "/bots")).body).bots.find((b: any) => b.slug === "scout");
+    assert.equal(h.remote, true);
+    assert.equal(h.remoteLog.at(-1).by, "auto");
+    assert.match(h.remoteLog.at(-1).note, /iPhone/);
+    // the desktop's own settings show it turned on, and say why
+    const d = await until(async () => { const x = JSON.parse((await desk.api("GET", "/bots")).body).bots.find((b: any) => b.slug === "scout"); return x.remote ? x : undefined; });
+    assert.equal(d.remoteLog.at(-1).by, "auto");
+  } finally { await desk.close(); await hosted.close(); }
+});
+
+test("OFFLINE desktop: the sender sees 'Waiting for <device>', the message is queued, and it is delivered and answered when the desktop comes back", async () => {
+  const hosted = await hostedRig({ script: [{ text: "SERVER SHOULD NOT ANSWER" }], onlineMs: 300 });
+  const desk = await deskRig(hosted, hosted.keys.alice, { script: [{ text: "back and answering" }] });
+  const dir = desk.dir;
+  let desk2: Awaited<ReturnType<typeof deskRig>> | undefined;
+  try {
+    const { bot, web, hostBot } = await botOnBoth(hosted, desk);
+    await desk.api("PATCH", `/bots/${bot.id}`, { remote: true });
+    await until(async () => JSON.parse((await web("GET", "/bots")).body).bots.find((x: any) => x.slug === "scout").remote);
+    await desk.close(); // the Mac goes to sleep
+    await sleep(450);
+    const { sessionId } = JSON.parse((await web("POST", "/sessions", { surface: "web", bot: hostBot.id })).body);
+    const pending = web("POST", `/sessions/${sessionId}/send`, { text: "are you there?" }); // stays open: the message waits
+    await sleep(500);
+    desk2 = await deskRig(hosted, hosted.keys.alice, { script: [{ text: "back and answering" }], dir }); // the Mac wakes up
+    const res = await pending;
+    const evs = parseSse(res.body) as any[];
+    assert.ok(evs.some((e) => e.type === "notice" && /Waiting for Test Mac/.test(e.text)), res.body);
+    assert.ok(evs.some((e) => e.type === "notice" && /Test Mac is back/.test(e.text)), res.body);
+    assert.ok(evs.some((e) => e.type === "text" && /back and answering/.test(e.delta)), res.body);
+    assert.equal(hosted.provider.requests.length, 0);
+    assert.equal(desk2.provider.requests.length, 1);
+  } finally { await desk2?.close(); await hosted.close(); }
+});
+
+test("stop while the message still waits for a sleeping desktop: it is withdrawn and never delivered", async () => {
+  const hosted = await hostedRig({ onlineMs: 300 });
+  const desk = await deskRig(hosted, hosted.keys.alice, { script: [{ text: "must not run" }] });
+  try {
+    const { bot, web, hostBot } = await botOnBoth(hosted, desk);
+    await desk.api("PATCH", `/bots/${bot.id}`, { remote: true });
+    await until(async () => JSON.parse((await web("GET", "/bots")).body).bots.find((x: any) => x.slug === "scout").remote);
+    await desk.close();
+    await sleep(450);
+    const { sessionId } = JSON.parse((await web("POST", "/sessions", { surface: "web", bot: hostBot.id })).body);
+    const pending = web("POST", `/sessions/${sessionId}/send`, { text: "never mind" });
+    await sleep(400);
+    const ab = JSON.parse((await web("POST", `/sessions/${sessionId}/abort`)).body);
+    assert.equal(ab.aborted, true);
+    const evs = parseSse((await pending).body) as any[];
+    assert.ok(evs.some((e) => e.type === "notice" && /Stopped before the device picked it up/.test(e.text)));
+    assert.equal(desk.provider.requests.length, 0);
+  } finally { await hosted.close(); }
 });

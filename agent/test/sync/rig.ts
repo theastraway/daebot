@@ -1,6 +1,7 @@
 // Two real gateways in one process: a HOSTED one (daebot.live: per-user runtimes, X-MIND-Key sync API) and a LOCAL one (the desktop app's
 // gateway) whose sync agent talks to the hosted one through a fetch bridge (the hosted side only answers its allowlisted Host over "https").
 import { randomBytes } from "node:crypto";
+import { request } from "node:http";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,7 +18,7 @@ import { auth as bearer, http, tmpStatic } from "../gateway/helpers.ts";
 export const rnd = () => randomBytes(18).toString("hex");
 export const H = { host: "daebot.live", "x-forwarded-proto": "https" };
 
-export async function hostedRig(o: { script?: ConstructorParameters<typeof FakeProvider>[0]; users?: string[] } = {}) {
+export async function hostedRig(o: { script?: ConstructorParameters<typeof FakeProvider>[0]; users?: string[]; onlineMs?: number } = {}) {
   const names = o.users ?? ["alice", "bob"];
   const keys: Record<string, string> = Object.fromEntries(names.map((n) => [n, "mind_" + rnd()]));
   const fake = await startFakeMind(Object.fromEntries(names.map((n) => [keys[n], n])));
@@ -34,14 +35,25 @@ export async function hostedRig(o: { script?: ConstructorParameters<typeof FakeP
   const ownerRuntime = createRuntime(cfg, { provider, store, bootCache, bots, hosted: { dailyUsdCap: 50, sharedCap: globalCap, exempt: true } });
   const env: NodeJS.ProcessEnv = { DATA_DIR: dir, DAEBOT_SECRET_KEY: rnd() + rnd(), DAEBOT_ADMINS: "", MIND_OAUTH_BASE_URL: fake.url, DAEBOT_PUBLIC_URL: "https://daebot.live" };
   const auth = createAuthContext({ env, cfg, hosted: hostedOpts, ownerRuntime, globalCap, provider, sessionStore: store, bootCache, bots });
-  const gw = await startGateway({ runtime: ownerRuntime, cfg, port: 0, host: "127.0.0.1", staticDir: st.dir, hosted: hostedOpts, auth, sessionStore: store, bots, botsEnabled: () => true, remoteDir: dir });
-  /** What a device does: a fetch that carries the allowlisted Host over https and lands on the in-process hosted gateway. */
-  const bridge = (): typeof fetch => (async (input: string | URL | Request, init?: RequestInit) => {
+  const gw = await startGateway({ runtime: ownerRuntime, cfg, port: 0, host: "127.0.0.1", staticDir: st.dir, hosted: hostedOpts, auth, sessionStore: store, bots, botsEnabled: () => true, remoteDir: dir, remoteOnlineMs: o.onlineMs });
+  /** What a device does: a fetch that carries the allowlisted Host over https and lands on the in-process hosted gateway (an aborted fetch drops the connection, as a real network does). */
+  const bridge = (): typeof fetch => ((input: string | URL | Request, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
     const u = new URL(String(input));
     const headers: Record<string, string> = { ...H, ...Object.fromEntries(new Headers(init?.headers).entries()) };
-    const r = await http(gw.url, (init?.method ?? "GET") as string, u.pathname + u.search, { headers, body: init?.body ? JSON.parse(String(init.body)) : undefined });
-    return new Response(r.body, { status: r.status, headers: { "content-type": "application/json" } });
-  }) as typeof fetch;
+    const target = new URL(gw.url);
+    const payload = init?.body ? String(init.body) : undefined;
+    const req = request({ host: target.hostname, port: target.port, method: init?.method ?? "GET", path: u.pathname + u.search, headers: { ...headers, ...(payload ? { "content-length": String(Buffer.byteLength(payload)) } : {}) } }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (c: string) => (body += c));
+      res.on("end", () => resolve(new Response(body, { status: res.statusCode ?? 0, headers: { "content-type": "application/json" } })));
+    });
+    req.on("error", reject);
+    const sig = init?.signal;
+    if (sig) { if (sig.aborted) { req.destroy(); return reject(new Error("aborted")); } sig.addEventListener("abort", () => { req.destroy(); reject(new Error("aborted")); }, { once: true }); }
+    if (payload) req.write(payload);
+    req.end();
+  })) as typeof fetch;
   /** Signs in as a user the way the web/phone app does (POST /auth/key) and returns the session cookie. */
   const cookieFor = async (key: string): Promise<Record<string, string>> => {
     const r = await http(gw.url, "POST", "/auth/key", { headers: H, body: { key } });
@@ -55,8 +67,8 @@ export async function hostedRig(o: { script?: ConstructorParameters<typeof FakeP
 
 export type HostedRig = Awaited<ReturnType<typeof hostedRig>>;
 
-export async function deskRig(hosted: HostedRig, userKey: string, o: { script?: ConstructorParameters<typeof FakeProvider>[0]; intervalMs?: number; sync?: boolean; deviceId?: string; deviceName?: string } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "daebot-desk-"));
+export async function deskRig(hosted: HostedRig, userKey: string, o: { script?: ConstructorParameters<typeof FakeProvider>[0]; intervalMs?: number; sync?: boolean; deviceId?: string; deviceName?: string; dir?: string } = {}) {
+  const dir = o.dir ?? mkdtempSync(join(tmpdir(), "daebot-desk-"));
   const provider = new FakeProvider(o.script ?? [{ text: "desktop says hi" }]);
   const cfg = baseCfg({ mindBaseUrl: hosted.fake.base, mindApiKey: userKey });
   const store = createFileStore(dir);

@@ -70,7 +70,7 @@ export class RemoteAgent {
 
   /** One poll. Exposed for tests: returns how many jobs it started. */
   async pollOnce(waitSec = this.d.waitSec ?? 20): Promise<number> {
-    const r = await this.d.http.json<{ bots?: FlagIn[]; jobs?: RemoteJob[] }>("POST", "/api/sync/device/poll", { deviceId: this.d.deviceId, name: this.d.deviceName, bots: this.flags(), wait: waitSec }, (waitSec + 25) * 1000);
+    const r = await this.d.http.json<{ bots?: FlagIn[]; jobs?: RemoteJob[] }>("POST", "/api/sync/device/poll", { deviceId: this.d.deviceId, name: this.d.deviceName, bots: this.flags(), wait: waitSec }, (waitSec + 25) * 1000, waitSec > 0 ? this.ctl?.signal : undefined);
     this.status.polls++; this.status.lastPollAt = Date.now(); this.status.lastError = "";
     this.applyFlags(r.bots);
     for (const job of r.jobs ?? []) this.enqueue(job);

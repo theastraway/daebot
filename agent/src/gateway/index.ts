@@ -122,6 +122,8 @@ export interface GatewayOptions {
   sessionStore?: { meta?(id: string): { owner?: string } | undefined };
   /** Where the hosted remote-bot hub keeps its device list and queued messages (default DATA_DIR). Tests. */
   remoteDir?: string;
+  /** How recent a poll makes a desktop "online" (default 45 s). Tests. */
+  remoteOnlineMs?: number;
   /** Device sync (desktop <-> daebot.live). Local gateways start it only when `enabled` is true (the CLI sets it); tests inject `fetchImpl`/`url`/`key`. */
   sync?: { enabled?: boolean; url?: string; key?: string; intervalMs?: number; fetchImpl?: typeof fetch; deviceId?: string; deviceName?: string; remoteWaitSec?: number };
   /** MIND Voice (/voice/stt, /voice/tts). Defaults from cfg + auth; pass to override (tests). */
@@ -393,10 +395,11 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   const syncLimiter = new TurnRateLimiter({ max: 1200 });
 
   // ---- Remote bots (see src/remote/hub.ts, src/sync/remote-agent.ts). Hosted: the hub queues messages for a user's desktop and relays its reply into the sender's run feed.
-  const remoteRuns = new Map<string, { run: Run; owner: string; sessionId: string }>();
+  const remoteRuns = new Map<string, { run: Run; owner: string; sessionId: string; waiting: boolean }>();
   const remoteHub = hosted && auth?.store.enabled
     ? new RemoteHub({
         dir: opts.remoteDir ?? dataDir(),
+        onlineMs: opts.remoteOnlineMs,
         onStalled: (job) => {
           const e = remoteRuns.get(job.id);
           if (!e) return;
@@ -885,9 +888,10 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
     const waitMs = Math.min(25, Math.max(0, Number(b.wait) || 0)) * 1000;
     const ac = new AbortController();
-    req.on("close", () => ac.abort());
+    res.on("close", () => ac.abort()); // the connection (not the request body) closing: the device hung up
     const jobs = await remoteHub.wait(me.id, deviceId, waitMs, ac.signal);
-    if (ac.signal.aborted) return;
+    if (ac.signal.aborted) { if (jobs.length) remoteHub.requeue(me.id, jobs); return; } // the device hung up first: nothing was delivered
+    for (const j of jobs) { const e = remoteRuns.get(j.id); if (e?.waiting) { e.waiting = false; e.run.publish({ type: "notice", level: "info", text: `${name} is back and picked it up.` }); } } // it had been waiting
     remoteHub.heartbeat(me.id, { id: deviceId, name, slugs: flags.map((f) => f.slug) });
     // What the device does not know yet (a flag turned on here, or automatically): computed after the wait so a change made while it waited is in this answer.
     const reply: { slug: string; remote: boolean; at: number; by?: string; note?: string }[] = [];
@@ -930,13 +934,19 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     const rec = manager.runtimeOf(me.id).bots?.get(bot);
     if (!rec) return false;
     const devs = remoteHub.devicesFor(me.id, rec.slug);
-    if (!devs.length || !rec.remote) return false;
+    if (!devs.length) return false; // no computer of this user carries the bot: the server answers, as before
+    if (!rec.remote) {
+      // Auto-wake: someone messaged the bot from another device while Remote was off. Turn it on, say so in the bot's settings, and wake the desktop.
+      const from = surface === "ios" ? "your iPhone" : surface === "web" ? "the web" : `another device (${surface})`;
+      manager.runtimeOf(me.id).bots?.setRemote?.(rec.id, true, { by: "auto", note: `Turned on automatically: a message arrived from ${from} while Remote was off.` });
+      remoteHub.nudge(me.id);
+    }
     if (hasPhotos) { sendJson(res, 409, { error: "remote_photos", message: "Photos cannot be sent to a remote bot yet. Turn Remote off for this bot to send a photo." }); return true; }
     const dev = devs[0];
     const job = remoteHub.enqueue(me.id, { deviceId: dev.id, sessionId, botSlug: rec.slug, surface, title, text, ...(quote ? { quote } : {}) });
     const run = runs.start(sessionId, text);
     run.external = true;
-    remoteRuns.set(job.id, { run, owner: me.id, sessionId });
+    remoteRuns.set(job.id, { run, owner: me.id, sessionId, waiting: !dev.online });
     res.writeHead(200, sseHeaders({ "x-daebot-remote": dev.name }));
     run.publish({ type: "notice", level: "info", text: dev.online ? `Sent to ${dev.name}.` : `Waiting for ${dev.name}: it is offline. It will answer when it is back.` });
     attachRun(res, run, 0, undefined);
@@ -1539,6 +1549,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
           if (instr === null) return sendJson(res, 400, { error: "bad_instructions", message: "instructions must be text" });
           if (instr !== undefined && Buffer.byteLength(instr, "utf8") > 8 * 1024) return sendJson(res, 413, { error: "instructions_too_long", message: "DAEBOT.md is capped at 8 KB" });
           const rec = await bots.create({ slug, name, purpose: optStr(b.purpose, 1000), color: optStr(b.color, 20), face: b.face });
+          remoteAgent?.kick(); // a new bot is registered with daebot.live right away, not at the end of the current long poll
           if (instr) bots.setInstructions(rec.id, instr);
           return sendJson(res, 201, { bot: { ...botView(rec), live: false, busy: false } });
         }
@@ -2030,7 +2041,9 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
     if (action === "abort") {
       if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
-      return sendJson(res, 200, { aborted: manager.abort(id) || (remoteHub?.requestAbort(me.id, id) ?? false) });
+      const waiting = remoteHub?.cancelQueued(me.id, id) ?? [];
+      for (const j of waiting) { const e = remoteRuns.get(j.id); if (e) { remoteRuns.delete(j.id); e.run.publish({ type: "notice", level: "info", text: "Stopped before the device picked it up." }); e.run.finish(); } }
+      return sendJson(res, 200, { aborted: manager.abort(id) || waiting.length > 0 || (remoteHub?.requestAbort(me.id, id) ?? false) });
     }
     if (action === "suggest") {
       // 1-3 replies Dae predicts the user will send next. Empty when the last message does not wait on them. Never sends anything.
