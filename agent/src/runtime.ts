@@ -367,7 +367,9 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
   const sessionLog = overrides.store?.subscribe && stateDir && overrides.sessionLog !== false && cfg.mindApiKey
     ? loggerFor({
         client: () => sessionClient, store: overrides.store!, owner: overrides.owner ?? "owner",
-        sourceKeyOf: (rec) => (rec.peer ? undefined : rec.bot ? (botStore?.get(rec.bot)?.slug ? `daebot-bot-${botStore.get(rec.bot)!.slug}` : undefined) : "daebot"),
+        // A bot-to-bot DM thread is its own MIND session under its own source (labelled "Bot to bot: ..."), never part of the MAIN session.
+        sourceKeyOf: (rec) => (rec.peer ? "daebot-bot-to-bot" : rec.bot ? (botStore?.get(rec.bot)?.slug ? `daebot-bot-${botStore.get(rec.bot)!.slug}` : undefined) : "daebot"),
+        titleOf: (rec) => (rec.peer ? `Bot to bot: ${rec.title || "DM thread"}` : rec.title || "Daebot session"),
         upgradeScopes: hosted?.adminKey
           ? () => upgradeChatScopes({ baseUrl: cfg.mindBaseUrl, adminKey: hosted.adminKey!, key: (cfg.mindSessionApiKey && cfg.mindSessionApiKey !== cfg.mindApiKey ? cfg.mindSessionApiKey : billingKey()), fetchImpl: overrides.fetchImpl })
           : undefined,

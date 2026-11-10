@@ -54,7 +54,7 @@ test("a desktop session is logged to the tenant's MIND (once, with its messages)
   } finally { await desk.close(); await hosted.close(); }
 });
 
-test("a bot thread is logged under daebot-bot-<slug>; a bot-to-bot DM is never logged", async () => {
+test("a bot thread is logged under daebot-bot-<slug>; a bot-to-bot DM is logged as its OWN session under daebot-bot-to-bot, never in MAIN", async () => {
   const hosted = await hostedRig();
   const desk = await deskRig(hosted, hosted.keys.alice, { script: [{ text: "scout here" }] });
   try {
@@ -63,9 +63,14 @@ test("a bot thread is logged under daebot-bot-<slug>; a bot-to-bot DM is never l
     await desk.api("POST", `/sessions/${sessionId}/send`, { text: "scout, report" });
     await until(() => mindRows(hosted).some((r) => r.source_key === "daebot-bot-scout" && said(r).includes("assistant:scout here")));
     const store = desk.store;
-    await store.save({ ...rec("dm_1", { surface: "bot", bot: bot.id, peer: "main", texts: [["u1", "secret between bots"]] }), owner: "owner" });
-    await sleep(500);
-    assert.ok(!mindRows(hosted).some((r) => r.external_session_id === "dm_1" || JSON.stringify(r.messages).includes("secret between bots")));
+    await store.save({ ...rec("dm_1", { surface: "bot", title: "Scout to Daebot", bot: bot.id, peer: "main", texts: [["u1", "status between bots"], ["a1", "all clear"]] }), owner: "owner" });
+    await until(() => mindRows(hosted).some((r) => r.external_session_id === "dm_1"));
+    const dm = mindRows(hosted).find((r) => r.external_session_id === "dm_1")!;
+    assert.equal(dm.source_key, "daebot-bot-to-bot", "its own source, labelled bot to bot");
+    assert.equal(dm.title, "Bot to bot: Scout to Daebot");
+    assert.ok(said(dm).some((x) => x.includes("status between bots")));
+    assert.ok(!mindRows(hosted).some((r) => r.source_key === "daebot" && JSON.stringify(r.messages).includes("status between bots")), "never in the MAIN session");
+    assert.equal(mindRows(hosted).filter((r) => r.external_session_id === "dm_1").length, 1);
   } finally { await desk.close(); await hosted.close(); }
 });
 

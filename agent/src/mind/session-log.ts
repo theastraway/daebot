@@ -56,8 +56,10 @@ export interface SessionLoggerDeps {
   store: SessionStore;
   /** The principal whose sessions this logs ("owner", or a MIND user id). Others' records in a shared store are ignored. */
   owner: string;
-  /** undefined = this session is never logged (a bot-to-bot DM). */
+  /** undefined = this session is never logged. A bot-to-bot DM thread has its own source, so it is never mixed into the MAIN session other agents read. */
   sourceKeyOf(rec: Pick<StoredSession, "bot" | "peer">): string | undefined;
+  /** The title a session is filed under in MIND (default: the chat's own title). */
+  titleOf?(rec: Pick<StoredSession, "bot" | "peer" | "title">): string;
   /** MIND answered 403 "lacks chat scope" on this owner's key: ask MIND to add the chat scopes to it (see scope-upgrade.ts). true = upgraded, retry. */
   upgradeScopes?(): Promise<boolean>;
   stateFile?: string;
@@ -208,8 +210,8 @@ export class SessionLogger {
     }
     if (!this.mine(rec)) return;
     const key = this.d.sourceKeyOf(rec);
-    if (!key) return; // never logged
-    const title = (rec.title || "Daebot session").slice(0, 200);
+    if (!key) return; // never logged (a bot whose slug is unknown here)
+    const title = (this.d.titleOf ? this.d.titleOf(rec) : rec.title || "Daebot session").slice(0, 200);
     const fresh = !entry.mid;
     if (!entry.mid) {
       const data = await this.call({
