@@ -18,12 +18,12 @@ export class SyncHttp {
     this.timeoutMs = o.timeoutMs ?? 20_000;
   }
   get url(): string { return this.base; }
-  async json<T>(method: "GET" | "POST", path: string, body?: unknown, timeoutMs?: number): Promise<T> {
+  async json<T>(method: "GET" | "POST", path: string, body?: unknown, timeoutMs?: number, signal?: AbortSignal): Promise<T> {
     const res = await this.f(this.base + path, {
       method,
       headers: { "x-mind-key": this.key, accept: "application/json", ...(body !== undefined ? { "content-type": "application/json" } : {}) },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(timeoutMs ?? this.timeoutMs),
+      signal: signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs ?? this.timeoutMs), signal]) : AbortSignal.timeout(timeoutMs ?? this.timeoutMs),
     });
     const text = await res.text();
     if (!res.ok) {

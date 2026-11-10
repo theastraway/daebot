@@ -35,7 +35,7 @@ export interface RemoteJob {
 interface OwnerState { devices: Record<string, DeviceInfo>; jobs: RemoteJob[] }
 interface Waiter { deviceId: string; wake: () => void }
 
-export interface HubOptions { dir?: string; now?: () => number; onStalled?: (job: RemoteJob) => void }
+export interface HubOptions { dir?: string; now?: () => number; onStalled?: (job: RemoteJob) => void; /** How recent a poll must be for a device to count as online (default ONLINE_MS). */ onlineMs?: number }
 
 const safe = (s: string): string => s.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 80);
 
@@ -45,11 +45,13 @@ export class RemoteHub {
   private now: () => number;
   private dir?: string;
   private onStalled?: (job: RemoteJob) => void;
+  private onlineMs: number;
 
   constructor(o: HubOptions = {}) {
     this.now = o.now ?? Date.now;
     this.dir = o.dir ? join(o.dir, "remote") : undefined;
     this.onStalled = o.onStalled;
+    this.onlineMs = o.onlineMs ?? ONLINE_MS;
   }
 
   private st(owner: string): OwnerState {
@@ -90,7 +92,7 @@ export class RemoteHub {
     return info;
   }
 
-  isOnline(d: DeviceInfo): boolean { return this.now() - d.lastSeen < ONLINE_MS; }
+  isOnline(d: DeviceInfo): boolean { return this.now() - d.lastSeen < this.onlineMs; }
 
   devices(owner: string): (DeviceInfo & { online: boolean })[] {
     return Object.values(this.st(owner).devices).map((d) => ({ ...d, online: this.isOnline(d) })).sort((a, b) => b.lastSeen - a.lastSeen);
@@ -172,6 +174,21 @@ export class RemoteHub {
     for (const j of this.st(owner).jobs) if (j.sessionId === sessionId && (j.state === "delivered" || j.state === "queued")) { j.abort = true; hit = true; }
     if (hit) this.save(owner);
     return hit;
+  }
+
+  /** The poll that was handed these jobs went away before it could read them: they go back in the queue (never run, never lost). */
+  requeue(owner: string, jobs: RemoteJob[]): void {
+    const s = this.st(owner);
+    for (const j of jobs) { const x = s.jobs.find((y) => y.id === j.id); if (x && x.state === "delivered") { x.state = "queued"; delete x.deliveredAt; } }
+    this.save(owner);
+  }
+
+  /** Stop pressed while the message still waits for a sleeping device: it never gets delivered. Returns the jobs withdrawn. */
+  cancelQueued(owner: string, sessionId: string): RemoteJob[] {
+    const out: RemoteJob[] = [];
+    for (const j of this.st(owner).jobs) if (j.sessionId === sessionId && j.state === "queued") { j.state = "failed"; j.error = "stopped before the device picked it up"; out.push({ ...j }); }
+    if (out.length) this.save(owner);
+    return out;
   }
 
   activeFor(owner: string, sessionId: string): RemoteJob | undefined {
