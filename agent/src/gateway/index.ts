@@ -62,6 +62,9 @@ import { screenApi } from "./screen.ts";
 import { screenFeed } from "../screen/feed.ts";
 import type { ScreenFeed } from "../screen/feed.ts";
 import { MAX_PHOTO_BODY, checkPhotos, cleanName, isPhotoId } from "../photos.ts";
+import type { SessionStore } from "../persist.ts";
+import { SyncService } from "../sync/service.ts";
+import { SyncAgent } from "../sync/agent.ts";
 
 // ---------- inbound webhooks (channel adapters register here) ----------
 export interface WebhookRequest {
@@ -111,6 +114,8 @@ export interface GatewayOptions {
   auth?: AuthContext;
   /** The shared session store (DATA_DIR/sessions); lets ownership of persisted sessions be checked without a live session. */
   sessionStore?: { meta?(id: string): { owner?: string } | undefined };
+  /** Device sync (desktop <-> daebot.live). Local gateways start it only when `enabled` is true (the CLI sets it); tests inject `fetchImpl`/`url`/`key`. */
+  sync?: { enabled?: boolean; url?: string; key?: string; intervalMs?: number; fetchImpl?: typeof fetch };
   /** MIND Voice (/voice/stt, /voice/tts). Defaults from cfg + auth; pass to override (tests). */
   voice?: Partial<VoiceOptions>;
   /** Apps card (/apps/integrations): MIND integrations proxied with the signed-in user's own key. Defaults from cfg + auth; pass to override (tests). */
@@ -348,6 +353,36 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   const subscribers = new Map<string, Set<WsConnection>>(); // sessionId -> ws conns
   const runs = new RunRegistry(); // server-owned turns: they outlive the request that started them
   const deviceRelay = new DeviceRelay(); // tool -> the user's own device (Apple Calendar in the iPhone and Mac apps) and back
+
+  // ---- Session sync across devices (see src/sync/). Hosted: SyncService answers /api/sync/*; a local gateway runs a SyncAgent that mirrors to it.
+  const fullStore = opts.sessionStore as SessionStore | undefined;
+  const storeOk = !!fullStore && typeof fullStore.save === "function" && typeof fullStore.load === "function" && typeof fullStore.list === "function";
+  /** A session was rewritten from another device: a live idle copy reloads from the store (a busy one is picked up next round). */
+  const refreshLive = async (owner: string, id: string): Promise<void> => {
+    const ls = manager.get(id);
+    if (!ls || ls.owner !== owner || ls.busy) return;
+    const { surface, bot } = ls;
+    await manager.close(id, "refreshed from another device");
+    await manager.open({ surface, resumeId: id, owner, bot });
+  };
+  const syncSvc = hosted && auth?.store.enabled && storeOk
+    ? new SyncService({ store: fullStore!, bots: (owner) => manager.runtimeOf(owner).bots, isBusy: (id) => !!manager.get(id)?.busy, tierOf: (owner) => (owner === OWNER.id ? OWNER.tier : auth?.store.principal(owner)?.tier ?? "staff"), afterWrite: refreshLive })
+    : undefined;
+  const syncKey = opts.sync?.key ?? opts.cfg?.mindApiKey ?? "";
+  const syncAgent = !hosted && storeOk && opts.sync?.enabled === true && syncKey
+    ? new SyncAgent({
+        baseUrl: opts.sync?.url ?? ((process.env.DAEBOT_SYNC_URL ?? "").trim() || "https://daebot.live"),
+        key: syncKey,
+        store: fullStore!,
+        bots: () => manager.runtimeOf(OWNER.id).bots,
+        isBusy: (id) => !!manager.get(id)?.busy,
+        afterWrite: (id) => refreshLive(OWNER.id, id),
+        fetchImpl: opts.sync?.fetchImpl,
+        intervalMs: opts.sync?.intervalMs,
+        log: (l) => process.stderr.write(`${l}\n`),
+      })
+    : undefined;
+  const syncLimiter = new TurnRateLimiter({ max: 1200 });
   const wsConns = new Set<WsConnection>();
   const SESSION_ROUTE = /^\/sessions\/([^/]+)(?:\/(send|abort|violations|history|events|suggest|suggest-feedback|device-result))?$/;
   const MSG_ROUTE = /^\/sessions\/([^/]+)\/messages\/([^/]+)\/(react|feedback|report)$/;
@@ -744,6 +779,73 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
   }
 
+  // The user behind an X-MIND-Key request (sync + remote-device channel): same checks as /api/agent/turn (host allowlist, no browser Origin,
+  // https, key validated live against MIND, per-IP failure limiter), then a per-user rate limit. undefined = a response was already sent.
+  async function keyPrincipal(req: IncomingMessage, res: ServerResponse): Promise<Principal | undefined> {
+    if (!auth?.store.enabled) { sendJson(res, 404, { error: "not enabled on this deployment" }); return undefined; }
+    if (!hostOk(req)) { sendJson(res, 403, { error: "forbidden host" }); return undefined; }
+    if (req.headers.origin !== undefined) { sendJson(res, 403, { error: "browser origins are not allowed on this API" }); return undefined; }
+    if (headerOne(req, "x-forwarded-proto")?.split(",")[0].trim().toLowerCase() === "http") { sendJson(res, 400, { error: "https required" }); return undefined; }
+    const ip = clientIp(req);
+    const wait = limiter.retryAfter(ip);
+    if (wait > 0) { res.setHeader("retry-after", String(wait)); sendJson(res, 429, { error: "too many attempts; try again later" }); return undefined; }
+    const key = (headerOne(req, "x-mind-key") ?? "").trim();
+    if (!key) { sendJson(res, 401, { error: "X-MIND-Key header required" }); return undefined; }
+    let name = keyIdentities.get(key);
+    if (!name) {
+      try {
+        name = (await whoami(auth.mindBaseUrl, key, auth.fetchImpl)).username;
+      } catch (e) {
+        const status = e instanceof MindAuthError ? e.status : 502;
+        if (status === 400 || status === 401) limiter.fail(ip);
+        sendJson(res, status === 400 ? 401 : status, { error: e instanceof MindAuthError ? e.message : "could not check that key" });
+        return undefined;
+      }
+      keyIdentities.set(key, name);
+    }
+    if (!mayUse(name)) { sendJson(res, 403, { error: "That MIND account is not enabled for Daebot." }); return undefined; }
+    const uid = userIdFor(name);
+    const retry = syncLimiter.take(uid);
+    if (retry > 0) { res.setHeader("retry-after", String(retry)); sendJson(res, 429, { error: "too many requests; slow down" }); return undefined; }
+    const have = auth.store.creds(uid);
+    if (!have || (have.kind === "key" && have.mindKey !== key)) {
+      auth.store.upsert(name, { kind: "key", mindKey: key });
+      auth.evict(uid);
+    }
+    const principal = auth.store.principal(uid);
+    if (!principal) { sendJson(res, 500, { error: "could not load the user" }); return undefined; }
+    return principal;
+  }
+
+  // /api/sync/*: device session sync. GET sessions?since&limit (rows), GET sessions/:id (one record), POST sessions {records} (merge in).
+  async function syncApi(req: IncomingMessage, res: ServerResponse, path: string, query: URLSearchParams): Promise<void> {
+    const me = await keyPrincipal(req, res);
+    if (!me) return;
+    if (!syncSvc) return sendJson(res, 404, { error: "sync is not available on this deployment" });
+    const method = req.method ?? "GET";
+    if (path === "/api/sync/sessions") {
+      if (method === "GET") {
+        const since = Math.max(0, Number(query.get("since") ?? 0) || 0);
+        const limit = Math.min(500, Math.max(1, Number(query.get("limit") ?? 200) || 200));
+        return sendJson(res, 200, syncSvc.list(me.id, since, limit));
+      }
+      if (method === "POST") {
+        const b = parseJsonObject(await readBody(req, 8 * 1024 * 1024));
+        if (!Array.isArray(b.records)) return sendJson(res, 400, { error: "records must be an array" });
+        return sendJson(res, 200, { results: await syncSvc.push(me.id, b.records) });
+      }
+      return sendJson(res, 405, { error: "method not allowed" });
+    }
+    const m = /^\/api\/sync\/sessions\/([^/]+)$/.exec(path);
+    if (m && method === "GET") {
+      let id: string;
+      try { id = decodeURIComponent(m[1]); } catch { return sendJson(res, 400, { error: "bad session id" }); }
+      const session = await syncSvc.get(me.id, id);
+      return session ? sendJson(res, 200, { session }) : sendJson(res, 404, { error: "no such session" });
+    }
+    return sendJson(res, 404, { error: "not found" });
+  }
+
   // POST /api/agent/turn: server-to-server (MIND backend). Header-authenticated with the user's own mind_ key, never a cookie,
   // so it sits outside the browser Origin/CSRF rules. It is deliberately STRICTER than them: any Origin header at all is refused
   // (a browser always sends one on a cross-site POST; a server caller sends none), and the Host allowlist + https rules still apply.
@@ -899,6 +1001,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     if (hosted && path === AGENT_TURN_PATH) return agentTurn(req, res);
+    if (hosted && path.startsWith("/api/sync/")) return syncApi(req, res, path, query);
     if (hosted && path === PROVISION_PATH) return provisionApi(req, res);
 
     // A routine's webhook: authenticated by the secret in the URL alone (a service calling in has no login), so it is answered before the cookie checks.
@@ -995,7 +1098,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/board" || path.startsWith("/board/") || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/");
+    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/board" || path.startsWith("/board/") || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/sync/status" || path === "/sync/now";
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -1570,6 +1673,13 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     const me = who(req);
+    if (path === "/sync/status") return method === "GET" ? sendJson(res, 200, syncAgent ? { ...syncAgent.status } : { enabled: false }) : sendJson(res, 405, { error: "method not allowed" });
+    if (path === "/sync/now") {
+      if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+      if (!syncAgent) return sendJson(res, 404, { error: "sync is not on for this gateway" });
+      await syncAgent.round(true);
+      return sendJson(res, 200, { ...syncAgent.status });
+    }
     // The desktop shell's screen feed: local gateways only. A hosted server has no desktop to feed it and must never accept frames.
     if (path.startsWith("/screen/")) return hosted ? sendJson(res, 404, { error: "not found" }) : screenApi(req, res, path, new URLSearchParams(req.url!.includes("?") ? req.url!.slice(req.url!.indexOf("?") + 1) : ""), method, opts.screenFeed ?? screenFeed, { readBody, readJson, sendJson });
     if (path.startsWith("/voice/")) return voice ? voice(req, res, path, _query, me) : sendJson(res, 404, { error: "voice is not available" });
@@ -2009,6 +2119,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     server.listen(opts.port ?? 7777, host, () => resolve());
   });
   routines?.runner.start(); // the one timer loop (unref'd; stopped in close)
+  syncAgent?.start();
   const addr = server.address() as AddressInfo;
   const shownHost = host === "::1" ? "[::1]" : host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
   const url = `http://${shownHost}:${addr.port}`;
@@ -2023,6 +2134,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     async close() {
       clearInterval(pinger);
       routines?.runner.stop();
+      syncAgent?.stop();
       mindFeed?.stop();
       for (const c of wsConns) c.close(1001, "server shutting down");
       await manager.closeAll();

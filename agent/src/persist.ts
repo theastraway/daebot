@@ -73,6 +73,8 @@ export interface SessionStore {
   meta?(id: string): StoredMeta | undefined;
   /** Deletes a saved session (used when a bot is deleted: its threads go with it). */
   remove?(id: string): Promise<void>;
+  /** Called after every successful save (the record as written). Used by device sync. Returns the unsubscribe function. */
+  subscribe?(fn: (rec: StoredSession) => void): () => void;
 }
 
 export function dataDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -99,6 +101,7 @@ export function createFileStore(dir: string): SessionStore {
   const queues = new Map<string, Promise<void>>();
   const shared = new Map<string, { mtimeMs: number; size: number; rec: StoredSession }>();
   const SHARED_MAX = 12;
+  const listeners = new Set<(rec: StoredSession) => void>();
 
   function scan(): void {
     if (scanned) return;
@@ -126,6 +129,7 @@ export function createFileStore(dir: string): SessionStore {
         await writeFile(tmp, data, { mode: 0o600 });
         await rename(tmp, file);
         index.set(rec.id, metaOf(rec));
+        for (const fn of [...listeners]) { try { fn(rec); } catch { /* a listener never blocks a save */ } }
       });
       queues.set(rec.id, next);
       return next.finally(() => { if (queues.get(rec.id) === next) queues.delete(rec.id); });
@@ -159,6 +163,10 @@ export function createFileStore(dir: string): SessionStore {
     meta(id) {
       scan();
       return index.get(id);
+    },
+    subscribe(fn) {
+      listeners.add(fn);
+      return () => { listeners.delete(fn); };
     },
     async remove(id) {
       scan();
