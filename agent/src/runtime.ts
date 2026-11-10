@@ -295,6 +295,8 @@ export interface HostedRuntimeOptions {
 }
 
 export interface RuntimeOverrides {
+  /** A local (desktop) gateway: asks daebot.live to add the chat scopes to this user's key when MIND answers 403 for them. */
+  scopeUpgrade?: (key: string) => Promise<boolean>;
   /** false = do not log this owner's sessions to their MIND (default on whenever there is a store and a data dir). */
   sessionLog?: boolean;
   env?: NodeJS.ProcessEnv;
@@ -371,9 +373,12 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         sourceKeyOf: (rec) => (rec.peer ? "daebot-bot-to-bot" : rec.bot ? (botStore?.get(rec.bot)?.slug ? `daebot-bot-${botStore.get(rec.bot)!.slug}` : undefined) : "daebot"),
         tagsOf: (rec) => (rec.peer ? ["bot-to-bot"] : undefined),
         titleOf: (rec) => (rec.peer ? `Bot to bot: ${rec.title || "DM thread"}` : rec.title || "Daebot session"),
-        upgradeScopes: hosted?.adminKey
-          ? () => upgradeChatScopes({ baseUrl: cfg.mindBaseUrl, adminKey: hosted.adminKey!, key: (cfg.mindSessionApiKey && cfg.mindSessionApiKey !== cfg.mindApiKey ? cfg.mindSessionApiKey : billingKey()), fetchImpl: overrides.fetchImpl })
-          : undefined,
+        upgradeScopes: (() => {
+          const key = (): string => (cfg.mindSessionApiKey && cfg.mindSessionApiKey !== cfg.mindApiKey ? cfg.mindSessionApiKey : billingKey());
+          if (hosted?.adminKey) return () => upgradeChatScopes({ baseUrl: cfg.mindBaseUrl, adminKey: hosted.adminKey!, key: key(), fetchImpl: overrides.fetchImpl });
+          if (overrides.scopeUpgrade) return () => overrides.scopeUpgrade!(key());
+          return undefined;
+        })(),
         stateFile: joinPath(stateDir, "mind-log", `${(overrides.owner ?? "owner").replace(/[^A-Za-z0-9._-]/g, "_")}.json`),
         log: (l) => process.stderr.write(`${l}\n`),
       })

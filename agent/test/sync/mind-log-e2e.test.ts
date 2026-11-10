@@ -148,3 +148,28 @@ test("MIND unreachable: nothing is lost, the logger retries and writes each mess
   assert.deepEqual(appended, ["q", "a"]);
   l.stop();
 });
+
+test("DESKTOP: a key without the chat scopes is upgraded through daebot.live (which holds the admin key), then the logger writes the chat", async () => {
+  const { upgradeViaDaebot } = await import("../../src/mind/scope-upgrade.ts");
+  const hosted = await hostedRig();
+  try {
+    hosted.fake.adminKeys.add(hosted.cfgKey);
+    hosted.fake.chatScopeless.add(hosted.keys.alice);
+    const dir = mkdtempSync(join(tmpdir(), "log-scope-"));
+    const store = createFileStore(dir);
+    const mindClient: any = { call: async (_t: string, a: any) => {
+      const r = await fetch(`${hosted.fake.base}/agent-sessions/${a.action === "open" ? "open" : `${a.session_id}/${a.action}`}`, { method: "POST", headers: { "x-api-key": hosted.keys.alice, "content-type": "application/json" }, body: JSON.stringify(a) });
+      if (!r.ok) { const e: any = new Error(`MIND agent_sessions ${a.action}: HTTP ${r.status} ${(JSON.parse(await r.text()) as any).detail}`); e.status = r.status; throw e; }
+      return await r.text();
+    } };
+    const l = new SessionLogger({ client: () => mindClient, store, owner: "owner", sourceKeyOf: () => "daebot", stateFile: join(dir, "s.json"), retryMs: 80, upgradeScopes: () => upgradeViaDaebot({ url: "https://daebot.live", key: hosted.keys.alice, fetchImpl: hosted.bridge() }) });
+    l.start();
+    await store.save(rec("dsk1", { texts: [["u1", "from a desktop"], ["a1", "answered"]] }));
+    await until(() => mindRows(hosted).some((r) => r.external_session_id === "dsk1" && said(r).includes("assistant:answered")));
+    assert.equal(l.stats.upgraded, 1);
+    assert.equal(hosted.fake.chatScopeless.has(hosted.keys.alice), false);
+    // an unknown key is refused by daebot.live, and nothing is upgraded for it
+    assert.equal(await upgradeViaDaebot({ url: "https://daebot.live", key: "mind_" + "z".repeat(30), fetchImpl: hosted.bridge() }), false);
+    l.stop();
+  } finally { await hosted.close(); }
+});
