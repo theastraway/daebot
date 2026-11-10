@@ -114,7 +114,7 @@ function argValue(argv: string[], name: string): string | undefined {
 }
 
 async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promise<number> {
-  let mod: { startGateway?: (o: { runtime: Runtime; cfg?: Config; port?: number; host?: string; hosted?: HostedOptions; auth?: AuthContext; sessionStore?: unknown; bots?: { dir: string; bus: { current?: unknown } }; mcpConnect?: unknown }) => Promise<{ url: string; token: string; close?: () => Promise<void> }> };
+  let mod: { startGateway?: (o: { runtime: Runtime; cfg?: Config; port?: number; host?: string; hosted?: HostedOptions; auth?: AuthContext; sessionStore?: unknown; sync?: { enabled?: boolean }; bots?: { dir: string; bus: { current?: unknown } }; mcpConnect?: unknown }) => Promise<{ url: string; token: string; close?: () => Promise<void> }> };
   try { mod = (await import("./gateway/index.ts")) as typeof mod; } catch { process.stdout.write("gateway not built yet\n"); return 1; }
   if (!mod.startGateway) { process.stdout.write("gateway not built yet\n"); return 1; }
   const hostedMode = isHostedEnv(process.env, argv);
@@ -174,7 +174,7 @@ async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promis
   const host = argValue(argv, "--host");
   if (hosted && !process.env.MINDCLAW_MODEL) process.stderr.write(`hosted: MINDCLAW_MODEL is not set, using the built-in default (${cfg.models.default}). Set MINDCLAW_MODEL to choose the deployed model.\n`);
   let gw: { url: string; token: string; close?: () => Promise<void> };
-  try { gw = await mod.startGateway({ runtime, cfg, port, host, hosted, auth, sessionStore, bots, mcpConnect }); } catch (e) {
+  try { gw = await mod.startGateway({ runtime, cfg, port, host, hosted, auth, sessionStore, bots, mcpConnect, sync: { enabled: !hosted && (process.env.DAEBOT_SYNC ?? "").trim().toLowerCase() !== "off" } }); } catch (e) {
     process.stderr.write(`gateway failed to start: ${String((e as Error)?.message ?? e).split("\n")[0]}\n`);
     return 1;
   }
