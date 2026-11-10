@@ -60,6 +60,8 @@ export interface SessionLoggerDeps {
   sourceKeyOf(rec: Pick<StoredSession, "bot" | "peer">): string | undefined;
   /** The title a session is filed under in MIND (default: the chat's own title). */
   titleOf?(rec: Pick<StoredSession, "bot" | "peer" | "title">): string;
+  /** Tags MIND files the session with (a bot-to-bot DM carries "bot-to-bot", so it can be told apart and filtered in MIND). */
+  tagsOf?(rec: Pick<StoredSession, "bot" | "peer">): string[] | undefined;
   /** MIND answered 403 "lacks chat scope" on this owner's key: ask MIND to add the chat scopes to it (see scope-upgrade.ts). true = upgraded, retry. */
   upgradeScopes?(): Promise<boolean>;
   stateFile?: string;
@@ -218,6 +220,7 @@ export class SessionLogger {
         // runtime "mindclaw" and no device hint, on purpose: MIND files a session under <runtime>@<device>, so a per-device hint would give each
         // device its own MIND session for the same chat. This is also the source the earlier per-turn logging used, so existing sessions resume.
         action: "open", source_key: key, external_session_id: id, runtime: "mindclaw", title,
+        ...(this.d.tagsOf?.(rec)?.length ? { tags: this.d.tagsOf(rec) } : {}),
       });
       if (!data?.session_id) throw new Error("MIND did not return a session id");
       entry.mid = String(data.session_id);
