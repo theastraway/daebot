@@ -141,3 +141,46 @@ test("stop while the message still waits for a sleeping desktop: it is withdrawn
     assert.equal(desk.provider.requests.length, 0);
   } finally { await hosted.close(); }
 });
+
+test("SERVER-TO-SERVER: /api/agent/turn with bot:<slug> runs on the desktop that carries the bot (Olympus asking the Legion's Xactimate bot)", async () => {
+  const hosted = await hostedRig({ script: [{ text: "SERVER SHOULD NOT ANSWER" }] });
+  const desk = await deskRig(hosted, hosted.keys.alice, { script: [{ text: "DRYWLL 1/2 hung taped finished: $2.31/SF" }] });
+  try {
+    await botOnBoth(hosted, desk, "xactai");
+    // the caller can find the bot and see which computer carries it
+    const list = await hosted.host(hosted.keys.alice, "GET", "/api/agent/bots");
+    assert.equal(list.status, 200, list.body);
+    const xb = JSON.parse(list.body).bots.find((b: any) => b.slug === "xactai");
+    assert.ok(xb?.devices.some((d: any) => d.name === "Test Mac" && d.online), list.body);
+    const res = await hosted.host(hosted.keys.alice, "POST", "/api/agent/turn", { text: "price for 1/2 drywall per SF", bot: "xactai", surface: "olympus", title: "Olympus Xact request" });
+    assert.equal(res.status, 200, res.body);
+    const sid = String(res.headers["x-daebot-session"]);
+    assert.ok(sid, "the session is named in a header");
+    assert.equal(String(res.headers["x-daebot-remote"]), "Test Mac");
+    const evs = parseSse(res.body) as any[];
+    assert.deepEqual(evs[0], { type: "session", sessionId: sid });
+    assert.ok(evs.some((e) => e.type === "text" && /\$2\.31\/SF/.test(e.delta)), res.body);
+    assert.equal(evs.at(-1).type, "done");
+    assert.equal(hosted.provider.requests.length, 0, "the server's model never ran it");
+    assert.ok(desk.provider.requests.length >= 1, "the desktop's model ran it (a quoted price can trigger Daebot's own claim check, so more than one call is fine)");
+    // a follow-up on the same session goes to the same desktop bot
+    const again = await hosted.host(hosted.keys.alice, "POST", "/api/agent/turn", { text: "and per LF?", bot: "xactai", sessionId: sid });
+    assert.equal(again.status, 200, again.body);
+    assert.equal(String(again.headers["x-daebot-session"]), sid);
+  } finally { await desk.close(); await hosted.close(); }
+});
+
+test("SERVER-TO-SERVER: an unknown bot is 404, and another user cannot list or reach this user's bots", async () => {
+  const hosted = await hostedRig();
+  const desk = await deskRig(hosted, hosted.keys.alice);
+  try {
+    await botOnBoth(hosted, desk, "xactai");
+    const nope = await hosted.host(hosted.keys.alice, "POST", "/api/agent/turn", { text: "hi", bot: "no-such-bot" });
+    assert.equal(nope.status, 404, nope.body);
+    const bobList = JSON.parse((await hosted.host(hosted.keys.bob, "GET", "/api/agent/bots")).body);
+    assert.ok(!bobList.bots.some((b: any) => b.slug === "xactai"), "bob does not see alice's bot");
+    const bobTurn = await hosted.host(hosted.keys.bob, "POST", "/api/agent/turn", { text: "hi", bot: "xactai" });
+    assert.equal(bobTurn.status, 404, bobTurn.body);
+    assert.equal(desk.provider.requests.length, 0);
+  } finally { await desk.close(); await hosted.close(); }
+});

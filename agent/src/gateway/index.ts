@@ -21,7 +21,7 @@ import { MindAuthError, whoami } from "../auth/mind-auth.ts";
 import { WAIVER_TEXT, WAIVER_VERSION, STANDING_ALLOW, isSessionMode } from "../permissions/index.ts";
 import { AppHandoff, appRedirect, isValidChallenge } from "../auth/app-handoff.ts";
 import { ENTER_PATH, PROVISION_PATH, bearerOf, provisionTokenOk } from "../auth/provision.ts";
-import { AGENT_SURFACE_RE, AGENT_TURN_PATH, KeyIdentityCache, TurnRateLimiter } from "./agent-api.ts";
+import { AGENT_BOTS_PATH, AGENT_SURFACE_RE, AGENT_TURN_PATH, KeyIdentityCache, TurnRateLimiter } from "./agent-api.ts";
 import { userIdFor } from "../auth/users.ts";
 import { FREE_TIER, usageLeftPct, usesOwnKey } from "../provider/mind.ts";
 import { createBotBus } from "../bots/bus.ts";
@@ -929,7 +929,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   }
 
   /** A message to a bot thread whose desktop is reachable: it becomes a job for that desktop. false = not a remote thread (the hosted server answers as before). */
-  async function routeRemote(res: ServerResponse, me: Principal, sessionId: string, bot: string, surface: string, title: string, text: string, quote: MessageQuote | undefined, hasPhotos: boolean): Promise<boolean> {
+  async function routeRemote(res: ServerResponse, me: Principal, sessionId: string, bot: string, surface: string, title: string, text: string, quote: MessageQuote | undefined, hasPhotos: boolean, extra: { headers?: Record<string, string>; first?: Record<string, unknown> } = {}): Promise<boolean> {
     if (!remoteHub) return false;
     const rec = manager.runtimeOf(me.id).bots?.get(bot);
     if (!rec) return false;
@@ -947,9 +947,9 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     const run = runs.start(sessionId, text);
     run.external = true;
     remoteRuns.set(job.id, { run, owner: me.id, sessionId, waiting: !dev.online });
-    res.writeHead(200, sseHeaders({ "x-daebot-remote": dev.name }));
+    res.writeHead(200, sseHeaders({ ...(extra.headers ?? {}), "x-daebot-remote": dev.name }));
     run.publish({ type: "notice", level: "info", text: dev.online ? `Sent to ${dev.name}.` : `Waiting for ${dev.name}: it is offline. It will answer when it is back.` });
-    attachRun(res, run, 0, undefined);
+    attachRun(res, run, 0, extra.first);
     return true;
   }
 
@@ -988,20 +988,21 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   // POST /api/agent/turn: server-to-server (MIND backend). Header-authenticated with the user's own mind_ key, never a cookie,
   // so it sits outside the browser Origin/CSRF rules. It is deliberately STRICTER than them: any Origin header at all is refused
   // (a browser always sends one on a cross-site POST; a server caller sends none), and the Host allowlist + https rules still apply.
-  async function agentTurn(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
-    if (!auth?.store.enabled) return sendJson(res, 404, { error: "agent API is not enabled on this deployment" });
-    if (!hostOk(req)) return sendJson(res, 403, { error: "forbidden host" });
-    if (req.headers.origin !== undefined) return sendJson(res, 403, { error: "browser origins are not allowed on the agent API" });
-    if (headerOne(req, "x-forwarded-proto")?.split(",")[0].trim().toLowerCase() === "http") return sendJson(res, 400, { error: "https required" });
+  /** The server-to-server caller of the agent API (X-MIND-Key, no browser): the user's principal, or undefined after answering the error. */
+  async function agentPrincipal(req: IncomingMessage, res: ServerResponse, o: { limitTurns: boolean }): Promise<Principal | undefined> {
+    if (!auth?.store.enabled) { sendJson(res, 404, { error: "agent API is not enabled on this deployment" }); return undefined; }
+    if (!hostOk(req)) { sendJson(res, 403, { error: "forbidden host" }); return undefined; }
+    if (req.headers.origin !== undefined) { sendJson(res, 403, { error: "browser origins are not allowed on the agent API" }); return undefined; }
+    if (headerOne(req, "x-forwarded-proto")?.split(",")[0].trim().toLowerCase() === "http") { sendJson(res, 400, { error: "https required" }); return undefined; }
     const ip = clientIp(req);
     const wait = limiter.retryAfter(ip);
     if (wait > 0) {
       res.setHeader("retry-after", String(wait));
-      return sendJson(res, 429, { error: "too many attempts; try again later" });
+      sendJson(res, 429, { error: "too many attempts; try again later" });
+      return undefined;
     }
     const key = (headerOne(req, "x-mind-key") ?? "").trim();
-    if (!key) return sendJson(res, 401, { error: "X-MIND-Key header required" });
+    if (!key) { sendJson(res, 401, { error: "X-MIND-Key header required" }); return undefined; }
     let name = keyIdentities.get(key);
     if (!name) {
       try {
@@ -1009,23 +1010,21 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       } catch (e) {
         const status = e instanceof MindAuthError ? e.status : 502;
         if (status === 400 || status === 401) limiter.fail(ip);
-        return sendJson(res, status === 400 ? 401 : status, { error: e instanceof MindAuthError ? e.message : "could not check that key" });
+        sendJson(res, status === 400 ? 401 : status, { error: e instanceof MindAuthError ? e.message : "could not check that key" });
+        return undefined;
       }
       keyIdentities.set(key, name);
     }
-    if (!mayUse(name)) return sendJson(res, 403, { error: "That MIND account is not enabled for Daebot." });
+    if (!mayUse(name)) { sendJson(res, 403, { error: "That MIND account is not enabled for Daebot." }); return undefined; }
     const uid = userIdFor(name);
-    const retry = turnLimiter.take(uid);
-    if (retry > 0) {
-      res.setHeader("retry-after", String(retry));
-      return sendJson(res, 429, { error: "too many agent turns; slow down" });
+    if (o.limitTurns) {
+      const retry = turnLimiter.take(uid);
+      if (retry > 0) {
+        res.setHeader("retry-after", String(retry));
+        sendJson(res, 429, { error: "too many agent turns; slow down" });
+        return undefined;
+      }
     }
-    const b = await readJson(req);
-    const text = optStr(b.text, 200_000);
-    if (!text || !text.trim()) return sendJson(res, 400, { error: "text required" });
-    const surface = optStr(b.surface, 40) ?? "mind-chat";
-    if (!AGENT_SURFACE_RE.test(surface)) return sendJson(res, 400, { error: "bad surface" });
-    const sessionId = optStr(b.sessionId, 200);
     // The user's runtime is built from THEIR key. A browser sign-in (OAuth or key) already stored is kept; a new or rotated key is stored.
     const have = auth.store.creds(uid);
     if (!have || (have.kind === "key" && have.mindKey !== key)) {
@@ -1033,15 +1032,58 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       auth.evict(uid);
     }
     const principal = auth.store.principal(uid);
-    if (!principal) return sendJson(res, 500, { error: "could not load the user" });
+    if (!principal) { sendJson(res, 500, { error: "could not load the user" }); return undefined; }
+    return principal;
+  }
+
+  // GET /api/agent/bots: the caller's bots, and which of their computers carry each one (remote bots). Lets a server find the bot to address.
+  async function agentBots(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+    const principal = await agentPrincipal(req, res, { limitTurns: false });
+    if (!principal) return;
+    if (!botsOn()) return sendJson(res, 404, { error: "bots are not enabled on this deployment" });
+    const reg = manager.runtimeOf(principal.id).bots;
+    let list: BotRecord[] = [];
+    try { list = (await reg?.list()) ?? []; } catch { return sendJson(res, 502, { error: "could not load your bots from MIND" }); }
+    return sendJson(res, 200, {
+      bots: list.map((x) => ({ id: x.id, slug: x.slug, name: x.name, purpose: x.purpose ?? "", remote: !!x.remote, devices: remoteHub ? remoteHub.devicesFor(principal.id, x.slug).map((d) => ({ name: d.name, online: d.online, lastSeen: d.lastSeen })) : [] })),
+    });
+  }
+
+  async function agentTurn(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+    const principal = await agentPrincipal(req, res, { limitTurns: true });
+    if (!principal) return;
+    const b = await readJson(req);
+    const text = optStr(b.text, 200_000);
+    if (!text || !text.trim()) return sendJson(res, 400, { error: "text required" });
+    const surface = optStr(b.surface, 40) ?? "mind-chat";
+    if (!AGENT_SURFACE_RE.test(surface)) return sendJson(res, 400, { error: "bad surface" });
+    const sessionId = optStr(b.sessionId, 200);
+    // `bot` (slug or id): talk to one of the user's bots instead of the main Daebot. If a computer of this user carries the bot
+    // (remote bots), the turn runs on that computer with its own tools, exactly like a message sent to the bot from the web.
+    const botArg = optStr(b.bot, 64)?.trim();
+    let botId: string | undefined;
+    if (botArg) {
+      if (!botsOn()) return sendJson(res, 404, { error: "bots are not enabled on this deployment" });
+      const reg = manager.runtimeOf(principal.id).bots;
+      const find = () => reg?.get(botArg) ?? reg?.bySlug(botArg.toLowerCase());
+      let rec = find();
+      if (!rec && reg) { try { await reg.list(); } catch { /* MIND unreachable: answered as unknown below */ } rec = find(); }
+      if (!rec) return sendJson(res, 404, { error: "no such bot" });
+      botId = rec.id;
+    }
     let ls;
     try {
-      ls = await manager.open({ surface, title: optStr(b.title, 200) ?? "MIND chat", resumeId: sessionId || undefined, owner: principal.id });
+      ls = await manager.open({ surface, title: optStr(b.title, 200) ?? "MIND chat", resumeId: sessionId || undefined, owner: principal.id, ...(botId ? { bot: botId } : {}) });
     } catch (e) {
       if (e instanceof ForbiddenError) throw e;
+      if (e instanceof Error && (e.message === "no such bot" || e.message === "bots are not enabled")) return sendJson(res, 404, { error: "no such bot" });
+      if (e instanceof Error && e.message === "session belongs to a different bot") return sendJson(res, 409, { error: e.message });
       return sendJson(res, 502, { error: e instanceof Error ? e.message.slice(0, 300) : "could not open a session" });
     }
-    if (ls.busy) return sendJson(res, 409, { error: "session is busy with another turn", sessionId: ls.id });
+    if (ls.busy || remoteHub?.activeFor(principal.id, ls.id)) return sendJson(res, 409, { error: "session is busy with another turn", sessionId: ls.id });
+    if (ls.bot && remoteHub && (await routeRemote(res, principal, ls.id, ls.bot, ls.surface, ls.title, text, undefined, false, { headers: { "x-daebot-session": ls.id }, first: { type: "session", sessionId: ls.id } }))) return;
     return streamTurn(res, ls.id, text, { "x-daebot-session": ls.id }, { type: "session", sessionId: ls.id }, principal);
   }
 
@@ -1140,6 +1182,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     if (hosted && path === AGENT_TURN_PATH) return agentTurn(req, res);
+    if (hosted && path === AGENT_BOTS_PATH) return agentBots(req, res);
     if (hosted && path.startsWith("/api/sync/")) return syncApi(req, res, path, query);
     if (hosted && path === PROVISION_PATH) return provisionApi(req, res);
 

@@ -46,4 +46,5 @@ export class KeyIdentityCache {
 }
 
 export const AGENT_TURN_PATH = "/api/agent/turn";
+export const AGENT_BOTS_PATH = "/api/agent/bots";
 export const AGENT_SURFACE_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
