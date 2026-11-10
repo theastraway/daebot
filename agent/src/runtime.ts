@@ -325,6 +325,14 @@ export interface RuntimeOverrides {
   mcpConnect?: McpConnectService;
 }
 
+/** Hosted: how long after a device pushed a session MIND is made to hold it (ms). DAEBOT_MIND_RECONCILE_MS=off turns the reconciler off. */
+function reconcileDelayMs(env: NodeJS.ProcessEnv): number | undefined {
+  const v = (env.DAEBOT_MIND_RECONCILE_MS ?? "").trim().toLowerCase();
+  if (v === "off" || v === "0") return undefined;
+  const n = Number(v);
+  return v && Number.isFinite(n) && n > 0 ? n : 20_000;
+}
+
 export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Runtime {
   const hosted = overrides.hosted;
   // Hosted: the kernel is always on and always enforcing, whatever the env says.
@@ -379,10 +387,17 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
           if (overrides.scopeUpgrade) return () => overrides.scopeUpgrade!(key());
           return undefined;
         })(),
+        // Hosted only: a session a device pushed here is reconciled into MIND a moment after (the device may not have logged it; see session-log.ts).
+        reconcileSyncMs: hosted ? reconcileDelayMs(overrides.env ?? process.env) : undefined,
         stateFile: joinPath(stateDir, "mind-log", `${(overrides.owner ?? "owner").replace(/[^A-Za-z0-9._-]/g, "_")}.json`),
         log: (l) => process.stderr.write(`${l}\n`),
       })
     : undefined;
+  // Hosted: when this owner's runtime is built (a restart, a sign-in), sweep every saved session once so MIND holds them all.
+  if (sessionLog && hosted && reconcileDelayMs(overrides.env ?? process.env) !== undefined) {
+    const t = setTimeout(() => { void sessionLog.reconcile().catch(() => {}); }, 15_000);
+    t.unref?.();
+  }
   const suggestCache = new Map<string, { key: string; replies: string[] }>();
   const boardCache = new Map<string, { updatedAt: number; rows: BoardRow[] }>();
   // One client per bot MIND, all on the MAIN key (the bot is addressed by the X-MIND-Bot header, never by a key of its own).
@@ -882,6 +897,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       return r.found ? r.result : "nosession";
     },
     async boardSync() { return syncFromMind(this.boardRows!()); },
+    async mindReconcile(o) { return sessionLog ? sessionLog.reconcile(o) : undefined; },
     async decisionDoc(id) {
       if (!/^[A-Za-z0-9_.-]{6,80}$/.test(id) || id.startsWith("local-")) return undefined;
       try {

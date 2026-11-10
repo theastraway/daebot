@@ -382,6 +382,31 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   const syncSvc = hosted && auth?.store.enabled && storeOk
     ? new SyncService({ store: fullStore!, bots: (owner) => manager.runtimeOf(owner).bots, isBusy: (id) => !!manager.get(id)?.busy, tierOf: (owner) => (owner === OWNER.id ? OWNER.tier : auth?.store.principal(owner)?.tier ?? "staff"), afterWrite: refreshLive, deleteSession: (owner, id) => manager.deleteSession(id, owner), tombstones: new TombstoneBook({ file: join(opts.remoteDir ?? dataDir(), "sync-tombstones.json") }) })
     : undefined;
+  // Admin backfill: every signed-in user (and the owner login) gets their MIND made to hold every saved session. One run at a time; the result is read back with GET.
+  type ReconcileState = { running: boolean; startedAt?: number; finishedAt?: number; dryRun?: boolean; owners: Record<string, unknown>[] };
+  const reconcileState: ReconcileState = { running: false, owners: [] };
+  const mindReconcileJob = {
+    state: (): ReconcileState => reconcileState,
+    start(b: Record<string, unknown>): { started: boolean } {
+      if (reconcileState.running) return { started: false };
+      const only = Array.isArray(b.users) ? new Set(b.users.map((u) => String(u).trim().toLowerCase())) : undefined;
+      const dryRun = b.dryRun === true, force = b.force === true;
+      const targets = [{ id: OWNER.id, username: OWNER.username }, ...(auth?.store.list() ?? []).map((u) => ({ id: u.id, username: u.username }))]
+        .filter((t) => !only || only.has(t.username.toLowerCase()) || only.has(t.id));
+      Object.assign(reconcileState, { running: true, startedAt: Date.now(), finishedAt: undefined, dryRun, owners: [] });
+      void (async () => {
+        for (const t of targets) {
+          try {
+            const sum = await manager.runtimeOf(t.id).mindReconcile?.({ dryRun, force });
+            if (!sum) { reconcileState.owners.push({ user: t.username, skipped: "no MIND session log for this user (no readable credentials)" }); continue; }
+            const { results, ...counts } = sum;
+            reconcileState.owners.push({ user: t.username, ...counts, results: results.filter((r) => r.status !== "current" && r.status !== "empty") });
+          } catch (e) { reconcileState.owners.push({ user: t.username, error: String((e as Error)?.message ?? e).slice(0, 200) }); }
+        }
+      })().finally(() => { reconcileState.running = false; reconcileState.finishedAt = Date.now(); });
+      return { started: true };
+    },
+  };
   const syncKey = opts.sync?.key ?? opts.cfg?.mindApiKey ?? "";
   const syncAgent = !hosted && storeOk && opts.sync?.enabled === true && syncKey
     ? new SyncAgent({
@@ -1309,6 +1334,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         get ledger() { return ledger(); },
         get anger() { return anger(); },
         feed: mindFeed,
+        reconcile: hosted && auth?.store.enabled ? mindReconcileJob : undefined,
         logKey: opts.adminLog?.logKey ?? (() => process.env.DAEBOT_MISTAKE_LOG_KEY?.trim() || undefined),
         isAdmin: (r) => (hosted ? principalOf(r)?.tier === "admin" : authorized(r, query, false)),
         signedIn: (r) => authorized(r, query, false),

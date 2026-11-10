@@ -69,6 +69,8 @@ export class UserStore {
   /** True when user sign-in can be offered (a data key is configured). */
   get enabled(): boolean { return !!this.key; }
   count(): number { return this.users.size; }
+  /** Every signed-in user (a record, never its credentials). */
+  list(): UserRecord[] { return [...this.users.keys()].map((id) => this.get(id)!); }
 
   private load(): void {
     if (!existsSync(this.path)) return;
