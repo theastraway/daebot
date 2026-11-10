@@ -147,7 +147,9 @@ export class SessionLogger {
         try { await this.syncOne(id); } catch (e) {
           failed = true;
           this.stats.errors++;
-          this.stats.lastError = String((e as Error)?.message ?? e).slice(0, 160);
+          const msg = String((e as Error)?.message ?? e).slice(0, 160);
+          if (msg !== this.stats.lastError) this.d.log?.(`mind-log: ${msg}`);
+          this.stats.lastError = msg;
           this.queue.add(id);
         }
       }
@@ -199,8 +201,9 @@ export class SessionLogger {
     const fresh = !entry.mid;
     if (!entry.mid) {
       const data = await this.call({
-        action: "open", source_key: key, external_session_id: id, runtime: "daebot", title,
-        ...(this.d.device ? { device: this.d.device } : {}),
+        // runtime "mindclaw" and no device hint, on purpose: MIND files a session under <runtime>@<device>, so a per-device hint would give each
+        // device its own MIND session for the same chat. This is also the source the earlier per-turn logging used, so existing sessions resume.
+        action: "open", source_key: key, external_session_id: id, runtime: "mindclaw", title,
       });
       if (!data?.session_id) throw new Error("MIND did not return a session id");
       entry.mid = String(data.session_id);

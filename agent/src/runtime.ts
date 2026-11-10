@@ -1,6 +1,5 @@
 // Runtime: wires MindClient, boot, kernel, tools and provider into AgentSessions.
 import { createHash, randomUUID } from "node:crypto";
-import { hostname } from "node:os";
 import { join as joinPath } from "node:path";
 import { DailyCostCap, filterHostedTools } from "./hosted.ts";
 import { createKernel, parseTier } from "./kernel/index.ts";
@@ -367,7 +366,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         client: () => sessionClient, store: overrides.store!, owner: overrides.owner ?? "owner",
         sourceKeyOf: (rec) => (rec.peer ? undefined : rec.bot ? (botStore?.get(rec.bot)?.slug ? `daebot-bot-${botStore.get(rec.bot)!.slug}` : undefined) : "daebot"),
         stateFile: joinPath(stateDir, "mind-log", `${(overrides.owner ?? "owner").replace(/[^A-Za-z0-9._-]/g, "_")}.json`),
-        device: hosted ? { kind: "web", label: "daebot.live" } : { kind: process.platform === "darwin" ? "mac" : process.platform === "win32" ? "windows" : "linux", label: hostname() || "Daebot desktop" },
+        log: (l) => process.stderr.write(`${l}\n`),
       })
     : undefined;
   const suggestCache = new Map<string, { key: string; replies: string[] }>();
