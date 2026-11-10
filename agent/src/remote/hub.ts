@@ -12,6 +12,9 @@ export const JOB_TTL_MS = 24 * 60 * 60 * 1000;
 export const STALL_MS = 3 * 60 * 1000;
 const MAX_JOBS_PER_OWNER = 200;
 
+/** An answer to a permission card, on its way to the desktop that asked. */
+export interface RemoteDecision { jobId: string; permId: string; decision: "allow" | "deny"; remember?: "once" | "always"; scope?: string }
+
 export interface DeviceInfo { id: string; name: string; lastSeen: number; slugs: string[] }
 export type JobState = "queued" | "delivered" | "done" | "failed";
 export interface RemoteJob {
@@ -26,6 +29,8 @@ export interface RemoteJob {
   quote?: { id?: string; text: string };
   /** Photos attached to this message: already stored on daebot.live under the same session (the device fetches the bytes). */
   photos?: { id: string; name: string; width: number; height: number }[];
+  /** The sender's device can answer a permission card: the desktop turn may ask (the card is relayed to the sender, the answer comes back). */
+  interactive?: boolean;
   createdAt: number;
   state: JobState;
   deliveredAt?: number;
@@ -48,6 +53,7 @@ export class RemoteHub {
   private dir?: string;
   private onStalled?: (job: RemoteJob) => void;
   private onlineMs: number;
+  private decisions = new Map<string, RemoteDecision[]>(); // `${owner}|${deviceId}` -> answers waiting for that device (memory only: a card dies with its turn)
 
   constructor(o: HubOptions = {}) {
     this.now = o.now ?? Date.now;
@@ -114,6 +120,25 @@ export class RemoteHub {
     return job;
   }
 
+  /** The sender answered a permission card of a job that runs on a device: hold the answer for that device's next poll and wake it. */
+  addDecision(owner: string, d: RemoteDecision): boolean {
+    const j = this.job(owner, d.jobId);
+    if (!j || j.state !== "delivered") return false;
+    const k = `${owner}|${j.deviceId}`;
+    this.decisions.set(k, [...(this.decisions.get(k) ?? []), d].slice(-50));
+    this.wake(owner, j.deviceId);
+    return true;
+  }
+
+  hasDecisions(owner: string, deviceId: string): boolean { return (this.decisions.get(`${owner}|${deviceId}`)?.length ?? 0) > 0; }
+
+  takeDecisions(owner: string, deviceId: string): RemoteDecision[] {
+    const k = `${owner}|${deviceId}`;
+    const out = this.decisions.get(k) ?? [];
+    this.decisions.delete(k);
+    return out;
+  }
+
   /** Something other than a job changed (a Remote flag): every waiting poll of this owner answers now so the device sees it. */
   nudge(owner: string): void {
     for (const w of [...(this.waiters.get(owner) ?? [])]) w.wake();
@@ -142,7 +167,7 @@ export class RemoteHub {
   /** Long poll: resolves with jobs as soon as there is one for this device, or with [] after `ms`. */
   async wait(owner: string, deviceId: string, ms: number, signal?: AbortSignal): Promise<RemoteJob[]> {
     const first = this.take(owner, deviceId);
-    if (first.length || ms <= 0) return first;
+    if (first.length || ms <= 0 || this.hasDecisions(owner, deviceId)) return first;
     await new Promise<void>((resolve) => {
       const set = this.waiters.get(owner) ?? new Set<Waiter>();
       this.waiters.set(owner, set);

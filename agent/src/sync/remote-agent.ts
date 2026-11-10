@@ -7,7 +7,7 @@ import { randomBytes } from "node:crypto";
 import type { BotsApi } from "../bots/types.ts";
 import type { HistoryEvent } from "../types.ts";
 import { SyncHttp } from "./http.ts";
-import type { RemoteJob } from "../remote/hub.ts";
+import type { RemoteDecision, RemoteJob } from "../remote/hub.ts";
 
 /** A stable id for this install, kept next to the data. */
 export function loadDeviceId(path: string): string {
@@ -24,6 +24,8 @@ export interface RemoteAgentDeps {
   bots(): BotsApi | undefined;
   /** Runs one message as a turn of the bot thread on this machine; every event goes to `emit`. Resolves when the turn ended. */
   runJob(job: RemoteJob, emit: (ev: HistoryEvent) => void, signal: AbortSignal): Promise<void>;
+  /** The sender answered a permission card of a turn running here. */
+  decide?(d: RemoteDecision): void;
   /** After a job: push the session to the server now. */
   afterJob?(sessionId: string): Promise<void>;
   waitSec?: number;
@@ -70,9 +72,10 @@ export class RemoteAgent {
 
   /** One poll. Exposed for tests: returns how many jobs it started. */
   async pollOnce(waitSec = this.d.waitSec ?? 20): Promise<number> {
-    const r = await this.d.http.json<{ bots?: FlagIn[]; jobs?: RemoteJob[] }>("POST", "/api/sync/device/poll", { deviceId: this.d.deviceId, name: this.d.deviceName, bots: this.flags(), wait: waitSec }, (waitSec + 25) * 1000, waitSec > 0 ? this.ctl?.signal : undefined);
+    const r = await this.d.http.json<{ bots?: FlagIn[]; jobs?: RemoteJob[]; decisions?: RemoteDecision[] }>("POST", "/api/sync/device/poll", { deviceId: this.d.deviceId, name: this.d.deviceName, bots: this.flags(), wait: waitSec }, (waitSec + 25) * 1000, waitSec > 0 ? this.ctl?.signal : undefined);
     this.status.polls++; this.status.lastPollAt = Date.now(); this.status.lastError = "";
     this.applyFlags(r.bots);
+    for (const d of r.decisions ?? []) { try { this.d.decide?.(d); } catch { /* an answer for a card that is gone */ } }
     for (const job of r.jobs ?? []) this.enqueue(job);
     return (r.jobs ?? []).length;
   }
@@ -118,6 +121,9 @@ export class RemoteAgent {
     };
     const timer = setInterval(() => { if (buf.length) void flush(); }, 300);
     timer.unref?.();
+    // A turn that waits on a permission card (or a long tool) says nothing for a while; this keeps the server from calling the device dead.
+    const alive = setInterval(() => { void flush(); }, 30_000);
+    alive.unref?.();
     let error: string | undefined;
     try {
       await this.d.runJob(job, (ev) => { buf.push(ev); }, ac.signal);
@@ -125,6 +131,7 @@ export class RemoteAgent {
       error = String((e as Error)?.message ?? e).slice(0, 300);
     } finally {
       clearInterval(timer);
+      clearInterval(alive);
       await flush(true, error);
       this.status.running--;
       await this.d.afterJob?.(job.sessionId).catch(() => {});

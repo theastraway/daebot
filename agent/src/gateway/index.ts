@@ -401,6 +401,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
 
   // ---- Remote bots (see src/remote/hub.ts, src/sync/remote-agent.ts). Hosted: the hub queues messages for a user's desktop and relays its reply into the sender's run feed.
   const remoteRuns = new Map<string, { run: Run; owner: string; sessionId: string; waiting: boolean }>();
+  /** Permission cards of turns that run on a user's desktop: card id -> the job it belongs to (the answer is relayed there). */
+  const remotePerms = new Map<string, { owner: string; jobId: string }>();
   const remoteHub = hosted && auth?.store.enabled
     ? new RemoteHub({
         dir: opts.remoteDir ?? dataDir(),
@@ -409,6 +411,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
           const e = remoteRuns.get(job.id);
           if (!e) return;
           remoteRuns.delete(job.id);
+          for (const [k, v] of remotePerms) if (v.jobId === job.id) remotePerms.delete(k);
           e.run.publish({ type: "notice", level: "warn", text: `Turn failed: ${job.error ?? "the device did not answer"}.` });
           e.run.finish();
         },
@@ -428,7 +431,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (refs) await syncAgent?.fetchPhotos(job.sessionId, refs.map((r) => r.id)); // the photos sent with the message live on daebot.live
     const ls = await manager.open({ surface: job.surface || "web", title: job.title || undefined, resumeId: job.sessionId, owner: OWNER.id, bot: bot.id });
     for (let i = 0; ls.busy && i < 100; i++) await new Promise((r) => setTimeout(r, 200));
-    await manager.turn(ls.id, job.text, emit, signal, "user", false, refs, undefined, job.quote ? { ...(job.quote.id ? { id: job.quote.id } : {}), text: job.quote.text } : undefined);
+    await manager.turn(ls.id, job.text, emit, signal, "user", job.interactive === true, refs, undefined, job.quote ? { ...(job.quote.id ? { id: job.quote.id } : {}), text: job.quote.text } : undefined);
   }
   const remoteAgent = syncAgent
     ? new RemoteAgent({
@@ -437,6 +440,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         deviceName: opts.sync?.deviceName ?? (hostname() || "Desktop"),
         bots: () => manager.runtimeOf(OWNER.id).bots,
         runJob: runRemoteJob,
+        decide: (d) => { manager.runtimeOf(OWNER.id).permissions?.decide(d.permId, { decision: d.decision, remember: d.remember, scope: d.scope }); },
         afterJob: (id) => syncAgent.round(false).then(() => undefined),
         waitSec: opts.sync?.remoteWaitSec,
         log: (l) => process.stderr.write(`${l}\n`),
@@ -906,7 +910,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       const hb = bots?.bySlug(f.slug);
       if (hb && (hb.remoteAt ?? 0) > f.at) { const last = hb.remoteLog?.[hb.remoteLog.length - 1]; reply.push({ slug: hb.slug, remote: !!hb.remote, at: hb.remoteAt!, by: last?.by, note: last?.note }); }
     }
-    return sendJson(res, 200, { ok: true, bots: reply, jobs });
+    return sendJson(res, 200, { ok: true, bots: reply, jobs, decisions: remoteHub.takeDecisions(me.id, deviceId) });
   }
 
   // POST /api/sync/device/jobs/:id/events {events, done?, error?}: the device streams the reply of a job it ran; the sender's run feed gets it live.
@@ -923,10 +927,21 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       const evs = Array.isArray(b.events) ? b.events.slice(0, 1000) : [];
       for (const ev of evs) {
         if (!ev || typeof ev !== "object" || typeof (ev as { type?: unknown }).type !== "string") continue;
+        const t = (ev as { type: string }).type;
+        if (t === "permission" && typeof (ev as { id?: unknown }).id === "string") { remotePerms.set((ev as { id: string }).id, { owner: me.id, jobId }); if (remotePerms.size > 500) remotePerms.delete(remotePerms.keys().next().value as string); }
         e.run.publish(ev as AgentEvent);
         broadcast(e.sessionId, ev as AgentEvent);
+        if (t === "permissionResolved") {
+          const pid = (ev as { id?: unknown }).id;
+          if (typeof pid === "string") remotePerms.delete(pid);
+          if ((ev as { outcome?: string }).outcome === "expired") {
+            const note: AgentEvent = { type: "notice", level: "warn", text: "Nobody answered the permission request in time, so it was denied and the step did not run." };
+            e.run.publish(note); broadcast(e.sessionId, note);
+          }
+        }
       }
       if (b.done === true) {
+        for (const [k, v] of remotePerms) if (v.jobId === jobId) remotePerms.delete(k);
         if (error) e.run.publish({ type: "notice", level: "warn", text: `Turn failed: ${error.slice(0, 200)}` });
         remoteRuns.delete(jobId);
         e.run.finish();
@@ -936,7 +951,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   }
 
   /** A message to a bot thread whose desktop is reachable: it becomes a job for that desktop. false = not a remote thread (the hosted server answers as before). */
-  async function routeRemote(res: ServerResponse, me: Principal, sessionId: string, bot: string, surface: string, title: string, text: string, quote: MessageQuote | undefined, photos: PhotoRef[] | undefined, extra: { headers?: Record<string, string>; first?: Record<string, unknown> } = {}): Promise<boolean> {
+  async function routeRemote(res: ServerResponse, me: Principal, sessionId: string, bot: string, surface: string, title: string, text: string, quote: MessageQuote | undefined, photos: PhotoRef[] | undefined, extra: { headers?: Record<string, string>; first?: Record<string, unknown>; interactive?: boolean } = {}): Promise<boolean> {
     if (!remoteHub) return false;
     const rec = manager.runtimeOf(me.id).bots?.get(bot);
     if (!rec) return false;
@@ -949,7 +964,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       remoteHub.nudge(me.id);
     }
     const dev = devs[0];
-    const job = remoteHub.enqueue(me.id, { deviceId: dev.id, sessionId, botSlug: rec.slug, surface, title, text, ...(quote ? { quote } : {}), ...(photos?.length ? { photos } : {}) });
+    const job = remoteHub.enqueue(me.id, { deviceId: dev.id, sessionId, botSlug: rec.slug, surface, title, text, ...(quote ? { quote } : {}), ...(photos?.length ? { photos } : {}), ...(extra.interactive ? { interactive: true } : {}) });
     const run = runs.start(sessionId, text, photos);
     run.external = true;
     remoteRuns.set(job.id, { run, owner: me.id, sessionId, waiting: !dev.online });
@@ -1797,6 +1812,16 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       let id: string;
       try { id = decodeURIComponent(dm[1]); } catch { return sendJson(res, 400, { error: "bad request id" }); }
       const b = await readJson(req);
+      // A card of a turn that runs on the user's desktop: the answer is relayed to that desktop (it validates the scope against the real call).
+      const rp = remotePerms.get(id);
+      if (rp && rp.owner === me.id && remoteHub) {
+        if (b.decision !== "allow" && b.decision !== "deny") return sendJson(res, 400, { error: "decision must be allow or deny" });
+        if (b.remember !== undefined && b.remember !== "once" && b.remember !== "always") return sendJson(res, 400, { error: "remember must be once or always" });
+        if (b.scope !== undefined && (typeof b.scope !== "string" || b.scope.length > 80)) return sendJson(res, 400, { error: "bad scope" });
+        const ok = remoteHub.addDecision(me.id, { jobId: rp.jobId, permId: id, decision: b.decision, ...(b.remember ? { remember: b.remember } : {}), ...(typeof b.scope === "string" ? { scope: b.scope } : {}) });
+        if (!ok) { remotePerms.delete(id); return sendJson(res, 404, { error: "no such pending request (already answered, expired, or not yours)" }); }
+        return sendJson(res, 200, { ok: true, allowed: b.decision === "allow", relayed: true });
+      }
       const r = svc.decide(id, { decision: b.decision, remember: b.remember, scope: b.scope });
       return r.ok ? sendJson(res, 200, { ok: true, allowed: r.allow, ...(r.rule ? { rule: r.rule } : {}) }) : sendJson(res, r.status, { error: r.error });
     }
@@ -2188,7 +2213,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         const qtext = (saved ?? optStr((qb as any).text, 600) ?? "").trim().slice(0, 600);
         if (qtext) quote = { ...(qid ? { id: qid } : {}), text: qtext };
       }
-      if (ls.bot && remoteHub && (await routeRemote(res, me, id, ls.bot, ls.surface, ls.title, text, quote, refs))) return;
+      if (ls.bot && remoteHub && (await routeRemote(res, me, id, ls.bot, ls.surface, ls.title, text, quote, refs, { interactive: true }))) return;
       return streamTurn(res, id, text, {}, refs ? { type: "photos", photos: refs } : undefined, me, true, refs, parseCapabilities(b.capabilities), quote); // the web/desktop/mobile UI can answer a permission card
     } finally {
       if (big) photoBodies--;
