@@ -112,7 +112,7 @@ export class SessionLogger {
       // Written by device sync: the device that ran these turns logged them. Move the cursor past them so a later local turn logs only its own.
       const e = this.st.sessions[rec.id];
       if (e) { e.n = Math.max(e.n, rec.history.length); this.save(); }
-      else { this.st.sessions[rec.id] = { n: rec.history.length }; this.save(); this.queue.add(rec.id); this.kick(); }
+      else { this.st.sessions[rec.id] = { n: rec.history.length }; this.save(); } // not logged here: the device that ran it (or this owner's hosted copy) does that
       return;
     }
     this.queue.add(rec.id);
