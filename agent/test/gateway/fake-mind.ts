@@ -12,6 +12,10 @@ export interface FakeAgentSession { id: string; user: string; source_key: string
 export interface FakeMind {
   /** Agent Sessions (open is idempotent per user + source_key + external_session_id; append/close keep what they were given) */
   agentSessions: Map<string, FakeAgentSession>;
+  /** keys that lack chat:read/chat:write (agent-sessions answers 403 for them) until an admin key upgrades them via POST /agent-sessions/daebot-scopes */
+  chatScopeless: Set<string>;
+  /** admin API keys (may call /agent-sessions/daebot-scopes) */
+  adminKeys: Set<string>;
   url: string;            // origin
   base: string;           // /developer/v1
   seen: Seen[];
@@ -61,7 +65,7 @@ const json = (res: ServerResponse, status: number, v: unknown, extra: Record<str
 export async function startFakeMind(initial: Record<string, string> = {}): Promise<FakeMind> {
   const m: FakeMind = {
     url: "", base: "", seen: [], keys: new Map(Object.entries(initial)), registered: [], consentUser: "", codes: new Map(), refreshTokens: new Map(),
-    agentSessions: new Map(), bots: new Map(), integrations: new Map(), usage: new Map(), life: new Map(),
+    agentSessions: new Map(), chatScopeless: new Set(), adminKeys: new Set(), bots: new Map(), integrations: new Map(), usage: new Map(), life: new Map(),
     newKey(username) { const k = "mind_" + randomBytes(24).toString("base64url"); m.keys.set(k, username); return k; },
     close: () => new Promise((r) => { server.close(() => r()); server.closeAllConnections(); }),
   };
@@ -123,6 +127,13 @@ export async function startFakeMind(initial: Record<string, string> = {}): Promi
         return issue(rt.username, rt.client);
       }
       return json(res, 400, { error: "unsupported_grant_type" });
+    }
+    if (u.pathname === "/developer/v1/agent-sessions/daebot-scopes" && req.method === "POST") {
+      if (!m.adminKeys.has(key)) return json(res, 403, { detail: "Admin API key required." });
+      const target = String(parsed?.key ?? "");
+      if (!m.keys.has(target)) return json(res, 404, { detail: "no active key matches" });
+      const had = m.chatScopeless.delete(target);
+      return json(res, 200, { ok: true, added: had ? ["chat:read", "chat:write"] : [] });
     }
     if (u.pathname.startsWith("/developer/v1/")) {
       const username = m.keys.get(key);
@@ -223,6 +234,7 @@ export async function startFakeMind(initial: Record<string, string> = {}): Promi
       if (rest === "/profile") return json(res, 200, { username, bio: "" });
       if (rest === "/profile/models" && m.models) return json(res, 200, { models: m.models, current: m.models[0]?.id });
       if (rest === "/context") return json(res, 200, { sections: [{ section: "soul", items: [{ text: `MIND of ${username}` }] }] });
+      if (rest.startsWith("/agent-sessions/") && m.chatScopeless.has(key)) return json(res, 403, { detail: "API key lacks required scope: chat:write" });
       if (rest === "/agent-sessions/open") {
         const k = `${username}|${parsed?.source_key}|${parsed?.external_session_id}`;
         const had = m.agentSessions.get(k);

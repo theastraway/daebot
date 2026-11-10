@@ -62,7 +62,7 @@ export async function hostedRig(o: { script?: ConstructorParameters<typeof FakeP
     return { ...H, cookie: first };
   };
   const as = async (key: string) => { const h = await cookieFor(key); return (method: string, path: string, body?: unknown) => http(gw.url, method, path, { headers: h, body }); };
-  return { gw, fake, keys, store, dir, provider, bridge, as, host: (key: string, method: string, path: string, body?: unknown) => http(gw.url, method, path, { headers: { ...H, "x-mind-key": key }, body }), close: async () => { await gw.close(); await fake.close(); } };
+  return { gw, fake, keys, cfgKey: cfg.mindApiKey, store, dir, provider, bridge, as, host: (key: string, method: string, path: string, body?: unknown) => http(gw.url, method, path, { headers: { ...H, "x-mind-key": key }, body }), close: async () => { await gw.close(); await fake.close(); } };
 }
 
 export type HostedRig = Awaited<ReturnType<typeof hostedRig>>;
