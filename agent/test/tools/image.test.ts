@@ -11,7 +11,6 @@ const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwA
 const DATA = `data:image/png;base64,${PNG}`;
 const ctx = { cwd: "/", sessionId: "sess-1" };
 const MIND = { url: "https://mind.test/llm/chat/completions", via: "mind" as const, headers: () => ({ "X-API-Key": "mind_user" }) };
-const DIRECT = { url: "https://or.test/chat/completions", via: "openrouter" as const, headers: () => ({ Authorization: "Bearer server-key" }) };
 const reply = (images: unknown, cost = 0.014) => new Response(JSON.stringify({ model: "black-forest-labs/flux-3-image-klein", choices: [{ message: { role: "assistant", content: "", images } }], usage: { cost, prompt_tokens: 20, completion_tokens: 1000 } }), { status: 200 });
 const store = () => new PhotoStore({ dir: mkdtempSync(join(tmpdir(), "img-")), owner: "owner" });
 
@@ -56,19 +55,14 @@ test("image_generate: validates input, reports no image, and refuses bytes that 
   assert.match(broke.output, /no credits/);
 });
 
-test("image_generate: a model MIND does not offer falls back to the owner's own key only when a fallback is given", async () => {
+test("image_generate: a model MIND refuses is reported, and no other key is ever tried", async () => {
   const refuse = () => new Response(JSON.stringify({ error: "model_not_available", message: "Model 'x' is not offered by MIND." }), { status: 400 });
   const calls: string[] = [];
-  const f = (async (u: string) => { calls.push(u); return u.startsWith("https://mind.test") ? refuse() : reply([{ image_url: { url: DATA } }]); }) as any;
-  const without = await createImageGenerateTool({ store: store(), endpoint: () => MIND, fetchImpl: f }).run({ prompt: "a cat" }, ctx);
-  assert.equal(without.ok, false);
-  assert.match(without.output, /not offered by MIND/);
+  const f = (async (u: string) => { calls.push(u); return refuse(); }) as any;
+  const r = await createImageGenerateTool({ store: store(), endpoint: () => MIND, fetchImpl: f }).run({ prompt: "a cat" }, ctx);
+  assert.equal(r.ok, false);
+  assert.match(r.output, /not offered by MIND/);
   assert.deepEqual(calls, [MIND.url]);
-  calls.length = 0;
-  const withFb = await createImageGenerateTool({ store: store(), endpoint: () => MIND, fallback: () => DIRECT, fetchImpl: f }).run({ prompt: "a cat" }, ctx);
-  assert.equal(withFb.ok, true);
-  assert.equal(withFb.meta?.via, "openrouter");
-  assert.deepEqual(calls, [MIND.url, DIRECT.url]);
 });
 
 test("image_generate is a hosted tool and a read-class tool", () => {

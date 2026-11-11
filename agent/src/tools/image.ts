@@ -3,10 +3,9 @@
 // One non-streaming chat call with `modalities: ["image"]`. The reply carries the picture as a data URL in message.images[].image_url.url.
 // The bytes are validated like any attached photo (real PNG/JPEG/WebP/GIF, size caps) and stored in this chat's PhotoStore, so the image
 // shows in the chat, survives a reload, and syncs to the user's other devices with the chat (src/sync/photos.ts trades every local photo).
-// Billing: MIND billing sends the call to MIND's /llm/chat/completions with the user's own key (credits deducted). MIND only forwards models
-// on its own list, and a model it does not offer is refused with `model_not_available`; only then, and only when the host passed a
-// `fallback` endpoint (the owner's own session with the server's OpenRouter key), is the same call made there. The cost of every image is in
-// result.meta.costUsd (OpenRouter's reported usage.cost).
+// Billing: MIND billing sends the call to MIND's /llm/chat/completions with the user's own key; recraft/recraft-v4.1-flash is on MIND's model
+// list (MINDapp PR 3002), so every signed-in paid user is billed from their own MIND credits at provider cost + 12%, and MIND writes the
+// llm_call_ledger row. There is no server-key fallback. The cost of every image is in result.meta.costUsd (OpenRouter's reported usage.cost).
 import type { PhotoStore } from "../photos.ts";
 import { checkPhotos } from "../photos.ts";
 import type { Tool } from "../types.ts";
@@ -24,8 +23,6 @@ const MAX_PROMPT = 2000;
 
 export interface ImageGenerateOptions {
   endpoint: () => LlmEndpoint | undefined;
-  /** Used only when `endpoint` answers model_not_available. Absent = never. */
-  fallback?: () => LlmEndpoint | undefined;
   store: Pick<PhotoStore, "add">;
   fetchImpl?: typeof fetch;
   model?: string;
@@ -91,12 +88,8 @@ export function createImageGenerateTool(o: ImageGenerateOptions): Tool {
       const timeout = AbortSignal.timeout(o.timeoutMs ?? TIMEOUT_MS);
       const signal = ctx.signal ? AbortSignal.any([ctx.signal, timeout]) : timeout;
       try {
-        let ep = primary;
-        let r = await call(ep, prompt, aspect, signal);
-        if (r.status === 400 && /model_not_available/.test(r.text)) {
-          const alt = o.fallback?.();
-          if (alt) { ep = alt; r = await call(ep, prompt, aspect, signal); }
-        }
+        const ep = primary;
+        const r = await call(ep, prompt, aspect, signal);
         if (r.status < 200 || r.status >= 300) return fail(`image_generate: ${refusalText(r.status, r.text)}`);
         let body: any;
         try { body = JSON.parse(r.text); } catch { return fail("image_generate: the image service sent a reply that was not JSON"); }
