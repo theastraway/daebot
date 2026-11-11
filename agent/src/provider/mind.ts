@@ -220,7 +220,8 @@ export function createMindProvider(cfg: Config, o: MindProviderOptions): Provide
   };
   // Paid plans: the normal default model with cfg.models.fallback. Free plan: only the free model (a paid fallback would 402).
   const paid = createOpenRouterProvider(cfg, f, shared);
-  const free = createOpenRouterProvider({ ...cfg, models: { ...cfg.models, fallback: [] } }, f, shared);
+  // The free model is text-only: a request with screenshots is routed to the free vision model instead (still $0).
+  const free = createOpenRouterProvider({ ...cfg, models: { ...cfg.models, fallback: [] } }, f, { ...shared, imageModels: [cfg.vision?.freeModel ?? ""] });
 
   return {
     name: "mind",
