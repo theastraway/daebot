@@ -7,7 +7,7 @@ import { homeSig, mergeRecords, recordSig } from "./merge.ts";
 import { MAX_RECORD_BYTES, NOT_SYNCED_SURFACES, fromWire, toWire } from "./wire.ts";
 import type { WireRecord } from "./wire.ts";
 import { TombstoneBook } from "./tombstones.ts";
-import { inferHome, readEvidence } from "./home.ts";
+import { inferHome, movesOffCloud } from "./home.ts";
 import type { HomeCtx, HomeWhy } from "./home.ts";
 import type { EnvTag } from "../env.ts";
 
@@ -123,7 +123,8 @@ export class SyncService {
         if (this.deps.isBusy(m.id)) continue; // its live copy would write the old record back; the next pass gets it
         const rec = this.deps.store.load(m.id);
         if (!rec) continue;
-        if (rec.env && (rec.env.kind !== "cloud" || !readEvidence(rec).localTool)) continue;
+        // A cloud stamp is moved by proof of a computer: a tool daebot.live cannot run that returned ok, or surface desktop with no refusal for being hosted.
+        if (rec.env && (rec.env.kind !== "cloud" || !movesOffCloud(rec))) continue;
         const g = inferHome({ ...rec, env: undefined }, ctx);
         if (g.env.kind === "cloud" && rec.env) continue;
         await this.deps.store.save({ ...rec, env: g.env }, { origin: "sync" });

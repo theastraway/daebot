@@ -42,6 +42,12 @@ export function pickComputer(groups: readonly EnvGroup[]): EnvTag | undefined {
   return best ? { id: best.id, kind: best.kind, name: best.name } : undefined;
 }
 
+/** A session stamped MIND Cloud is re-read (start-up pass) and moved only when its record says a computer: a local tool that ran, or surface desktop that no hosted refusal contradicts. */
+export function movesOffCloud(rec: StoredSession): boolean {
+  const ev = readEvidence(rec);
+  return ev.localTool || (rec.surface === "desktop" && !ev.hostedRefusal);
+}
+
 export function inferHome(rec: StoredSession, ctx: HomeCtx): HomeGuess {
   if (rec.env) return { env: rec.env, why: "has-home" };
   if (ctx.pusher && ctx.pusher.kind !== "cloud") return { env: ctx.pusher, why: "pushed-by-device" };
