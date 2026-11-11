@@ -5,7 +5,7 @@ import type { Tier } from "../kernel/index.ts";
 import { tokenSet } from "./text.ts";
 
 // Tools whose output comes from outside (a web page, anything a third party controls). A turn that read one is tainted.
-const UNTRUSTED_TOOLS = new Set(["web_fetch"]);
+const UNTRUSTED_TOOLS = new Set(["web_fetch", "web_search"]);
 
 export interface Trust { ok: boolean; why?: string }
 

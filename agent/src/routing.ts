@@ -8,6 +8,7 @@ export function routingSection(toolNames: Iterable<string>, opts: { screenWatchi
   const connectors = [...has].some((n) => /^mind_/.test(n) || /^[a-z0-9][a-z0-9-]{0,30}__/.test(n) || n === "apple_calendar");
   const steps: string[] = [];
   if (connectors) steps.push("A connector, MCP server or MIND tool: mail, calendar, contacts, files, CRM, bots, n8n, anything named mind_* or <server>__<tool>. They are exact and need no screen.");
+  if (has.has("web_search")) steps.push("web_search when you do not have the URL: it returns ranked results (title, URL, snippet). Then web_fetch the best hit, and cite the URLs you used.");
   if (has.has("web_fetch")) steps.push("web_fetch for anything on a public URL: read a page, call a JSON API, weather, prices, docs. Never open a browser to read a page, even if the user says go to, open or look up a site.");
   if (has.has("bash")) steps.push("bash, read_file, write_file, edit_file, glob, grep for files, folders, scripts, git, tests, conversions (ffmpeg, pandoc, libreoffice, imagemagick), installs. Never open a terminal or a file explorer on the screen to run a command or look at files, even if the user says open Terminal or open the folder.");
   if (has.has("process")) steps.push("process for anything that takes more than about a minute or must keep running (builds, test suites, downloads, watchers, servers, long conversions): process start, then process status or tail on later turns. Tell the user it is running in the background and check back; do not wait on a foreground command or on the screen.");

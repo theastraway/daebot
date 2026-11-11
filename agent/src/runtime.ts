@@ -39,6 +39,8 @@ import { createProvider } from "./provider/index.ts";
 import { FREE_TIER, MindCredits } from "./provider/mind.ts";
 import { createBuiltinTools } from "./tools/index.ts";
 import { createViewPhotoTool, DEFAULT_VISION } from "./tools/photo.ts";
+import { createWebSearchTool } from "./tools/search.ts";
+import { llmEndpoint } from "./tools/llm-call.ts";
 import { PhotoStore, messageWithPhotos } from "./photos.ts";
 import { HistoryRecorder, messageWithQuote, withMessageIds } from "./events.ts";
 import { createMcpLoader, parseMcpServers } from "./mcp/client.ts";
@@ -88,6 +90,7 @@ export function botSessionTools(tools: Tool[], opts: { localTools?: boolean } = 
   const drop = opts.localTools ? ["apple_calendar"] : ["bash", "process", "terminal", "write_file", "edit_file", "apple_calendar"];
   return tools
     .filter((t) => !drop.includes(t.spec.name))
+    .map((t) => (t.spec.name === "web_search" ? { ...t, classFor: () => "outward" } as Tool : t))
     .map((t) => (t.spec.name !== "web_fetch" ? t : {
       ...t,
       classFor: (a: Record<string, unknown>) => (/[?#]/.test(String(a.url ?? "")) || a.body !== undefined || (typeof a.method === "string" && a.method.toUpperCase() !== "GET") ? "outward" : t.class),
@@ -372,6 +375,8 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         isFree: mindBilled && credits ? async () => (await credits.get(billingKey()))?.tier === FREE_TIER : undefined,
       })
     : undefined;
+  // web_search: ranked web results through the same billing path as the chat (hosted: the user's own MIND key and credits; self-host: OPENROUTER_API_KEY).
+  const searchTool = createWebSearchTool({ endpoint: () => llmEndpoint(cfg, billingKey), fetchImpl: overrides.fetchImpl, model: (overrides.env ?? process.env).DAEBOT_SEARCH_MODEL?.trim() || undefined });
   // Every session of this owner is logged to their own MIND as an Agent Session, from every device (see mind/session-log.ts). Off only when
   // there is no data dir to remember the cursors in, or the host says so (tests).
   const sessionLog = overrides.store?.subscribe && stateDir && overrides.sessionLog !== false && cfg.mindApiKey
@@ -562,7 +567,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         return r;
       },
     })] : [];
-    const every = [...builtinTools, ...(photoTool ? [photoTool] : []), ...createMindTools({
+    const every = [...builtinTools, searchTool, ...(photoTool ? [photoTool] : []), ...createMindTools({
       home, clientFor: clientForMind, roster: () => botStore?.roster() ?? [],
       refresh: botStore ? async () => { await botStore.list(); } : undefined,
     }, { user: hosted?.username }).filter((t) => on || t.spec.name !== "mind_tenants"),
