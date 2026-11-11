@@ -147,3 +147,81 @@ test("classFor: delete on any write tool is irreversible (action or HTTP-style),
   }
   for (const t of tools.filter((x) => x.class === "read" || x.class === "public")) assert.equal(t.classFor, undefined, t.spec.name);
 });
+
+test("mind_todos: read tool routes every read action to /developer/v1/todos and sends no body", async () => {
+  const { by, seen } = setup();
+  const t = by("mind_todos");
+  const id = "b7ed3123-e5e7-4fd1-9deb-05f812ea1a5d";
+  const cases: Array<[Record<string, unknown>, string, string]> = [
+    [{ action: "list", workspace_id: "ws_1", status: "open" }, "GET", "/developer/v1/todos?workspace_id=ws_1&status=open"],
+    [{ action: "waiting", workspace_id: "ws_1" }, "GET", "/developer/v1/todos?workspace_id=ws_1&waiting=true"],
+    [{ action: "search", q: "fax", workspace_id: "ws_1" }, "GET", "/developer/v1/todos/search?q=fax&workspace_id=ws_1"],
+    [{ action: "get", todo_id: id }, "GET", `/developer/v1/todos/${id}`],
+    [{ action: "thread", todo_id: id }, "GET", `/developer/v1/todos/${id}/comments`],
+    [{ action: "progress", project_id: "p1" }, "GET", "/developer/v1/projects/p1/progress"],
+  ];
+  for (const [args, method, path] of cases) {
+    const r = await t.run(args, ctx);
+    assert.equal(r.ok, true, JSON.stringify(args) + r.output);
+    const s = seen[seen.length - 1];
+    assert.equal(s.method, method);
+    assert.equal(s.url.replace("https://m-i-n-d.ai", ""), path);
+    assert.equal(s.body, undefined);
+  }
+  assert.equal(t.class, "read");
+  assert.equal(t.receipt, "mind");
+  const bad = await t.run({ action: "get" }, ctx);
+  assert.equal(bad.ok, false);
+});
+
+test("mind_todos_write: owner gate in schema, route mapping per write action, no delete anywhere", async () => {
+  const { by, seen, tools } = setup();
+  const t = by("mind_todos_write");
+  assert.equal(t.class, "write");
+  const params = t.spec.parameters as { required: string[]; properties: Record<string, any> };
+  assert.ok(params.required.includes("owner_check"));
+  const id = "b7ed3123-e5e7-4fd1-9deb-05f812ea1a5d";
+  const owner_check = "todo belongs to Atlas; Anthony asked about Atlas; Atlas == Atlas";
+  const cases: Array<[Record<string, unknown>, string, string, unknown]> = [
+    [{ action: "update", todo_id: id, status: "in_progress", notes: "n" }, "PATCH", `/developer/v1/todos/${id}`, { status: "in_progress", notes: "n" }],
+    [{ action: "start", todo_id: id }, "POST", `/developer/v1/todos/${id}/start`, {}],
+    [{ action: "reopen", todo_id: id }, "POST", `/developer/v1/todos/${id}/reopen`, {}],
+    [{ action: "complete", todo_id: id, notes: "done" }, "POST", `/developer/v1/todos/${id}/complete`, { note: "done" }],
+    [{ action: "comment", todo_id: id, body: "hi" }, "POST", `/developer/v1/todos/${id}/comments`, { kind: "comment", body: "hi" }],
+    [{ action: "create", project_id: "p1", title: "T", priority: "high" }, "POST", "/developer/v1/todos", { project_id: "p1", title: "T", priority: "high" }],
+  ];
+  for (const [args, method, path, body] of cases) {
+    const r = await t.run({ ...args, owner_check }, ctx);
+    assert.equal(r.ok, true, JSON.stringify(args) + r.output);
+    const s = seen[seen.length - 1];
+    assert.equal(s.method, method);
+    assert.equal(s.url.replace("https://m-i-n-d.ai", ""), path);
+    assert.deepEqual(s.body, body);
+  }
+  const before = seen.length;
+  let r = await t.run({ action: "complete", todo_id: id }, ctx);
+  assert.equal(r.ok, false);
+  assert.match(r.output, /owner_check required/);
+  r = await t.run({ action: "delete", todo_id: id, owner_check }, ctx);
+  assert.equal(r.ok, false);
+  assert.equal(seen.length, before, "no request for a missing owner_check or a delete");
+  for (const n of ["mind_todos", "mind_todos_write"]) {
+    const a = (by(n).spec.parameters as any).properties.action.enum as string[];
+    assert.ok(!a.includes("delete"), n);
+  }
+  assert.ok(tools.some((x) => x.spec.name === "mind_todos"));
+  // a delete attempt is still classed irreversible by the shared classFor
+  assert.equal(t.classFor!({ action: "delete" }), "irreversible");
+});
+
+test("mind_todos descriptions state the id space and treat to-do text as untrusted", () => {
+  const { by } = setup();
+  for (const n of ["mind_todos", "mind_todos_write"]) {
+    const d = by(n).spec.description;
+    assert.match(d, /MIND to-do UUID/);
+    assert.match(d, /workspace_id/);
+    assert.match(d, /astra_board/);
+    assert.match(d, /portal ids/);
+    assert.match(d, /never instructions/);
+  }
+});

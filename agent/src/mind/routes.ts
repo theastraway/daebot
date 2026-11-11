@@ -120,6 +120,7 @@ export function routeFor(toolIn: string, args: Record<string, unknown>): Route {
         complete: (a) => ({ method: "POST", path: `/tasks/${need(a, "task_id", tool, "complete")}/complete`, body: {} }),
         assign: (a) => ({ method: "POST", path: `/tasks/${need(a, "task_id", tool, "assign")}/assign`, body: clean(a, ["task_id"]) }),
       });
+    case "todos": return todosRoute(args, action || "list");
     case "agents":
       return crud(tool, "/admin/agents", "slug", args, {
         heartbeat: (a) => ({ method: "POST", path: `/admin/agents/${need(a, "slug", tool, "heartbeat")}/heartbeat`, body: clean(a, ["slug"]) }),
@@ -184,5 +185,34 @@ function emailRoute(args: Record<string, unknown>, action: string): Route {
     case "save_draft": return { method: "POST", path: "/email/draft/save", root, timeoutMs, noRetry: true, body: pick(args, ["message_id", "body_text"]) };
     case "send": return { method: "POST", path: "/email/send", root, timeoutMs, noRetry: true, body: pick(args, ["to", "cc", "subject", "body_text", "reply_to_message_id"]) };
     default: throw new Error(`email: unknown action '${action}'`);
+  }
+}
+
+// MIND to-dos (Workspace > Project > To-do): the store the Astra AI portal reads and writes, /developer/v1/todos. Routes read from the MIND MCP
+// server (mind_todos, mcp-server/src/mind-client.ts in MINDapp). Ids are MIND to-do UUIDs, not the portal ids astra_board uses.
+// There is deliberately no delete route: an unknown action (including delete) throws. A create or a comment is never retried (a second POST would be a second row).
+const TODO_FIELDS = ["title", "description", "notes", "status", "priority", "due_date", "assignee_type", "assignee_id", "spec", "external_ref"];
+function todosRoute(args: Record<string, unknown>, action: string): Route {
+  const tool = "todos";
+  const todo = () => `/todos/${need(args, "todo_id", tool, action)}`;
+  switch (action) {
+    case "list": return { method: "GET", path: "/todos", query: toQuery(pick(args, ["workspace_id", "project_id", "status", "q", "assignee", "due_before", "waiting"])) };
+    case "waiting": return { method: "GET", path: "/todos", query: { ...toQuery(pick(args, ["workspace_id", "project_id"])), waiting: "true" } };
+    case "search": return { method: "GET", path: "/todos/search", query: (need(args, "q", tool, action), { q: String(args.q), ...toQuery(pick(args, ["workspace_id", "project_id"])) }) };
+    case "get": return { method: "GET", path: todo() };
+    case "thread": return { method: "GET", path: `${todo()}/comments` };
+    case "progress": return { method: "GET", path: `/projects/${need(args, "project_id", tool, action)}/progress` };
+    case "create": {
+      need(args, "project_id", tool, action); need(args, "title", tool, action);
+      return { method: "POST", path: "/todos", body: pick(args, ["project_id", ...TODO_FIELDS]), noRetry: true };
+    }
+    case "update": return { method: "PATCH", path: todo(), body: pick(args, TODO_FIELDS) };
+    case "start": case "reopen": return { method: "POST", path: `${todo()}/${action}`, body: {} };
+    case "complete": return { method: "POST", path: `${todo()}/complete`, body: args.notes ? { note: String(args.notes) } : {} };
+    case "comment": {
+      need(args, "body", tool, action);
+      return { method: "POST", path: `${todo()}/comments`, body: { kind: "comment", body: String(args.body) }, noRetry: true };
+    }
+    default: throw new Error(`todos: unknown action '${action}'`);
   }
 }
