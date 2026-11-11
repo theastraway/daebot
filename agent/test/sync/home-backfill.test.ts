@@ -126,3 +126,21 @@ test("end to end on the hosted gateway: pushes get a home from their device or t
     assert.equal(row.env.kind, "machine", "the list row carries the home so a device adopts it without fetching the record");
   } finally { await hosted.close(); }
 });
+
+test("a desktop-surface session stamped MIND Cloud moves to the computer on the start-up pass unless a tool refused for being hosted", async () => {
+  const mk = (id: string, surface: string, ev: HistoryEvent[] = []) => ({ ...withHistory(id, surface, ev, { env: CLOUD_ENV }), owner: "alice" });
+  const store = memStore([
+    mk("desk-quiet", "desktop"), mk("desk-screen-ok", "desktop", tool("screen", true, "Frame 1366x384")),
+    mk("desk-hosted", "desktop", tool("screen", false, "screen: Screen watching is only available in the Daebot desktop app.")),
+    mk("web-quiet", "web"), mk("desk-both", "desktop", [...tool("screen", false, "only available in the Daebot desktop app"), ...tool("bash", true)]),
+  ]);
+  const svc = new SyncService({ store, bots: () => undefined, isBusy: () => false, tierOf: () => "staff", homeCtx: () => ({ groups }) });
+  await svc.backfillHomes(undefined, { recheckCloud: false });
+  assert.equal(store.all.get("desk-quiet")!.env!.kind, "cloud", "an ordinary pass never re-reads a cloud stamp");
+  await svc.backfillHomes(undefined, { recheckCloud: true });
+  assert.equal(store.all.get("desk-quiet")!.env!.id, MAC.id);
+  assert.equal(store.all.get("desk-screen-ok")!.env!.id, MAC.id);
+  assert.equal(store.all.get("desk-hosted")!.env!.kind, "cloud", "it ran on the hosted side: stays cloud");
+  assert.equal(store.all.get("web-quiet")!.env!.kind, "cloud");
+  assert.equal(store.all.get("desk-both")!.env!.id, MAC.id, "a tool that ran on a computer outweighs an earlier hosted refusal");
+});
