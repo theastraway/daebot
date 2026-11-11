@@ -31,7 +31,7 @@ test("image_generate stores the picture as a chat photo and returns the line tha
   assert.equal(r.meta?.costUsd, 0.014);
   assert.equal(seen[0].h["X-API-Key"], "mind_user");
   assert.deepEqual(seen[0].b.modalities, ["image"]);
-  assert.equal(seen[0].b.model, "recraft/recraft-v4.1-flash");
+  assert.equal(seen[0].b.model, "bytedance-seed/seedream-5-0-flash");
   assert.deepEqual(modalitiesFor("google/gemini-3.1-flash-image"), ["image", "text"]);
   assert.deepEqual(seen[0].b.image_config, { aspect_ratio: "16:9" });
   const stored = await s.read("sess-1", "p1");
