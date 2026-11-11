@@ -84,6 +84,7 @@ const clipLine = (s: string, n: number): string => { const t = s.replace(/\s+/g,
 const noKernelSpoof = (s: string): string => s.replace(/\[kernel/gi, "[ kernel");
 
 /**
+ * web_search stays "read" in a bot session exactly as in the main chat (the query goes only to the MIND LLM proxy, billed to the user's own credits); reclassifying it as outward blocked it for every staff user.
  * A bot's writes go ONLY to its own MIND, and a web_fetch that carries a query string or a body can leak data, so it counts as an outward action there.
  * Apple Calendar (a device bridge) is never a bot tool. The shell, process, terminal and file write/edit tools are kept ONLY when `localTools` is set:
  * a local desktop/CLI gateway runs on the owner's own machine, so the owner's bot threads get the same machine tools as the main chat (every one still
@@ -93,7 +94,6 @@ export function botSessionTools(tools: Tool[], opts: { localTools?: boolean } = 
   const drop = opts.localTools ? ["apple_calendar"] : ["bash", "process", "terminal", "write_file", "edit_file", "apple_calendar"];
   return tools
     .filter((t) => !drop.includes(t.spec.name))
-    .map((t) => (t.spec.name === "web_search" ? { ...t, classFor: () => "outward" } as Tool : t))
     .map((t) => (t.spec.name !== "web_fetch" ? t : {
       ...t,
       classFor: (a: Record<string, unknown>) => (/[?#]/.test(String(a.url ?? "")) || a.body !== undefined || (typeof a.method === "string" && a.method.toUpperCase() !== "GET") ? "outward" : t.class),

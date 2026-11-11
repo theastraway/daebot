@@ -5,6 +5,9 @@ import { llmEndpoint } from "../../src/tools/llm-call.ts";
 import { hostedToolAllowed } from "../../src/hosted.ts";
 import { botSessionTools } from "../../src/runtime.ts";
 import { writeTrust } from "../../src/learn/guard.ts";
+import { createBuiltinTools } from "../../src/tools/index.ts";
+import { tierAllows } from "../../src/kernel/tier.ts";
+import { effectiveClass } from "../../src/tool-class.ts";
 
 const ctx = { cwd: "/", sessionId: "s1" };
 const completion = (annotations: unknown[], cost = 0.0071) => ({
@@ -74,10 +77,15 @@ test("llmEndpoint: MIND billing uses the user's MIND key; self-host uses the Ope
   assert.equal(llmEndpoint({ billing: "openrouter", mindBaseUrl: "x", openrouterKey: "" }, () => ""), undefined);
 });
 
-test("web_search is allowed on hosted, is outward for a bot, and taints a learning turn", () => {
+test("web_search is allowed on hosted, stays read for a bot (a staff-tier bot session can call it), and taints a learning turn", () => {
   assert.equal(hostedToolAllowed("web_search"), true);
   const t = createWebSearchTool({ endpoint: () => ENDPOINT });
   const bot = botSessionTools([t]);
-  assert.equal(bot[0].classFor?.({ query: "q" }), "outward");
+  assert.equal(effectiveClass(bot[0], { query: "q" }), "read");
+  assert.equal(tierAllows("staff", bot[0], { query: "q" }), true, "staff bot session may call web_search");
+  assert.equal(tierAllows("public", bot[0], { query: "q" }), true);
+  const wf = botSessionTools(createBuiltinTools()).find((x) => x.spec.name === "web_fetch")!;
+  assert.equal(tierAllows("staff", wf, { url: "https://example.com/p" }), true);
+  assert.equal(tierAllows("staff", wf, { url: "https://example.com/p?q=secret" }), false, "web_fetch with a query string stays outward");
   assert.equal(writeTrust("admin", [{ tool: "web_search" } as any]).ok, false);
 });
