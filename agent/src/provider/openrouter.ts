@@ -3,6 +3,7 @@
 import { ThinkFilter } from "./think-filter.ts";
 import type { Config, Message, Provider, StreamEvent, ToolCall, ToolSpec, Usage } from "../types.ts";
 import { abortError, readSse } from "./sse.ts";
+import { acceptsImages, carriesImages, stripImages } from "./vision.ts";
 
 export const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 export const REFERER = "https://www.m-i-n-d.ai/mindclaw";
@@ -18,6 +19,8 @@ export interface ProviderOptions {
   onResponse?: (res: Response) => void;
   /** Maps a non-ok response to a typed error. Return undefined to keep the generic ProviderHttpError. */
   errorFor?: (status: number, body: string, model: string) => ProviderHttpError | undefined;
+  /** Vision-capable chat models (must support tools) used when a request carries images and the selected model cannot see them. Default: cfg.models.default, then cfg.vision.model. */
+  imageModels?: string[];
 }
 
 export class ProviderHttpError extends Error {
@@ -122,7 +125,8 @@ export function createOpenRouterProvider(cfg: Config, fetchImpl: typeof fetch = 
   async function open(model: string, req: { messages: Message[]; tools: ToolSpec[]; signal?: AbortSignal }): Promise<Response> {
     const body: Record<string, unknown> = {
       model,
-      messages: toWireMessages(req.messages),
+      // Never put an image in front of a text-only model: OpenRouter answers 404 "No endpoints found that support image input".
+      messages: toWireMessages(acceptsImages(model) ? req.messages : stripImages(req.messages)),
       stream: true,
       usage: { include: true },
     };
@@ -208,7 +212,17 @@ export function createOpenRouterProvider(cfg: Config, fetchImpl: typeof fetch = 
     name: opts.name ?? "openrouter",
     async *stream(req) {
       // pinModel: exactly this model. The chat fallbacks are text models; a vision call must not slide onto one of them.
-      const models = req.pinModel ? [req.model] : [req.model, ...cfg.models.fallback.filter((m) => m !== req.model)];
+      let models = req.pinModel ? [req.model] : [req.model, ...cfg.models.fallback.filter((m) => m !== req.model)];
+      if (!req.pinModel && carriesImages(req.messages)) {
+        // Screenshots in tool results: vision-capable models first, in the caller's order. If none is selected, route the call to a
+        // vision chat model. Text-only models stay last and get the conversation with images stripped (open() does that).
+        const seen = new Set<string>();
+        const capable = models.filter((m) => acceptsImages(m));
+        if (!capable.length) {
+          for (const m of opts.imageModels ?? [cfg.models.default, cfg.vision?.model ?? ""]) if (m && acceptsImages(m)) capable.push(m);
+        }
+        models = [...capable, ...models.filter((m) => !acceptsImages(m))].filter((m) => !seen.has(m) && !!seen.add(m));
+      }
       let lastErr: unknown;
       for (const model of models) {
         let res: Response;

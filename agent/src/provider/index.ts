@@ -1,6 +1,7 @@
 import type { Config, Provider } from "../types.ts";
 import { createOpenRouterProvider } from "./openrouter.ts";
 import { MindCredits, createMindProvider } from "./mind.ts";
+import { warmVisionCapabilities } from "./vision.ts";
 
 export interface MindBillingWiring {
   /** The key this runtime bills to (live, so a rotated OAuth key is picked up). Default: cfg.mindApiKey. */
@@ -11,6 +12,7 @@ export interface MindBillingWiring {
 
 /** DAEBOT_BILLING=mind -> every call goes through MIND with that runtime's own MIND key; otherwise OpenRouter with our key (unchanged). */
 export function createProvider(cfg: Config, fetchImpl?: typeof fetch, mind?: MindBillingWiring): Provider {
+  if (!fetchImpl) void warmVisionCapabilities(); // production only: tests inject fetch and never touch the network
   if (cfg.billing === "mind") {
     return createMindProvider(cfg, {
       getKey: mind?.getKey ?? (() => cfg.mindApiKey),
