@@ -3,8 +3,12 @@ import { fail } from "./util.ts";
 import { isTerminalProgram } from "../routing.ts";
 import { CONSOLE_CHECK_PS, blockedMessage, parseBlocked, psq, runPowerShell as makeRunner } from "./ps.ts";
 import type { ScriptRunner } from "./ps.ts";
+import { isMacTerminalApp } from "./computer-mac.ts";
+import type { MacExec } from "./computer-mac.ts";
+import { runMacApp } from "./app-mac.ts";
 
-// Background desktop-app control for Windows: Microsoft UI Automation (the accessibility API) driven from one PowerShell process.
+// Background desktop-app control. macOS: the Accessibility API through System Events (app-mac.ts), the same actions and the same approval classes.
+// Windows: Microsoft UI Automation (the accessibility API) driven from one PowerShell process.
 // It never moves the mouse, never injects keystrokes, never takes focus and takes no screenshot unless asked. Every control is reached
 // through a UIA pattern (Invoke, Value, Toggle, SelectionItem, ExpandCollapse, Text, Window). One call runs a whole list of steps.
 // Terminals, consoles and the Run box are refused (use bash). The steps travel as JSON data inside a here-string, never as code.
@@ -73,7 +77,7 @@ export function normalizeSteps(args: Record<string, unknown>): { steps: AppStep[
     if (action === "set_value" && st.value === undefined) return { error: `${label}set_value needs value` };
     if (action === "launch") {
       if (!st.app) return { error: `${label}launch needs app (a program name or path)` };
-      if (isTerminalProgram(st.app)) return { error: `${label}refused: ${st.app} is a terminal or shell. ${blockedHint}` };
+      if (isTerminalProgram(st.app) || isMacTerminalApp(st.app.replace(/\.app$/i, "").split("/").pop() ?? "")) return { error: `${label}refused: ${st.app} is a terminal or shell. ${blockedHint}` };
     }
     steps.push(st);
   }
@@ -491,14 +495,17 @@ export function parseAppOutput(stdout: string): AppOutput {
 
 export function appToolSupported(platform: string = process.platform, env: NodeJS.ProcessEnv = process.env): boolean {
   if (env.DAEBOT_APP_CONTROL === "0" || env.DAEBOT_APP_CONTROL === "false") return false;
-  return platform === "win32";
+  return platform === "win32" || platform === "darwin";
 }
+
+/** Dry run: write actions resolve the control and say what they would do, and do not do it. DAEBOT_APP_DRY_RUN=1, or dry_run:true on the call (Mac). */
+export const appDryRun = (env: NodeJS.ProcessEnv = process.env): boolean => /^(1|true|yes|on)$/i.test((env.DAEBOT_APP_DRY_RUN ?? "").trim());
 
 const STEP_PROPS = {
   action: { type: "string", enum: [...ACTIONS], description: "What to do. list_windows | tree | find | invoke (click a button or menu item) | set_value (fill a text field) | get_text | select | toggle | expand | collapse | launch | close | wait" },
   window: { type: "string", description: "Which window: part of its title, the process name, or pid:123. Carried to the next steps if they leave it out." },
   name: { type: "string", description: "The control's visible name (case-insensitive; contains unless exact:true)" },
-  type: { type: "string", description: "UI Automation control type: Button, Edit, MenuItem, CheckBox, RadioButton, ComboBox, ListItem, TabItem, Document, Hyperlink, ..." },
+  type: { type: "string", description: "Control type: Button, Edit, MenuItem, CheckBox, RadioButton, ComboBox, ListItem, TabItem, Document, Hyperlink, ..." },
   id: { type: "string", description: "The control's AutomationId (exact), as shown by tree or find" },
   exact: { type: "boolean" },
   index: { type: "number", description: "Which match to use when several controls match (default 0)" },
@@ -513,7 +520,10 @@ const STEP_PROPS = {
   timeout_s: { type: "number", description: "wait/launch: seconds to wait (default 5 / 10, max 30)" },
 } as const;
 
-export function createAppTool(run?: ScriptRunner): Tool {
+export function createAppTool(run?: ScriptRunner, opts: { platform?: string; macExec?: MacExec; env?: NodeJS.ProcessEnv } = {}): Tool {
+  // An injected PowerShell runner always means the Windows path (tests); otherwise the host decides.
+  const platform = opts.platform ?? (run ? "win32" : process.platform);
+  const mac = platform === "darwin";
   return {
     class: "write",
     receipt: "surface",
@@ -524,7 +534,7 @@ export function createAppTool(run?: ScriptRunner): Tool {
     spec: {
       name: "app",
       description:
-        "Operate a desktop app IN THE BACKGROUND with UI Automation (Windows). It does not move the mouse, press keys, take focus or take a screenshot unless you ask, so the user keeps using their PC. Use it BEFORE the `computer` tool for any desktop app: " +
+        "Operate a desktop app IN THE BACKGROUND with the OS accessibility API (UI Automation on Windows, Accessibility / System Events on a Mac). It does not move the mouse, press keys, take focus or take a screenshot unless you ask, so the user keeps using their PC. Use it BEFORE the `computer` tool for any desktop app: " +
         "click a button or menu item (invoke), fill a field (set_value), read text (get_text), pick a list/tab item (select), flip a checkbox (toggle), open/close a dropdown (expand/collapse), start the app (launch), close a window (close), wait for a control (wait). " +
         "Workflow: list_windows -> tree (see the control names, types, ids; {i v t s e x} after a control = it supports invoke, value, toggle, select, expand, text) -> act. " +
         "BATCH: put every step you can predict in ONE call as steps:[{action,...},...]; they run in one process and come back as one short text result. Steps stop at the first failure unless continue_on_error:true. " +
@@ -537,6 +547,7 @@ export function createAppTool(run?: ScriptRunner): Tool {
           steps: { type: "array", maxItems: MAX_STEPS, items: { type: "object", properties: STEP_PROPS, required: ["action"] }, description: "A batch of steps to run in order in one call." },
           screenshot: { type: "boolean", description: "Also return a screenshot of the last step's window. Default false." },
           continue_on_error: { type: "boolean", description: "Keep going after a failed step. Default false." },
+          dry_run: { type: "boolean", description: "Mac: describe what each changing step would do (the control is found) without doing it." },
         },
       },
     },
@@ -545,6 +556,13 @@ export function createAppTool(run?: ScriptRunner): Tool {
       if ("error" in n) return fail(`app: ${n.error}`);
       if (n.shot && !lastWindow(n.steps)) return fail("app: screenshot needs a window");
       if (ctx.signal?.aborted) return fail("app: aborted before start");
+      if (mac) {
+        const dry = args.dry_run === true || appDryRun(opts.env);
+        const r = await runMacApp(n.steps as never, { exec: opts.macExec, signal: ctx.signal, dry, shot: n.shot, shotWindow: lastWindow(n.steps), stopOnError: n.stopOnError });
+        if (r.blocked) return fail(`${blockedMessage("app", r.blocked)}${r.text ? ` Done before it:\n${r.text}` : ""}`);
+        if (r.error) return fail(`app: failed: ${r.error}`);
+        return { ok: !r.failed, output: r.text, images: r.image ? [r.image] : undefined, meta: { steps: r.steps, platform: "darwin", dryRun: r.dry } };
+      }
       const script = buildAppScript(n.steps, { shot: n.shot, stopOnError: n.stopOnError });
       const runner = run ?? makeRunner(Math.min(180_000, SCRIPT_TIMEOUT_MS + n.steps.length * 3000), { mta: true });
       const r = await runner(script, ctx.signal);

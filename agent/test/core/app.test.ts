@@ -154,9 +154,11 @@ test("app: read-only calls are class read, anything that changes an app is write
   assert.equal(t.classFor!({ action: "launch" }), "write");
 });
 
-test("app: offered on Windows only, listed before computer, and switchable off", () => {
+test("app: offered on Windows and Mac, never Linux, listed before computer, and switchable off", () => {
   assert.equal(appToolSupported("win32", {}), true);
-  assert.equal(appToolSupported("darwin", {}), false);
+  assert.equal(appToolSupported("darwin", {}), true);
+  assert.equal(appToolSupported("linux", {}), false);
+  assert.equal(appToolSupported("darwin", { DAEBOT_APP_CONTROL: "0" }), false);
   assert.equal(appToolSupported("win32", { DAEBOT_APP_CONTROL: "0" }), false);
   const names = createBuiltinTools({ computer: true, app: true }).map((t) => t.spec.name);
   assert.ok(names.indexOf("app") > names.indexOf("process") && names.indexOf("app") < names.indexOf("computer"));
