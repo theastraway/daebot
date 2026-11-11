@@ -7,8 +7,11 @@ import { homeSig, mergeRecords, recordSig } from "./merge.ts";
 import { MAX_RECORD_BYTES, NOT_SYNCED_SURFACES, fromWire, toWire } from "./wire.ts";
 import type { WireRecord } from "./wire.ts";
 import { TombstoneBook } from "./tombstones.ts";
+import { inferHome, readEvidence } from "./home.ts";
+import type { HomeCtx, HomeWhy } from "./home.ts";
+import type { EnvTag } from "../env.ts";
 
-export interface SyncRow { id: string; touchedAt: number; updatedAt: number; sig: string; title: string; /** The session was deleted (a tombstone): the device deletes its copy. */ deleted?: true }
+export interface SyncRow { id: string; touchedAt: number; updatedAt: number; sig: string; title: string; /** Where the session lives (a device that has the same transcript adopts it without fetching the record). */ env?: EnvTag; /** The session was deleted (a tombstone): the device deletes its copy. */ deleted?: true }
 export type PushStatus = "ok" | "same" | "busy" | "forbidden" | "invalid" | "nobot" | "toolarge" | "error" | "deleted";
 export interface PushResult { id: string; status: PushStatus; sig?: string }
 
@@ -24,6 +27,8 @@ export interface SyncServiceDeps {
   deleteSession?(owner: string, id: string): Promise<boolean>;
   /** Where deletes are remembered (default: in memory only). */
   tombstones?: TombstoneBook;
+  /** The owner's computers and servers (merged) and the computer each Remote bot runs on: what a session's home is worked out from. */
+  homeCtx?(owner: string): HomeCtx;
   /** Called after a merge wrote a session: a live idle copy must be reloaded from the store. */
   afterWrite?(owner: string, id: string): Promise<void>;
   now?: () => number;
@@ -70,7 +75,7 @@ export class SyncService {
       if (x.tomb) { rows.push({ id: x.id, touchedAt: x.at, updatedAt: x.at, sig: "", title: "", deleted: true }); continue; }
       const rec = this.deps.store.loadShared ? this.deps.store.loadShared(x.id) : this.deps.store.load(x.id);
       if (!rec) continue;
-      rows.push({ id: x.id, touchedAt: x.at, updatedAt: rec.updatedAt, sig: recordSig(rec), title: rec.title });
+      rows.push({ id: x.id, touchedAt: x.at, updatedAt: rec.updatedAt, sig: recordSig(rec), title: rec.title, ...(rec.env ? { env: rec.env } : {}) });
     }
     return { now: this.tick(), rows, more: all.length > limit };
   }
@@ -96,15 +101,51 @@ export class SyncService {
     return toWire(rec, this.deps.bots(owner));
   }
 
+  private homeCtx(owner: string): HomeCtx { return this.deps.homeCtx?.(owner) ?? { groups: [] }; }
+
+  /**
+   * Gives every session of these owners (all of them when none are named) that has no home the one its record proves, else MIND Cloud.
+   * Idempotent: a session that has a home is never touched. Runs at start and then on a timer, so any session that slips in untagged is fixed.
+   */
+  async backfillHomes(owners?: string[], o: { recheckCloud?: boolean } = {}): Promise<{ owner: string; scanned: number; assigned: number; byHome: Record<string, number>; byWhy: Partial<Record<HomeWhy, number>> }[]> {
+    const metas = this.deps.store.list().filter((m) => !NOT_SYNCED_SURFACES.has(m.surface));
+    const want = owners ? new Set(owners) : undefined;
+    const ids = [...new Set(metas.map((m) => m.owner ?? "owner"))].filter((o) => !want || want.has(o));
+    const out: { owner: string; scanned: number; assigned: number; byHome: Record<string, number>; byWhy: Partial<Record<HomeWhy, number>> }[] = [];
+    for (const owner of ids) {
+      const sum = { owner, scanned: 0, assigned: 0, byHome: {} as Record<string, number>, byWhy: {} as Partial<Record<HomeWhy, number>> };
+      const ctx = this.homeCtx(owner);
+      for (const m of metas) {
+        if ((m.owner ?? "owner") !== owner) continue;
+        sum.scanned++;
+        // A session stamped MIND Cloud is only re-read on the start-up pass, and only moved by proof (a tool that cannot run on daebot.live returned ok).
+        if (m.env && !(o.recheckCloud && m.env.kind === "cloud")) continue;
+        if (this.deps.isBusy(m.id)) continue; // its live copy would write the old record back; the next pass gets it
+        const rec = this.deps.store.load(m.id);
+        if (!rec) continue;
+        if (rec.env && (rec.env.kind !== "cloud" || !readEvidence(rec).localTool)) continue;
+        const g = inferHome({ ...rec, env: undefined }, ctx);
+        if (g.env.kind === "cloud" && rec.env) continue;
+        await this.deps.store.save({ ...rec, env: g.env }, { origin: "sync" });
+        await this.deps.afterWrite?.(owner, rec.id).catch(() => {});
+        sum.assigned++;
+        sum.byHome[g.env.name] = (sum.byHome[g.env.name] ?? 0) + 1;
+        sum.byWhy[g.why] = (sum.byWhy[g.why] ?? 0) + 1;
+      }
+      out.push(sum);
+    }
+    return out;
+  }
+
   /** Merges incoming wire records into this owner's store. One push at a time per owner (a merge is read-modify-write). */
-  push(owner: string, records: unknown[]): Promise<PushResult[]> {
+  push(owner: string, records: unknown[], pusher?: EnvTag): Promise<PushResult[]> {
     const prev = this.chains.get(owner) ?? Promise.resolve();
-    const run = prev.catch(() => {}).then(() => this.pushLocked(owner, records));
+    const run = prev.catch(() => {}).then(() => this.pushLocked(owner, records, pusher));
     this.chains.set(owner, run.catch(() => {}));
     return run;
   }
 
-  private async pushLocked(owner: string, records: unknown[]): Promise<PushResult[]> {
+  private async pushLocked(owner: string, records: unknown[], pusher?: EnvTag): Promise<PushResult[]> {
     const out: PushResult[] = [];
     let bots = this.deps.bots(owner);
     let reconciled = false;
@@ -126,6 +167,8 @@ export class SyncService {
         const existing = this.deps.store.load(rec.id);
         if (existing && (existing.owner ?? "owner") !== owner) { out.push({ id: rec.id, status: "forbidden" }); continue; }
         const merged = mergeRecords(existing, rec);
+        // Every session ends up with a home: a record nobody tagged gets the device that pushed it (if it is new here) or what its own history shows.
+        if (!merged.env) merged.env = inferHome(merged, { ...this.homeCtx(owner), pusher: existing ? undefined : pusher }).env;
         if (existing && recordSig(merged) === recordSig(existing) && merged.history.length === existing.history.length && homeSig(merged) === homeSig(existing)) {
           out.push({ id: rec.id, status: "same", sig: recordSig(existing) });
           continue;

@@ -18,7 +18,7 @@ import { auth as bearer, http, tmpStatic } from "../gateway/helpers.ts";
 export const rnd = () => randomBytes(18).toString("hex");
 export const H = { host: "daebot.live", "x-forwarded-proto": "https" };
 
-export async function hostedRig(o: { script?: ConstructorParameters<typeof FakeProvider>[0]; users?: string[]; onlineMs?: number } = {}) {
+export async function hostedRig(o: { script?: ConstructorParameters<typeof FakeProvider>[0]; users?: string[]; onlineMs?: number; envSweepMs?: number } = {}) {
   const names = o.users ?? ["alice", "bob"];
   const keys: Record<string, string> = Object.fromEntries(names.map((n) => [n, "mind_" + rnd()]));
   const fake = await startFakeMind(Object.fromEntries(names.map((n) => [keys[n], n])));
@@ -35,7 +35,7 @@ export async function hostedRig(o: { script?: ConstructorParameters<typeof FakeP
   const ownerRuntime = createRuntime(cfg, { provider, store, bootCache, bots, hosted: { dailyUsdCap: 50, sharedCap: globalCap, exempt: true } });
   const env: NodeJS.ProcessEnv = { DATA_DIR: dir, DAEBOT_SECRET_KEY: rnd() + rnd(), DAEBOT_ADMINS: "", MIND_OAUTH_BASE_URL: fake.url, DAEBOT_PUBLIC_URL: "https://daebot.live" };
   const auth = createAuthContext({ env, cfg, hosted: hostedOpts, ownerRuntime, globalCap, provider, sessionStore: store, bootCache, bots });
-  const gw = await startGateway({ runtime: ownerRuntime, cfg, port: 0, host: "127.0.0.1", staticDir: st.dir, hosted: hostedOpts, auth, sessionStore: store, bots, botsEnabled: () => true, remoteDir: dir, remoteOnlineMs: o.onlineMs });
+  const gw = await startGateway({ runtime: ownerRuntime, cfg, port: 0, host: "127.0.0.1", staticDir: st.dir, hosted: hostedOpts, auth, sessionStore: store, bots, botsEnabled: () => true, remoteDir: dir, remoteOnlineMs: o.onlineMs, envSweepMs: o.envSweepMs });
   /** What a device does: a fetch that carries the allowlisted Host over https and lands on the in-process hosted gateway (an aborted fetch drops the connection, as a real network does). */
   const bridge = (): typeof fetch => ((input: string | URL | Request, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
     const u = new URL(String(input));

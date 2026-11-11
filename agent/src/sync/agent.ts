@@ -6,8 +6,8 @@
 import type { SessionStore, StoredSession } from "../persist.ts";
 import type { BotsApi } from "../bots/types.ts";
 import { homeSig, mergeRecords, recordSig } from "./merge.ts";
-import { CLOUD_ENV } from "../env.ts";
-import type { EnvTag } from "../env.ts";
+import { normalizeEnv } from "../env.ts";
+import type { EnvGroup, EnvTag } from "../env.ts";
 import { NOT_SYNCED_SURFACES, fromWire, toWire } from "./wire.ts";
 import type { WireRecord } from "./wire.ts";
 import { SyncHttp } from "./http.ts";
@@ -27,6 +27,8 @@ export interface SyncAgentDeps {
   bots(): BotsApi | undefined;
   /** This device's home environment: a session this device made and daebot.live has not seen yet is stamped with it on its way up. */
   env?: EnvTag;
+  /** What this device tells daebot.live about itself on every push (the server records the first device that pushed a session it had not seen). */
+  device?: { id: string; name: string; kind: "machine" | "server" };
   isBusy(id: string): boolean;
   /** A session was rewritten from the other side: reload a live idle copy. */
   afterWrite?(id: string): Promise<void>;
@@ -69,6 +71,9 @@ export class SyncAgent {
   private applying = new Set<string>(); // deletes this agent is applying from the server (not echoed back)
   readonly tombs: TombstoneBook;
   readonly status: SyncStatus;
+  /** The account's computers and servers (one per machine) and the cloud's name, as daebot.live last sent them: every device shows the same places under the same names. */
+  envGroups: EnvGroup[] = [];
+  cloudName?: string;
   private routineAgent?: RoutineSyncAgent;
   private routineErr = "";
 
@@ -191,6 +196,13 @@ export class SyncAgent {
   /** Routine counters (pulled/pushed/deleted since start). */
   get routineStats(): { pulled: number; pushed: number; deleted: number; error: string } | undefined { return this.routineAgent ? { ...this.routineAgent.stats, error: this.routineErr } : undefined; }
 
+  /** Renames an environment of this account on daebot.live (an empty name puts the automatic one back) and takes the new names right away. */
+  async renameEnv(id: string, name: string): Promise<void> {
+    await this.http.json("POST", "/api/sync/envs/rename", { id, name });
+    const r = await this.http.json<{ envGroups?: EnvGroup[]; cloudName?: string }>("GET", "/api/sync/sessions?since=9007199254740991&limit=1"); // no rows, just the names that ride on every list answer
+    if (Array.isArray(r.envGroups)) { this.envGroups = r.envGroups.filter((g) => !!normalizeEnv(g) && Array.isArray(g.members) && Array.isArray(g.keys)).slice(0, 100); this.cloudName = typeof r.cloudName === "string" ? r.cloudName : undefined; }
+  }
+
   /** Brings one session up to date from the server right now (a remote job needs the thread as it is on the other device). */
   async pullSession(id: string): Promise<void> {
     if (this.running) await this.running.catch(() => {});
@@ -201,12 +213,13 @@ export class SyncAgent {
     let since = full ? 0 : this.cursor;
     const seen = new Set<string>();
     for (let page = 0; page < 200; page++) {
-      const r = await this.http.json<{ now: number; rows: SyncRow[]; more: boolean }>("GET", `/api/sync/sessions?since=${since}&limit=200`);
+      const r = await this.http.json<{ now: number; rows: SyncRow[]; more: boolean; envGroups?: EnvGroup[]; cloudName?: string }>("GET", `/api/sync/sessions?since=${since}&limit=200`);
+      if (Array.isArray(r.envGroups)) { this.envGroups = r.envGroups.filter((g) => !!normalizeEnv(g) && Array.isArray(g.members) && Array.isArray(g.keys)).slice(0, 100); this.cloudName = typeof r.cloudName === "string" ? r.cloudName : undefined; }
       for (const row of r.rows) {
         seen.add(row.id);
         if (!row.deleted) this.onServer.add(row.id);
         if (row.deleted) { await this.applyRemoteDelete(row.id); continue; }
-        await this.pullRow(row.id, row.sig);
+        await this.pullRow(row.id, row.sig, normalizeEnv(row.env));
       }
       if (r.rows.length) { since = r.rows[r.rows.length - 1].touchedAt; this.cursor = Math.max(this.cursor, since); }
       if (!r.more) break;
@@ -215,14 +228,14 @@ export class SyncAgent {
     if (full) for (const m of this.deps.store.list()) if (!seen.has(m.id) && !this.tombs.has(SYNC_OWNER, m.id) && !NOT_SYNCED_SURFACES.has(m.surface) && (m.owner ?? SYNC_OWNER) === SYNC_OWNER) this.dirty.add(m.id);
   }
 
-  private async pullRow(id: string, remoteSig: string | undefined): Promise<void> {
+  private async pullRow(id: string, remoteSig: string | undefined, remoteEnv?: EnvTag): Promise<void> {
     if (this.tombs.has(SYNC_OWNER, id)) return; // deleted here: never brought back (the delete itself is sent in flush)
     const local = this.deps.store.load(id);
     if (local && (local.owner ?? SYNC_OWNER) !== SYNC_OWNER) return;
     if (local && remoteSig && recordSig(local) === remoteSig) {
       this.synced.set(id, remoteSig); this.dirty.delete(id); this.onServer.add(id);
-      // Same transcript on both sides: only the home can differ. A copy with no home that the server holds is MIND Cloud's (the server gives no-home records that home).
-      if (!local.env && (local.owner ?? SYNC_OWNER) === SYNC_OWNER && !this.deps.isBusy(id)) await this.deps.store.save({ ...local, env: CLOUD_ENV }, { origin: "sync" });
+      // Same transcript on both sides: only the home can differ. The server decides a home for every session it holds; a copy with none takes it.
+      if (remoteEnv && !local.env && (local.owner ?? SYNC_OWNER) === SYNC_OWNER && !this.deps.isBusy(id)) await this.deps.store.save({ ...local, env: remoteEnv }, { origin: "sync" });
       await this.syncPhotos(id, local.history); return;
     }
     if (this.deps.isBusy(id)) { this.retryPull.add(id); return; }
@@ -237,8 +250,6 @@ export class SyncAgent {
       m = fromWire(w, this.bots(), SYNC_OWNER, "admin");
     }
     if (!m.ok) { if (m.reason === "nobot") this.retryAfter(id); return; }
-    // A record the server sends with no home (made before environments existed) was made on daebot.live: that is MIND Cloud.
-    if (!m.rec.env && !local?.env) m.rec.env = CLOUD_ENV;
     this.onServer.add(id);
     const merged = mergeRecords(local, m.rec);
     const changed = !local || recordSig(merged) !== recordSig(local) || merged.history.length !== local.history.length || homeSig(merged) !== homeSig(local);
@@ -310,7 +321,7 @@ export class SyncAgent {
       if (!batch.length) return;
       const sent = batch;
       batch = []; bytes = 0;
-      const r = await this.http.json<{ results: PushResult[] }>("POST", "/api/sync/sessions", { records: sent });
+      const r = await this.http.json<{ results: PushResult[] }>("POST", "/api/sync/sessions", { records: sent, ...(this.deps.device ? { device: this.deps.device } : {}) });
       for (const x of r.results) {
         if (x.status === "ok" || x.status === "same") {
           const local = this.deps.store.load(x.id);
