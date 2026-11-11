@@ -32,7 +32,7 @@ const errorChunk = (): Response => new Response(sseBody([{ error: { message: "up
 const drain = async (it: AsyncIterable<StreamEvent>) => { const out: StreamEvent[] = []; for await (const e of it) out.push(e); return out; };
 const text = (ev: StreamEvent[]) => ev.filter((e) => e.type === "text").map((e: any) => e.delta).join("");
 
-interface LlmCall { url: string; key: string; auth: string | undefined; model: string; body: any }
+interface LlmCall { url: string; key: string; auth: string | undefined; model: string; body: any; headers: Record<string, string> }
 
 /** A fake MIND LLM + credits surface behind one fetch. `script` answers the Nth LLM call; `tiers` maps a MIND key to its plan. */
 function fakeMindFetch(o: { script?: (n: number, model: string, key: string) => Response; tiers?: Record<string, string>; credits?: Record<string, number>; limit?: number | null; routing?: Record<string, Record<string, unknown>>; passthrough?: typeof fetch } = {}) {
@@ -44,7 +44,7 @@ function fakeMindFetch(o: { script?: (n: number, model: string, key: string) => 
     const h = (init?.headers ?? {}) as Record<string, string>;
     if (url.endsWith("/llm/chat/completions")) {
       const body = JSON.parse(String(init?.body));
-      llm.push({ url, key: h["X-API-Key"], auth: h["Authorization"], model: body.model, body });
+      llm.push({ url, key: h["X-API-Key"], auth: h["Authorization"], model: body.model, body, headers: h });
       return (o.script ?? (() => okStream()))(llm.length - 1, body.model, h["X-API-Key"]);
     }
     if (url.endsWith("/credits")) {
@@ -478,4 +478,31 @@ test("pickDefaultModel: the default the user picked in Daebot beats the MIND acc
 test("404 relayed from OpenRouter (one model unavailable) falls through to the fallback model, not the route-off message", async () => {
   const w = provider({ script: (_n, model) => (model === "m/default" ? new Response('{"error":{"message":"No endpoints found for m/default.","code":404}}', { status: 404 }) : okStream("fb")) });
   assert.equal(text(await ask(w.p)), "fb");
+});
+
+
+// ---------- spend caps ----------
+const capRefusal = (scope = "account"): Response =>
+  new Response(JSON.stringify({ error: "spend_cap_reached", scope, message: "This bot reached its $1 weekly cap. Raise it in Settings.", cap_usd: 1, period: "weekly", spent_usd: 1.2 }), { status: 402, headers: { "content-type": "application/json" } });
+
+test("402 spend_cap_reached: one call, no fall through, no free retry, MIND's own sentence reaches the user", async () => {
+  const w = provider({ script: () => capRefusal("bot") });
+  await assert.rejects(ask(w.p), (e: any) => {
+    assert.ok(e instanceof MindBillingError);
+    assert.equal(e.code, "spend_cap_reached");
+    assert.equal(e.userNotice, "This bot reached its $1 weekly cap. Raise it in Settings.");
+    assert.equal(e.fatal, true);
+    return true;
+  });
+  assert.deepEqual(w.llm.map((c) => c.model), ["m/default"], "never retried on the free model or the fallback list");
+});
+
+test("withBot tags every call of that bot with X-Daebot-Bot; an untagged session sends no such header", async () => {
+  const w = provider({ script: () => okStream() });
+  const inner = w.p;
+  const { withBot } = await import("../../src/provider/index.ts");
+  await drain(withBot(inner, "bot_7").stream({ model: "m/default", messages: [{ role: "user", content: "hi" }], tools: [] }));
+  await drain(inner.stream({ model: "m/default", messages: [{ role: "user", content: "hi" }], tools: [] }));
+  assert.equal(w.llm[0].headers["X-Daebot-Bot"], "bot_7");
+  assert.equal(w.llm[1].headers["X-Daebot-Bot"], undefined);
 });

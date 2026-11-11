@@ -12,7 +12,7 @@ export const DEFAULT_FREE_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
 export const CREDITS_TTL_MS = 5 * 60 * 1000;
 
 // model_not_available: MIND answered 400, the model is not in its list. endpoint_disabled: MIND answered 404, the LLM proxy flag is off.
-export type BillingCode = "insufficient_credits" | "model_not_in_plan" | "model_not_available" | "endpoint_disabled";
+export type BillingCode = "insufficient_credits" | "model_not_in_plan" | "model_not_available" | "endpoint_disabled" | "spend_cap_reached";
 
 export interface MindBilling {
   tier: string;              // MIND plan id ("free", "starter", ...)
@@ -54,9 +54,10 @@ export class MindBillingError extends ProviderHttpError {
   upgradeUrl: string;
   /** The line the gateway shows the user (the loop prefers it over the raw error text). */
   userNotice: string;
-  constructor(code: BillingCode, b: { tier: string; creditsRemaining: number | null; upgradeUrl: string }, status = 402) {
+  constructor(code: BillingCode, b: { tier: string; creditsRemaining: number | null; upgradeUrl: string; message?: string }, status = 402) {
     const plan = tierDisplayName(b.tier);
-    const text = code === "model_not_in_plan" ? `This model needs a paid MIND plan (you are on ${plan}). Upgrade: ${b.upgradeUrl}`
+    const text = code === "spend_cap_reached" ? (b.message || "Your spend cap is reached. Raise it in Settings.")
+      : code === "model_not_in_plan" ? `This model needs a paid MIND plan (you are on ${plan}). Upgrade: ${b.upgradeUrl}`
       : code === "model_not_available" ? `This model is not available on MIND (${plan} plan). See plans: ${b.upgradeUrl}`
       : code === "endpoint_disabled" ? "Daebot can't reach the AI on your MIND account right now. Please try again in a few minutes."
       : `You've used this month's plan usage (${plan} plan). Upgrade: ${b.upgradeUrl}`;
@@ -188,7 +189,7 @@ export function createMindProvider(cfg: Config, o: MindProviderOptions): Provide
 
   const shared = {
     url, name: "mind", backoffMs: o.backoffMs,
-    headers: () => ({ "Content-Type": "application/json", "X-API-Key": o.getKey() }),
+    headers: (bot?: string) => ({ "Content-Type": "application/json", "X-API-Key": o.getKey(), ...(bot ? { "X-Daebot-Bot": bot } : {}) }),
     onResponse: (res: Response) => {
       const tier = res.headers.get("x-mind-tier");
       const left = res.headers.get("x-mind-credits-remaining");
@@ -210,6 +211,11 @@ export function createMindProvider(cfg: Config, o: MindProviderOptions): Provide
       let j: any;
       try { j = JSON.parse(body); } catch { return undefined; }
       const code = j?.error;
+      // The user's own spend cap (account or this bot), refused by MIND before any spend. Never falls back to another model.
+      if (status === 402 && code === "spend_cap_reached") {
+        const message = typeof j.message === "string" && j.message.trim() ? j.message.trim().slice(0, 300) : undefined;
+        return new MindBillingError("spend_cap_reached", { tier: known?.tier ?? "", creditsRemaining: known?.creditsRemaining ?? null, upgradeUrl: known?.upgradeUrl ?? o.credits.defaultUpgradeUrl, message }, 402);
+      }
       if (status === 402 ? code !== "insufficient_credits" && code !== "model_not_in_plan" : code !== "model_not_available") return undefined;
       const tier = typeof j.tier === "string" && j.tier ? j.tier : known?.tier ?? "";
       const upgradeUrl = typeof j.upgrade_url === "string" && j.upgrade_url ? j.upgrade_url : known?.upgradeUrl ?? o.credits.defaultUpgradeUrl;

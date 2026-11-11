@@ -14,7 +14,7 @@ export interface ProviderOptions {
   url?: string;
   name?: string;        // Provider.name (default "openrouter")
   /** Request headers per call (default: OpenRouter bearer key + attribution). The MIND-billed provider sends X-API-Key here. */
-  headers?: () => Record<string, string>;
+  headers?: (bot?: string) => Record<string, string>;
   /** Sees every response (ok or not) before it is read, e.g. for billing headers. */
   onResponse?: (res: Response) => void;
   /** Maps a non-ok response to a typed error. Return undefined to keep the generic ProviderHttpError. */
@@ -122,7 +122,7 @@ export function createOpenRouterProvider(cfg: Config, fetchImpl: typeof fetch = 
   const backoffMs = opts.backoffMs ?? 800;
   const url = opts.url ?? OPENROUTER_URL;
 
-  async function open(model: string, req: { messages: Message[]; tools: ToolSpec[]; signal?: AbortSignal }): Promise<Response> {
+  async function open(model: string, req: { messages: Message[]; tools: ToolSpec[]; signal?: AbortSignal; bot?: string }): Promise<Response> {
     const body: Record<string, unknown> = {
       model,
       // Never put an image in front of a text-only model: OpenRouter answers 404 "No endpoints found that support image input".
@@ -137,7 +137,7 @@ export function createOpenRouterProvider(cfg: Config, fetchImpl: typeof fetch = 
       try {
         const res = await fetchImpl(url, {
           method: "POST",
-          headers: opts.headers ? opts.headers() : {
+          headers: opts.headers ? opts.headers(req.bot) : {
             "Content-Type": "application/json",
             Authorization: `Bearer ${cfg.openrouterKey}`,
             "HTTP-Referer": REFERER,

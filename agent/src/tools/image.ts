@@ -23,7 +23,7 @@ const TIMEOUT_MS = 120_000;
 const MAX_PROMPT = 2000;
 
 export interface ImageGenerateOptions {
-  endpoint: () => LlmEndpoint | undefined;
+  endpoint: (sessionId?: string) => LlmEndpoint | undefined;
   store: Pick<PhotoStore, "add">;
   fetchImpl?: typeof fetch;
   model?: string;
@@ -84,7 +84,7 @@ export function createImageGenerateTool(o: ImageGenerateOptions): Tool {
       if (prompt.length > MAX_PROMPT) return fail(`image_generate: prompt is over ${MAX_PROMPT} characters`);
       const aspect = typeof args.aspect_ratio === "string" && (ASPECTS as readonly string[]).includes(args.aspect_ratio) ? args.aspect_ratio : undefined;
       if (args.aspect_ratio !== undefined && !aspect) return fail(`image_generate: aspect_ratio must be one of ${ASPECTS.join(", ")}`);
-      const primary = o.endpoint();
+      const primary = o.endpoint(ctx.sessionId);
       if (!primary) return fail("image_generate: no model provider is configured on this server (needs a MIND key or OPENROUTER_API_KEY)");
       const timeout = AbortSignal.timeout(o.timeoutMs ?? TIMEOUT_MS);
       const signal = ctx.signal ? AbortSignal.any([ctx.signal, timeout]) : timeout;

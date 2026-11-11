@@ -40,7 +40,7 @@ export type StreamEvent =
 export interface Provider {
   readonly name: string;
   /** pinModel: use exactly req.model, with no tier swap and no fallback list (a vision call must not land on a text-only chat model). */
-  stream(req: { model: string; messages: Message[]; tools: ToolSpec[]; signal?: AbortSignal; pinModel?: boolean }): AsyncIterable<StreamEvent>;
+  stream(req: { model: string; messages: Message[]; tools: ToolSpec[]; signal?: AbortSignal; pinModel?: boolean; bot?: string }): AsyncIterable<StreamEvent>;
 }
 
 // ---------- tools ----------

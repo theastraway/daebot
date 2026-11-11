@@ -40,7 +40,7 @@ export function parseSearchHits(body: unknown, max = MAX_RESULTS): SearchHit[] {
 }
 
 export interface WebSearchOptions {
-  endpoint: () => LlmEndpoint | undefined;
+  endpoint: (sessionId?: string) => LlmEndpoint | undefined;
   fetchImpl?: typeof fetch;
   model?: string;
   timeoutMs?: number;
@@ -71,7 +71,7 @@ export function createWebSearchTool(o: WebSearchOptions): Tool {
       if (!query) return fail("web_search: query is required");
       if (query.length > 400) return fail("web_search: query is over 400 characters; search for the key terms");
       const n = Math.min(MAX_RESULTS, Math.max(1, Math.round(Number(args.max_results)) || DEFAULT_RESULTS));
-      const ep = o.endpoint();
+      const ep = o.endpoint(ctx.sessionId);
       if (!ep) return fail("web_search: no model provider is configured on this server (needs a MIND key or OPENROUTER_API_KEY)");
       const doFetch = o.fetchImpl ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
       const timeout = AbortSignal.timeout(o.timeoutMs ?? TIMEOUT_MS);

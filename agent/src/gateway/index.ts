@@ -53,6 +53,7 @@ import { AdminLedger } from "./mistakes.ts";
 import { AngerLedger } from "./anger.ts";
 import { MindFeed } from "./mind-feed.ts";
 import { fetchUsage, setAdditional, UsageError } from "./usage.ts";
+import { fetchSpendCaps, putSpendCaps, SpendCapsError, toMindBody, validBotId } from "./spendcaps.ts";
 import { createMindClient } from "../mind/client.ts";
 import { touchConnectedApps } from "../mind/connected.ts";
 import { addonWords, fetchIntegrations, providerFor } from "../mind/integrations.ts";
@@ -1443,7 +1444,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/board" || path.startsWith("/board/") || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
+    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/board" || path.startsWith("/board/") || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -1566,6 +1567,34 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       return sendJson(res, 200, await setAdditional(base, key, b.enabled, f));
     } catch (e) {
       if (e instanceof UsageError) return sendJson(res, e.status, { error: e.message });
+      return sendJson(res, 502, { error: "Could not reach MIND." });
+    }
+  }
+
+  // ---------- spend caps: the account cap and each bot's cap, read and set in MIND (which enforces them in its LLM proxy).
+  // Always the signed-in user's own MIND key, so a user can only ever read or change their own caps.
+  async function spendCapsApi(req: IncomingMessage, res: ServerResponse, method: string, me: Principal, q: URLSearchParams): Promise<void> {
+    if (method !== "GET" && method !== "PUT") return sendJson(res, 405, { error: "method not allowed" });
+    let key: string | undefined;
+    if (hosted) {
+      if (me.owner) return sendJson(res, 200, { source: "owner" });
+      key = billingKeyOf(me);
+    } else {
+      key = opts.cfg?.billing === "mind" ? opts.cfg.mindApiKey || undefined : undefined;
+    }
+    if (!key) return sendJson(res, 200, { source: "own-key" });
+    const base = auth?.mindBaseUrl ?? opts.cfg?.mindBaseUrl ?? "https://m-i-n-d.ai/developer/v1";
+    const f = opts.fetchImpl ?? auth?.fetchImpl;
+    try {
+      if (method === "GET") {
+        const bot = q.get("bot") ?? undefined;
+        if (bot !== undefined && !validBotId(bot)) return sendJson(res, 400, { error: "Unknown bot." });
+        return sendJson(res, 200, await fetchSpendCaps(base, key, bot, f));
+      }
+      const body = toMindBody(await readJson(req));
+      return sendJson(res, 200, { source: "mind", caps: await putSpendCaps(base, key, body, f) });
+    } catch (e) {
+      if (e instanceof SpendCapsError) return sendJson(res, e.status, { error: e.message });
       return sendJson(res, 502, { error: "Could not reach MIND." });
     }
   }
@@ -2096,6 +2125,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (path.startsWith("/apps/")) return apps ? apps(req, res, path, me) : sendJson(res, 404, { error: "apps are not available" });
     if (path === "/account") return accountApi(res, method);
     if (path === "/usage" || path === "/usage/additional") return usageApi(req, res, path, method, me);
+    if (path === "/spend-caps") return spendCapsApi(req, res, method, me, new URLSearchParams((req.url ?? "").includes("?") ? req.url!.slice(req.url!.indexOf("?") + 1) : ""));
     if (path === "/board") {
       // Every task Daebot declared across THIS signed-in user's sessions. The runtime is the user's own, so another user's sessions can never appear.
       if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
