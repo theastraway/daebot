@@ -43,6 +43,7 @@ import { createBuiltinTools } from "./tools/index.ts";
 import { createViewPhotoTool, DEFAULT_VISION } from "./tools/photo.ts";
 import { createWebSearchTool } from "./tools/search.ts";
 import { llmEndpoint } from "./tools/llm-call.ts";
+import { createImageGenerateTool } from "./tools/image.ts";
 import { PhotoStore, messageWithPhotos } from "./photos.ts";
 import { HistoryRecorder, messageWithQuote, withMessageIds } from "./events.ts";
 import { createMcpLoader, parseMcpServers } from "./mcp/client.ts";
@@ -382,6 +383,14 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     : undefined;
   // web_search: ranked web results through the same billing path as the chat (hosted: the user's own MIND key and credits; self-host: OPENROUTER_API_KEY).
   const searchTool = createWebSearchTool({ endpoint: () => llmEndpoint(cfg, billingKey), fetchImpl: overrides.fetchImpl, model: (overrides.env ?? process.env).DAEBOT_SEARCH_MODEL?.trim() || undefined });
+  // image_generate: an image-output model, billed through the same path as the chat; the picture is stored as a chat photo (synced with the chat).
+  // MIND offers only the models on its own list: when it refuses the image model, the OWNER's session (exempt) may use the server's own OpenRouter key instead, never another user's.
+  const imageTool = photoStore
+    ? createImageGenerateTool({
+        store: photoStore, endpoint: () => llmEndpoint(cfg, billingKey), fetchImpl: overrides.fetchImpl, model: (overrides.env ?? process.env).DAEBOT_IMAGE_MODEL?.trim() || undefined,
+        fallback: mindBilled && exempt && cfg.openrouterKey ? () => llmEndpoint({ ...cfg, billing: "openrouter" }, billingKey) : undefined,
+      })
+    : undefined;
   // Every session of this owner is logged to their own MIND as an Agent Session, from every device (see mind/session-log.ts). Off only when
   // there is no data dir to remember the cursors in, or the host says so (tests).
   const sessionLog = overrides.store?.subscribe && stateDir && overrides.sessionLog !== false && cfg.mindApiKey
@@ -572,7 +581,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         return r;
       },
     })] : [];
-    const every = [...builtinTools, searchTool, ...(photoTool ? [photoTool] : []), ...createMindTools({
+    const every = [...builtinTools, searchTool, ...(photoTool ? [photoTool] : []), ...(imageTool ? [imageTool] : []), ...createMindTools({
       home, clientFor: clientForMind, roster: () => botStore?.roster() ?? [],
       refresh: botStore ? async () => { await botStore.list(); } : undefined,
     }, { user: hosted?.username }).filter((t) => on || t.spec.name !== "mind_tenants"),

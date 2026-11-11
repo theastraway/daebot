@@ -291,6 +291,39 @@ export function initPhotos({ els, h, icon, api, onChange }) {
     return box;
   }
 
+  // ---- images Dae generated (image_generate): the reply carries ![alt](/sessions/<id>/photos/<pN>); show the stored photo instead of the text.
+  // A separate observer, so the markdown renderer in app.js stays untouched. The text node is replaced by the same thumbnail a sent photo gets.
+  const GENERATED = /!\[([^\]\n]*)\]\(\/sessions\/([^/\s)]+)\/photos\/(p\d{1,4})\)/g;
+  function showGenerated(root) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const hits = [];
+    for (let n; (n = walker.nextNode()); ) if (n.nodeValue.includes("](/sessions/")) hits.push(n);
+    for (const node of hits) {
+      const text = node.nodeValue;
+      const frag = document.createDocumentFragment();
+      let last = 0, found = false;
+      GENERATED.lastIndex = 0;
+      for (let m; (m = GENERATED.exec(text)); ) {
+        found = true;
+        if (m.index > last) frag.append(text.slice(last, m.index));
+        let sid = m[2]; try { sid = decodeURIComponent(sid); } catch { /* keep as is */ }
+        const box = thumbs([{ id: m[3], name: m[1] || "Generated image" }], sid);
+        box.classList.add("msg-generated"); box.style.justifyContent = "flex-start"; box.style.margin = "8px 0";
+        box.querySelectorAll("img").forEach((img) => { img.style.height = "auto"; img.style.maxHeight = "380px"; img.style.maxWidth = "min(440px, 80vw)"; });
+        frag.append(box);
+        last = m.index + m[0].length;
+      }
+      if (!found) continue;
+      if (last < text.length) frag.append(text.slice(last));
+      node.replaceWith(frag);
+    }
+  }
+  if (typeof MutationObserver !== "undefined" && typeof document !== "undefined") {
+    let queued = false;
+    const scan = () => { queued = false; document.querySelectorAll(".msg-asst").forEach(showGenerated); };
+    new MutationObserver(() => { if (!queued) { queued = true; requestAnimationFrame(scan); } }).observe(document.body, { childList: true, subtree: true });
+  }
+
   render();
   return {
     count: () => items.length,
