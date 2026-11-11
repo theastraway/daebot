@@ -11,6 +11,8 @@ export interface BotRecord {
   face?: string;
   /** When the user pinned this bot (ms). Absent = not pinned. Pinned bots sort to the top, in the order they were pinned. Saved per user, so it follows web, desktop and phone. */
   pinnedAt?: number;
+  /** Home environment: where this bot was created (MIND Cloud, a machine, a server). Absent on bots made before environments existed. */
+  env?: import("../env.ts").EnvTag;
   createdAt: number;
   updatedAt: number;
   /** Definition version installed (absent = 1). See versions.ts. */

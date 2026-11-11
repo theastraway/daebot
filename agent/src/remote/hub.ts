@@ -15,7 +15,7 @@ const MAX_JOBS_PER_OWNER = 200;
 /** An answer to a permission card, on its way to the desktop that asked. */
 export interface RemoteDecision { jobId: string; permId: string; decision: "allow" | "deny"; remember?: "once" | "always"; scope?: string }
 
-export interface DeviceInfo { id: string; name: string; lastSeen: number; slugs: string[] }
+export interface DeviceInfo { id: string; name: string; lastSeen: number; slugs: string[]; /** machine (a computer) or server (a droplet); absent on a device that has not said. */ kind?: "machine" | "server" }
 export type JobState = "queued" | "delivered" | "done" | "failed";
 export interface RemoteJob {
   id: string;
@@ -91,12 +91,13 @@ export class RemoteHub {
   }
 
   /** A desktop checked in: it carries these bots (by slug). */
-  heartbeat(owner: string, d: { id: string; name: string; slugs: string[] }): DeviceInfo {
+  heartbeat(owner: string, d: { id: string; name: string; slugs: string[]; kind?: "machine" | "server" }): DeviceInfo {
     const s = this.st(owner);
     const prev = s.devices[d.id];
-    const info: DeviceInfo = { id: d.id, name: d.name.slice(0, 60) || "Desktop", lastSeen: this.now(), slugs: d.slugs.slice(0, 200) };
+    const kind = d.kind ?? prev?.kind;
+    const info: DeviceInfo = { id: d.id, name: d.name.slice(0, 60) || "Desktop", lastSeen: this.now(), slugs: d.slugs.slice(0, 200), ...(kind ? { kind } : {}) };
     s.devices[d.id] = info;
-    if (!prev || prev.name !== info.name || prev.slugs.join() !== info.slugs.join()) this.save(owner);
+    if (!prev || prev.name !== info.name || prev.kind !== info.kind || prev.slugs.join() !== info.slugs.join()) this.save(owner);
     return info;
   }
 

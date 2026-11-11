@@ -65,7 +65,8 @@ test("wiring: bot icons are the M mascot, the click opens the top thread, the ch
   assert.match(b, /"bot-chev side-icon"/);
   assert.match(b, /chev\.addEventListener\("click", \(\) => toggleThreads\(bot\)\)/);
   assert.match(b, /JSON\.stringify\(\{ pinned \}\)/);
-  assert.match(b, /h\("div", "bot-group", "Pinned"\)/);
+  assert.match(b, /pinnedLabel: "Pinned bots"/, "pinned bots sit in their own section above the environment groups");
+  assert.match(b, /app\.rowMenu\.attach\(head/, "pin, settings, delete and Remote are in the hover menu");
   assert.match(src("exchanges.js"), /mascotFor/);
   assert.match(src("brand/mbot.js"), /prefers-reduced-motion|matchMedia\("\(prefers-reduced-motion: reduce\)"\)/);
   assert.doesNotMatch(src("mbadge.js"), /innerHTML/);

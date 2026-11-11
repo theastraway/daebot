@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { daebotHome } from "./home.ts";
 import type { HistoryEvent, Message, MessageMeta, SessionState, Violation } from "./types.ts";
 import type { BoardTask } from "./board/board.ts";
+import type { EnvTag } from "./env.ts";
 
 export interface RunMark { id: string; status: "running" | "done" | "error" | "interrupted"; startedAt: number; updatedAt: number }
 
@@ -37,6 +38,10 @@ export interface StoredSession {
   unreadFrom?: string;
   /** The latest turn. "running" on disk with no live owner process = the server died mid-turn (shown as interrupted). */
   run?: RunMark;
+  /** Home environment: where this session was created and runs (MIND Cloud, a machine, a server). Absent on records made before environments existed. */
+  env?: EnvTag;
+  /** When the user pinned this session (ms). Absent = not pinned. Saved with the session, so it follows every device (last writer wins by metaAt). */
+  pinnedAt?: number;
   /** The task board the model keeps for this chat (task_board tool). Absent = none declared. */
   board?: BoardTask[];
   createdAt: number;
@@ -55,10 +60,10 @@ export function cleanTitle(raw: unknown): string | undefined {
   return t.length >= 1 && t.length <= 80 ? t : undefined;
 }
 
-export interface StoredMeta { id: string; surface: string; title: string; updatedAt: number; owner?: string; bot?: string; peer?: string; model?: string; permMode?: string; unread?: boolean; archived?: boolean }
+export interface StoredMeta { id: string; surface: string; title: string; updatedAt: number; owner?: string; bot?: string; peer?: string; model?: string; permMode?: string; unread?: boolean; archived?: boolean; env?: EnvTag; pinnedAt?: number }
 
 function metaOf(rec: StoredSession): StoredMeta {
-  return { id: rec.id, surface: rec.surface, title: rec.title, updatedAt: rec.updatedAt, owner: rec.owner, bot: rec.bot, peer: rec.peer, model: rec.model, ...(rec.permMode ? { permMode: rec.permMode } : {}), ...(rec.unreadFrom ? { unread: true } : {}), ...(rec.archived ? { archived: true } : {}) };
+  return { id: rec.id, surface: rec.surface, title: rec.title, updatedAt: rec.updatedAt, owner: rec.owner, bot: rec.bot, peer: rec.peer, model: rec.model, ...(rec.permMode ? { permMode: rec.permMode } : {}), ...(rec.unreadFrom ? { unread: true } : {}), ...(rec.archived ? { archived: true } : {}), ...(rec.env ? { env: rec.env } : {}), ...(rec.pinnedAt ? { pinnedAt: rec.pinnedAt } : {}) };
 }
 
 export interface SessionStore {

@@ -90,6 +90,8 @@ export interface BotStoreOptions {
   owner: string;
   mind: BotMindApi;
   now?: () => number;
+  /** The home environment a bot created through this store gets. */
+  env?: import("../env.ts").EnvTag;
 }
 
 export class BotStore implements BotsApi {
@@ -101,12 +103,14 @@ export class BotStore implements BotsApi {
   /** Consecutive reconcile passes in which MIND did not list a bot (a bot is only dropped after MISS_LIMIT in a row). */
   private misses = new Map<string, number>();
   private chain: Promise<unknown> = Promise.resolve();
+  private env?: import("../env.ts").EnvTag;
 
   constructor(o: BotStoreOptions) {
     this.root = join(o.dir, "bots", safeSegment(o.owner));
     this.file = join(this.root, "bots.json");
     this.mind = o.mind;
     this.now = o.now ?? Date.now;
+    this.env = o.env;
     this.load();
   }
 
@@ -232,7 +236,7 @@ export class BotStore implements BotsApi {
     if (raced) return raced;
     const id = this.newId();
     const t = this.now();
-    const rec: BotRecord = { id, slug, name, purpose, color, ...(face ? { face } : {}), createdAt: t, updatedAt: t, version: LATEST_BOT_VERSION };
+    const rec: BotRecord = { id, slug, name, purpose, color, ...(face ? { face } : {}), ...(this.env ? { env: this.env } : {}), createdAt: t, updatedAt: t, version: LATEST_BOT_VERSION };
     this.bots[id] = rec;
     try { this.save(); } catch (e) {
       delete this.bots[id];
