@@ -3,8 +3,8 @@
 // One non-streaming chat call with `modalities: ["image"]`. The reply carries the picture as a data URL in message.images[].image_url.url.
 // The bytes are validated like any attached photo (real PNG/JPEG/WebP/GIF, size caps) and stored in this chat's PhotoStore, so the image
 // shows in the chat, survives a reload, and syncs to the user's other devices with the chat (src/sync/photos.ts trades every local photo).
-// Billing: MIND billing sends the call to MIND's /llm/chat/completions with the user's own key; recraft/recraft-v4.1-flash is on MIND's model
-// list (MINDapp PR 3002), so every signed-in paid user is billed from their own MIND credits at provider cost + 12%, and MIND writes the
+// Billing: MIND billing sends the call to MIND's /llm/chat/completions with the user's own key; bytedance-seed/seedream-5-0-flash is on MIND's model
+// list (MINDapp PR 3004), so every signed-in paid user is billed from their own MIND credits at provider cost + 12%, and MIND writes the
 // llm_call_ledger row. There is no server-key fallback. The cost of every image is in result.meta.costUsd (OpenRouter's reported usage.cost).
 import type { PhotoStore } from "../photos.ts";
 import { checkPhotos } from "../photos.ts";
@@ -12,9 +12,10 @@ import type { Tool } from "../types.ts";
 import { fail, ok } from "./util.ts";
 import { refusalText, type LlmEndpoint } from "./llm-call.ts";
 
-// Cheapest image model that OpenRouter serves on /chat/completions (measured $0.007 per image; the flux, qwen, krea and tencent image models are
-// /images-only and the chat endpoint refuses them). DAEBOT_IMAGE_MODEL overrides it.
-export const IMAGE_MODEL = "recraft/recraft-v4.1-flash";
+// Cheapest image model with a Zero Data Retention endpoint that OpenRouter serves on /chat/completions (measured $0.018 per image at 2048x2048;
+// the krea and tencent ZDR image models are /images-only and the chat endpoint refuses them). MIND is strict ZDR: never put a model here that has
+// no ZDR endpoint (GET https://openrouter.ai/api/v1/endpoints/zdr). DAEBOT_IMAGE_MODEL overrides it.
+export const IMAGE_MODEL = "bytedance-seed/seedream-5-0-flash";
 /** Image-only models take ["image"]; models that also write text (Gemini image models) need ["image", "text"]. */
 export const modalitiesFor = (model: string): string[] => (/^google\//.test(model) ? ["image", "text"] : ["image"]);
 const ASPECTS = ["1:1", "16:9", "9:16", "4:3", "3:4"] as const;
