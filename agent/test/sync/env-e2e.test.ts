@@ -31,14 +31,14 @@ test("a desktop session's home is that desktop on every device; a hosted session
   } finally { await desk.close(); await hosted.close(); }
 });
 
-test("a session from before environments, held by the server, shows as MIND Cloud on the desktop too", async () => {
+test("a session from before environments, held by the server, is given MIND Cloud as its home when nothing says otherwise, and shows so on the desktop too", async () => {
   const hosted = await hostedRig();
   const desk = await deskRig(hosted, hosted.keys.alice);
   try {
     const old = rec("old-1", { surface: "web", title: "an old one", updatedAt: 5000, texts: [["u1", "hi"], ["a1", "yo"]] });
     const res = await hosted.host(hosted.keys.alice, "POST", "/api/sync/sessions", { records: [(({ owner, tier, run, ...w }) => w)(old as any)] });
     assert.equal(JSON.parse(res.body).results[0].status, "ok");
-    assert.equal(hosted.store.load("old-1")!.env, undefined);
+    assert.equal(hosted.store.load("old-1")!.env!.id, "cloud", "the server gives a session nobody tagged a home when it takes it in (no device and no tool run say otherwise)");
     await until(() => desk.store.load("old-1")?.env);
     assert.equal(desk.store.load("old-1")!.env!.id, "cloud");
     const hl = JSON.parse((await hosted.as(hosted.keys.alice).then((f) => f("GET", "/sessions"))).body);

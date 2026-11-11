@@ -87,8 +87,9 @@ export function mergeRecords(a: StoredSession | undefined, b: StoredSession): St
   // Home environment: once a session has one it keeps it; the side that has none takes the other's (never flips a home).
   if (!out.env && lose.env) out.env = lose.env;
   else if (a.env && b.env && a.env.id !== b.env.id) {
-    // Two different homes (rare: both sides stamped it): the older record's stands, a tie goes to the smaller id, so both sides settle on one.
-    const first = a.createdAt !== b.createdAt ? (a.createdAt < b.createdAt ? a : b) : a.env.id < b.env.id ? a : b;
+    // Two different homes (rare: both sides stamped it). MIND Cloud is also what a record is assumed to be, so a computer or server beats it; else the
+    // older record's stands, a tie goes to the smaller id, so both sides settle on one.
+    const first = a.env.kind === "cloud" !== (b.env.kind === "cloud") ? (a.env.kind === "cloud" ? b : a) : a.createdAt !== b.createdAt ? (a.createdAt < b.createdAt ? a : b) : a.env.id < b.env.id ? a : b;
     out.env = first.env;
   }
   // The pin is a user-hand change like a rename: the side whose metaAt is later decides it, even when the other side has newer messages.

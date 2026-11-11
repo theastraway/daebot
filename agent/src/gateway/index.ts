@@ -65,12 +65,14 @@ import { MAX_PHOTO_BODY, checkPhotos, cleanName, isPhotoId } from "../photos.ts"
 import type { PhotoMeta } from "../photos.ts";
 import type { SessionStore } from "../persist.ts";
 import { SyncService } from "../sync/service.ts";
+import type { HomeCtx } from "../sync/home.ts";
 import { SyncAgent } from "../sync/agent.ts";
 import { RoutineSyncService } from "../sync/routines.ts";
 import { upgradeChatScopes } from "../mind/scope-upgrade.ts";
 import { SyncHttp } from "../sync/http.ts";
 import { RemoteAgent, loadDeviceId } from "../sync/remote-agent.ts";
-import { CLOUD_ENV, envViews, normalizeEnv } from "../env.ts";
+import { CLOUD_ENV, canonEnv, cleanLabel, envViews, normalizeEnv } from "../env.ts";
+import type { EnvGroup } from "../env.ts";
 import type { EnvTag, EnvView } from "../env.ts";
 import { TombstoneBook } from "../sync/tombstones.ts";
 import { RemoteHub } from "../remote/hub.ts";
@@ -126,6 +128,8 @@ export interface GatewayOptions {
   auth?: AuthContext;
   /** The shared session store (DATA_DIR/sessions); lets ownership of persisted sessions be checked without a live session. */
   sessionStore?: { meta?(id: string): { owner?: string } | undefined };
+  /** Hosted: how long after start the one-time pass that gives every session a home environment runs (default 15 s). Tests. */
+  envSweepMs?: number;
   /** Where the hosted remote-bot hub keeps its device list and queued messages (default DATA_DIR). Tests. */
   remoteDir?: string;
   /** How recent a poll makes a desktop "online" (default 45 s). Tests. */
@@ -382,7 +386,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     await manager.open({ surface, resumeId: id, owner, bot });
   };
   const syncSvc = hosted && auth?.store.enabled && storeOk
-    ? new SyncService({ store: fullStore!, bots: (owner) => manager.runtimeOf(owner).bots, isBusy: (id) => !!manager.get(id)?.busy, tierOf: (owner) => (owner === OWNER.id ? OWNER.tier : auth?.store.principal(owner)?.tier ?? "staff"), afterWrite: refreshLive, deleteSession: (owner, id) => manager.deleteSession(id, owner), tombstones: new TombstoneBook({ file: join(opts.remoteDir ?? dataDir(), "sync-tombstones.json") }) })
+    ? new SyncService({ store: fullStore!, bots: (owner) => manager.runtimeOf(owner).bots, isBusy: (id) => !!manager.get(id)?.busy, tierOf: (owner) => (owner === OWNER.id ? OWNER.tier : auth?.store.principal(owner)?.tier ?? "staff"), afterWrite: refreshLive, homeCtx: (owner) => homeCtxOf(owner), deleteSession: (owner, id) => manager.deleteSession(id, owner), tombstones: new TombstoneBook({ file: join(opts.remoteDir ?? dataDir(), "sync-tombstones.json") }) })
     : undefined;
   // Admin backfill: every signed-in user (and the owner login) gets their MIND made to hold every saved session. One run at a time; the result is read back with GET.
   type ReconcileState = { running: boolean; startedAt?: number; finishedAt?: number; dryRun?: boolean; owners: Record<string, unknown>[] };
@@ -417,6 +421,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         store: fullStore!,
         bots: () => manager.runtimeOf(OWNER.id).bots,
         env: opts.runtime.ownEnv?.(),
+        device: ((e) => (e ? { id: opts.sync?.deviceId ?? loadDeviceId(join(daebotHome(), "device-id")), name: e.name, kind: e.kind === "server" ? ("server" as const) : ("machine" as const) } : undefined))(opts.runtime.ownEnv?.()),
         isBusy: (id) => !!manager.get(id)?.busy,
         afterWrite: (id) => refreshLive(OWNER.id, id),
         deleteLocal: async (id) => { await manager.deleteSession(id, OWNER.id); },
@@ -451,6 +456,32 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     : undefined;
   const remoteSweep = remoteHub ? setInterval(() => remoteHub.sweep(), 30_000) : undefined;
   remoteSweep?.unref();
+  /** What a session's home is worked out from: this owner's computers and servers (one per physical machine) and where each Remote bot runs. */
+  function homeCtxOf(owner: string): HomeCtx {
+    const groups = remoteHub ? remoteHub.envGroups(owner) : [];
+    return {
+      groups,
+      botHome: (botId) => {
+        const b = manager.runtimeOf(owner).bots?.get(botId);
+        if (!b?.remote || !remoteHub) return undefined;
+        const d = remoteHub.devicesFor(owner, b.slug);
+        const dev = d.find((x) => x.online) ?? d[0];
+        return dev ? canonEnv({ id: dev.id, kind: dev.kind ?? "machine", name: dev.name }, groups) : undefined;
+      },
+    };
+  }
+  // Every session that has no home gets the one its record proves (else MIND Cloud): once at start for every user, then each hour.
+  const homesLast: { at?: number; first?: boolean; owners?: unknown[]; error?: string } = {};
+  const homeSweep = syncSvc ? async (first = false, only?: string[]): Promise<unknown> => {
+    try {
+      const r = await syncSvc.backfillHomes(only, { recheckCloud: first });
+      Object.assign(homesLast, { at: Date.now(), first, owners: r, error: undefined });
+      const moved = r.filter((x) => x.assigned > 0);
+      if (moved.length) process.stderr.write(`env backfill: ${moved.map((x) => `${x.owner} ${x.assigned}/${x.scanned} ${JSON.stringify(x.byHome)}`).join("; ")}\n`);
+      return r;
+    } catch (e) { homesLast.error = String((e as Error)?.message ?? e).split("\n")[0].slice(0, 160); process.stderr.write(`env backfill failed: ${homesLast.error}\n`); return { error: homesLast.error }; }
+  } : undefined;
+  if (homeSweep) { setTimeout(() => void homeSweep(true), opts.envSweepMs ?? 15_000).unref(); const t = setInterval(() => void homeSweep(), 60 * 60_000); t.unref(); }
   /** Desktop: runs one message of a remote bot thread on this machine. */
   async function runRemoteJob(job: RemoteJob, emit: (ev: AgentEvent) => void, signal: AbortSignal): Promise<void> {
     const bots = manager.runtimeOf(OWNER.id).bots;
@@ -471,6 +502,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         deviceId: opts.sync?.deviceId ?? loadDeviceId(join(daebotHome(), "device-id")),
         deviceName: opts.sync?.deviceName ?? (opts.runtime.ownEnv?.().name || hostname() || "Desktop"),
         deviceKind: ((k) => (k === "server" ? "server" : "machine"))(opts.runtime.ownEnv?.().kind),
+        deviceHost: hostname() || undefined,
         bots: () => manager.runtimeOf(OWNER.id).bots,
         runJob: runRemoteJob,
         decide: (d) => { manager.runtimeOf(OWNER.id).permissions?.decide(d.permId, { decision: d.decision, remember: d.remember, scope: d.scope }); },
@@ -929,10 +961,11 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (!deviceId) return sendJson(res, 400, { error: "deviceId required" });
     const name = optStr(b.name, 60) ?? "Desktop";
     const kind = b.kind === "server" ? "server" : b.kind === "machine" ? "machine" : undefined;
+    const host = optStr(b.host, 80);
     const flags = Array.isArray(b.bots) ? b.bots.filter((f): f is { slug: string; remote: boolean; at: number } => !!f && typeof f.slug === "string" && typeof f.remote === "boolean" && typeof f.at === "number").slice(0, 200) : [];
     const bots = manager.runtimeOf(me.id).bots;
     if (bots && flags.some((f) => !bots.bySlug(f.slug))) { try { await bots.list(); } catch { /* MIND unreachable: unknown bots wait for the next poll */ } }
-    remoteHub.heartbeat(me.id, { id: deviceId, name, slugs: flags.map((f) => f.slug), kind });
+    remoteHub.heartbeat(me.id, { id: deviceId, name, slugs: flags.map((f) => f.slug), kind, host });
     if (bots?.setRemote) {
       for (const f of flags) {
         const hb = bots.bySlug(f.slug);
@@ -945,7 +978,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     const jobs = await remoteHub.wait(me.id, deviceId, waitMs, ac.signal);
     if (ac.signal.aborted) { if (jobs.length) remoteHub.requeue(me.id, jobs); return; } // the device hung up first: nothing was delivered
     for (const j of jobs) { const e = remoteRuns.get(j.id); if (e?.waiting) { e.waiting = false; e.run.publish({ type: "notice", level: "info", text: `${name} is back and picked it up.` }); } } // it had been waiting
-    remoteHub.heartbeat(me.id, { id: deviceId, name, slugs: flags.map((f) => f.slug), kind });
+    remoteHub.heartbeat(me.id, { id: deviceId, name, slugs: flags.map((f) => f.slug), kind, host });
     // What the device does not know yet (a flag turned on here, or automatically): computed after the wait so a change made while it waited is in this answer.
     const reply: { slug: string; remote: boolean; at: number; by?: string; note?: string }[] = [];
     for (const f of flags) {
@@ -1057,15 +1090,19 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       if (method === "GET") {
         const since = Math.max(0, Number(query.get("since") ?? 0) || 0);
         const limit = Math.min(500, Math.max(1, Number(query.get("limit") ?? 200) || 200));
-        return sendJson(res, 200, syncSvc.list(me.id, since, limit));
+        return sendJson(res, 200, { ...syncSvc.list(me.id, since, limit), ...envShare(me.id) });
       }
       if (method === "POST") {
         const b = parseJsonObject(await readBody(req, 8 * 1024 * 1024));
         if (!Array.isArray(b.records)) return sendJson(res, 400, { error: "records must be an array" });
-        return sendJson(res, 200, { results: await syncSvc.push(me.id, b.records) });
+        const d = b.device as { id?: unknown; name?: unknown; kind?: unknown } | undefined;
+        const pusher = d && typeof d === "object" && typeof d.id === "string" && /^d_[0-9a-f]{16}$/.test(d.id) ? canonEnv({ id: d.id, kind: d.kind === "server" ? "server" : "machine", name: typeof d.name === "string" ? d.name : "Computer" }, remoteHub?.envGroups(me.id) ?? []) : undefined;
+        return sendJson(res, 200, { results: await syncSvc.push(me.id, b.records, pusher) });
       }
       return sendJson(res, 405, { error: "method not allowed" });
     }
+    // POST /api/sync/envs/rename {id, name}: a desktop renames one of this account's environments (an empty name puts the automatic one back).
+    if (path === "/api/sync/envs/rename" && method === "POST") return renameEnvApi(req, res, me);
     // POST /api/sync/chat-scopes: a desktop whose key lacks chat:read/chat:write (MIND 403) asks this server, which holds an admin key, to add them to the
     // key it just presented (already checked against MIND above). Nothing else about the key changes.
     if (path === "/api/sync/chat-scopes" && method === "POST") {
@@ -1340,6 +1377,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         get anger() { return anger(); },
         feed: mindFeed,
         reconcile: hosted && auth?.store.enabled ? mindReconcileJob : undefined,
+        homes: homeSweep ? { run: (b) => homeSweep(b.recheckCloud === true, Array.isArray(b.owners) ? b.owners.map(String) : undefined), last: () => homesLast } : undefined,
         logKey: opts.adminLog?.logKey ?? (() => process.env.DAEBOT_MISTAKE_LOG_KEY?.trim() || undefined),
         isAdmin: (r) => (hosted ? principalOf(r)?.tier === "admin" : authorized(r, query, false)),
         signedIn: (r) => authorized(r, query, false),
@@ -1405,7 +1443,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/board" || path.startsWith("/board/") || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/sync/status" || path === "/sync/now";
+    const isApi = path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/board" || path.startsWith("/board/") || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -1657,24 +1695,55 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   // ---------- bots + models REST (same cookie auth and origin rules as /sessions; one owner's bots are invisible to everyone else) ----------
   const botView = (b: BotRecord) => ({ id: b.id, slug: b.slug, name: b.name, purpose: b.purpose, color: b.color, face: b.face ?? null, model: b.model ?? null, pinned: !!b.pinnedAt, pinnedAt: b.pinnedAt ?? null, remote: !!b.remote, remoteAt: b.remoteAt ?? null, remoteLog: (b.remoteLog ?? []).slice(-5), createdAt: b.createdAt, updatedAt: b.updatedAt, ...versionInfo(b) });
 
+  /** The computers and servers of an owner with duplicate registrations merged, renames applied (hosted: the Remote hub; a desktop: what daebot.live last sent). */
+  function envState(owner: string): { groups: readonly EnvGroup[]; cloudName?: string } {
+    if (remoteHub) return { groups: remoteHub.envGroups(owner), cloudName: remoteHub.cloudName(owner) };
+    return { groups: syncAgent?.envGroups ?? [], cloudName: syncAgent?.cloudName };
+  }
+  const canon = (owner: string, t: unknown): EnvTag | undefined => { const st = envState(owner); return canonEnv(t, st.groups, st.cloudName); };
+  /** What a desktop needs to show the same places under the same names: merged computers, renames and the cloud's name. */
+  const envShare = (owner: string): { envGroups: EnvGroup[]; cloudName?: string } => ({ envGroups: remoteHub ? remoteHub.envGroups(owner) : [], ...(remoteHub?.cloudName(owner) ? { cloudName: remoteHub.cloudName(owner) } : {}) });
+  /** The environment this process runs in, under its merged name. */
+  const ownEnvOf = (owner: string): EnvTag => { const e = manager.runtimeOf(owner).ownEnv?.() ?? CLOUD_ENV; return canon(owner, e) ?? e; };
+
   /** Hosted: which of the user's desktops carry this bot and whether they are online (the Remote switch shows it). */
   const remoteView = (owner: string, b: BotRecord): { remoteDevices?: { name: string; online: boolean }[]; env: EnvTag; runsOn?: boolean } => {
     const devs = remoteHub ? remoteHub.devicesFor(owner, b.slug) : [];
     // A bot with Remote on and a computer that carries it runs THERE; otherwise it lives where it was created.
     const dev = b.remote ? (devs.find((d) => d.online) ?? devs[0]) : undefined;
-    const env: EnvTag = dev ? { id: dev.id, kind: dev.kind ?? "machine", name: dev.name } : normalizeEnv(b.env) ?? manager.runtimeOf(owner).ownEnv?.() ?? CLOUD_ENV;
-    return { ...(remoteHub ? { remoteDevices: devs.map((d) => ({ name: d.name, online: d.online })) } : {}), env, ...(dev ? { runsOn: true } : {}) };
+    const raw: EnvTag = dev ? { id: dev.id, kind: dev.kind ?? "machine", name: dev.name } : normalizeEnv(b.env) ?? manager.runtimeOf(owner).ownEnv?.() ?? CLOUD_ENV;
+    const env = canon(owner, raw) ?? raw;
+    const names = new Map<string, { name: string; online: boolean }>();
+    for (const d of devs) { const c = canon(owner, { id: d.id, kind: d.kind ?? "machine", name: d.name }); const k = c?.id ?? d.id; const prev = names.get(k); names.set(k, { name: c?.name ?? d.name, online: d.online || !!prev?.online }); }
+    return { ...(remoteHub ? { remoteDevices: [...names.values()] } : {}), env, ...(dev ? { runsOn: true } : {}) };
   };
 
-  /** The places to show in the sidebar: every one a row points at, plus the computers and servers this account has, each with its online state. */
+  /** The places to show in the sidebar: every one a row points at, plus the computers and servers this account has (one each), with their online state. */
   function envsFor(owner: string, tags: Iterable<EnvTag | undefined>): EnvView[] {
-    const cur = manager.runtimeOf(owner).ownEnv?.() ?? CLOUD_ENV;
-    const devs = remoteHub ? remoteHub.devices(owner) : [];
+    const st = envState(owner);
+    const cur = ownEnvOf(owner);
     const all: EnvTag[] = [];
-    for (const t of tags) { const n = normalizeEnv(t); if (n) all.push(n); }
-    for (const d of devs) all.push({ id: d.id, kind: d.kind ?? "machine", name: d.name });
+    for (const t of tags) { const n = canon(owner, t); if (n) all.push(n); }
+    for (const g of st.groups) all.push({ id: g.id, kind: g.kind, name: g.name });
+    all.push(canonEnv(CLOUD_ENV, st.groups, st.cloudName)!);
     const cloudOnline = hosted ? true : !!syncAgent && syncAgent.status.lastOkAt > Date.now() - 90_000 && !syncAgent.status.lastError;
-    return envViews(all, cur, { cloudOnline, devices: new Map(devs.map((d) => [d.id, d.online] as const)) });
+    return envViews(all, cur, { cloudOnline, devices: new Map(st.groups.map((g) => [g.id, g.online] as const)) });
+  }
+
+  // POST /envs/rename {id, name} (signed in) and POST /api/sync/envs/rename (a desktop's key): gives an environment the name the person chose.
+  async function renameEnvApi(req: IncomingMessage, res: ServerResponse, me: Principal): Promise<void> {
+    const b = await readJson(req);
+    const id = typeof b.id === "string" ? b.id : "";
+    const name = cleanLabel(typeof b.name === "string" ? b.name : "");
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) return sendJson(res, 400, { error: "id required" });
+    if (remoteHub) {
+      if (!remoteHub.renameEnv(me.id, id, name)) return sendJson(res, 404, { error: "no such environment" });
+      return sendJson(res, 200, { ok: true, envs: envsFor(me.id, []) });
+    }
+    // A desktop: the names live on daebot.live (every device of the account shows them), so the change is made there and brought back.
+    if (!syncAgent) return sendJson(res, 404, { error: "renaming is not available here" });
+    try { await syncAgent.renameEnv(id, name); } catch (e) { return sendJson(res, 502, { error: String((e as Error)?.message ?? e).slice(0, 160) }); }
+    return sendJson(res, 200, { ok: true, envs: envsFor(me.id, []) });
   }
 
   function botFail(res: ServerResponse, e: unknown): void {
@@ -2071,6 +2140,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
     if (path === "/permissions" || path.startsWith("/permissions/")) return permissionsApi(req, res, path, method, me);
     if (routines && botsOn() && (path === "/routines/preview" || path === "/routines/triggers" || /^\/bots\/[^/]+\/routines(\/|$)/.test(path))) { if (await routines.api(req, res, path, method, me)) return; }
+    if (path === "/envs/rename" && method === "POST") return renameEnvApi(req, res, me);
     if (path === "/exchanges" || path.startsWith("/exchanges/")) return exchangesApi(res, path, method, me);
     if (path === "/bots/caelum") return caelumApi(req, res, method, me);
     if (path === "/settings/daebot") return mainProfileApi(req, res, method, me);
@@ -2079,7 +2149,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (path.startsWith("/mcp/")) return mcpApi(req, res, path, method, me);
     if (path === "/models" || path.startsWith("/models/")) return modelsApi(req, res, path, method, me);
     if (path === "/sessions") {
-      if (method === "GET") { const sessions = manager.list(me.id, { bot: optStr(_query.get("bot") ?? undefined, 80) || undefined }); return sendJson(res, 200, { sessions, envs: envsFor(me.id, sessions.map((s) => s.env)) }); }
+      if (method === "GET") { const sessions = manager.list(me.id, { bot: optStr(_query.get("bot") ?? undefined, 80) || undefined }).map((r) => ({ ...r, env: canon(me.id, r.env) ?? r.env })); return sendJson(res, 200, { sessions, envs: envsFor(me.id, sessions.map((s) => s.env)) }); }
       if (method === "POST") {
         const b = await readJson(req);
         const model = optStr(b.model, 130);

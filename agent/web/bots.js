@@ -338,7 +338,7 @@ export function initBots(ctx) {
     for (const id of [...st.mascots.keys()]) if (!botById(id)) st.mascots.delete(id);
     const model = groupByEnv(st.bots, mergeEnvs(), { keep: (b) => !!(b.pinned || b.pinnedAt) });
     model.pinned.sort((x, y) => (x.pinnedAt || 0) - (y.pinnedAt || 0) || String(x.name).localeCompare(String(y.name))); // bots keep the order they were pinned in
-    renderGroups(box, model, { build: (bot, o) => botRow(bot, o), collapsed: app.collapsed(), onToggle: (id) => app.toggleEnv(id), h, icon, pinnedLabel: "Pinned bots" });
+    renderGroups(box, model, { build: (bot, o) => botRow(bot, o), collapsed: app.collapsed(), onToggle: (id) => app.toggleEnv(id), onRename: (env, name) => app.renameEnv(env, name), h, icon, pinnedLabel: "Pinned bots" });
     const ex = app.exchangesGroup && app.exchangesGroup(); // the agent exchanges, with unread dots
     if (ex) box.append(ex);
   }

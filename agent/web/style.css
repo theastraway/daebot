@@ -1259,6 +1259,17 @@ body.xv-open .top-title, body.xv-open .model-wrap, body.xv-open .top-meta, body.
 /* ---- Environment groups (sidebar): MIND Cloud, each computer, each server ---- */
 .env-group { display: flex; flex-direction: column; gap: 2px; margin-bottom: 6px; min-width: 0; }
 .env-head { display: flex; align-items: center; gap: 7px; width: 100%; padding: 5px 8px 5px 4px; margin: 2px 0; background: none; border: 0; border-radius: 8px; color: var(--ink-3); font: 600 11px var(--sans); letter-spacing: .05em; text-transform: uppercase; text-align: left; cursor: pointer; transition: background .15s, color .15s; }
+.env-headrow { display: flex; align-items: center; position: relative; }
+.env-headrow .env-head { flex: 1; width: auto; min-width: 0; }
+.env-more { flex: none; width: 24px; height: 24px; margin-right: 2px; display: grid; place-items: center; border: 0; border-radius: 7px; background: none; color: var(--ink-3); cursor: pointer; opacity: 0; transition: opacity .15s, background .15s; }
+.env-more svg { width: 14px; height: 14px; }
+.env-headrow:hover .env-more, .env-headrow:focus-within .env-more, .env-more[aria-expanded="true"] { opacity: 1; }
+.env-more:hover { background: var(--surface-2); color: var(--ink-2); }
+.env-more:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+@media (hover: none) { .env-more { opacity: 1; } }
+.env-menu { min-width: 190px; }
+.env-rename { flex: 1; min-width: 0; margin: 2px 4px; padding: 4px 8px; font: 600 12px var(--sans); color: var(--ink-1, var(--ink-2)); background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 8px; }
+.env-rename:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 .env-head.static { cursor: default; padding-left: 8px; }
 button.env-head:hover { background: var(--surface-2); color: var(--ink-2); }
 .env-head:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }

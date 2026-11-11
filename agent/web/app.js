@@ -813,6 +813,11 @@ function toggleEnv(id) {
   store.set("localStorage", COLLAPSE_KEY, serializeCollapsed(collapsedEnvs));
   renderSessions(); bots.renderList();
 }
+// Rename a place (a computer, a server, MIND Cloud): kept on the account, so the web, the phone and every desktop show the same name.
+async function renameEnv(env, name) {
+  await json("/envs/rename", { method: "POST", body: JSON.stringify({ id: env.id, name }) });
+  await refreshSessions(); // new names in the sessions list, and the bots list when that view is open
+}
 const rowMenu = createRowMenu({ h, icon });
 function envFor(row) { const g = groupByEnv([row], state.envs); return g.envOf(row); }
 /** What the row menu needs for a session or bot thread: its Remote state comes from the bot that owns it. */
@@ -862,7 +867,7 @@ function renderSessions() {
   els.list.replaceChildren();
   const shown = generalSessions(state.sessions); // bot threads live under their bot, in the Bots view
   if (!shown.length) { els.list.append(h("div", "empty-side", "No sessions yet.")); return; }
-  renderGroups(els.list, groupByEnv(shown, state.envs), { build: sessionRow, collapsed: collapsedEnvs, onToggle: toggleEnv, h, icon });
+  renderGroups(els.list, groupByEnv(shown, state.envs), { build: sessionRow, collapsed: collapsedEnvs, onToggle: toggleEnv, onRename: renameEnv, h, icon });
 }
 // Rename a thread (session or bot thread): PATCH the title, keep it in every cached copy, redraw. The server keeps it for good.
 async function renameThread(s, title) {
@@ -1644,7 +1649,7 @@ const bots = initBots({
     botDeleted: (id) => { if (state.curBot === id) newSession(); refreshSessions(); },
     threadDeleted: (s) => deleteSession(s),
     pinThread: (s, on) => pinSession(s, on),
-    sessionSpec, sessionActions, rowMenu, envs: () => state.envs, collapsed: () => collapsedEnvs, toggleEnv,
+    sessionSpec, sessionActions, rowMenu, renameEnv, envs: () => state.envs, collapsed: () => collapsedEnvs, toggleEnv,
     renameThread: (btn, s) => renameRow(btn, s),
   },
 });

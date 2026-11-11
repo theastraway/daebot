@@ -5,6 +5,8 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
+import { cleanLabel, groupDevices, tidyName } from "../env.ts";
+import type { EnvGroup } from "../env.ts";
 
 export const ONLINE_MS = 45_000;
 export const JOB_TTL_MS = 24 * 60 * 60 * 1000;
@@ -15,7 +17,7 @@ const MAX_JOBS_PER_OWNER = 200;
 /** An answer to a permission card, on its way to the desktop that asked. */
 export interface RemoteDecision { jobId: string; permId: string; decision: "allow" | "deny"; remember?: "once" | "always"; scope?: string }
 
-export interface DeviceInfo { id: string; name: string; lastSeen: number; slugs: string[]; /** machine (a computer) or server (a droplet); absent on a device that has not said. */ kind?: "machine" | "server" }
+export interface DeviceInfo { id: string; name: string; lastSeen: number; slugs: string[]; /** machine (a computer) or server (a droplet); absent on a device that has not said. */ kind?: "machine" | "server"; /** The network hostname, when the device says its name is something friendlier (the same computer is then one environment). */ host?: string; firstSeen?: number }
 export type JobState = "queued" | "delivered" | "done" | "failed";
 export interface RemoteJob {
   id: string;
@@ -39,7 +41,7 @@ export interface RemoteJob {
   error?: string;
 }
 
-interface OwnerState { devices: Record<string, DeviceInfo>; jobs: RemoteJob[] }
+interface OwnerState { devices: Record<string, DeviceInfo>; jobs: RemoteJob[]; /** Names the person gave environments: a device id (or "cloud") -> name. */ envNames: Record<string, string> }
 interface Waiter { deviceId: string; wake: () => void }
 
 export interface HubOptions { dir?: string; now?: () => number; onStalled?: (job: RemoteJob) => void; /** How recent a poll must be for a device to count as online (default ONLINE_MS). */ onlineMs?: number }
@@ -65,11 +67,11 @@ export class RemoteHub {
   private st(owner: string): OwnerState {
     let s = this.owners.get(owner);
     if (s) return s;
-    s = { devices: {}, jobs: [] };
+    s = { devices: {}, jobs: [], envNames: {} };
     if (this.dir) {
       try {
         const j = JSON.parse(readFileSync(join(this.dir, `${safe(owner)}.json`), "utf8"));
-        if (j && typeof j === "object") { s.devices = j.devices && typeof j.devices === "object" ? j.devices : {}; s.jobs = Array.isArray(j.jobs) ? j.jobs : []; }
+        if (j && typeof j === "object") { s.devices = j.devices && typeof j.devices === "object" ? j.devices : {}; s.jobs = Array.isArray(j.jobs) ? j.jobs : []; s.envNames = j.envNames && typeof j.envNames === "object" ? j.envNames : {}; }
       } catch { /* first use, or a torn file: start empty */ }
     }
     this.owners.set(owner, s);
@@ -85,20 +87,43 @@ export class RemoteHub {
       s.jobs = keep;
       const f = join(this.dir, `${safe(owner)}.json`);
       const tmp = `${f}.${process.pid}.tmp`;
-      writeFileSync(tmp, JSON.stringify({ devices: s.devices, jobs: s.jobs }), { mode: 0o600 });
+      writeFileSync(tmp, JSON.stringify({ devices: s.devices, jobs: s.jobs, envNames: s.envNames }), { mode: 0o600 });
       renameSync(tmp, f);
     } catch { /* a failed save never blocks a message */ }
   }
 
   /** A desktop checked in: it carries these bots (by slug). */
-  heartbeat(owner: string, d: { id: string; name: string; slugs: string[]; kind?: "machine" | "server" }): DeviceInfo {
+  heartbeat(owner: string, d: { id: string; name: string; slugs: string[]; kind?: "machine" | "server"; host?: string }): DeviceInfo {
     const s = this.st(owner);
     const prev = s.devices[d.id];
     const kind = d.kind ?? prev?.kind;
-    const info: DeviceInfo = { id: d.id, name: d.name.slice(0, 60) || "Desktop", lastSeen: this.now(), slugs: d.slugs.slice(0, 200), ...(kind ? { kind } : {}) };
+    const host = (d.host ? tidyName(d.host, "server") : prev?.host)?.slice(0, 60) || undefined;
+    const info: DeviceInfo = { id: d.id, name: d.name.slice(0, 60) || "Desktop", lastSeen: this.now(), slugs: d.slugs.slice(0, 200), ...(kind ? { kind } : {}), ...(host ? { host } : {}), firstSeen: prev?.firstSeen ?? this.now() };
     s.devices[d.id] = info;
-    if (!prev || prev.name !== info.name || prev.kind !== info.kind || prev.slugs.join() !== info.slugs.join()) this.save(owner);
+    if (!prev || prev.name !== info.name || prev.kind !== info.kind || prev.host !== info.host || prev.slugs.join() !== info.slugs.join()) this.save(owner);
     return info;
+  }
+
+  /** The computers and servers of this owner with duplicate registrations merged into one each and the person's renames applied. */
+  envGroups(owner: string): EnvGroup[] {
+    const s = this.st(owner);
+    return groupDevices(this.devices(owner), s.envNames);
+  }
+
+  /** The name the person gave MIND Cloud, if any. */
+  cloudName(owner: string): string | undefined { return this.st(owner).envNames.cloud; }
+
+  /** Renames an environment (a device id of any of its registrations, or "cloud"). An empty name puts the automatic name back. false = unknown environment. */
+  renameEnv(owner: string, id: string, name: string): boolean {
+    const s = this.st(owner);
+    const clean = cleanLabel(name);
+    if (id === "cloud") { if (clean) s.envNames.cloud = clean; else delete s.envNames.cloud; this.save(owner); return true; }
+    const g = this.envGroups(owner).find((x) => x.members.includes(id));
+    if (!g) return false;
+    for (const m of g.members) delete s.envNames[m];
+    if (clean) s.envNames[g.id] = clean;
+    this.save(owner);
+    return true;
   }
 
   isOnline(d: DeviceInfo): boolean { return this.now() - d.lastSeen < this.onlineMs; }
