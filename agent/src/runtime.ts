@@ -382,7 +382,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       })
     : undefined;
   // web_search: ranked web results through the same billing path as the chat (hosted: the user's own MIND key and credits; self-host: OPENROUTER_API_KEY).
-  const searchTool = createWebSearchTool({ endpoint: (sid) => llmEndpoint(cfg, billingKey, sid ? sessions.get(sid)?.bot : undefined), fetchImpl: overrides.fetchImpl, model: (overrides.env ?? process.env).DAEBOT_SEARCH_MODEL?.trim() || undefined });
+  const searchTool = createWebSearchTool({ endpoint: (sid) => { const bid = sid ? sessions.get(sid)?.bot : undefined; return llmEndpoint(cfg, billingKey, bid ? botStore?.get(bid)?.slug : undefined); }, fetchImpl: overrides.fetchImpl, model: (overrides.env ?? process.env).DAEBOT_SEARCH_MODEL?.trim() || undefined });
   // image_generate: an image-output model, billed through the same path as the chat; the picture is stored as a chat photo (synced with the chat).
   // Every user is billed through MIND (the image model is on MIND's list, MINDapp PR 3002); no session ever spends the server's own OpenRouter key.
   const imageTool = photoStore
@@ -728,7 +728,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         : undefined;
       const wasInterrupted = stored?.run?.status === "running"; // a process died with this turn in flight
       const inner = createAgentSession({
-        id, surface: opts.surface, provider: botId ? withBot(provider, botId) : provider, kernel: kernelFor(tier), tools, sync, cfg, cwd, bootContext, learn,
+        id, surface: opts.surface, provider: botRec ? withBot(provider, botRec.slug) : provider, kernel: kernelFor(tier), tools, sync, cfg, cwd, bootContext, learn,
         // Bots take their orders from their owner's rules too; a bot's turns are never interactive, so they keep the typed confirmation.
         permissions,
         permMode: () => curPerm,

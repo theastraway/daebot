@@ -23,9 +23,9 @@ export function createProvider(cfg: Config, fetchImpl?: typeof fetch, mind?: Min
   return createOpenRouterProvider(cfg, fetchImpl ?? fetch);
 }
 
-/** Tags every model call of one bot's sessions with the bot id (X-Daebot-Bot) so MIND can apply that bot's spend cap and ledger its spend. */
-export function withBot(provider: Provider, botId: string): Provider {
-  return { ...provider, name: provider.name, stream: (req) => provider.stream({ ...req, bot: botId }) };
+/** Tags every model call of one bot's sessions with the bot's slug (X-Daebot-Bot; the slug is the bot's identity on every device, its id is not) so MIND can apply that bot's spend cap and ledger its spend. */
+export function withBot(provider: Provider, slug: string): Provider {
+  return { ...provider, name: provider.name, stream: (req) => provider.stream({ ...req, bot: slug }) };
 }
 
 export function pickModel(cfg: Config, hint: "default" | "cheap"): string {

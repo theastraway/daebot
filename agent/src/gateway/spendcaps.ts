@@ -28,7 +28,7 @@ export type SpendCapsResult = { source: "mind"; caps: SpendCaps } | { source: "o
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 const PERIODS = ["daily", "weekly", "monthly"] as const;
 const iso = (v: unknown): string | null => (typeof v === "string" && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : null);
-const BOT_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const BOT_ID = /^[a-z0-9-]{1,32}$/; // a bot slug
 export const validBotId = (s: unknown): s is string => typeof s === "string" && BOT_ID.test(s);
 
 export function capFromMind(j: any): CapSpec | null {

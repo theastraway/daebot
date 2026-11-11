@@ -20,12 +20,12 @@ export type Round = { text?: string; calls?: ToolCall[] } | (() => never);
 // Scripted provider: each stream() call consumes the next round. Records requests.
 export class FakeProvider implements Provider {
   name = "fake";
-  requests: { model: string; messages: Message[]; tools: ToolSpec[] }[] = [];
+  requests: { model: string; messages: Message[]; tools: ToolSpec[]; bot?: string }[] = [];
   private i = 0;
   private rounds: Round[];
   constructor(rounds: Round[]) { this.rounds = rounds; }
-  async *stream(req: { model: string; messages: Message[]; tools: ToolSpec[]; signal?: AbortSignal }): AsyncIterable<StreamEvent> {
-    this.requests.push({ model: req.model, messages: req.messages.map((m) => ({ ...m })), tools: req.tools });
+  async *stream(req: { model: string; messages: Message[]; tools: ToolSpec[]; signal?: AbortSignal; bot?: string }): AsyncIterable<StreamEvent> {
+    this.requests.push({ model: req.model, messages: req.messages.map((m) => ({ ...m })), tools: req.tools, bot: req.bot });
     const r = this.rounds[Math.min(this.i++, this.rounds.length - 1)];
     if (typeof r === "function") r();
     const round = r as { text?: string; calls?: ToolCall[] };

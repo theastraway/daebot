@@ -305,3 +305,17 @@ test("bot model override: a bot's threads run on the bot's model; main and other
     assert.equal((await run(main, "10")).model, "vendor/header-pick", "main never saw the bot's model");
   } finally { await w.close(); }
 });
+
+test("spend caps: every model call of a bot session carries the bot's SLUG (the same on every device); the main session carries none", async () => {
+  const w = await world({ rounds: [{ text: "a" }, { text: "b" }] });
+  try {
+    const bot = await w.runtime.bots!.create({ slug: "sales", name: "Sales Bot", purpose: "x" });
+    const bs = await w.runtime.openSession({ surface: "web", botId: bot.id, identity: "admin" });
+    await collect(bs.send("hi"));
+    const ms = await w.runtime.openSession({ surface: "web", identity: "admin" });
+    await collect(ms.send("hi"));
+    assert.equal(w.provider.requests[0].bot, "sales");
+    assert.notEqual(bot.id, "sales");
+    assert.equal(w.provider.requests[1].bot, undefined);
+  } finally { await w.close(); }
+});
