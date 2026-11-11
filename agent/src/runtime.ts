@@ -384,11 +384,10 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
   // web_search: ranked web results through the same billing path as the chat (hosted: the user's own MIND key and credits; self-host: OPENROUTER_API_KEY).
   const searchTool = createWebSearchTool({ endpoint: () => llmEndpoint(cfg, billingKey), fetchImpl: overrides.fetchImpl, model: (overrides.env ?? process.env).DAEBOT_SEARCH_MODEL?.trim() || undefined });
   // image_generate: an image-output model, billed through the same path as the chat; the picture is stored as a chat photo (synced with the chat).
-  // MIND offers only the models on its own list: when it refuses the image model, the OWNER's session (exempt) may use the server's own OpenRouter key instead, never another user's.
+  // Every user is billed through MIND (the image model is on MIND's list, MINDapp PR 3002); no session ever spends the server's own OpenRouter key.
   const imageTool = photoStore
     ? createImageGenerateTool({
         store: photoStore, endpoint: () => llmEndpoint(cfg, billingKey), fetchImpl: overrides.fetchImpl, model: (overrides.env ?? process.env).DAEBOT_IMAGE_MODEL?.trim() || undefined,
-        fallback: mindBilled && exempt && cfg.openrouterKey ? () => llmEndpoint({ ...cfg, billing: "openrouter" }, billingKey) : undefined,
       })
     : undefined;
   // Every session of this owner is logged to their own MIND as an Agent Session, from every device (see mind/session-log.ts). Off only when
