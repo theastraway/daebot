@@ -5,6 +5,8 @@ import { CONSOLE_CHECK_PS, blockedMessage, parseBlocked, psq, runPowerShell as m
 import type { ScriptRunner } from "./ps.ts";
 import { frameDataUrl, screenFeed } from "../screen/feed.ts";
 import type { Frame, ScreenFeed } from "../screen/feed.ts";
+import { runMacExec, runMacSteps } from "./computer-mac.ts";
+import type { MacExec } from "./computer-mac.ts";
 export type { ScriptRunner } from "./ps.ts";
 
 // Screen control for desktop apps with no API (Xactimate is the first). Windows only: every action is one short PowerShell
@@ -218,11 +220,14 @@ export function parseShots(stdout: string): ShotParse[] {
 /** The production runner (Windows PowerShell 5.1). */
 export const runPowerShell: ScriptRunner = (script, signal) => makeRunner(SCRIPT_TIMEOUT_MS)(script, signal);
 
-/** Offered only on the Windows desktop app: never hosted (the hosted allowlist drops it) and never on Mac/Linux for now. */
+/** Offered on the Windows and Mac desktop apps: never hosted (the hosted allowlist drops it) and never on Linux. DAEBOT_COMPUTER_USE=0 turns it off. */
 export function computerToolSupported(platform: string = process.platform, env: NodeJS.ProcessEnv = process.env): boolean {
   if (env.DAEBOT_COMPUTER_USE === "0" || env.DAEBOT_COMPUTER_USE === "false") return false;
-  return platform === "win32";
+  return platform === "win32" || platform === "darwin";
 }
+
+/** Dry run: input actions are described and not executed (screenshots still happen). DAEBOT_COMPUTER_DRY_RUN=1, or dry_run:true on the call. */
+export const computerDryRun = (env: NodeJS.ProcessEnv = process.env): boolean => /^(1|true|yes|on)$/i.test((env.DAEBOT_COMPUTER_DRY_RUN ?? "").trim());
 
 const STEP_PROPS = {
   action: { type: "string", enum: [...ACTIONS] },
@@ -284,7 +289,10 @@ export function desktopPid(env: NodeJS.ProcessEnv = process.env): number | undef
   return Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
-export function createComputerTool(run?: ScriptRunner, feed: ScreenFeed = screenFeed, opts: { settleMs?: number; desktopPid?: number } = {}): Tool {
+export function createComputerTool(run?: ScriptRunner, feed: ScreenFeed = screenFeed, opts: { settleMs?: number; desktopPid?: number; platform?: string; macExec?: MacExec; env?: NodeJS.ProcessEnv } = {}): Tool {
+  // An injected PowerShell runner (tests, the Windows eval) always means the Windows path.
+  const platform = opts.platform ?? (run ? "win32" : process.platform);
+  const mac = platform === "darwin";
   const settleMs = opts.settleMs ?? SETTLE_MS;
   const ownPid = "desktopPid" in opts ? opts.desktopPid : desktopPid();
   return {
@@ -302,13 +310,14 @@ export function createComputerTool(run?: ScriptRunner, feed: ScreenFeed = screen
         "A single action returns a fresh screenshot of the primary display. x/y are pixels in the LATEST screenshot (top-left is 0,0). Start with action=screenshot, then batch what you can see. " +
         "When the user has Let Daebot watch my screen ON, a screenshot is the latest frame of the live feed (instant, no PowerShell), actions return the live frame taken after the screen settles, and a batch returns only its final frame; the `screen` tool also has wait_for_change and clip. " +
         "Actions: screenshot | click | double_click | right_click | move | drag (x,y -> to_x,to_y) | type (text) | " +
-        'key (keys, e.g. "enter", "tab", "ctrl+s", "alt+f4") | scroll (amount, negative = down, optional x,y) | wait (seconds, max 10).',
+        (mac ? 'key (keys, e.g. "enter", "tab", "cmd+s", "cmd+shift+4") | scroll (amount, negative = down, optional x,y) | wait (seconds, max 10). On a Mac: cmd is the Command key; the terminal ban covers Terminal, iTerm, Warp, Ghostty, kitty, Alacritty and WezTerm.' : 'key (keys, e.g. "enter", "tab", "ctrl+s", "alt+f4") | scroll (amount, negative = down, optional x,y) | wait (seconds, max 10).'),
       parameters: {
         type: "object",
         properties: {
           ...STEP_PROPS,
           actions: { type: "array", maxItems: MAX_BATCH, items: { type: "object", properties: STEP_PROPS, required: ["action"] }, description: "A batch: run these in order in one call." },
           screen_required: { type: "boolean", description: "true only when the user asked to watch this on screen or no background tool can do it. Never lifts the terminal ban." },
+          dry_run: { type: "boolean", description: "true: describe the input actions without doing them (a screenshot is still taken)." },
         },
       },
     },
@@ -330,6 +339,23 @@ export function createComputerTool(run?: ScriptRunner, feed: ScreenFeed = screen
       }
       const wantFinal = args.screenshot !== false && !(raw.length === 1 && raw[0].screenshot === false);
       if (steps.filter((s, i) => s.shot && i < steps.length - 1).length + (wantFinal ? 1 : 0) > MAX_SHOTS) return fail(`computer: at most ${MAX_SHOTS} screenshots per call`);
+      if (mac) {
+        // macOS: screencapture, JXA/CoreGraphics input and System Events keys (computer-mac.ts). Same terminal ban, same approval cards (class write).
+        const dryRun = args.dry_run === true || computerDryRun(opts.env);
+        const r = await runMacSteps(steps, { exec: opts.macExec ?? runMacExec, signal: ctx.signal, dryRun, finalShot: wantFinal, hideOwnPid: ownPid, settleMs });
+        if (!r.ok) return fail(r.error ?? "computer: failed");
+        const head = (r.texts.length === 1 && r.texts[0] === "screenshot" ? "Screenshot taken" : r.texts.length === 1 ? `Did ${r.texts[0]}` : `Did ${r.texts.length} actions (${r.texts.join("; ")})`) + (dryRun && r.texts.some((t) => t.startsWith("DRY RUN")) ? ". Dry run: nothing was clicked or typed" : "");
+        const last = r.shots[r.shots.length - 1];
+        const warn = last && !last.state.screenRecording ? " Warning: Daebot has no Screen Recording permission, so this screenshot shows only the desktop and menu bar (System Settings, Privacy & Security, Screen Recording)." : "";
+        return {
+          ok: true,
+          output: last
+            ? `${head}. Screenshot ${last.width}x${last.height} (screen ${last.screenWidth}x${last.screenHeight}), cursor at ${last.cursorX},${last.cursorY}. Use coordinates in this screenshot.${r.shots.length > 1 ? ` ${r.shots.length} screenshots, in order; the last is the current screen.` : ""}${warn}`
+            : `${head}. No screenshot was taken.`,
+          images: r.shots.map((x) => `data:image/jpeg;base64,${x.jpegBase64}`),
+          meta: { ...(last ? { width: last.width, height: last.height } : {}), platform: "darwin", dryRun },
+        };
+      }
       // Live feed on (and fresh): the user turned on "Let Daebot watch my screen", so the picture comes from the feed, not from a PowerShell
       // screenshot. A batch returns only its final frame. Feed off or stale: everything below is exactly the old path.
       const live = feed.live();

@@ -21,5 +21,8 @@
   <!-- Apple Calendar through the daebot-calendar helper (EventKit). Without it the hardened runtime refuses Calendar and macOS never asks. -->
   <key>com.apple.security.personal-information.calendars</key>
   <true/>
+  <!-- Computer use on a Mac: keystrokes through System Events (osascript). Without it the hardened runtime refuses Apple events and macOS never asks. -->
+  <key>com.apple.security.automation.apple-events</key>
+  <true/>
 </dict>
 </plist>

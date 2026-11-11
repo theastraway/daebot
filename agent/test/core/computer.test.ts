@@ -62,7 +62,8 @@ test("computer: parses the screenshot block and returns it as an image", async (
 
 test("computer: offered on Windows only, and can be switched off", () => {
   assert.equal(computerToolSupported("win32", {}), true);
-  assert.equal(computerToolSupported("darwin", {}), false);
+  assert.equal(computerToolSupported("darwin", {}), true);
+  assert.equal(computerToolSupported("darwin", { DAEBOT_COMPUTER_USE: "0" }), false);
   assert.equal(computerToolSupported("linux", {}), false);
   assert.equal(computerToolSupported("win32", { DAEBOT_COMPUTER_USE: "0" }), false);
 });
