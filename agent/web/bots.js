@@ -7,7 +7,8 @@
 // DOM is built with createElement + textContent only; there is no innerHTML. All requests are same-origin, through the app's
 // api()/json() helpers. The pure helpers are exported (and unit tested); everything that touches `document` lives in initBots().
 
-import { confirmDialog, deleteControl, renameControl, isRenaming, botDeleteText, updateText } from "./manage.js";
+import { confirmDialog, isRenaming, botDeleteText, updateText } from "./manage.js";
+import { groupByEnv, renderGroups } from "./envgroups.js";
 import { FACES, faceOf } from "./faces.js";
 import { mascotFor, setMascot, wakeOn } from "./mbadge.js";
 import { groupModels, shortName, LOCKED_NOTE } from "./models.js";
@@ -166,7 +167,7 @@ export function initBots(ctx) {
   const st = {
     updating: new Set(), updated: new Map(),
     view: store.get("localStorage", VIEW_KEY) === "bots" ? "bots" : "sessions",
-    bots: [], botsLoaded: false, botsError: "",
+    bots: [], envs: [], botsLoaded: false, botsError: "",
     selected: store.get("localStorage", SELECTED_KEY) || "",
     expanded: new Set(),
     mascots: new Map(),
@@ -294,7 +295,8 @@ export function initBots(ctx) {
   // ---------------------------------------------------------------- data
   async function refresh() {
     try {
-      st.bots = (await json("/bots")).bots || [];
+      const r = await json("/bots");
+      st.bots = r.bots || []; st.envs = r.envs || st.envs;
       st.botsLoaded = true; st.botsError = "";
     } catch (e) {
       if (e.message === "unauthorized") return;
@@ -334,24 +336,21 @@ export function initBots(ctx) {
       return;
     }
     for (const id of [...st.mascots.keys()]) if (!botById(id)) st.mascots.delete(id);
-    const { pinned, rest } = orderBots(st.bots);
-    if (pinned.length) {
-      box.append(h("div", "bot-group", "Pinned"));
-      for (const bot of pinned) box.append(botRow(bot));
-      box.append(h("div", "bot-group", "Bots"));
-    }
-    for (const bot of rest) box.append(botRow(bot));
+    const model = groupByEnv(st.bots, mergeEnvs(), { keep: (b) => !!(b.pinned || b.pinnedAt) });
+    model.pinned.sort((x, y) => (x.pinnedAt || 0) - (y.pinnedAt || 0) || String(x.name).localeCompare(String(y.name))); // bots keep the order they were pinned in
+    renderGroups(box, model, { build: (bot, o) => botRow(bot, o), collapsed: app.collapsed(), onToggle: (id) => app.toggleEnv(id), h, icon, pinnedLabel: "Pinned bots" });
     const ex = app.exchangesGroup && app.exchangesGroup(); // the agent exchanges, with unread dots
     if (ex) box.append(ex);
   }
 
-  function botRow(bot) {
+  function botRow(bot, o = {}) {
     const row = h("div", "bot-row");
     const open = st.expanded.has(bot.id);
     const item = h("button", "bot-item"); item.type = "button";
     if (activeBotId() === bot.id) item.setAttribute("aria-current", "true");
     const text = h("span", "bot-text");
     text.append(h("span", "bot-name", bot.name), h("span", "bot-purpose", bot.purpose || "No purpose yet"));
+    if (bot.remote && bot.runsOn && bot.env && bot.env.name) { const ro = h("span", "bot-runs"); const ri = icon("i-link"); ri.classList.add("ic"); ro.append(ri, document.createTextNode(`Runs on ${bot.env.name}`)); text.append(ro); } // Remote on: which environment carries it
     const ds = dotState(bot);
     const dot = h("span", `bot-dot ${ds}`);
     dot.setAttribute("role", "img"); dot.setAttribute("aria-label", DOT_LABEL[ds]); dot.title = DOT_LABEL[ds];
@@ -374,23 +373,8 @@ export function initBots(ctx) {
       up.addEventListener("click", (e) => { e.stopPropagation(); updateBot(bot.id); });
       head.append(up);
     }
-    const pin = h("button", "row-del row-pin"); pin.type = "button";
-    const pinned = !!(bot.pinned || bot.pinnedAt);
-    const pinLabel = `${pinned ? "Unpin" : "Pin"} ${bot.name}`;
-    pin.setAttribute("aria-label", pinLabel); pin.title = pinned ? "Unpin" : "Pin to top";
-    pin.setAttribute("aria-pressed", String(pinned));
-    pin.append(icon("i-pin"));
-    pin.addEventListener("click", (e) => { e.stopPropagation(); setPinned(bot, !pinned); });
-    head.append(pin);
-    head.append(deleteControl(head, icon, `Delete bot ${bot.name}`, () => deleteBot(bot.id)));
-    // Bot settings: the gear opens this bot's settings (model, instructions, name, face) without opening or closing the row.
-    const gear = h("button", "row-del row-gear"); gear.type = "button";
-    gear.setAttribute("aria-label", `Bot settings for ${bot.name}`); gear.title = `Bot settings for ${bot.name}`;
-    gear.setAttribute("aria-expanded", String(st.drawerOpen && st.drawerBot === bot.id));
-    gear.dataset.botId = bot.id;
-    gear.append(icon("i-gear"));
-    gear.addEventListener("click", (e) => { e.stopPropagation(); openSettings(bot.id); });
-    head.append(gear);
+    // Pin, settings, delete and the Remote switch live in the hover menu (rowMenu), not in four inline buttons.
+    app.rowMenu.attach(head, () => ({ name: bot.name, pinned: !!(bot.pinned || bot.pinnedAt), remote: remoteSpec(bot) }), botActions(bot));
     wakeOn(head, mascot(bot));
     row.append(head);
     if (open) {
@@ -404,7 +388,7 @@ export function initBots(ctx) {
       const mine = cached || [];
       if (!cached && !st.loading.has(bot.id)) { st.loading.add(bot.id); loadThreads(bot.id, { cacheOnly: true, quiet: true }).finally(() => st.loading.delete(bot.id)); }
       if (!mine.length) sub.append(h("div", "empty-side", cached ? "No threads yet." : "Loading threads…"));
-      for (const s of mine) {
+      for (const s of [...mine].sort((x, y) => (y.pinnedAt ? 1 : 0) - (x.pinnedAt ? 1 : 0) || (y.pinnedAt || 0) - (x.pinnedAt || 0))) { // pinned threads first
         const b = h("button", "sess"); b.type = "button"; b.dataset.sid = s.id;
         if (s.id === app.currentId()) b.setAttribute("aria-current", "true");
         if (s.unread) { b.classList.add("unread"); b.title = "Unread"; }
@@ -414,17 +398,62 @@ export function initBots(ctx) {
         bits.push(s.surface || "web", ago(s.updatedAt));
         bits.forEach((t, i) => { if (i) m.append(h("span", "sep", "·")); m.append(h("span", s.peer && i === 0 ? "peer" : "", t)); });
         if (s.live) { m.append(h("span", "sep", "·"), h("span", "live", s.busy ? "working" : "live")); }
-        b.append(h("span", "sess-t", s.title || "Untitled"), m);
+        const tt = h("span", "sess-t");
+        if (s.pinnedAt) { const pm = icon("i-pin"); pm.classList.add("sess-pin"); pm.setAttribute("aria-hidden", "true"); tt.append(pm); }
+        tt.append(document.createTextNode(s.title || "Untitled"));
+        b.append(tt, m);
         b.addEventListener("click", () => app.openThread({ ...s, bot: s.bot || bot.id }));
         const tr = h("div", "sess-row");
         const startRename = () => app.renameThread(b, { ...s, bot: s.bot || bot.id });
         b.addEventListener("dblclick", (e) => { e.preventDefault(); startRename(); });
-        tr.append(b, renameControl(tr, icon, `Rename thread ${s.title || "Untitled"}`, startRename), deleteControl(tr, icon, `Delete thread ${s.title || "Untitled"}`, () => app.threadDeleted({ ...s, bot: s.bot || bot.id })));
+        tr.append(b);
+        const ts = { ...s, bot: s.bot || bot.id };
+        app.rowMenu.attach(tr, () => app.sessionSpec(ts), app.sessionActions(ts));
         sub.append(tr);
       }
       row.append(sub);
     }
     return row;
+  }
+
+  /** The environments to group by: the server's list for bots, plus any the session list knows (a bot's thread can live elsewhere). */
+  function mergeEnvs() {
+    const by = new Map();
+    for (const e of [...(app.envs ? app.envs() : []), ...st.envs]) if (e && e.id) by.set(e.id, { ...(by.get(e.id) || {}), ...e });
+    return [...by.values()];
+  }
+
+  /** The Remote switch state of a bot, for the row menu. */
+  function remoteSpec(bot) {
+    if (!bot) return { state: "disabled", reason: "Bots only. No bot owns this chat." };
+    return { state: bot.remote ? "on" : "off", where: bot.remote && bot.runsOn && bot.env ? bot.env.name : "" };
+  }
+
+  /** Turn Remote on or off for a bot (the same PATCH /bots/:id {remote} as the settings drawer). Optimistic; put back on failure. */
+  async function setRemote(id, want) {
+    const bot = botById(id);
+    if (!bot || !!bot.remote === want) return;
+    const prev = bot.remote;
+    bot.remote = want; renderList();
+    try {
+      const res = await api(`/bots/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ remote: want }) });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(botErrorMessage(res.status, body).text);
+      Object.assign(bot, body.bot || body, { id });
+      if (st.drawerOpen && st.drawerBot === id) paintRemote(bot);
+      app.botChanged(bot);
+      notify(`Remote is ${want ? "on" : "off"} for ${bot.name}.`);
+    } catch (e) { bot.remote = prev; if (e.message !== "unauthorized") notify(`Could not change Remote: ${e.message}`); }
+    renderList(); sync();
+  }
+
+  function botActions(bot) {
+    return {
+      settings: () => openSettings(bot.id),
+      pin: () => setPinned(bot, !(bot.pinned || bot.pinnedAt)),
+      delete: () => deleteBot(bot.id),
+      remote: (on) => setRemote(bot.id, on),
+    };
   }
 
   /** Show or hide a bot's thread list (remembered per bot). Does not touch the chat. */
@@ -869,6 +898,7 @@ export function initBots(ctx) {
     closeDrawer,
     /** Open Bot settings for a bot (the header's "set by bot" badge uses it). */
     openSettings: (id) => { if (!(st.drawerOpen && st.drawerBot === id)) openSettings(id); },
+    remoteSpec, setRemote, botActions,
     drawerOpen: () => st.drawerOpen,
     cardOpen: () => !el.card.hidden,
     threads: () => st.threads,

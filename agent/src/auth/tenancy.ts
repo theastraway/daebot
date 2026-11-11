@@ -2,6 +2,7 @@
 // user's own credentials. The server-wide MIND_API_KEY never reaches a user runtime.
 import { DailyCostCap } from "../hosted.ts";
 import { createRuntime } from "../runtime.ts";
+import { CLOUD_ENV } from "../env.ts";
 import type { Provider, Config, Runtime } from "../types.ts";
 import type { SessionStore } from "../persist.ts";
 import type { BootCache } from "../mind/boot-cache.ts";
@@ -140,6 +141,8 @@ export function createRuntimeHub(o: HubOptions): { runtimeFor(p: Principal): Run
       purgeBotSessions: (id) => inner.purgeBotSessions?.(id) ?? Promise.resolve(0),
       deleteSession: (id) => inner.deleteSession?.(id) ?? Promise.resolve(false),
       renameSession: (id, title) => inner.renameSession?.(id, title) ?? Promise.resolve(false),
+      setPinned: (id, on) => inner.setPinned?.(id, on) ?? Promise.resolve(false),
+      ownEnv: () => inner.ownEnv?.() ?? CLOUD_ENV,
       messageMeta: (id) => inner.messageMeta?.(id),
       historyWithMeta: (id) => inner.historyWithMeta?.(id),
       messageText: (id, mid) => inner.messageText?.(id, mid),

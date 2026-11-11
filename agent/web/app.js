@@ -15,7 +15,10 @@ import { initConnectors } from "/connectors.js";
 import { openConnectorDetail } from "/connector-detail.js";
 import { transcriptBehind } from "/sync.js";
 import { lruPut, raceAbort, windowPlan, scrollMemory } from "/switchcache.js";
-import { confirmDialog, deleteControl, renameControl, editInline, isRenaming, sessionDeleteText } from "/manage.js";
+import { confirmDialog, editInline, isRenaming, sessionDeleteText } from "/manage.js";
+import { groupByEnv, renderGroups, parseCollapsed, serializeCollapsed, COLLAPSE_KEY } from "/envgroups.js";
+import { createRowMenu } from "/rowmenu.js";
+import { openSessionSettings } from "/sessionsettings.js";
 import { compareBuild, webUpdateText, WEB_CHECK_MS } from "/webupdate.js";
 import { buildPermissionCard, initChatMode, initPermissions } from "/permissions.js";
 import { initAccount } from "/account.js";
@@ -69,6 +72,7 @@ let token = store.get("sessionStorage", "mc_token") || "";
 // ---------- state ----------
 const state = {
   sessions: [],            // server list
+  envs: [],                // the places sessions live: MIND Cloud, computers, servers (server list, with online state)
   currentId: null,         // gateway session id, null = draft (created on first send)
   transcripts: new Map(),  // id -> { items: [], usage: {in,out,cost}, violCount }
   busy: new Set(),         // ids with a turn in flight
@@ -802,26 +806,63 @@ function workingSignal(on) {
     favLinks.forEach((l) => { l.href = url; });
   }, 250);
 }
+// Home-environment groups: collapsed state is remembered per device (localStorage); the pinned section is never collapsed.
+const collapsedEnvs = parseCollapsed(store.get("localStorage", COLLAPSE_KEY));
+function toggleEnv(id) {
+  if (collapsedEnvs.has(id)) collapsedEnvs.delete(id); else collapsedEnvs.add(id);
+  store.set("localStorage", COLLAPSE_KEY, serializeCollapsed(collapsedEnvs));
+  renderSessions(); bots.renderList();
+}
+const rowMenu = createRowMenu({ h, icon });
+function envFor(row) { const g = groupByEnv([row], state.envs); return g.envOf(row); }
+/** What the row menu needs for a session or bot thread: its Remote state comes from the bot that owns it. */
+function sessionSpec(s) {
+  const bot = s.bot ? bots.bot(s.bot) : null;
+  return { name: s.title || "Untitled", pinned: !!s.pinnedAt, remote: bot ? bots.remoteSpec(bot) : { state: "disabled", reason: "Bots only. No bot owns this chat." } };
+}
+function sessionActions(s) {
+  return {
+    settings: () => { if (s.bot) { bots.ensureLoaded().then(() => bots.openSettings(s.bot)); return; } openSessionSettings({ s, env: envFor(s), h, icon, ago, onRename: (t) => renameThread(s, t) }); },
+    pin: () => pinSession(s, !s.pinnedAt),
+    delete: () => deleteSession(s),
+    remote: (on) => { if (s.bot) bots.setRemote(s.bot, on); },
+  };
+}
+/** Pin or unpin a session or bot thread. Saved with the session (it follows every device); optimistic, rolled back on failure. */
+async function pinSession(s, on) {
+  const prev = s.pinnedAt;
+  const apply = (v) => { for (const x of [state.sessions, bots.threads(), ...bots.cached()]) for (const r of x) if (r.id === s.id) { if (v) r.pinnedAt = v; else delete r.pinnedAt; } renderSessions(); bots.renderList(); };
+  apply(on ? Date.now() : 0);
+  try {
+    const r = await api(`/sessions/${encodeURIComponent(s.id)}`, { method: "PATCH", body: JSON.stringify({ pinned: on }) });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+  } catch (e) { apply(prev || 0); if (e.message !== "unauthorized") notify(`Could not ${on ? "pin" : "unpin"} the session: ${e.message}`); }
+}
+function sessionRow(s, { pinned } = {}) {
+  const b = h("button", "sess"); b.type = "button"; b.dataset.sid = s.id;
+  if (s.id === state.currentId) b.setAttribute("aria-current", "true");
+  if (s.unread) { b.classList.add("unread"); b.title = "Unread"; }
+  const m = h("span", "sess-m");
+  m.append(h("span", "", s.surface), h("span", "", "·"), h("span", "", ago(s.updatedAt)));
+  if (s.live) { m.append(h("span", "", "·"), h("span", "live", s.busy ? "working" : "live")); }
+  const t = h("span", "sess-t");
+  if (pinned) { const pm = icon("i-pin"); pm.classList.add("sess-pin"); pm.setAttribute("aria-hidden", "true"); t.append(pm); }
+  t.append(document.createTextNode(s.title || "Untitled"));
+  b.append(t, m);
+  b.addEventListener("click", () => selectSession(s, { userClick: true }));
+  const row = h("div", "sess-row");
+  b.addEventListener("dblclick", (e) => { e.preventDefault(); rowMenu.close(); renameRow(b, s); }); // inline rename stays on double-click
+  row.append(b);
+  rowMenu.attach(row, () => sessionSpec(s), sessionActions(s));
+  return row;
+}
 function renderSessions() {
   if (isRenaming()) return; // an inline rename is open: the list is redrawn when it ends
+  rowMenu.close();
   els.list.replaceChildren();
   const shown = generalSessions(state.sessions); // bot threads live under their bot, in the Bots view
   if (!shown.length) { els.list.append(h("div", "empty-side", "No sessions yet.")); return; }
-  for (const s of shown) {
-    const b = h("button", "sess"); b.type = "button"; b.dataset.sid = s.id;
-    if (s.id === state.currentId) b.setAttribute("aria-current", "true");
-    if (s.unread) { b.classList.add("unread"); b.title = "Unread"; }
-    const m = h("span", "sess-m");
-    m.append(h("span", "", s.surface), h("span", "", "·"), h("span", "", ago(s.updatedAt)));
-    if (s.live) { m.append(h("span", "", "·"), h("span", "live", s.busy ? "working" : "live")); }
-    b.append(h("span", "sess-t", s.title || "Untitled"), m);
-    b.addEventListener("click", () => selectSession(s, { userClick: true }));
-    const row = h("div", "sess-row");
-    const startRename = () => renameRow(b, s);
-    b.addEventListener("dblclick", (e) => { e.preventDefault(); startRename(); });
-    row.append(b, renameControl(row, icon, `Rename session ${s.title || "Untitled"}`, startRename), deleteControl(row, icon, `Delete session ${s.title || "Untitled"}`, () => deleteSession(s)));
-    els.list.append(row);
-  }
+  renderGroups(els.list, groupByEnv(shown, state.envs), { build: sessionRow, collapsed: collapsedEnvs, onToggle: toggleEnv, h, icon });
 }
 // Rename a thread (session or bot thread): PATCH the title, keep it in every cached copy, redraw. The server keeps it for good.
 async function renameThread(s, title) {
@@ -861,7 +902,7 @@ async function deleteSession(s) {
 // View-aware: the Sessions view lists plain sessions; the Bots view also refreshes the bots and the selected bot's threads.
 // A bot thread can be open while the Sessions view shows, so its bot is kept fresh too.
 async function refreshSessions() {
-  try { state.sessions = (await json("/sessions")).sessions; } catch { /* shown via connection state */ }
+  try { const r = await json("/sessions"); state.sessions = r.sessions; state.envs = r.envs || state.envs; } catch { /* shown via connection state */ }
   if (bots.view() === "bots" || state.curBot) await bots.refresh();
   renderSessions(); renderHeader();
 }
@@ -1493,7 +1534,7 @@ els.scrim.addEventListener("click", closeSidebar);
 initGift();
 $("btn-newbot").addEventListener("click", () => { closeSidebar(); bots.openCard(); });
 initSearch({
-  h, getSessions: () => state.sessions, getBots: () => bots.bots(), ensureLoaded: async () => { await bots.ensureLoaded(); try { state.sessions = (await json("/sessions")).sessions; } catch { /* the list on screen */ } },
+  h, getSessions: () => state.sessions, getBots: () => bots.bots(), ensureLoaded: async () => { await bots.ensureLoaded(); try { const r = await json("/sessions"); state.sessions = r.sessions; state.envs = r.envs || state.envs; } catch { /* the list on screen */ } },
   openSession: (s) => selectSession(s, { userClick: true }), openBot: (id) => bots.pickBot(id), closeSidebar,
 });
 els.btnNew.addEventListener("click", () => (bots.view() === "bots" ? bots.openCard() : newSession()));
@@ -1602,6 +1643,8 @@ const bots = initBots({
     modelRows: async () => { if (!models) return []; await models.list(); return models.rows(); },
     botDeleted: (id) => { if (state.curBot === id) newSession(); refreshSessions(); },
     threadDeleted: (s) => deleteSession(s),
+    pinThread: (s, on) => pinSession(s, on),
+    sessionSpec, sessionActions, rowMenu, envs: () => state.envs, collapsed: () => collapsedEnvs, toggleEnv,
     renameThread: (btn, s) => renameRow(btn, s),
   },
 });

@@ -3,7 +3,7 @@
 // owner: another user's session id is "forbidden", never merged into.
 import type { SessionStore, StoredSession } from "../persist.ts";
 import type { BotsApi } from "../bots/types.ts";
-import { mergeRecords, recordSig } from "./merge.ts";
+import { homeSig, mergeRecords, recordSig } from "./merge.ts";
 import { MAX_RECORD_BYTES, NOT_SYNCED_SURFACES, fromWire, toWire } from "./wire.ts";
 import type { WireRecord } from "./wire.ts";
 import { TombstoneBook } from "./tombstones.ts";
@@ -126,7 +126,7 @@ export class SyncService {
         const existing = this.deps.store.load(rec.id);
         if (existing && (existing.owner ?? "owner") !== owner) { out.push({ id: rec.id, status: "forbidden" }); continue; }
         const merged = mergeRecords(existing, rec);
-        if (existing && recordSig(merged) === recordSig(existing) && merged.history.length === existing.history.length) {
+        if (existing && recordSig(merged) === recordSig(existing) && merged.history.length === existing.history.length && homeSig(merged) === homeSig(existing)) {
           out.push({ id: rec.id, status: "same", sig: recordSig(existing) });
           continue;
         }

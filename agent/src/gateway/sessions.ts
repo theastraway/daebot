@@ -30,7 +30,7 @@ export interface LiveSession {
   turnNonce: string;
 }
 
-export interface SessionRow { id: string; surface: string; title: string; updatedAt: number; live: boolean; busy: boolean; bot?: string; peer?: string; model?: string; permMode?: string; unread?: boolean; archived?: boolean }
+export interface SessionRow { id: string; surface: string; title: string; updatedAt: number; live: boolean; busy: boolean; bot?: string; peer?: string; model?: string; permMode?: string; unread?: boolean; archived?: boolean; env?: import("../env.ts").EnvTag; pinnedAt?: number }
 
 export const IDLE_MS = 6 * 60 * 60 * 1000;
 export const EMPTY_IDLE_MS = 15 * 60 * 1000; // a session nobody has written to is dropped sooner
@@ -157,6 +157,8 @@ export class SessionManager {
         ...(prev?.permMode ? { permMode: prev.permMode } : {}),
         ...(prev?.unread ? { unread: true } : {}),
         ...(prev?.archived ? { archived: true } : {}),
+        ...(prev?.env ? { env: prev.env } : {}),
+        ...(prev?.pinnedAt ? { pinnedAt: prev.pinnedAt } : {}),
       });
     }
     return [...out.values()].filter((r) => (filter.archived || !r.archived) && (filter.bot ? r.bot === filter.bot : !r.bot && !r.peer)).sort((a, b) => b.updatedAt - a.updatedAt);
@@ -235,6 +237,14 @@ export class SessionManager {
     const ok = (await rt.renameSession?.(id, title)) === true;
     if (ok && ls) ls.title = title;
     return ok;
+  }
+
+  /** Pins or unpins one session of an owner (live and/or saved). The caller has already passed access(). false = unknown id. */
+  async setPinned(id: string, owner: string, on: boolean): Promise<boolean> {
+    const ls = this.live.get(id);
+    if (ls && ls.owner !== owner) throw new ForbiddenError("forbidden");
+    const rt = this.runtimeFor ? this.runtimeFor(owner) : this.runtime;
+    return (await rt.setPinned?.(id, on)) === true;
   }
 
   /** Changes the model the NEXT turn of a live session runs on. */

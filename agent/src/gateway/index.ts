@@ -70,6 +70,8 @@ import { RoutineSyncService } from "../sync/routines.ts";
 import { upgradeChatScopes } from "../mind/scope-upgrade.ts";
 import { SyncHttp } from "../sync/http.ts";
 import { RemoteAgent, loadDeviceId } from "../sync/remote-agent.ts";
+import { CLOUD_ENV, envViews, normalizeEnv } from "../env.ts";
+import type { EnvTag, EnvView } from "../env.ts";
 import { TombstoneBook } from "../sync/tombstones.ts";
 import { RemoteHub } from "../remote/hub.ts";
 import type { RemoteJob } from "../remote/hub.ts";
@@ -414,6 +416,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         key: syncKey,
         store: fullStore!,
         bots: () => manager.runtimeOf(OWNER.id).bots,
+        env: opts.runtime.ownEnv?.(),
         isBusy: (id) => !!manager.get(id)?.busy,
         afterWrite: (id) => refreshLive(OWNER.id, id),
         deleteLocal: async (id) => { await manager.deleteSession(id, OWNER.id); },
@@ -466,7 +469,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     ? new RemoteAgent({
         http: new SyncHttp({ baseUrl: opts.sync?.url ?? ((process.env.DAEBOT_SYNC_URL ?? "").trim() || "https://daebot.live"), key: syncKey, fetchImpl: opts.sync?.fetchImpl }),
         deviceId: opts.sync?.deviceId ?? loadDeviceId(join(daebotHome(), "device-id")),
-        deviceName: opts.sync?.deviceName ?? (hostname() || "Desktop"),
+        deviceName: opts.sync?.deviceName ?? (opts.runtime.ownEnv?.().name || hostname() || "Desktop"),
+        deviceKind: ((k) => (k === "server" ? "server" : "machine"))(opts.runtime.ownEnv?.().kind),
         bots: () => manager.runtimeOf(OWNER.id).bots,
         runJob: runRemoteJob,
         decide: (d) => { manager.runtimeOf(OWNER.id).permissions?.decide(d.permId, { decision: d.decision, remember: d.remember, scope: d.scope }); },
@@ -924,10 +928,11 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     const deviceId = typeof b.deviceId === "string" && /^d_[0-9a-f]{16}$/.test(b.deviceId) ? b.deviceId : "";
     if (!deviceId) return sendJson(res, 400, { error: "deviceId required" });
     const name = optStr(b.name, 60) ?? "Desktop";
+    const kind = b.kind === "server" ? "server" : b.kind === "machine" ? "machine" : undefined;
     const flags = Array.isArray(b.bots) ? b.bots.filter((f): f is { slug: string; remote: boolean; at: number } => !!f && typeof f.slug === "string" && typeof f.remote === "boolean" && typeof f.at === "number").slice(0, 200) : [];
     const bots = manager.runtimeOf(me.id).bots;
     if (bots && flags.some((f) => !bots.bySlug(f.slug))) { try { await bots.list(); } catch { /* MIND unreachable: unknown bots wait for the next poll */ } }
-    remoteHub.heartbeat(me.id, { id: deviceId, name, slugs: flags.map((f) => f.slug) });
+    remoteHub.heartbeat(me.id, { id: deviceId, name, slugs: flags.map((f) => f.slug), kind });
     if (bots?.setRemote) {
       for (const f of flags) {
         const hb = bots.bySlug(f.slug);
@@ -940,7 +945,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     const jobs = await remoteHub.wait(me.id, deviceId, waitMs, ac.signal);
     if (ac.signal.aborted) { if (jobs.length) remoteHub.requeue(me.id, jobs); return; } // the device hung up first: nothing was delivered
     for (const j of jobs) { const e = remoteRuns.get(j.id); if (e?.waiting) { e.waiting = false; e.run.publish({ type: "notice", level: "info", text: `${name} is back and picked it up.` }); } } // it had been waiting
-    remoteHub.heartbeat(me.id, { id: deviceId, name, slugs: flags.map((f) => f.slug) });
+    remoteHub.heartbeat(me.id, { id: deviceId, name, slugs: flags.map((f) => f.slug), kind });
     // What the device does not know yet (a flag turned on here, or automatically): computed after the wait so a change made while it waited is in this answer.
     const reply: { slug: string; remote: boolean; at: number; by?: string; note?: string }[] = [];
     for (const f of flags) {
@@ -1653,8 +1658,24 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   const botView = (b: BotRecord) => ({ id: b.id, slug: b.slug, name: b.name, purpose: b.purpose, color: b.color, face: b.face ?? null, model: b.model ?? null, pinned: !!b.pinnedAt, pinnedAt: b.pinnedAt ?? null, remote: !!b.remote, remoteAt: b.remoteAt ?? null, remoteLog: (b.remoteLog ?? []).slice(-5), createdAt: b.createdAt, updatedAt: b.updatedAt, ...versionInfo(b) });
 
   /** Hosted: which of the user's desktops carry this bot and whether they are online (the Remote switch shows it). */
-  const remoteView = (owner: string, b: BotRecord): { remoteDevices?: { name: string; online: boolean }[] } =>
-    remoteHub ? { remoteDevices: remoteHub.devicesFor(owner, b.slug).map((d) => ({ name: d.name, online: d.online })) } : {};
+  const remoteView = (owner: string, b: BotRecord): { remoteDevices?: { name: string; online: boolean }[]; env: EnvTag; runsOn?: boolean } => {
+    const devs = remoteHub ? remoteHub.devicesFor(owner, b.slug) : [];
+    // A bot with Remote on and a computer that carries it runs THERE; otherwise it lives where it was created.
+    const dev = b.remote ? (devs.find((d) => d.online) ?? devs[0]) : undefined;
+    const env: EnvTag = dev ? { id: dev.id, kind: dev.kind ?? "machine", name: dev.name } : normalizeEnv(b.env) ?? manager.runtimeOf(owner).ownEnv?.() ?? CLOUD_ENV;
+    return { ...(remoteHub ? { remoteDevices: devs.map((d) => ({ name: d.name, online: d.online })) } : {}), env, ...(dev ? { runsOn: true } : {}) };
+  };
+
+  /** The places to show in the sidebar: every one a row points at, plus the computers and servers this account has, each with its online state. */
+  function envsFor(owner: string, tags: Iterable<EnvTag | undefined>): EnvView[] {
+    const cur = manager.runtimeOf(owner).ownEnv?.() ?? CLOUD_ENV;
+    const devs = remoteHub ? remoteHub.devices(owner) : [];
+    const all: EnvTag[] = [];
+    for (const t of tags) { const n = normalizeEnv(t); if (n) all.push(n); }
+    for (const d of devs) all.push({ id: d.id, kind: d.kind ?? "machine", name: d.name });
+    const cloudOnline = hosted ? true : !!syncAgent && syncAgent.status.lastOkAt > Date.now() - 90_000 && !syncAgent.status.lastError;
+    return envViews(all, cur, { cloudOnline, devices: new Map(devs.map((d) => [d.id, d.online] as const)) });
+  }
 
   function botFail(res: ServerResponse, e: unknown): void {
     if (e instanceof BotError) return sendJson(res, e.status, { error: e.code, message: e.message, ...(e.extra ?? {}) });
@@ -1695,7 +1716,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (!botsOn() || !bots) return sendJson(res, 404, { error: "bots are not enabled on this deployment" });
     try {
       if (path === "/bots") {
-        if (method === "GET") return sendJson(res, 200, { bots: (await bots.list()).map((b) => ({ ...botView(b), ...manager.botState(me.id, b.id), ...remoteView(me.id, b) })) });
+        if (method === "GET") { const rows = (await bots.list()).map((b) => ({ ...botView(b), ...manager.botState(me.id, b.id), ...remoteView(me.id, b) })); return sendJson(res, 200, { bots: rows, envs: envsFor(me.id, rows.map((b) => b.env)) }); }
         if (method === "POST") {
           const b = await readJson(req);
           // The web UI sends only a name: the slug is derived from it (made unique with a numeric suffix).
@@ -1714,7 +1735,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
           const rec = await bots.create({ slug, name, purpose: optStr(b.purpose, 1000), color: optStr(b.color, 20), face: b.face });
           remoteAgent?.kick(); // a new bot is registered with daebot.live right away, not at the end of the current long poll
           if (instr) bots.setInstructions(rec.id, instr);
-          return sendJson(res, 201, { bot: { ...botView(rec), live: false, busy: false } });
+          return sendJson(res, 201, { bot: { ...botView(rec), live: false, busy: false, ...remoteView(me.id, rec) } });
         }
         return sendJson(res, 405, { error: "method not allowed" });
       }
@@ -1739,7 +1760,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
         const from = versionInfo(rec).version;
         const up = bots.upgrade(id); // DAEBOT.md, threads and the bot's MIND are untouched
-        return sendJson(res, 200, { ok: true, from, bot: botView(up) });
+        return sendJson(res, 200, { ok: true, from, bot: { ...botView(up), ...remoteView(me.id, up) } });
       }
       if (method === "PATCH") {
         const b = await readJson(req);
@@ -1763,7 +1784,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         exchangeHub?.purgeBot(me.id, id); // and every agent exchange it was part of
         return sendJson(res, 200, { ok: true });
       }
-      if (method === "GET") return sendJson(res, 200, { bot: botView(rec) });
+      if (method === "GET") return sendJson(res, 200, { bot: { ...botView(rec), ...remoteView(me.id, rec) } });
       return sendJson(res, 405, { error: "method not allowed" });
     } catch (e) {
       return botFail(res, e);
@@ -2058,7 +2079,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (path.startsWith("/mcp/")) return mcpApi(req, res, path, method, me);
     if (path === "/models" || path.startsWith("/models/")) return modelsApi(req, res, path, method, me);
     if (path === "/sessions") {
-      if (method === "GET") return sendJson(res, 200, { sessions: manager.list(me.id, { bot: optStr(_query.get("bot") ?? undefined, 80) || undefined }) });
+      if (method === "GET") { const sessions = manager.list(me.id, { bot: optStr(_query.get("bot") ?? undefined, 80) || undefined }); return sendJson(res, 200, { sessions, envs: envsFor(me.id, sessions.map((s) => s.env)) }); }
       if (method === "POST") {
         const b = await readJson(req);
         const model = optStr(b.model, 130);
@@ -2145,6 +2166,13 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         const ok = await manager.rename(id, me.id, t);
         if (!ok) return sendJson(res, 404, { error: "no such session" });
         return sendJson(res, 200, { ok: true, title: t });
+      }
+      // Pin or unpin this session. Saved with the session, so it follows every device; last writer wins (metaAt).
+      if (b.pinned !== undefined) {
+        if (typeof b.pinned !== "boolean") return sendJson(res, 400, { error: "pinned must be true or false" });
+        const ok = await manager.setPinned(id, me.id, b.pinned);
+        if (!ok) return sendJson(res, 404, { error: "no such session" });
+        return sendJson(res, 200, { ok: true, pinned: b.pinned });
       }
       // Mark as unread: the thread is unread from this message on (a message id), or unreadFrom: null marks it read. Per user, saved with the thread.
       if (b.unreadFrom !== undefined) {

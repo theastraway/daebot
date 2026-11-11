@@ -270,7 +270,7 @@ export interface Runtime {
   // boot: runs mind_context before returning; throws only if tools are unreachable.
   // botId: open a session of that bot (home MIND = the bot's); peer: the other end of a bot-to-bot DM thread; model: per-session model.
   openSession(opts: { surface: string; title?: string; resumeId?: string; identity?: string; botId?: string; peer?: string; model?: string }): Promise<AgentSession>;
-  listSessions(): { id: string; surface: string; title: string; updatedAt: number; bot?: string; peer?: string; model?: string; permMode?: string; unread?: boolean; archived?: boolean }[];
+  listSessions(): { id: string; surface: string; title: string; updatedAt: number; bot?: string; peer?: string; model?: string; permMode?: string; unread?: boolean; archived?: boolean; env?: import("./env.ts").EnvTag; pinnedAt?: number }[];
   /** Bots of this runtime's owner (absent on runtimes built without a bots context). */
   bots?: BotsApi;
   /** Bot / peer / model of a live or persisted session of this owner. */
@@ -283,6 +283,10 @@ export interface Runtime {
   renameSession?(id: string, title: string): Promise<boolean>;
   /** Hides (on) or restores (off) one session of this owner in the lists; nothing is deleted. false = no such session. */
   archiveSession?(id: string, on: boolean): Promise<boolean>;
+  /** Pins (on) or unpins (off) one session of this owner. The pin is saved with the session and syncs to every device. false = no such session. */
+  setPinned?(id: string, on: boolean): Promise<boolean>;
+  /** This runtime's home environment: where its new sessions and bots live (MIND Cloud, this machine, this server). */
+  ownEnv?(): import("./env.ts").EnvTag;
   /** Reactions / feedback of each message and the unread marker of a session of this owner. Undefined = unknown id. */
   messageMeta?(id: string): SessionMessageMeta | undefined;
   /** history() and messageMeta() in one read. live = the session is running in this process (its transcript changes under the reader). */

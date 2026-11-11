@@ -67,13 +67,13 @@ export async function hostedRig(o: { script?: ConstructorParameters<typeof FakeP
 
 export type HostedRig = Awaited<ReturnType<typeof hostedRig>>;
 
-export async function deskRig(hosted: HostedRig, userKey: string, o: { script?: ConstructorParameters<typeof FakeProvider>[0]; intervalMs?: number; sync?: boolean; deviceId?: string; deviceName?: string; dir?: string } = {}) {
+export async function deskRig(hosted: HostedRig, userKey: string, o: { script?: ConstructorParameters<typeof FakeProvider>[0]; intervalMs?: number; sync?: boolean; deviceId?: string; deviceName?: string; kind?: "machine" | "server"; dir?: string } = {}) {
   const dir = o.dir ?? mkdtempSync(join(tmpdir(), "daebot-desk-"));
   const provider = new FakeProvider(o.script ?? [{ text: "desktop says hi" }]);
   const cfg = baseCfg({ mindBaseUrl: hosted.fake.base, mindApiKey: userKey });
   const store = createFileStore(dir);
   const bots = { dir, bus: {} as { current?: unknown }, manage: {} };
-  const runtime = createRuntime(cfg, { provider, store, bots: bots as never, bootCache: new BootCache() });
+  const runtime = createRuntime(cfg, { provider, store, bots: bots as never, bootCache: new BootCache(), envTag: { id: o.deviceId ?? "d_" + "1".repeat(16), kind: o.kind ?? "machine", name: o.deviceName ?? "Test Mac" } });
   const st = tmpStatic();
   const gw = await startGateway({
     runtime, cfg, port: 0, staticDir: st.dir, tokenPath: join(dir, "tok"), bots: bots as never, botsEnabled: () => true, sessionStore: store,
