@@ -42,6 +42,7 @@ const SAMPLE: Record<string, Record<string, unknown>> = {
   mind_crm: { action: "list" }, mind_crm_write: { action: "create", fields: { name: "n" } },
   mind_checklists: { action: "list" }, mind_checklists_write: { action: "create", fields: { title: "t" } },
   mind_tasks: { action: "list" }, mind_tasks_write: { action: "create", fields: { title: "t" } },
+  mind_todos: { action: "list" }, mind_todos_write: { action: "update", todo_id: "t1", fields: { status: "done" } },
   mind_folders_read: { action: "list" },
   mind_folders: { action: "create", fields: { name: "f" } },
 };
