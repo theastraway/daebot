@@ -44,6 +44,7 @@ export interface FakeMind {
   /** when set, /referral answers this HTTP status */
   referralStatus?: number;
   /** GET/PUT /developer/v1/usage, per username: plan, percent used, switch state. A user missing here answers a free plan at 2% used. */
+  spendCaps?: Map<string, { account: unknown; bots: Record<string, unknown> }>;
   usage: Map<string, { plan: string; percentUsed: number; unlimited?: boolean; resetAt?: string; available: boolean; enabled: boolean; automatic?: boolean; rateNote?: string; putStatus?: number }>;
   /** LIFE board, Focuses and documents per username (GET/POST/PATCH/DELETE /life/items, /focuses, /documents). */
   life: Map<string, { focuses: Map<string, any>; items: Map<string, any>; docs: Map<string, any> }>;
@@ -209,6 +210,20 @@ export async function startFakeMind(initial: Record<string, string> = {}): Promi
           credits_balance: 123, credits_limit: 400,
           additional_usage: { available: u.available, eligible: u.available, enabled: u.enabled, active: u.enabled && u.available, automatic: !!u.automatic, rate_note: u.available ? u.rateNote ?? null : null, overflow_usd: 0 },
         });
+      }
+      if (rest === "/llm/spend-caps") {
+        const c = (m.spendCaps ??= new Map()).get(username) ?? { account: null, bots: {} as Record<string, unknown> };
+        m.spendCaps.set(username, c);
+        if (req.method === "PUT") {
+          if (parsed && "account" in parsed) c.account = parsed.account as never;
+          for (const [id, v] of Object.entries((parsed?.bots ?? {}) as Record<string, unknown>)) { if (v === null) delete c.bots[id]; else c.bots[id] = v; }
+        }
+        const view = (cap: any) => ({ cap, period: cap?.period ?? "monthly", spent_usd: 0.02, remaining_usd: cap ? Math.max(0, cap.usd - 0.02) : null, pct: cap ? 0.02 / cap.usd * 100 : null, reached: !!cap && 0.02 >= cap.usd, alert: !!cap && 0.02 >= cap.usd, period_start: "2026-11-11T05:00:00+00:00", resets_at: "2026-11-12T05:00:00+00:00" });
+        const bots: Record<string, unknown> = {};
+        for (const [id, v] of Object.entries(c.bots)) bots[id] = view(v);
+        const q = new URL(req.url ?? "", "http://x").searchParams.get("bot");
+        if (q && !bots[q]) bots[q] = view(null);
+        return json(res, 200, { account: view(c.account), bots, alert: false, reached: false });
       }
       if (rest === "/referral") {
         if (m.referralStatus) return json(res, m.referralStatus, { detail: "x" });

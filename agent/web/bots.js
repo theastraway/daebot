@@ -768,6 +768,7 @@ export function initBots(ctx) {
     el.btnInstr.setAttribute("aria-expanded", "true");
     el.drawerTitle.textContent = `${bot.name} settings`;
     paintDetails(bot);
+    if (app.mountBotCap) void app.mountBotCap(document.getElementById("bd-cap"), id);
     if (routines) routines.open(id);
     renderList();
     st.loadingInstr = true; delete el.stateEl.dataset.saved;

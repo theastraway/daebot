@@ -105,6 +105,7 @@
         </div>
         <div class="am-update" id="upd" hidden><span id="upd-text"></span><button class="btn-primary sm" id="upd-btn" type="button" role="menuitem"></button></div>
         <button class="am-item" id="btn-perms" type="button" role="menuitem" hidden aria-haspopup="dialog" aria-expanded="false"><svg class="ic"><use href="#i-lock"/></svg><span>Permissions</span></button>
+        <button class="am-item" id="am-caps" type="button" role="menuitem" aria-haspopup="dialog"><svg class="ic"><use href="#i-lock"/></svg><span>Spend caps</span></button>
         <button class="am-item" id="am-keys" type="button" role="menuitem" aria-haspopup="dialog" aria-expanded="false"><svg class="ic"><use href="#i-keys"/></svg><span>Keyboard shortcuts</span></button>
         <button class="am-item am-screen" id="am-screen" type="button" role="menuitemcheckbox" aria-checked="false" hidden><svg class="ic"><use href="#i-eye"/></svg><span class="am-screen-text"><b>Let Daebot watch my screen</b><small>Off. Daebot cannot see your screen.</small></span><i class="u-switch" aria-hidden="true"><i></i></i></button>
         <button class="am-item" id="am-apps" type="button" role="menuitem" aria-haspopup="dialog"><svg class="ic"><use href="#i-apps"/></svg><span>Apps &amp; connectors</span></button>
@@ -128,6 +129,7 @@
   <div class="scrim" id="scrim" hidden></div>
 
   <main class="main">
+    <div class="cap-banner" id="cap-banner" role="status" aria-live="polite" hidden><span id="cap-banner-text"></span><button class="icon-btn" id="cap-banner-x" type="button" aria-label="Dismiss"><svg class="ic"><use href="#i-x"/></svg></button></div>
     <header class="topbar">
       <button class="icon-btn only-mobile" id="btn-menu" type="button" aria-label="Open sessions"><svg class="ic"><use href="#i-menu"/></svg></button>
       <button class="bot-trigger" id="btn-instr" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="instr-drawer" title="Settings and instructions"><span class="bot-badge sm" id="top-badge" aria-hidden="true"></span><span class="bt-name" id="top-bot-name">Daebot</span><svg class="ic bt-chev" aria-hidden="true"><use href="#i-chev-down"/></svg></button>
@@ -219,6 +221,10 @@
         <select class="fld" id="bd-model" aria-label="Model for this bot" aria-describedby="bd-model-note"><option value="">Use default (whatever is chosen)</option></select>
         <p class="drawer-fine" id="bd-model-note">Applies to this bot's threads only. Main Daebot and other bots keep their own choice.</p>
         <span class="inline-state" id="bd-model-state" role="status" aria-live="polite"></span>
+      </section>
+      <section class="dsec" id="bd-cap-sec">
+        <h3>Spend cap</h3>
+        <div id="bd-cap"></div>
       </section>
       <section class="dsec" id="bd-remote-sec">
         <h3>Remote</h3>
@@ -331,6 +337,17 @@
     <p class="err" id="bn-err" role="alert" hidden></p>
     <div class="row"><button class="btn-primary" id="bn-create" type="submit">Create bot</button><button class="btn-quiet" id="bn-cancel" type="button">Cancel</button></div>
   </form>
+</div>
+
+<div class="gate-token modal" id="caps-modal" hidden>
+  <div class="token-card bot-card caps-card" role="dialog" aria-modal="true" aria-labelledby="caps-title">
+    <div class="apps-head">
+      <div><h2 id="caps-title">Spend caps</h2><p>Set how much Daebot may spend on your account. It stops before a call that would go over.</p></div>
+      <button class="icon-btn" id="caps-close" type="button" aria-label="Close"><svg class="ic"><use href="#i-x"/></svg></button>
+    </div>
+    <section class="dsec"><h3>Whole account</h3><div id="caps-body"></div></section>
+    <p class="drawer-fine">Each bot can also have its own cap in that bot's settings.</p>
+  </div>
 </div>
 
 <div class="gate-token modal" id="apps-modal" hidden>

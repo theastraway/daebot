@@ -10,9 +10,9 @@ export interface LlmEndpoint {
   via: "mind" | "openrouter";
 }
 
-export function llmEndpoint(cfg: Pick<Config, "billing" | "mindBaseUrl" | "openrouterKey">, getMindKey: () => string): LlmEndpoint | undefined {
+export function llmEndpoint(cfg: Pick<Config, "billing" | "mindBaseUrl" | "openrouterKey">, getMindKey: () => string, bot?: string): LlmEndpoint | undefined {
   if (cfg.billing === "mind") {
-    return { url: `${cfg.mindBaseUrl.replace(/\/+$/, "")}/llm/chat/completions`, via: "mind", headers: () => ({ "Content-Type": "application/json", "X-API-Key": getMindKey() }) };
+    return { url: `${cfg.mindBaseUrl.replace(/\/+$/, "")}/llm/chat/completions`, via: "mind", headers: () => ({ "Content-Type": "application/json", "X-API-Key": getMindKey(), ...(bot ? { "X-Daebot-Bot": bot } : {}) }) };
   }
   if (!cfg.openrouterKey) return undefined;
   return {
@@ -29,6 +29,7 @@ export function refusalText(status: number, body: string): string {
     code = typeof j?.error === "string" ? j.error : typeof j?.error?.code === "string" ? j.error.code : "";
     msg = typeof j?.message === "string" ? j.message : typeof j?.error?.message === "string" ? j.error.message : typeof j?.detail === "string" ? j.detail : "";
   } catch { /* not JSON */ }
+  if (code === "spend_cap_reached") return msg || "the spend cap is reached. Raise it in Settings";
   if (status === 402 || code === "insufficient_credits") return "the MIND plan has no credits left for this call (upgrade or top up at m-i-n-d.ai)";
   if (code === "model_not_in_plan") return "this model needs a paid MIND plan";
   if (code === "model_not_available") return msg || "MIND does not offer this model";

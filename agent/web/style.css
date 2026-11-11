@@ -1320,3 +1320,18 @@ button.env-head:hover { background: var(--surface-2); color: var(--ink-2); }
 .ss-home { display: flex; align-items: center; gap: 8px; font-size: 14px; }
 .ss-kind, .ss-state, .ss-meta { color: var(--ink-3); font-size: 12.5px; }
 .ss-meta { margin: 10px 0 14px; }
+
+/* ---- spend caps ---- */
+.cap-banner { display: flex; align-items: center; gap: 10px; justify-content: space-between; padding: 8px 14px; background: var(--surface-2); border-bottom: 1px solid var(--line-strong); font-size: 13.5px; color: var(--ink); }
+.cap-banner[hidden] { display: none; }
+.cap-banner.reached { background: var(--accent-soft); color: var(--accent); }
+.caps-card { max-width: 480px; }
+.cap-line { margin: 0; font-size: 13.5px; color: var(--ink-2); }
+.cap-bar { height: 6px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
+.cap-bar[hidden] { display: none; }
+.cap-bar i { display: block; height: 100%; background: var(--ink); border-radius: 99px; }
+.cap-bar.low i { background: var(--warn); }
+.cap-bar.empty i { background: var(--accent); }
+.cap-row { display: grid; grid-template-columns: 1.2fr 1fr .8fr; gap: 8px; }
+.cap-f { display: grid; gap: 4px; min-width: 0; }
+.cap-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

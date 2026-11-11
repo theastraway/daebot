@@ -24,6 +24,7 @@ import { buildPermissionCard, initChatMode, initPermissions } from "/permissions
 import { initAccount } from "/account.js";
 import { initMainBot } from "/mainbot.js";
 import { initUsage } from "/usage.js";
+import { initSpendCaps } from "/spendcaps.js";
 import { initBoard } from "/board.js";
 import { initExchanges } from "/exchanges.js";
 import { initSuggest } from "/suggest.js";
@@ -1613,9 +1614,12 @@ chatMode = initChatMode({
   onRowMode: (id, mode) => { const r = state.sessions.find((s) => s.id === id); if (r) { if (mode) r.permMode = mode; else delete r.permMode; } },
 });
 const usage = initUsage({ json, notify });
+const caps = initSpendCaps({ json, h, notify });
+void caps.refresh();
+setInterval(() => { if (!document.hidden) void caps.refresh(); }, 120_000);
 account = initAccount({
   json, h, icon, notify,
-  onOpen: () => usage.refresh(),
+  onOpen: () => { usage.refresh(); void caps.refresh(); },
   desktop: () => desktopBridge(),
   isHosted: () => state.hosted,
   closeSidebar,
@@ -1635,6 +1639,7 @@ let xchg = null; // agent exchanges (cards in the chat, the read-only transcript
 const bots = initBots({
   json, api, store, h, icon, ago, notify,
   app: {
+    mountBotCap: (host, id) => caps.mountBot(host, id),
     exchangesGroup: () => (xchg ? xchg.group() : null),
     exchangeUnread: (id) => (xchg ? xchg.unreadFor(id) : 0),
     currentBot: () => state.curBot,
