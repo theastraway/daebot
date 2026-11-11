@@ -678,8 +678,6 @@ a.bd-chip.decision:hover { text-decoration: underline; }
 #title.renamable:hover { text-decoration: underline dotted var(--ink-3); text-underline-offset: 4px; }
 .bot-head .bot-item { padding-right: 10px; }
 /* the hover actions (pin, gear, delete) take their own space instead of sitting on the name */
-.bot-head:hover .bot-item, .bot-head:focus-within .bot-item { padding-right: 100px; }
-@media (hover: none), (max-width: 900px) { .bot-head .bot-item { padding-right: 100px; } .bot-pinmark { display: none; } }
 .bot-chev { width: 22px; height: 28px; display: grid; place-items: center; padding: 0; color: var(--ink-3); cursor: pointer; margin-right: 1px; }
 .bot-chev .ic { width: 14px; height: 14px; transition: transform .15s; }
 .bot-chev[aria-expanded="true"] .ic { transform: rotate(90deg); }
@@ -690,7 +688,6 @@ a.bd-chip.decision:hover { text-decoration: underline; }
 .row-pin[aria-pressed="true"] .ic { fill: currentColor; }
 .bot-head:hover .row-pin, .bot-head:focus-within .row-pin { opacity: 1; }
 .bot-pinmark { flex: none; width: 11px; height: 11px; color: var(--ink-3); fill: currentColor; }
-.bot-head:hover .bot-pinmark, .bot-head:focus-within .bot-pinmark { display: none; }
 .bot-group { margin: 8px 0 2px 8px; font: 600 11px var(--sans); letter-spacing: .04em; text-transform: uppercase; color: var(--ink-3); }
 @media (prefers-reduced-motion: reduce) { .bot-chev .ic { transition: none; } }
 .bot-head.has-upd { flex-wrap: wrap; }
