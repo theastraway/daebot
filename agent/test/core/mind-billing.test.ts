@@ -501,8 +501,8 @@ test("withBot tags every call of that bot with X-Daebot-Bot; an untagged session
   const w = provider({ script: () => okStream() });
   const inner = w.p;
   const { withBot } = await import("../../src/provider/index.ts");
-  await drain(withBot(inner, "bot_7").stream({ model: "m/default", messages: [{ role: "user", content: "hi" }], tools: [] }));
+  await drain(withBot(inner, "bot-7").stream({ model: "m/default", messages: [{ role: "user", content: "hi" }], tools: [] }));
   await drain(inner.stream({ model: "m/default", messages: [{ role: "user", content: "hi" }], tools: [] }));
-  assert.equal(w.llm[0].headers["X-Daebot-Bot"], "bot_7");
+  assert.equal(w.llm[0].headers["X-Daebot-Bot"], "bot-7");
   assert.equal(w.llm[1].headers["X-Daebot-Bot"], undefined);
 });

@@ -1639,7 +1639,7 @@ let xchg = null; // agent exchanges (cards in the chat, the read-only transcript
 const bots = initBots({
   json, api, store, h, icon, ago, notify,
   app: {
-    mountBotCap: (host, id) => caps.mountBot(host, id),
+    mountBotCap: (host, id) => caps.mountBot(host, id), // keyed by the bot's slug: ids are per device, the slug is the same on every device
     exchangesGroup: () => (xchg ? xchg.group() : null),
     exchangeUnread: (id) => (xchg ? xchg.unreadFor(id) : 0),
     currentBot: () => state.curBot,
