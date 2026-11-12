@@ -162,3 +162,16 @@ test("admin spend does not count toward the global cap (strangers cannot be blam
     assert.ok(w.globalCap.total() > 0, "non-admin spend is counted");
   } finally { await w.close(); }
 });
+
+test("a signed-in user's runtime can record a voice chat transcript into their own thread (the tenant wrapper exposes it; another user's id is refused)", async () => {
+  const w = await world();
+  try {
+    const alice = w.principal("alice");
+    const rt = w.auth.runtimeFor(alice);
+    const s = await rt.openSession({ surface: "voice", title: "Voice chat" });
+    assert.equal(await rt.appendVoiceTranscript!(s.id, [{ role: "agent", text: "Hi" }, { role: "user", text: "What did we decide?" }]), true);
+    const texts = (rt.history!(s.id) ?? []).map((e) => (e.type === "user" ? e.text : e.type === "text" ? e.delta : ""));
+    assert.deepEqual(texts.filter(Boolean), ["Hi", "What did we decide?"]);
+    assert.equal(await rt.appendVoiceTranscript!("no-such-session", [{ role: "user", text: "x" }]), false);
+  } finally { await w.close(); }
+});
