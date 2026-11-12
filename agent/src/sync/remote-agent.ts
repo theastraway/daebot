@@ -25,6 +25,9 @@ export interface RemoteAgentDeps {
   deviceKind?: "machine" | "server";
   /** The network hostname: with the friendly name above it lets the server see that two registrations are the same computer. */
   deviceHost?: string;
+  /** "mac", "windows" or "linux", and the hardware model when the OS has a readable one: shown beside the name so a computer can be told apart. */
+  deviceOs?: string;
+  deviceModel?: string;
   bots(): BotsApi | undefined;
   /** Runs one message as a turn of the bot thread on this machine; every event goes to `emit`. Resolves when the turn ended. */
   runJob(job: RemoteJob, emit: (ev: HistoryEvent) => void, signal: AbortSignal): Promise<void>;
@@ -76,7 +79,7 @@ export class RemoteAgent {
 
   /** One poll. Exposed for tests: returns how many jobs it started. */
   async pollOnce(waitSec = this.d.waitSec ?? 20): Promise<number> {
-    const r = await this.d.http.json<{ bots?: FlagIn[]; jobs?: RemoteJob[]; decisions?: RemoteDecision[] }>("POST", "/api/sync/device/poll", { deviceId: this.d.deviceId, name: this.d.deviceName, ...(this.d.deviceKind ? { kind: this.d.deviceKind } : {}), ...(this.d.deviceHost ? { host: this.d.deviceHost } : {}), bots: this.flags(), wait: waitSec }, (waitSec + 25) * 1000, waitSec > 0 ? this.ctl?.signal : undefined);
+    const r = await this.d.http.json<{ bots?: FlagIn[]; jobs?: RemoteJob[]; decisions?: RemoteDecision[] }>("POST", "/api/sync/device/poll", { deviceId: this.d.deviceId, name: this.d.deviceName, ...(this.d.deviceKind ? { kind: this.d.deviceKind } : {}), ...(this.d.deviceHost ? { host: this.d.deviceHost } : {}), ...(this.d.deviceOs ? { os: this.d.deviceOs } : {}), ...(this.d.deviceModel ? { model: this.d.deviceModel } : {}), bots: this.flags(), wait: waitSec }, (waitSec + 25) * 1000, waitSec > 0 ? this.ctl?.signal : undefined);
     this.status.polls++; this.status.lastPollAt = Date.now(); this.status.lastError = "";
     this.applyFlags(r.bots);
     for (const d of r.decisions ?? []) { try { this.d.decide?.(d); } catch { /* an answer for a card that is gone */ } }

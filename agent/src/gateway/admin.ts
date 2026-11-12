@@ -44,6 +44,7 @@ export interface AdminOptions {
   /** Admin: make every user's MIND hold every saved Daebot session (see mind/session-log.ts reconcile). POST starts a run, GET reads the last one. */
   reconcile?: { start(b: Record<string, unknown>): { started: boolean }; state(): unknown };
   /** Admin: give every session that has no home environment the one its record proves (else MIND Cloud). GET reads the last run, POST runs it now. */
+  envs?: (who: string) => unknown;
   homes?: { run(b: Record<string, unknown>): Promise<unknown>; last(): unknown };
   /** The secret for writes (DAEBOT_MISTAKE_LOG_KEY), read per request so setting it on Render needs no code change. */
   logKey: () => string | undefined;
@@ -89,9 +90,9 @@ export async function handleAdmin(o: AdminOptions, req: IncomingMessage, res: Se
   // ---- API. Reads: log key or admin session. Writes: log key only (a browser session can never alter the ledger).
   const isMistakes = path === "/api/admin/mistakes", isTasks = path === "/api/admin/tasks";
   const isAnger = path === "/api/admin/anger";
-  const isSnap = path === "/api/admin/kpis/snapshot", isBackfill = path === "/api/admin/mind/backfill", isReconcile = path === "/api/admin/mind/reconcile", isHomes = path === "/api/admin/sync/homes";
+  const isSnap = path === "/api/admin/kpis/snapshot", isBackfill = path === "/api/admin/mind/backfill", isReconcile = path === "/api/admin/mind/reconcile", isHomes = path === "/api/admin/sync/homes", isEnvs = path === "/api/admin/envs";
   const delOcc = /^\/api\/admin\/mistakes\/occurrence\/([\w-]{1,80})$/.exec(path), delTask = /^\/api\/admin\/tasks\/([\w-]{1,80})$/.exec(path);
-  if (!isMistakes && !isTasks && !isAnger && !delOcc && !delTask && !isSnap && !isBackfill && !isReconcile && !isHomes) { json(res, 404, { error: "not found" }); return true; }
+  if (!isMistakes && !isTasks && !isAnger && !delOcc && !delTask && !isSnap && !isBackfill && !isReconcile && !isHomes && !isEnvs) { json(res, 404, { error: "not found" }); return true; }
   if (method === "GET") {
     if (!keyOk && !o.isAdmin(req)) { json(res, keyOk || !secret ? 401 : 401, { error: "unauthorized" }); return true; }
     if (isMistakes) { json(res, 200, o.ledger.mistakeView(query)); return true; }
@@ -100,6 +101,7 @@ export async function handleAdmin(o: AdminOptions, req: IncomingMessage, res: Se
     if (isSnap) { json(res, 200, { ok: true, kpis: o.ledger.kpiSnapshot() }); return true; }
     if (isReconcile) { if (!o.reconcile) { json(res, 503, { error: "reconcile is not available here" }); return true; } json(res, 200, o.reconcile.state() as object); return true; }
     if (isHomes) { if (!o.homes) { json(res, 503, { error: "not available here" }); return true; } json(res, 200, o.homes.last() as object); return true; }
+    if (isEnvs) { if (!o.envs) { json(res, 503, { error: "not available here" }); return true; } json(res, 200, o.envs(String(query.get("owner") ?? "all").slice(0, 80)) as object); return true; }
     json(res, 405, { error: "method not allowed" }); return true;
   }
   if (!secret) { json(res, 503, { error: "DAEBOT_MISTAKE_LOG_KEY is not set on the server" }); return true; }
