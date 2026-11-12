@@ -247,6 +247,14 @@ export class SessionManager {
     return (await rt.setPinned?.(id, on)) === true;
   }
 
+  /** Records where a session runs (MIND Cloud or a computer) as the person's decision. The caller has already passed access(). false = unknown id. */
+  async setHome(id: string, owner: string, env: import("../env.ts").EnvTag, by: import("../env.ts").EnvBy = "user"): Promise<boolean> {
+    const ls = this.live.get(id);
+    if (ls && ls.owner !== owner) throw new ForbiddenError("forbidden");
+    const rt = this.runtimeFor ? this.runtimeFor(owner) : this.runtime;
+    return (await rt.setHome?.(id, env, by)) === true;
+  }
+
   /** Changes the model the NEXT turn of a live session runs on. */
   setModel(id: string, model: string | undefined): boolean {
     const ls = this.live.get(id);

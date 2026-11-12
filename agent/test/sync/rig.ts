@@ -18,7 +18,7 @@ import { auth as bearer, http, tmpStatic } from "../gateway/helpers.ts";
 export const rnd = () => randomBytes(18).toString("hex");
 export const H = { host: "daebot.live", "x-forwarded-proto": "https" };
 
-export async function hostedRig(o: { script?: ConstructorParameters<typeof FakeProvider>[0]; users?: string[]; onlineMs?: number; envSweepMs?: number } = {}) {
+export async function hostedRig(o: { script?: ConstructorParameters<typeof FakeProvider>[0]; users?: string[]; onlineMs?: number; envSweepMs?: number; logKey?: string } = {}) {
   const names = o.users ?? ["alice", "bob"];
   const keys: Record<string, string> = Object.fromEntries(names.map((n) => [n, "mind_" + rnd()]));
   const fake = await startFakeMind(Object.fromEntries(names.map((n) => [keys[n], n])));
@@ -35,7 +35,7 @@ export async function hostedRig(o: { script?: ConstructorParameters<typeof FakeP
   const ownerRuntime = createRuntime(cfg, { provider, store, bootCache, bots, hosted: { dailyUsdCap: 50, sharedCap: globalCap, exempt: true } });
   const env: NodeJS.ProcessEnv = { DATA_DIR: dir, DAEBOT_SECRET_KEY: rnd() + rnd(), DAEBOT_ADMINS: "", MIND_OAUTH_BASE_URL: fake.url, DAEBOT_PUBLIC_URL: "https://daebot.live" };
   const auth = createAuthContext({ env, cfg, hosted: hostedOpts, ownerRuntime, globalCap, provider, sessionStore: store, bootCache, bots });
-  const gw = await startGateway({ runtime: ownerRuntime, cfg, port: 0, host: "127.0.0.1", staticDir: st.dir, hosted: hostedOpts, auth, sessionStore: store, bots, botsEnabled: () => true, remoteDir: dir, remoteOnlineMs: o.onlineMs, envSweepMs: o.envSweepMs });
+  const gw = await startGateway({ runtime: ownerRuntime, cfg, port: 0, host: "127.0.0.1", staticDir: st.dir, hosted: hostedOpts, auth, sessionStore: store, bots, botsEnabled: () => true, remoteDir: dir, remoteOnlineMs: o.onlineMs, envSweepMs: o.envSweepMs, ...(o.logKey ? { adminLog: { dir, logKey: () => o.logKey } } : {}) });
   /** What a device does: a fetch that carries the allowlisted Host over https and lands on the in-process hosted gateway (an aborted fetch drops the connection, as a real network does). */
   const bridge = (): typeof fetch => ((input: string | URL | Request, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
     const u = new URL(String(input));
@@ -62,7 +62,7 @@ export async function hostedRig(o: { script?: ConstructorParameters<typeof FakeP
     return { ...H, cookie: first };
   };
   const as = async (key: string) => { const h = await cookieFor(key); return (method: string, path: string, body?: unknown) => http(gw.url, method, path, { headers: h, body }); };
-  return { gw, fake, keys, cfgKey: cfg.mindApiKey, store, dir, provider, bridge, as, host: (key: string, method: string, path: string, body?: unknown) => http(gw.url, method, path, { headers: { ...H, "x-mind-key": key }, body }), close: async () => { await gw.close(); await fake.close(); } };
+  return { gw, fake, keys, cfgKey: cfg.mindApiKey, store, dir, provider, bridge, as, admin: (method: string, path: string, body?: unknown) => http(gw.url, method, path, { headers: { ...H, "x-daebot-log-key": o.logKey ?? "" }, body }), host: (key: string, method: string, path: string, body?: unknown) => http(gw.url, method, path, { headers: { ...H, "x-mind-key": key }, body }), close: async () => { await gw.close(); await fake.close(); } };
 }
 
 export type HostedRig = Awaited<ReturnType<typeof hostedRig>>;
@@ -77,7 +77,7 @@ export async function deskRig(hosted: HostedRig, userKey: string, o: { script?: 
   const st = tmpStatic();
   const gw = await startGateway({
     runtime, cfg, port: 0, staticDir: st.dir, tokenPath: join(dir, "tok"), bots: bots as never, botsEnabled: () => true, sessionStore: store,
-    sync: o.sync === false ? undefined : { enabled: true, stateFile: join(dir, "sync-state.json"), url: "https://daebot.live", fetchImpl: hosted.bridge(), intervalMs: o.intervalMs ?? 150, deviceId: o.deviceId ?? "d_" + "1".repeat(16), deviceName: o.deviceName ?? "Test Mac", remoteWaitSec: 2 },
+    sync: o.sync === false ? undefined : { enabled: true, stateFile: join(dir, "sync-state.json"), url: "https://daebot.live", fetchImpl: hosted.bridge(), intervalMs: o.intervalMs ?? 150, deviceId: o.deviceId ?? "d_" + "1".repeat(16), deviceName: o.deviceName ?? "Test Mac", remoteWaitSec: 2, botEveryMs: 200 },
   });
   const a = bearer(gw.token);
   return { gw, store, dir, provider, a, api: (method: string, path: string, body?: unknown) => http(gw.url, method, path, { headers: a, body }), close: () => gw.close() };
@@ -92,4 +92,12 @@ export async function until<T>(fn: () => T | Promise<T>, ms = 8000, step = 40): 
     if (Date.now() > end) throw new Error("timed out waiting");
     await sleep(step);
   }
+}
+
+/** A session on the desktop that the person set to run on this computer (the standard is MIND Cloud, so a local session is always an explicit choice). */
+export async function localSession(desk: { api: (m: string, p: string, b?: unknown) => Promise<{ status: number; body: string }> }, body: Record<string, unknown>): Promise<string> {
+  const { sessionId } = JSON.parse((await desk.api("POST", "/sessions", body)).body);
+  const r = await desk.api("PATCH", `/sessions/${sessionId}`, { home: "local" });
+  if (r.status !== 200) throw new Error(`could not set the session local: ${r.status} ${r.body}`);
+  return sessionId;
 }

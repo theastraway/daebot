@@ -40,6 +40,9 @@ export interface StoredSession {
   run?: RunMark;
   /** Home environment: where this session was created and runs (MIND Cloud, a machine, a server). Absent on records made before environments existed. */
   env?: EnvTag;
+  /** When the home was last decided (ms) and by whom (see env.ts EnvBy). The later decision wins on every device; absent = decided before this existed. */
+  envAt?: number;
+  envBy?: import("./env.ts").EnvBy;
   /** When the user pinned this session (ms). Absent = not pinned. Saved with the session, so it follows every device (last writer wins by metaAt). */
   pinnedAt?: number;
   /** The task board the model keeps for this chat (task_board tool). Absent = none declared. */

@@ -11,6 +11,8 @@ import { isFaceId } from "./faces.ts";
 import { validModelId } from "../settings.ts";
 import { BotError, MAX_INSTRUCTIONS_BYTES, MAX_REMOTE_LOG, SLUG_RE, safeUpgradeUrl } from "./types.ts";
 import type { BotRecord, BotsApi, RosterEntry } from "./types.ts";
+import { canonBot, mergeWireBot as mergeWire, sigOf } from "../sync/bots.ts";
+import type { WireBot } from "../sync/bots.ts";
 
 /** The MIND side: POST/GET/DELETE /developer/v1/bots, always with the user's MAIN key. */
 export interface BotMindApi {
@@ -236,7 +238,7 @@ export class BotStore implements BotsApi {
     if (raced) return raced;
     const id = this.newId();
     const t = this.now();
-    const rec: BotRecord = { id, slug, name, purpose, color, ...(face ? { face } : {}), ...(this.env ? { env: this.env } : {}), createdAt: t, updatedAt: t, version: LATEST_BOT_VERSION };
+    const rec: BotRecord = { id, slug, name, purpose, color, ...(face ? { face } : {}), ...(this.env ? { env: this.env } : {}), profileAt: t, createdAt: t, updatedAt: t, version: LATEST_BOT_VERSION };
     this.bots[id] = rec;
     try { this.save(); } catch (e) {
       delete this.bots[id];
@@ -270,14 +272,14 @@ export class BotStore implements BotsApi {
     }
     if (patch.pinned !== undefined) {
       if (typeof patch.pinned !== "boolean") throw new BotError(400, "bad_pinned", "pinned must be true or false");
-      if (patch.pinned) { if (!b.pinnedAt) b.pinnedAt = this.now(); } else delete b.pinnedAt;
+      if (patch.pinned) { if (!b.pinnedAt) { b.pinnedAt = this.now(); b.pinAt = b.pinnedAt; } } else if (b.pinnedAt) { delete b.pinnedAt; b.pinAt = this.now(); }
     }
     if (patch.remote !== undefined) {
       if (typeof patch.remote !== "boolean") throw new BotError(400, "bad_remote", "remote must be true or false");
       this.applyRemote(b, patch.remote, { by: "user" });
     }
     // Pinning and Remote are view/connection preferences, not edits: they do not move "updated".
-    if (Object.keys(patch).some((k) => k !== "pinned" && k !== "remote" && (patch as Record<string, unknown>)[k] !== undefined)) b.updatedAt = this.now();
+    if (Object.keys(patch).some((k) => k !== "pinned" && k !== "remote" && (patch as Record<string, unknown>)[k] !== undefined)) { b.updatedAt = this.now(); b.profileAt = b.updatedAt; } // the look changed: other devices take the later one
     this.save();
     return { ...b };
   }
@@ -339,7 +341,52 @@ export class BotStore implements BotsApi {
     writeFileSync(tmp, text, { mode: 0o600 });
     renameSync(tmp, file);
     b.updatedAt = this.now();
+    b.instructionsAt = b.updatedAt;
     this.save();
+  }
+
+  // ---------- device sync (see sync/bots.ts) ----------
+
+  /** The synced fields of a bot, in wire form. Records from before the change times existed fall back to their updatedAt (an edited record beats an untouched one). */
+  exportSync(slug: string): WireBot | undefined {
+    const b = Object.values(this.bots).find((x) => x.slug === slug);
+    if (!b) return undefined;
+    const text = this.instructions(b.id);
+    const edited = b.updatedAt > b.createdAt ? b.updatedAt : 0;
+    return canonBot({
+      slug: b.slug, name: b.name, purpose: b.purpose, color: b.color, face: b.face, model: b.model,
+      profileAt: b.profileAt ?? edited, pinnedAt: b.pinnedAt, pinAt: b.pinAt ?? b.pinnedAt ?? 0,
+      instructions: text || undefined, instructionsAt: b.instructionsAt ?? (text ? edited || 1 : 0), createdAt: b.createdAt,
+    });
+  }
+
+  /** Takes in the other side's bot: per group the later change wins, createdAt is the earlier. true = something changed here. */
+  applySync(w: WireBot): boolean {
+    const b = Object.values(this.bots).find((x) => x.slug === w.slug);
+    if (!b) return false;
+    const cur = this.exportSync(w.slug)!;
+    const merged = mergeWire(cur, canonBot(w));
+    if (sigOf(merged) === sigOf(cur)) return false;
+    b.createdAt = merged.createdAt;
+    b.name = merged.name; b.purpose = merged.purpose; b.color = merged.color;
+    if (merged.face) b.face = merged.face; else delete b.face;
+    if (merged.model && validModelId(merged.model)) b.model = merged.model; else delete b.model;
+    b.profileAt = merged.profileAt;
+    if (merged.pinnedAt) b.pinnedAt = merged.pinnedAt; else delete b.pinnedAt;
+    b.pinAt = merged.pinAt;
+    if (merged.instructionsAt > (cur.instructionsAt)) this.writeInstructions(b.id, merged.instructions ?? "");
+    b.instructionsAt = merged.instructionsAt;
+    this.save();
+    return true;
+  }
+
+  private writeInstructions(id: string, text: string): void {
+    const dir = join(this.root, id);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const file = join(dir, "DAEBOT.md");
+    const tmp = `${file}.${process.pid}.tmp`;
+    writeFileSync(tmp, text, { mode: 0o600 });
+    renameSync(tmp, file);
   }
 
   /** Test/diagnostic: does the instructions file exist on disk. */

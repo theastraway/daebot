@@ -200,6 +200,7 @@ export interface ExchangeParty { id: string; kind: "main" | "bot"; name: string;
 // ---------- agent session + gateway (all surfaces speak this) ----------
 // Every surface (terminal, web, desktop, Telegram, Discord, iMessage...) is a thin client of the
 // gateway. The gateway owns AgentSessions. Surfaces never touch the provider, tools or kernel.
+export interface NoticeAction { kind: "move_to_cloud" | "run_here"; label: string; sessionId: string }
 export type AgentEvent =
   | { type: "text"; delta: string }                                   // streaming assistant text
   | { type: "toolStart"; receiptId: string; tool: string; args: Record<string, unknown> }
@@ -215,7 +216,7 @@ export type AgentEvent =
   // A tool is waiting for the client DEVICE (not the model) to run `op` natively and POST the answer to /sessions/:id/device-result.
   // Relay-only: published into the run feed, never part of the saved transcript.
   | { type: "device_call"; id: string; tool: string; op: string; args: Record<string, unknown> }
-  | { type: "notice"; level: "info" | "warn"; text: string }          // e.g. pending MIND reply surfaced
+  | { type: "notice"; level: "info" | "warn"; text: string; /** One button under the notice, e.g. "Move to MIND Cloud" when the computer a session lives on is off. */ action?: NoticeAction }          // e.g. pending MIND reply surfaced
   // A bot_talk call just happened in this turn: shown as a small "Messaged <agent>" card with the message and (when it answered) the reply.
   // `exchangeId` opens the read-only two-sided transcript of that pair of agents (GET /exchanges/:id).
   | { type: "exchange"; exchangeId: string; from: ExchangeParty; to: ExchangeParty; message: string; reply?: { text: string; ok: boolean }; at: number }
@@ -274,7 +275,7 @@ export interface Runtime {
   /** Bots of this runtime's owner (absent on runtimes built without a bots context). */
   bots?: BotsApi;
   /** Bot / peer / model of a live or persisted session of this owner. */
-  sessionInfo?(id: string): { bot?: string; peer?: string; model?: string; permMode?: string } | undefined;
+  sessionInfo?(id: string): { bot?: string; peer?: string; model?: string; permMode?: string; env?: import("./env.ts").EnvTag } | undefined;
   /** Deletes every saved session of a deleted bot: its own threads and the DM threads where it is the peer or the recipient. */
   purgeBotSessions?(botId: string): Promise<number>;
   /** Permanently deletes one saved or live session of this owner (its transcript and state). false = no such session. */
@@ -287,6 +288,8 @@ export interface Runtime {
   setPinned?(id: string, on: boolean): Promise<boolean>;
   /** This runtime's home environment: where its new sessions and bots live (MIND Cloud, this machine, this server). */
   ownEnv?(): import("./env.ts").EnvTag;
+  /** Records where this session runs (MIND Cloud or a computer) as the person's decision; saved with the session and synced, the latest decision wins. false = no such session. */
+  setHome?(id: string, env: import("./env.ts").EnvTag, by?: import("./env.ts").EnvBy, at?: number): Promise<boolean>;
   /** Reactions / feedback of each message and the unread marker of a session of this owner. Undefined = unknown id. */
   messageMeta?(id: string): SessionMessageMeta | undefined;
   /** history() and messageMeta() in one read. live = the session is running in this process (its transcript changes under the reader). */
@@ -300,7 +303,7 @@ export interface Runtime {
   /** Saves thumbs feedback (or a Report) on a message and routes it into the learning store. */
   feedbackMessage?(id: string, mid: string, f: { rating: "up" | "down" | null; comment?: string; reason?: string; report?: boolean }): Promise<{ feedback?: MessageMeta["feedback"]; learned: boolean; excerpt: string } | "nosession" | "nomsg">;
   /** The owner's per-user settings (default model). */
-  settings?: { get(): import("./settings.ts").UserSettings; set(patch: import("./settings.ts").SettingsPatch): void };
+  settings?: import("./settings.ts").SettingsStore;
   // Visible transcript of a live or persisted session (replayed after a resume or restart). Undefined = unknown id.
   history?(id: string): HistoryEvent[] | undefined;
   /** Granular permissions of this owner (rules, mode, pending cards). Absent on runtimes built without a data dir. */

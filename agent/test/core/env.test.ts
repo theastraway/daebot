@@ -52,10 +52,10 @@ test("merge: a home is never lost or flipped; two homes settle on one; the later
   assert.deepEqual(mergeRecords(a, b).env, mac, "the side with no home takes the other's");
   assert.deepEqual(mergeRecords(b, a).env, mac);
   const x = rec("s", { createdAt: 5, env: mac }), y = rec("s", { createdAt: 9, env: CLOUD_ENV });
-  assert.deepEqual(mergeRecords(x, y).env, mac); assert.deepEqual(mergeRecords(y, x).env, mac, "both sides settle on the older record's home");
+  assert.deepEqual(mergeRecords(x, y).env, CLOUD_ENV); assert.deepEqual(mergeRecords(y, x).env, CLOUD_ENV, "no decision time on either side: both settle on MIND Cloud, the standard (a computer is only ever the person's choice)");
   const late = rec("s", { createdAt: 99, env: mac }), early = rec("s", { createdAt: 1, env: CLOUD_ENV });
-  assert.deepEqual(mergeRecords(late, early).env, mac, "a computer beats the cloud even when the cloud stamp is older (cloud is also the assumed home)");
-  assert.deepEqual(mergeRecords(early, late).env, mac);
+  assert.deepEqual(mergeRecords(late, early).env, CLOUD_ENV, "an old computer stamp with no recorded decision never beats MIND Cloud");
+  assert.deepEqual(mergeRecords(early, late).env, CLOUD_ENV);
   const pc = { id: "d_2", kind: "machine" as const, name: "PC" };
   assert.deepEqual(mergeRecords(rec("s", { createdAt: 5, env: mac }), rec("s", { createdAt: 9, env: pc })).env, mac, "two computers: the older stands");
   // pin on A (metaAt later) vs newer messages on B: the pin stays

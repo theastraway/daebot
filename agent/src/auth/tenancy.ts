@@ -143,6 +143,7 @@ export function createRuntimeHub(o: HubOptions): { runtimeFor(p: Principal): Run
       renameSession: (id, title) => inner.renameSession?.(id, title) ?? Promise.resolve(false),
       setPinned: (id, on) => inner.setPinned?.(id, on) ?? Promise.resolve(false),
       ownEnv: () => inner.ownEnv?.() ?? CLOUD_ENV,
+      setHome: (id, env, by, at) => inner.setHome?.(id, env, by, at) ?? Promise.resolve(false),
       messageMeta: (id) => inner.messageMeta?.(id),
       historyWithMeta: (id) => inner.historyWithMeta?.(id),
       messageText: (id, mid) => inner.messageText?.(id, mid),

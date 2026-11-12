@@ -67,3 +67,21 @@ test("wire: bots travel by slug and map to each side's own id; owner never trave
   assert.equal(toWire(rec("x", { surface: "routine" }), desk)?.surface, "routine", "routine run threads sync like any session");
   assert.ok(!fromWire({ junk: true }, host, "u", "staff").ok);
 });
+
+test("home environment: the latest decision wins, whichever side holds it; no decision on either side settles on MIND Cloud; a side with no home takes the other's", () => {
+  const cloud = { id: "cloud", kind: "cloud" as const, name: "MIND Cloud" }, mac = { id: "d_" + "1".repeat(16), kind: "machine" as const, name: "Mac" };
+  // the person's later choice of a computer beats an older cloud stamp, and an older computer stamp loses to a later move to cloud (the migration)
+  const chosen = rec("s", { updatedAt: 10, env: mac, envAt: 500, envBy: "user" }), stale = rec("s", { updatedAt: 10, env: cloud, envAt: 100, envBy: "default" });
+  assert.equal(mergeRecords(stale, chosen).env!.id, mac.id); assert.equal(mergeRecords(chosen, stale).env!.id, mac.id);
+  const moved = rec("s", { updatedAt: 10, env: cloud, envAt: 900, envBy: "auto" }), stamped = rec("s", { updatedAt: 10, env: mac });
+  const m1 = mergeRecords(stamped, moved), m2 = mergeRecords(moved, stamped);
+  assert.equal(m1.env!.kind, "cloud"); assert.equal(m2.env!.kind, "cloud"); assert.equal(m1.envBy, "auto"); assert.equal(m1.envAt, 900);
+  // two homes, neither with a decision time (records from before): MIND Cloud, the standard, not the computer
+  assert.equal(mergeRecords(rec("s", { updatedAt: 10, env: mac }), rec("s", { updatedAt: 10, env: cloud })).env!.kind, "cloud");
+  assert.equal(mergeRecords(rec("s", { updatedAt: 10, env: cloud }), rec("s", { updatedAt: 10, env: mac })).env!.kind, "cloud");
+  // a side with no home takes the other's, decision included
+  const taken = mergeRecords(rec("s", { updatedAt: 10 }), rec("s", { updatedAt: 10, env: mac, envAt: 7, envBy: "user" }));
+  assert.equal(taken.env!.id, mac.id); assert.equal(taken.envAt, 7); assert.equal(taken.envBy, "user");
+  // the winning record's home keeps its own decision time when the other has none
+  assert.equal(mergeRecords(rec("s", { updatedAt: 99, env: cloud, envAt: 5 }), rec("s", { updatedAt: 10 })).envAt, 5);
+});

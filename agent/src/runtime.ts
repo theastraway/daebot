@@ -12,8 +12,8 @@ import { createLearning, resolveLearnConfig } from "./learn/index.ts";
 import type { Learning } from "./learn/index.ts";
 import { mistakeBrief } from "./gateway/mistakes.ts";
 import { dataDir, cleanTitle } from "./persist.ts";
-import { localEnv, normalizeEnv } from "./env.ts";
-import type { EnvTag } from "./env.ts";
+import { defaultHome, localEnv, normalizeEnv } from "./env.ts";
+import type { EnvBy, EnvTag } from "./env.ts";
 import { bootMind, createMindClient, createMindTools, createSessionSync } from "./mind/index.ts";
 import { loggerFor } from "./mind/session-log.ts";
 import { upgradeChatScopes } from "./mind/scope-upgrade.ts";
@@ -265,7 +265,7 @@ export function composeSystemPrompt(o: {
   return lines.join("\n");
 }
 
-interface Entry { session: AgentSession; surface: string; title: string; updatedAt: number; tier: Tier; recorder: HistoryRecorder; createdAt: number; bot?: string; peer?: string; model?: string; permMode?: SessionPermMode; titleSet?: boolean; run?: RunMark; board?: BoardTask[]; msgMeta?: Record<string, MessageMeta>; unreadFrom?: string; archived?: boolean; metaAt?: number; env?: EnvTag; pinnedAt?: number; learn?: Learning }
+interface Entry { session: AgentSession; surface: string; title: string; updatedAt: number; tier: Tier; recorder: HistoryRecorder; createdAt: number; bot?: string; peer?: string; model?: string; permMode?: SessionPermMode; titleSet?: boolean; run?: RunMark; board?: BoardTask[]; msgMeta?: Record<string, MessageMeta>; unreadFrom?: string; archived?: boolean; metaAt?: number; env?: EnvTag; envAt?: number; envBy?: EnvBy; pinnedAt?: number; learn?: Learning }
 
 export const INTERRUPTED_TEXT = "Interrupted: the server restarted while this reply was being written. Your message is saved above; send it again to retry.";
 const interruptedNotice = (): AgentEvent => ({ type: "notice", level: "warn", text: INTERRUPTED_TEXT });
@@ -365,7 +365,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
   // Bots: this owner's store (MIND is the source of truth for existence) and settings. Only when the host gave a data dir.
   const botsCtx = overrides.bots;
   const ownerKey = overrides.owner ?? "owner";
-  const botStore = botsCtx ? new BotStore({ dir: botsCtx.dir, owner: ownerKey, mind: botMindApi(client), env: ownEnv }) : undefined;
+  const botStore = botsCtx ? new BotStore({ dir: botsCtx.dir, owner: ownerKey, mind: botMindApi(client), env: defaultHome(ownEnv) }) : undefined;
   if (botsCtx) botsCtx.routines ??= new RoutineHub(botsCtx.dir); // routines of every bot, shared by all runtimes and the gateway
   const settings = botsCtx ? createSettings(botsCtx.dir, ownerKey) : undefined;
   // Granular permissions + suggested-reply feedback: per owner, under the data dir (hosted: the Render disk).
@@ -631,7 +631,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       state: st, violations: e.session.violations(), history: e.recorder.events(),
       ...(e.bot ? { bot: e.bot } : {}), ...(e.peer ? { peer: e.peer } : {}), ...(e.model ? { model: e.model } : {}), ...(e.permMode ? { permMode: e.permMode } : {}), ...(e.titleSet ? { titleSet: true } : {}), ...(e.run ? { run: { ...e.run } } : {}), ...(e.board?.length ? { board: e.board } : {}),
       ...(e.msgMeta && Object.keys(e.msgMeta).length ? { msgMeta: e.msgMeta } : {}), ...(e.unreadFrom ? { unreadFrom: e.unreadFrom } : {}), ...(e.archived ? { archived: true } : {}), ...(e.metaAt ? { metaAt: e.metaAt } : {}),
-      ...(e.env ? { env: e.env } : {}), ...(e.pinnedAt ? { pinnedAt: e.pinnedAt } : {}),
+      ...(e.env ? { env: e.env } : {}), ...(e.env && e.envAt ? { envAt: e.envAt } : {}), ...(e.env && e.envBy ? { envBy: e.envBy } : {}), ...(e.pinnedAt ? { pinnedAt: e.pinnedAt } : {}),
     }).catch((err) => process.stderr.write(`persist: could not save a session (${String((err as Error)?.message ?? err).split("\n")[0].slice(0, 120)})\n`));
   }
 
@@ -787,7 +787,9 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         ...(stored?.board?.length ? { board: loadTasks(stored.board) } : {}),
         ...(stored?.msgMeta ? { msgMeta: stored.msgMeta } : {}), ...(stored?.unreadFrom ? { unreadFrom: stored.unreadFrom } : {}), ...(stored?.archived ? { archived: true } : {}), ...(stored?.metaAt ? { metaAt: stored.metaAt } : {}), ...(learn && "feedback" in learn ? { learn: learn as Learning } : {}),
         // A new session is born here: this is its home. A saved one keeps the home it already has (or none, for records from before environments).
-        ...(stored ? (stored.env ? { env: stored.env } : {}) : { env: ownEnv }), ...(stored?.pinnedAt ? { pinnedAt: stored.pinnedAt } : {}),
+        // A new session starts on MIND Cloud (a computer is only ever the person's choice, see env.ts defaultHome); a bot thread starts where its bot runs.
+        // A saved one keeps the home it already has (or none, for records from before environments).
+        ...(stored ? (stored.env ? { env: stored.env, ...(stored.envAt ? { envAt: stored.envAt } : {}), ...(stored.envBy ? { envBy: stored.envBy } : {}) } : {}) : { env: botRec?.remote && !stored ? ownEnv : defaultHome(ownEnv), envAt: Date.now(), envBy: "default" as const }), ...(stored?.pinnedAt ? { pinnedAt: stored.pinnedAt } : {}),
       };
       if (wasInterrupted && stored) {
         entry.recorder.push(interruptedNotice());
@@ -1063,6 +1065,21 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       return true;
     },
     ownEnv: () => ownEnv,
+    /** The person chose where this session runs (MIND Cloud or a computer). Saved with the session, so it follows every device; the latest decision wins. */
+    async setHome(id, env, by = "user", at = Date.now()) {
+      const live = sessions.get(id);
+      if (live) {
+        live.env = env; live.envAt = at; live.envBy = by;
+        persist(id);
+        return true;
+      }
+      const meta = store?.meta?.(id);
+      if (!store || !meta || !mine(meta)) return false;
+      const rec = store.load(id);
+      if (!rec || !mine(rec)) return false;
+      await store.save({ ...rec, env, envAt: at, envBy: by });
+      return true;
+    },
     async archiveSession(id, on) {
       const live = sessions.get(id);
       if (live) {
@@ -1083,9 +1100,9 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     },
     sessionInfo(id) {
       const live = sessions.get(id);
-      if (live) return { bot: live.bot, peer: live.peer, model: live.model, ...(live.permMode ? { permMode: live.permMode } : {}) };
+      if (live) return { bot: live.bot, peer: live.peer, model: live.model, ...(live.permMode ? { permMode: live.permMode } : {}), ...(live.env ? { env: live.env } : {}) };
       const m = store?.meta?.(id);
-      return m && mine(m) ? { bot: m.bot, peer: m.peer, model: m.model, ...(m.permMode ? { permMode: m.permMode } : {}) } : undefined;
+      return m && mine(m) ? { bot: m.bot, peer: m.peer, model: m.model, ...(m.permMode ? { permMode: m.permMode } : {}), ...(m.env ? { env: m.env } : {}) } : undefined;
     },
     history(id): HistoryEvent[] | undefined {
       const live = sessions.get(id);

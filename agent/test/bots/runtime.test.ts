@@ -174,7 +174,7 @@ test("the stored session carries the bot; listings and info know it; resume keep
     const rows = w.runtime.listSessions();
     assert.equal(rows.find((r) => r.id === s.id)!.bot, bot.id);
     assert.equal(rows.find((r) => r.id === plain.id)!.bot, undefined);
-    assert.deepEqual(w.runtime.sessionInfo!(s.id), { bot: bot.id, peer: undefined, model: undefined });
+    assert.deepEqual(w.runtime.sessionInfo!(s.id), { bot: bot.id, peer: undefined, model: undefined, env: { id: "cloud", kind: "cloud", name: "MIND Cloud" } }, "a new thread starts on MIND Cloud");
     // restart: a new runtime on the same store resumes the bot thread in the bot's MIND
     const rt2 = w.mkRuntime();
     const back = await rt2.openSession({ surface: "web", resumeId: s.id, identity: "admin" });

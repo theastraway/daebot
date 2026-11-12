@@ -5,11 +5,11 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hostedRig, deskRig, until, sleep } from "./rig.ts";
+import { hostedRig, deskRig, until, sleep, localSession } from "./rig.ts";
 import { TombstoneBook } from "../../src/sync/tombstones.ts";
 
 async function started(desk: Awaited<ReturnType<typeof deskRig>>, hosted: Awaited<ReturnType<typeof hostedRig>>, text = "hi") {
-  const { sessionId } = JSON.parse((await desk.api("POST", "/sessions", { surface: "desktop", title: "to delete" })).body);
+  const sessionId = await localSession(desk, { surface: "desktop", title: "to delete" });
   await desk.api("POST", `/sessions/${sessionId}/send`, { text });
   await until(() => hosted.store.load(sessionId));
   return sessionId as string;

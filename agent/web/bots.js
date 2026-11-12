@@ -442,7 +442,7 @@ export function initBots(ctx) {
       Object.assign(bot, body.bot || body, { id });
       if (st.drawerOpen && st.drawerBot === id) paintRemote(bot);
       app.botChanged(bot);
-      notify(`Remote is ${want ? "on" : "off"} for ${bot.name}.`);
+      notify(want ? `${bot.name} now runs on a computer.` : `${bot.name} now runs in MIND Cloud.`);
     } catch (e) { bot.remote = prev; if (e.message !== "unauthorized") notify(`Could not change Remote: ${e.message}`); }
     renderList(); sync();
   }
@@ -706,7 +706,7 @@ export function initBots(ctx) {
       if (!res.ok) { el.remoteState.textContent = botErrorMessage(res.status, body).text; el.remote.checked = !!bot.remote; el.remote.disabled = false; return; }
       Object.assign(bot, body.bot || body, { id });
       paintRemote(bot);
-      el.remoteState.textContent = want ? "Remote is on." : "Remote is off.";
+      el.remoteState.textContent = want ? "Runs on a computer." : "Runs in MIND Cloud.";
       renderList(); sync();
       app.botChanged(bot);
     } catch (e) { if (e.message !== "unauthorized") { el.remoteState.textContent = "Could not save. Try again."; el.remote.checked = !!bot.remote; } el.remote.disabled = false; }

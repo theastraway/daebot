@@ -52,11 +52,11 @@ test("collapse state: per device, round-trips, bad data is ignored", () => {
   assert.equal(eg.kindIcon("cloud"), "i-cloud"); assert.equal(eg.kindIcon("server"), "i-server"); assert.equal(eg.kindIcon("machine"), "i-desktop");
 });
 
-test("menu: exactly Settings, Pin, Delete and the Remote switch; Pin flips to Unpin; Remote shows its state or why it is off", () => {
+test("menu: exactly Settings, Pin, Delete and the Run on a computer switch; Pin flips to Unpin; the switch shows its state or why it is off", () => {
   const items = rm.menuItems({ pinned: false, remote: { state: "off" } });
   assert.deepEqual(items.map((i: any) => i.id), ["settings", "pin", "delete", "remote"]);
-  assert.deepEqual(items.map((i: any) => i.label), ["Settings", "Pin", "Delete", "Remote"]);
-  assert.equal(items[3].type, "switch"); assert.equal(items[3].checked, false); assert.equal(items[3].disabled, false);
+  assert.deepEqual(items.map((i: any) => i.label), ["Settings", "Pin", "Delete", "Run on a computer"]);
+  assert.equal(items[3].type, "switch"); assert.equal(items[3].checked, false); assert.equal(items[3].disabled, false); assert.match(items[3].hint, /MIND Cloud/, "off means MIND Cloud, the standard");
   assert.equal(items[2].danger, true);
   const p = rm.menuItems({ pinned: true, remote: { state: "on", where: "Atlas Windows PC" } });
   assert.equal(p[1].label, "Unpin");

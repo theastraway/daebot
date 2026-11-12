@@ -84,13 +84,19 @@ export function mergeRecords(a: StoredSession | undefined, b: StoredSession): St
   };
   // A thread the winner has no value for keeps the other side's (bot, peer and model never vanish in a merge).
   for (const k of ["bot", "peer", "model"] as const) if (out[k] === undefined && lose[k] !== undefined) out[k] = lose[k];
-  // Home environment: once a session has one it keeps it; the side that has none takes the other's (never flips a home).
-  if (!out.env && lose.env) out.env = lose.env;
-  else if (a.env && b.env && a.env.id !== b.env.id) {
-    // Two different homes (rare: both sides stamped it). MIND Cloud is also what a record is assumed to be, so a computer or server beats it; else the
-    // older record's stands, a tie goes to the smaller id, so both sides settle on one.
-    const first = a.env.kind === "cloud" !== (b.env.kind === "cloud") ? (a.env.kind === "cloud" ? b : a) : a.createdAt !== b.createdAt ? (a.createdAt < b.createdAt ? a : b) : a.env.id < b.env.id ? a : b;
-    out.env = first.env;
+  // Home environment. The LATEST DECISION wins (envAt, ms): the person turning "Run on a computer" on or off, or the migration that put auto-stamped
+  // computers back on MIND Cloud, beats an older stamp on any device. A side with no home takes the other's. Two homes with no decision time (records
+  // from before envAt) settle on MIND Cloud, the standard; two computers settle on the older record's, then the smaller id, so both sides agree.
+  if (!out.env && lose.env) { out.env = lose.env; if (lose.envAt) out.envAt = lose.envAt; if (lose.envBy) out.envBy = lose.envBy; }
+  else if (a.env && b.env) {
+    const aAt = a.envAt ?? 0, bAt = b.envAt ?? 0;
+    let pick: StoredSession | undefined;
+    if (aAt !== bAt) pick = aAt > bAt ? a : b;
+    else if (a.env.id !== b.env.id) pick = a.env.kind === "cloud" !== (b.env.kind === "cloud") ? (a.env.kind === "cloud" ? a : b) : a.createdAt !== b.createdAt ? (a.createdAt < b.createdAt ? a : b) : a.env.id < b.env.id ? a : b;
+    else pick = aAt || !bAt ? a : b;
+    out.env = pick.env;
+    if (pick.envAt) out.envAt = pick.envAt; else delete out.envAt;
+    if (pick.envBy) out.envBy = pick.envBy; else delete out.envBy;
   }
   // The pin is a user-hand change like a rename: the side whose metaAt is later decides it, even when the other side has newer messages.
   const am = a.metaAt ?? 0, bm = b.metaAt ?? 0;
@@ -100,4 +106,4 @@ export function mergeRecords(a: StoredSession | undefined, b: StoredSession): St
 }
 
 /** Fingerprint of the parts of a record that sit outside the transcript and the sig: home environment and pin. A change in either is worth a write. */
-export const homeSig = (r: Pick<StoredSession, "env" | "pinnedAt">): string => `${r.env?.id ?? ""}|${r.pinnedAt ?? 0}`;
+export const homeSig = (r: Pick<StoredSession, "env" | "pinnedAt" | "envAt">): string => `${r.env?.id ?? ""}|${r.pinnedAt ?? 0}|${r.envAt ?? 0}`;

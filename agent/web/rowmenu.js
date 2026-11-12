@@ -1,5 +1,5 @@
 // The row menu: a vertical pop-up that opens when you hover (or keyboard-focus, right-click, or long-press on touch) a session or bot row.
-// Exactly four items: Settings, Pin, Delete, and the Remote On/Off switch. One menu exists at a time, appended to <body> so no sidebar
+// Exactly four items: Settings, Pin, Delete, and the "Run on a computer" switch (off = MIND Cloud, the standard). One menu exists at a time, appended to <body> so no sidebar
 // overflow ever clips it, and it is clamped to the window. role=menu, arrow keys, Home/End, Escape; light and dark come from the tokens.
 // menuItems() and placeMenu() are pure (exported, unit tested). DOM is createElement + textContent only.
 
@@ -14,13 +14,13 @@ export const EDGE = 8;
  *   spec: { pinned, remote: { state: "on"|"off"|"disabled", reason?, where? }, name }
  */
 export function menuItems(spec) {
-  const r = spec.remote || { state: "disabled", reason: "Remote works on bots." };
+  const r = spec.remote || { state: "disabled", reason: "Choose where this runs from its settings." };
   const on = r.state === "on";
   return [
     { id: "settings", label: "Settings", icon: "i-gear" },
     { id: "pin", label: spec.pinned ? "Unpin" : "Pin", icon: "i-pin", pressed: !!spec.pinned },
     { id: "delete", label: "Delete", icon: "i-trash", danger: true },
-    { id: "remote", label: "Remote", icon: "i-link", type: "switch", checked: on, disabled: r.state === "disabled", hint: r.state === "disabled" ? (r.reason || "") : on ? (r.where ? `On, runs on ${r.where}` : "On") : "Off" },
+    { id: "remote", label: "Run on a computer", icon: "i-link", type: "switch", checked: on, disabled: r.state === "disabled", hint: r.state === "disabled" ? (r.reason || "") : on ? (r.where ? `On, runs on ${r.where}` : "On") : "Off, runs in MIND Cloud" },
   ];
 }
 

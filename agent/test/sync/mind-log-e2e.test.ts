@@ -2,7 +2,7 @@
 process.env.DAEBOT_BOTS_ENABLED = "1";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { hostedRig, deskRig, until, sleep } from "./rig.ts";
+import { hostedRig, deskRig, until, sleep, localSession } from "./rig.ts";
 import { messagesFrom, SessionLogger } from "../../src/mind/session-log.ts";
 import { createFileStore } from "../../src/persist.ts";
 import { rec } from "./helpers.ts";
@@ -33,7 +33,7 @@ test("a desktop session is logged to the tenant's MIND (once, with its messages)
   const hosted = await hostedRig({ script: [{ text: "phone reply" }] });
   const desk = await deskRig(hosted, hosted.keys.alice, { script: [{ text: "mac reply" }] });
   try {
-    const { sessionId } = JSON.parse((await desk.api("POST", "/sessions", { surface: "desktop", title: "Plan the week" })).body);
+    const sessionId = await localSession(desk, { surface: "desktop", title: "Plan the week" });
     await desk.api("POST", `/sessions/${sessionId}/send`, { text: "from the mac" });
     await until(() => mindRows(hosted).some((r) => said(r).includes("assistant:mac reply")));
     // the phone continues it on daebot.live
@@ -41,6 +41,7 @@ test("a desktop session is logged to the tenant's MIND (once, with its messages)
     await desk.api("POST", "/sync/now");
     const web = await hosted.as(hosted.keys.alice);
     await web("POST", "/sessions", { surface: "web", resumeId: sessionId }); // the phone opens the chat it saw in its list
+    assert.equal((await web("PATCH", `/sessions/${sessionId}`, { home: "cloud" })).status, 200); // the person moves it to MIND Cloud to continue there
     await web("POST", `/sessions/${sessionId}/send`, { text: "from the phone" });
     await until(() => said(mindRows(hosted)[0] ?? { messages: [] }).includes("assistant:phone reply"));
     await desk.api("POST", "/sync/now"); await sleep(500); await desk.api("POST", "/sync/now");
@@ -59,6 +60,7 @@ test("a bot thread is logged under daebot-bot-<slug>; a bot-to-bot DM is logged 
   const desk = await deskRig(hosted, hosted.keys.alice, { script: [{ text: "scout here" }] });
   try {
     const bot = JSON.parse((await desk.api("POST", "/bots", { slug: "scout", name: "Scout" })).body).bot;
+    await desk.api("PATCH", `/bots/${bot.id}`, { remote: true }); // "Run on a computer": the bot's threads run on this computer (the standard is MIND Cloud)
     const { sessionId } = JSON.parse((await desk.api("POST", "/sessions", { surface: "desktop", bot: bot.id })).body);
     await desk.api("POST", `/sessions/${sessionId}/send`, { text: "scout, report" });
     await until(() => mindRows(hosted).some((r) => r.source_key === "daebot-bot-scout" && said(r).includes("assistant:scout here")));
@@ -120,7 +122,7 @@ test("a deleted chat closes its MIND session with a note; the history stays", as
   const hosted = await hostedRig();
   const desk = await deskRig(hosted, hosted.keys.alice, { script: [{ text: "ok" }] });
   try {
-    const { sessionId } = JSON.parse((await desk.api("POST", "/sessions", { surface: "desktop" })).body);
+    const sessionId = await localSession(desk, { surface: "desktop" });
     await desk.api("POST", `/sessions/${sessionId}/send`, { text: "keep my history" });
     await until(() => mindRows(hosted).some((r) => said(r).includes("assistant:ok")));
     await desk.api("DELETE", `/sessions/${sessionId}?purge=1`);

@@ -7,13 +7,25 @@ import { homeSig, mergeRecords, recordSig } from "./merge.ts";
 import { MAX_RECORD_BYTES, NOT_SYNCED_SURFACES, fromWire, toWire } from "./wire.ts";
 import type { WireRecord } from "./wire.ts";
 import { TombstoneBook } from "./tombstones.ts";
-import { inferHome, movesOffCloud } from "./home.ts";
-import type { HomeCtx, HomeWhy } from "./home.ts";
-import type { EnvTag } from "../env.ts";
+import { botMigration, inferHome, migrationDecision } from "./home.ts";
+import type { HomeCtx, HomeWhy, MigrateWhy } from "./home.ts";
+import { CLOUD_ENV, isLocalHome } from "../env.ts";
+import type { EnvBy, EnvTag } from "../env.ts";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
-export interface SyncRow { id: string; touchedAt: number; updatedAt: number; sig: string; title: string; /** Where the session lives (a device that has the same transcript adopts it without fetching the record). */ env?: EnvTag; /** The session was deleted (a tombstone): the device deletes its copy. */ deleted?: true }
+export interface SyncRow { id: string; touchedAt: number; updatedAt: number; sig: string; title: string; /** Where the session lives (a device that has the same transcript adopts it without fetching the record). */ env?: EnvTag; /** When the home was last decided and by whom (the latest decision wins on every device). */ envAt?: number; envBy?: EnvBy; /** The session was deleted (a tombstone): the device deletes its copy. */ deleted?: true }
 export type PushStatus = "ok" | "same" | "busy" | "forbidden" | "invalid" | "nobot" | "toolarge" | "error" | "deleted";
 export interface PushResult { id: string; status: PushStatus; sig?: string }
+
+export interface MigrationReport {
+  owner: string; scanned: number;
+  moved: { id: string; title: string; from: string; why: MigrateWhy }[];
+  kept: { id: string; title: string; why: MigrateWhy }[];
+  botsOff: { slug: string; why: string }[];
+  botsKept: { slug: string; why: string }[];
+  skippedBusy: string[];
+}
 
 export interface SyncServiceDeps {
   store: SessionStore;
@@ -29,6 +41,8 @@ export interface SyncServiceDeps {
   tombstones?: TombstoneBook;
   /** The owner's computers and servers (merged) and the computer each Remote bot runs on: what a session's home is worked out from. */
   homeCtx?(owner: string): HomeCtx;
+  /** Where the one-time "put auto-stamped computers back on MIND Cloud" pass leaves its marker (one file per owner), so it never runs twice. Absent = runs when asked. */
+  migrationDir?: string;
   /** Called after a merge wrote a session: a live idle copy must be reloaded from the store. */
   afterWrite?(owner: string, id: string): Promise<void>;
   now?: () => number;
@@ -75,7 +89,7 @@ export class SyncService {
       if (x.tomb) { rows.push({ id: x.id, touchedAt: x.at, updatedAt: x.at, sig: "", title: "", deleted: true }); continue; }
       const rec = this.deps.store.loadShared ? this.deps.store.loadShared(x.id) : this.deps.store.load(x.id);
       if (!rec) continue;
-      rows.push({ id: x.id, touchedAt: x.at, updatedAt: rec.updatedAt, sig: recordSig(rec), title: rec.title, ...(rec.env ? { env: rec.env } : {}) });
+      rows.push({ id: x.id, touchedAt: x.at, updatedAt: rec.updatedAt, sig: recordSig(rec), title: rec.title, ...(rec.env ? { env: rec.env, ...(rec.envAt ? { envAt: rec.envAt } : {}), ...(rec.envBy ? { envBy: rec.envBy } : {}) } : {}) });
     }
     return { now: this.tick(), rows, more: all.length > limit };
   }
@@ -101,39 +115,81 @@ export class SyncService {
     return toWire(rec, this.deps.bots(owner));
   }
 
-  private homeCtx(owner: string): HomeCtx { return this.deps.homeCtx?.(owner) ?? { groups: [] }; }
-
   /**
-   * Gives every session of these owners (all of them when none are named) that has no home the one its record proves, else MIND Cloud.
-   * Idempotent: a session that has a home is never touched. Runs at start and then on a timer, so any session that slips in untagged is fixed.
+   * Gives every session of these owners (all of them when none are named) that has no home MIND Cloud, the standard. Idempotent: a session that has a
+   * home is never touched. Runs at start and then on a timer, so any session that slips in untagged is fixed. (It never infers a computer.)
    */
-  async backfillHomes(owners?: string[], o: { recheckCloud?: boolean } = {}): Promise<{ owner: string; scanned: number; assigned: number; byHome: Record<string, number>; byWhy: Partial<Record<HomeWhy, number>> }[]> {
+  async backfillHomes(owners?: string[], _o: { recheckCloud?: boolean } = {}): Promise<{ owner: string; scanned: number; assigned: number; byHome: Record<string, number>; byWhy: Partial<Record<HomeWhy, number>> }[]> {
     const metas = this.deps.store.list().filter((m) => !NOT_SYNCED_SURFACES.has(m.surface));
     const want = owners ? new Set(owners) : undefined;
     const ids = [...new Set(metas.map((m) => m.owner ?? "owner"))].filter((o) => !want || want.has(o));
     const out: { owner: string; scanned: number; assigned: number; byHome: Record<string, number>; byWhy: Partial<Record<HomeWhy, number>> }[] = [];
     for (const owner of ids) {
       const sum = { owner, scanned: 0, assigned: 0, byHome: {} as Record<string, number>, byWhy: {} as Partial<Record<HomeWhy, number>> };
-      const ctx = this.homeCtx(owner);
       for (const m of metas) {
         if ((m.owner ?? "owner") !== owner) continue;
         sum.scanned++;
-        // A session stamped MIND Cloud is only re-read on the start-up pass, and only moved by proof (a tool that cannot run on daebot.live returned ok).
-        if (m.env && !(o.recheckCloud && m.env.kind === "cloud")) continue;
+        if (m.env) continue;
         if (this.deps.isBusy(m.id)) continue; // its live copy would write the old record back; the next pass gets it
         const rec = this.deps.store.load(m.id);
-        if (!rec) continue;
-        // A cloud stamp is moved by proof of a computer: a tool daebot.live cannot run that returned ok, or surface desktop with no refusal for being hosted.
-        if (rec.env && (rec.env.kind !== "cloud" || !movesOffCloud(rec))) continue;
-        const g = inferHome({ ...rec, env: undefined }, ctx);
-        if (g.env.kind === "cloud" && rec.env) continue;
-        await this.deps.store.save({ ...rec, env: g.env }, { origin: "sync" });
+        if (!rec || rec.env) continue;
+        const g = inferHome(rec);
+        await this.deps.store.save({ ...rec, env: g.env, envAt: this.tick(), envBy: "default" }, { origin: "sync" });
         await this.deps.afterWrite?.(owner, rec.id).catch(() => {});
         sum.assigned++;
         sum.byHome[g.env.name] = (sum.byHome[g.env.name] ?? 0) + 1;
         sum.byWhy[g.why] = (sum.byWhy[g.why] ?? 0) + 1;
       }
       out.push(sum);
+    }
+    return out;
+  }
+
+  private migrationFile(owner: string): string | undefined {
+    return this.deps.migrationDir ? join(this.deps.migrationDir, `env-cloud-v1-${owner.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 80)}.json`) : undefined;
+  }
+
+  /**
+   * The one-time pass that puts every session and bot that was STAMPED onto a computer (not chosen) back on MIND Cloud. Kept as they are: a home the
+   * person chose (envBy user), a server, a bot whose Remote the person turned on (and its threads), a legacy Remote bot whose threads needed the
+   * computer's tools. Never loses history: only the home stamp (env, envAt, envBy) of a record is rewritten, and every device adopts it because the
+   * migration is the latest decision (envAt). Writes a marker per owner so it runs once; `force` ignores the marker.
+   */
+  async migrateToCloud(owners?: string[], o: { force?: boolean; dryRun?: boolean } = {}): Promise<MigrationReport[]> {
+    const metas = this.deps.store.list().filter((m) => !NOT_SYNCED_SURFACES.has(m.surface));
+    const want = owners ? new Set(owners) : undefined;
+    const ids = [...new Set(metas.map((m) => m.owner ?? "owner"))].filter((x) => !want || want.has(x));
+    const out: MigrationReport[] = [];
+    for (const owner of ids) {
+      const mf = this.migrationFile(owner);
+      if (!o.force && !o.dryRun && mf && existsSync(mf)) continue;
+      const rep: MigrationReport = { owner, scanned: 0, moved: [], kept: [], botsOff: [], botsKept: [], skippedBusy: [] };
+      const bots = this.deps.bots(owner);
+      try { await bots?.list(); } catch { /* MIND unreachable: the bots we hold locally are enough */ }
+      const recs = metas.filter((m) => (m.owner ?? "owner") === owner).map((m) => this.deps.store.load(m.id)).filter((r): r is StoredSession => !!r);
+      // 1. bots: Remote that nobody chose goes off.
+      for (const b of bots?.snapshot() ?? []) {
+        const v = botMigration(b, recs.filter((r) => r.bot === b.id));
+        if (v.why === "not-remote") continue;
+        if (!v.off) { rep.botsKept.push({ slug: b.slug, why: v.why }); continue; }
+        rep.botsOff.push({ slug: b.slug, why: v.why });
+        if (!o.dryRun) bots?.setRemote?.(b.id, false, { by: "auto", note: "Moved to MIND Cloud: Run on a computer had been turned on automatically, not by you. Turn it on again if you want this bot on a computer.", at: this.tick() });
+      }
+      // 2. sessions: a stamped computer goes to MIND Cloud.
+      for (const rec of recs) {
+        rep.scanned++;
+        const v = migrationDecision(rec, rec.bot ? bots?.get(rec.bot) : undefined);
+        if (!v.move) { if (isLocalHome(rec.env)) rep.kept.push({ id: rec.id, title: rec.title, why: v.why }); continue; }
+        if (this.deps.isBusy(rec.id)) { rep.skippedBusy.push(rec.id); continue; }
+        rep.moved.push({ id: rec.id, title: rec.title, from: rec.env!.name, why: v.why });
+        if (o.dryRun) continue;
+        // Re-read right before writing: a turn or another device may have saved since the scan. Only the home stamp changes.
+        const cur = this.deps.store.load(rec.id) ?? rec;
+        await this.deps.store.save({ ...cur, env: CLOUD_ENV, envAt: this.tick(), envBy: "auto" }, { origin: "sync" });
+        await this.deps.afterWrite?.(owner, rec.id).catch(() => {});
+      }
+      if (!o.dryRun && mf) { try { mkdirSync(this.deps.migrationDir!, { recursive: true, mode: 0o700 }); const tmp = `${mf}.${process.pid}.tmp`; writeFileSync(tmp, JSON.stringify({ at: Date.now(), moved: rep.moved.length, botsOff: rep.botsOff.map((x) => x.slug) }), { mode: 0o600 }); renameSync(tmp, mf); } catch { /* the next start tries again; the pass is idempotent */ } }
+      out.push(rep);
     }
     return out;
   }
@@ -168,8 +224,10 @@ export class SyncService {
         const existing = this.deps.store.load(rec.id);
         if (existing && (existing.owner ?? "owner") !== owner) { out.push({ id: rec.id, status: "forbidden" }); continue; }
         const merged = mergeRecords(existing, rec);
-        // Every session ends up with a home: a record nobody tagged gets the device that pushed it (if it is new here) or what its own history shows.
-        if (!merged.env) merged.env = inferHome(merged, { ...this.homeCtx(owner), pusher: existing ? undefined : pusher }).env;
+        // Every session ends up with a home, and it is MIND Cloud unless the person chose a computer. A record nobody tagged is MIND Cloud; so is a NEW
+        // record an older desktop build stamped with its own computer without the person's say (no decision recorded): never auto-stamped onto a computer.
+        if (!merged.env) { merged.env = inferHome(merged).env; merged.envAt = this.tick(); merged.envBy = "default"; }
+        else if (!existing && merged.env.kind === "machine" && !merged.envBy && !merged.envAt) { merged.env = CLOUD_ENV; merged.envAt = this.tick(); merged.envBy = "default"; }
         if (existing && recordSig(merged) === recordSig(existing) && merged.history.length === existing.history.length && homeSig(merged) === homeSig(existing)) {
           out.push({ id: rec.id, status: "same", sig: recordSig(existing) });
           continue;
