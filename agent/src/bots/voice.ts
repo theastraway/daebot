@@ -20,10 +20,14 @@ export interface BotVoice {
   language?: string;
   /** One of OUTPUT_FORMATS. Absent = mp3_44100_64. */
   outputFormat?: string;
+  /** Voice chat (the live voice agent): the ElevenLabs agent LLM, the first thing it says, and extra instructions for how it talks. All optional. */
+  agentLlm?: string;
+  agentFirstMessage?: string;
+  agentPrompt?: string;
 }
 
 export const OUTPUT_FORMATS = ["mp3_22050_32", "mp3_44100_32", "mp3_44100_64", "mp3_44100_96", "mp3_44100_128", "mp3_44100_192"] as const;
-export const VOICE_FIELDS = ["voiceId", "voiceName", "model", "speed", "stability", "similarityBoost", "style", "useSpeakerBoost", "language", "outputFormat"] as const;
+export const VOICE_FIELDS = ["voiceId", "voiceName", "model", "speed", "stability", "similarityBoost", "style", "useSpeakerBoost", "language", "outputFormat", "agentLlm", "agentFirstMessage", "agentPrompt"] as const;
 const ID_RE = /^[A-Za-z0-9]{8,40}$/;
 const MODEL_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 const LANG_RE = /^[a-z]{2,3}(-[A-Za-z]{2,4})?$/;
@@ -44,6 +48,10 @@ export function cleanVoice(v: unknown): BotVoice | undefined {
   if (typeof r.useSpeakerBoost === "boolean") o.useSpeakerBoost = r.useSpeakerBoost;
   if (typeof r.language === "string" && LANG_RE.test(r.language)) o.language = r.language;
   if (typeof r.outputFormat === "string" && (OUTPUT_FORMATS as readonly string[]).includes(r.outputFormat)) o.outputFormat = r.outputFormat;
+  if (typeof r.agentLlm === "string" && MODEL_RE.test(r.agentLlm)) o.agentLlm = r.agentLlm;
+  const clip = (t: unknown, n: number) => (typeof t === "string" ? t.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]+/g, "").trim().slice(0, n) : "");
+  if (clip(r.agentFirstMessage, 300)) o.agentFirstMessage = clip(r.agentFirstMessage, 300);
+  if (clip(r.agentPrompt, 2000)) o.agentPrompt = clip(r.agentPrompt, 2000);
   return Object.keys(o).length ? o : undefined;
 }
 

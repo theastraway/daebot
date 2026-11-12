@@ -44,6 +44,7 @@ import { EMBEDDED_FILES } from "../embedded.generated.ts";
 import { hasEmbeddedSite } from "../embedded.ts";
 import { acceptWebSocket } from "./ws.ts";
 import { createVoiceHandler } from "./voice.ts";
+import { createVoiceAgent, TOOL_PATH as VOICE_TOOL_PATH } from "./voiceagent.ts";
 import { buildId, handleAppFeed } from "./appfeed.ts";
 import { createAppsHandler } from "./apps.ts";
 import type { AppsOptions } from "./apps.ts";
@@ -337,6 +338,44 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         fetchImpl: opts.voice?.fetchImpl ?? opts.auth?.fetchImpl,
         now: opts.voice?.now,
         onUsed: opts.voice?.onUsed ?? ((key) => { try { auth?.credits?.get(key, true).catch(() => {}); } catch { /* best effort */ } }),
+      })
+    : undefined;
+  // ---- Voice chat: a live ElevenLabs agent per bot (MIND makes the session and bills it; its server tools call back into /voice-agent/tools/*).
+  const voiceAgent = voiceBase
+    ? createVoiceAgent({
+        baseUrl: voiceBase,
+        keyFor: opts.voice?.keyFor ?? ((p) => (auth ? auth.billingKey(p) : opts.cfg?.mindApiKey || undefined)),
+        secret: createHmac("sha256", token).update("daebot-voice-agent-tools").digest("hex"),
+        publicBase: () => (process.env.DAEBOT_PUBLIC_URL ?? "").trim().replace(/\/+$/, "") || (hosted?.allowedHosts?.[0] && hosted.allowedHosts[0] !== "localhost" ? `https://${hosted.allowedHosts[0]}` : undefined),
+        principalOf: (owner) => (owner === OWNER.id ? OWNER : auth?.store.principal(owner)),
+        fetchImpl: opts.voice?.fetchImpl ?? opts.auth?.fetchImpl,
+        botOf: (p, slug) => {
+          if (slug === "main") { const m = manager.runtimeOf(p.id).settings?.get().main ?? {}; return { id: "main", slug: "main", name: m.name || "Daebot", purpose: "the user's own Daebot", instructions: m.instructions ?? "" }; }
+          const b = manager.runtimeOf(p.id).bots?.bySlug(slug);
+          return b ? { id: b.id, slug: b.slug, name: b.name, purpose: b.purpose, voice: b.voice, instructions: manager.runtimeOf(p.id).bots?.instructions(b.id) ?? "" } : undefined;
+        },
+        saveTranscript: async (p, bot, lines) => {
+          const rt = manager.runtimeOf(p.id);
+          const ls = await manager.open({ surface: "voice", title: `Voice chat ${new Date().toISOString().slice(0, 16).replace("T", " ")}`, owner: p.id, ...(bot.id !== "main" ? { bot: bot.id } : {}) });
+          if (!(await rt.appendVoiceTranscript?.(ls.id, lines))) return undefined;
+          return ls.id;
+        },
+        tools: {
+          list: (owner) => manager.list(owner).map((r) => ({ id: r.id, title: r.title, updatedAt: r.updatedAt, ...(r.bot ? { bot: r.bot } : {}) })),
+          read: (owner, id) => {
+            const hist = manager.runtimeOf(owner).history?.(id);
+            if (!hist) return undefined;
+            const out: { role: "user" | "assistant"; text: string }[] = [];
+            for (const e of hist) { if (e.type === "user") out.push({ role: "user", text: e.text }); else if (e.type === "text" && e.delta.trim()) out.push({ role: "assistant", text: e.delta }); }
+            return out;
+          },
+          post: async (owner, id, text) => {
+            if (!manager.runtimeOf(owner).history?.(id)) return "missing";
+            try { await manager.open({ surface: "voice", resumeId: id, owner }); } catch { return "missing"; }
+            void manager.turn(id, text, (ev) => broadcast(id, ev), undefined, "user", false).catch(() => {});
+            return "sent";
+          },
+        },
       })
     : undefined;
   // ---- Apps: the user's MIND integrations, always with THEIR key (owner login: a plain sign-in-with-MIND answer).
@@ -1702,6 +1741,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       }
     }
 
+    if (path.startsWith(VOICE_TOOL_PATH)) return voiceAgent ? voiceAgent.tool(req, res, path) : sendJson(res, 404, { error: "not found" });
+
     if (path === "/health") {
       if (method !== "GET" && method !== "HEAD") return sendJson(res, 405, { error: "method not allowed" });
       return sendJson(res, 200, { ok: true, name: "mindclaw-gateway", sessions: manager.count(), build: buildId(), bots: botsOn(), ...mcpField(), ...modelInfo() });
@@ -2431,6 +2472,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
     // The desktop shell's screen feed: local gateways only. A hosted server has no desktop to feed it and must never accept frames.
     if (path.startsWith("/screen/")) return hosted ? sendJson(res, 404, { error: "not found" }) : screenApi(req, res, path, new URLSearchParams(req.url!.includes("?") ? req.url!.slice(req.url!.indexOf("?") + 1) : ""), method, opts.screenFeed ?? screenFeed, { readBody, readJson, sendJson });
+    if (path.startsWith("/voice/agent/")) return voiceAgent ? voiceAgent.handle(req, res, path, me) : sendJson(res, 404, { error: "voice is not available" });
     if (path.startsWith("/voice/")) return voice ? voice(req, res, path, _query, me) : sendJson(res, 404, { error: "voice is not available" });
     if (path.startsWith("/apps/")) return apps ? apps(req, res, path, me) : sendJson(res, 404, { error: "apps are not available" });
     if (path === "/account") return accountApi(res, method);

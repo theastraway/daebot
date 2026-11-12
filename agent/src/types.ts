@@ -306,6 +306,8 @@ export interface Runtime {
   settings?: import("./settings.ts").SettingsStore;
   // Visible transcript of a live or persisted session (replayed after a resume or restart). Undefined = unknown id.
   history?(id: string): HistoryEvent[] | undefined;
+  /** Adds the lines of a finished voice conversation (the live voice agent) to a live or saved session of this owner, as the person's and the bot's messages. false = unknown id. */
+  appendVoiceTranscript?(id: string, lines: { role: "user" | "agent"; text: string }[]): Promise<boolean>;
   /** Granular permissions of this owner (rules, mode, pending cards). Absent on runtimes built without a data dir. */
   permissions?: import("./permissions/index.ts").PermissionService;
   /** Suggested replies for the user's next message (1-3, in their voice) and the learning feedback. Absent = not offered. */

@@ -145,6 +145,7 @@
         <span id="usage-tokens"></span><span class="sep">·</span><span id="usage-cost"></span>
       </div>
       <button class="icon-btn voice-btn" id="btn-speak" type="button" aria-label="Spoken answers off" aria-pressed="false" title="Read answers aloud (uses MIND credits)"><svg class="ic"><use href="#i-speaker-off"/></svg></button>
+      <button class="icon-btn voice-btn" id="btn-vchat" type="button" aria-label="Voice chat with this bot" aria-pressed="false" title="Voice chat: talk live with this bot (uses MIND credits)"><svg class="ic"><use href="#i-mic"/></svg><span class="vchat-label">Voice chat</span></button>
       <button class="icon-btn voice-btn" id="btn-convo" type="button" aria-label="Voice conversation, hands-free" aria-pressed="false" title="Voice conversation, hands-free (uses MIND credits)"><svg class="ic"><use href="#i-wave"/></svg></button>
       <button class="icon-btn" id="btn-board" type="button" aria-label="Task board" aria-expanded="false" aria-controls="board-drawer"><svg class="ic"><use href="#i-board"/></svg><span class="badge" id="board-count" hidden>0</span></button>
       <button class="icon-btn" id="btn-violations" type="button" aria-label="Kernel violations" aria-expanded="false"><svg class="ic"><use href="#i-shield"/></svg><span class="badge" id="viol-count" hidden>0</span></button>
@@ -161,6 +162,11 @@
         <span class="vbars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
         <span class="vstatus" id="voice-status"></span>
         <button class="btn-quiet vstop" id="voice-stop" type="button">Stop <kbd>Esc</kbd></button>
+      </div>
+      <div class="voice-dock" id="vc-dock" role="status" aria-live="polite" hidden>
+        <span class="vpill" data-mode="voice"><svg class="ic"><use href="#i-wave"/></svg><span class="vpill-text">Voice chat</span></span>
+        <span class="vstatus" id="vc-status"></span>
+        <button class="btn-quiet vstop" id="vc-stop" type="button">End</button>
       </div>
       <div class="suggest" id="suggest" role="group" aria-label="Suggested replies" hidden></div>
       <div class="mode-row" id="mode-row">
@@ -243,6 +249,13 @@
         <select class="fld" id="bv-lang" aria-label="Spoken language"><option value="">Auto-detect</option></select>
         <label class="fld-label" for="bv-format">Audio format</label>
         <select class="fld" id="bv-format" aria-label="Audio output format"><option value="">Default</option></select>
+        <h3 class="bv-sub">Voice chat (live)</h3>
+        <label class="fld-label" for="bv-allm">Agent model</label>
+        <select class="fld" id="bv-allm" aria-label="Voice chat model"><option value="">Default (gemini-2.5-flash)</option></select>
+        <label class="fld-label" for="bv-first">First thing it says</label>
+        <input class="fld" id="bv-first" type="text" maxlength="300" autocomplete="off" placeholder="Hi, what are we working on?">
+        <label class="fld-label" for="bv-aprompt">Extra instructions for voice chat</label>
+        <textarea class="fld-area" id="bv-aprompt" rows="3" maxlength="2000" spellcheck="false" placeholder="How it should sound and behave when talking live (its DAEBOT.md already applies)."></textarea>
         <div class="row"><button class="btn-quiet" id="bv-preview" type="button">Preview</button><button class="btn-primary" id="bv-save" type="button" disabled>Save voice</button><button class="btn-quiet" id="bv-reset" type="button">Reset</button></div>
         <span class="inline-state" id="bv-state" role="status" aria-live="polite"></span>
       </section>
