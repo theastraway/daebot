@@ -17,6 +17,7 @@ import { openConnectorDetail } from "/connector-detail.js";
 import { transcriptBehind } from "/sync.js";
 import { lruPut, raceAbort, windowPlan, scrollMemory } from "/switchcache.js";
 import { confirmDialog, editInline, isRenaming, sessionDeleteText } from "/manage.js";
+import { createSharedThreads, parseSender, roleHint } from "/sharedthreads.js";
 import { groupByEnv, renderGroups, parseCollapsed, serializeCollapsed, COLLAPSE_KEY } from "/envgroups.js";
 import { createRowMenu } from "/rowmenu.js";
 import { openSessionSettings } from "/sessionsettings.js";
@@ -242,11 +243,16 @@ function renderEmpty() {
 function buildItem(it, tr) {
   let node;
   switch (it.kind) {
-    case "user":
-      node = h("div", (it.photos?.length ? "msg-user has-photos" : "msg-user") + (it.quote ? " has-quote" : ""), it.text || undefined);
+    case "user": {
+      // In a shared thread every message says who wrote it: a guest's carries their name (the server puts it there); the owner's is unmarked.
+      const sp = parseSender(it.text), sh = currentMeta()?.shared;
+      const who = sp.name ? (sh && sp.name === sh.you ? "You" : sp.name) : sh && sh.owner ? (sh.owner.label || sh.owner.username) : "";
+      node = h("div", (it.photos?.length ? "msg-user has-photos" : "msg-user") + (it.quote ? " has-quote" : ""), sp.text || undefined);
+      if (who) { node.classList.add("has-from"); node.prepend(h("div", "mx-from", who)); }
       if (it.photos?.length) node.prepend(photos.thumbs(it.photos, tkey()));
       if (it.quote?.text) node.prepend(h("div", "mx-quote", oneLine(it.quote.text, 200)));
       break;
+    }
     case "assistant": node = h("div", "msg-asst"); node.tabIndex = 0; node.setAttribute("aria-haspopup", "menu"); updateAssistant(node, it); break;
     case "tool": node = buildTool(it); break;
     case "gate": node = buildGate(it); break;
@@ -494,8 +500,14 @@ function getHistory(id, { signal } = {}) {
     p = (async () => {
       const res = await api(`/sessions/${encodeURIComponent(id)}/history`, prev?.etag ? { headers: { "if-none-match": prev.etag } } : {});
       if (res.status === 304 && prev) return prev;
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+      if (!res.ok) {
+        // A thread someone shared with you, and they took you off it (or deleted it): it leaves your list and you land on a new chat.
+        const row = state.openedRow;
+        if ((res.status === 403 || res.status === 404) && row && row.id === id && row.shared) { sharedThreads.forget(id); hist.delete(id); if (state.currentId === id) { newSession(); notify("You no longer have access to that thread."); } }
+        throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+      }
       const body = await res.json();
+      if (body.shared) { const row = state.openedRow; if (row && row.id === id && row.shared) row.shared = { ...row.shared, role: body.shared.role, you: body.shared.you }; }
       const e = { events: body.events, meta: body.meta, run: body.run, etag: res.headers.get("etag") || "" };
       histPut(id, e);
       return e;
@@ -690,9 +702,12 @@ function renderHeader() {
   const bot = state.curBot ? bots.bot(state.curBot) : null;
   if (isRenaming()) return;
   els.title.textContent = meta ? meta.title || "Untitled" : bot ? "New thread" : "New session";
-  els.title.classList.toggle("renamable", !!meta);
-  els.title.title = meta ? "Click to rename" : "";
-  els.subtitle.textContent = meta
+  const shared = meta && meta.shared;
+  els.title.classList.toggle("renamable", !!meta && !shared);
+  els.title.title = meta && !shared ? "Click to rename" : "";
+  els.subtitle.textContent = shared
+    ? [`Shared by ${shared.owner.label || shared.owner.username}`, shared.botName, roleHint(shared.role)].filter(Boolean).join(" · ")
+    : meta
     ? [bot && bot.name, meta.peer && peerLabel(meta.peer, bots.bots()), `${meta.surface}${meta.live ? " · live" : ""}`].filter(Boolean).join(" · ")
     : bot ? `${bot.name} · Not started` : "Not started";
   const u = transcript(tkey()).usage;
@@ -705,6 +720,11 @@ function renderHeader() {
   bots.sync();
   setBusyUi();
   chatMode?.render();
+  // A thread shared with you as view only: the box says so and does not take words. (Everything else about it works like any chat.)
+  const viewOnly = !!shared && shared.role === "viewer";
+  els.input.disabled = viewOnly;
+  els.input.placeholder = viewOnly ? "You can read this thread but not post in it" : "Message Daebot";
+  els.composer.classList.toggle("view-only", viewOnly);
 }
 // Messages sent while Dae is working wait here (per chat) and go out in order, one per turn, when Dae finishes (drainQueue).
 // Each one also has Send now (stops the running turn first), Copy, and remove. Kept in sessionStorage so a reload does not drop them.
@@ -829,12 +849,13 @@ function sessionSpec(s) {
   const env = envFor(s), local = !!env && env.kind !== "cloud";
   // A session on ANOTHER computer can be moved to the one this window is on (a computer's own window only: daebot.live is not a computer).
   const away = local && !state.hosted && env.current === false;
-  return { name: s.title || "Untitled", pinned: !!s.pinnedAt, remote: bot ? bots.remoteSpec(bot) : { state: local ? "on" : "off", where: local ? env.name : "", ...(away ? { moveHere: true } : {}) } };
+  return { name: s.title || "Untitled", pinned: !!s.pinnedAt, share: !s.shared && !s.peer, remote: bot ? bots.remoteSpec(bot) : { state: local ? "on" : "off", where: local ? env.name : "", ...(away ? { moveHere: true } : {}) } };
 }
 function sessionActions(s) {
   return {
     settings: () => { if (s.bot) { bots.ensureLoaded().then(() => bots.openSettings(s.bot)); return; } openSessionSettings({ s, env: envFor(s), h, icon, ago, onRename: (t) => renameThread(s, t), onHome: (on) => setSessionHome(s, on) }); },
     pin: () => pinSession(s, !s.pinnedAt),
+    share: () => sharedThreads.openShare(s),
     delete: () => deleteSession(s),
     remote: (on) => { if (s.bot) bots.setRemote(s.bot, on); else setSessionHome(s, on); },
     movehere: () => { if (s.bot) bots.moveHere(s.bot); else setSessionHome(s, true); },
@@ -906,7 +927,8 @@ function renderSessions() {
   rowMenu.close();
   els.list.replaceChildren();
   const shown = generalSessions(state.sessions); // bot threads live under their bot, in the Bots view
-  if (!shown.length) { els.list.append(h("div", "empty-side", "No sessions yet.")); return; }
+  sharedThreads.renderInto(els.list, { current: state.currentId }); // threads other people shared with you
+  if (!shown.length) { if (!sharedThreads.threads().length) els.list.append(h("div", "empty-side", "No sessions yet.")); return; }
   renderGroups(els.list, groupByEnv(shown, state.envs), { build: sessionRow, collapsed: collapsedEnvs, onToggle: toggleEnv, onRename: renameEnv, h, icon });
 }
 // Rename a thread (session or bot thread): PATCH the title, keep it in every cached copy, redraw. The server keeps it for good.
@@ -925,7 +947,7 @@ function renameRow(btn, s) {
 // The chat title in the header renames the open thread the same way.
 function renameCurrent() {
   const meta = currentMeta();
-  if (!meta) return;
+  if (!meta || meta.shared) return; // only the owner names a shared thread
   editInline({ host: els.title, current: meta.title || "", className: "head-edit", onSave: (t) => renameThread(meta, t), onEnd: () => { renderHeader(); } });
 }
 // Delete a session for good: confirm (naming it), the server removes it and its messages, the list updates; if it was open, land on a new session.
@@ -946,7 +968,13 @@ async function deleteSession(s) {
 }
 // View-aware: the Sessions view lists plain sessions; the Bots view also refreshes the bots and the selected bot's threads.
 // A bot thread can be open while the Sessions view shows, so its bot is kept fresh too.
+const sharedThreads = createSharedThreads({
+  json, h, icon, ago, notify: (t) => notify(t),
+  onOpen: (row) => selectSession(row, { userClick: true }),
+  onChange: () => { renderSessions(); },
+});
 async function refreshSessions() {
+  void sharedThreads.refresh();
   try { const r = await json("/sessions"); state.sessions = r.sessions; state.envs = r.envs || state.envs; } catch { /* shown via connection state */ }
   if (bots.view() === "bots" || state.curBot) await bots.refresh();
   renderSessions(); renderHeader();

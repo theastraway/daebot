@@ -1357,3 +1357,24 @@ button.env-head:hover { background: var(--surface-2); color: var(--ink-2); }
 #btn-vchat { width: auto; padding: 0 10px; }
 @media (max-width: 640px) { .vchat-label { display: none; } #btn-vchat { width: 36px; padding: 0; } }
 .bv-sub { margin: 10px 0 0; font: 650 13px var(--display); }
+
+/* ---- Shared threads (sharedthreads.js): the sidebar section, the sender name on a message, the share dialog ---- */
+.shared-threads .sess.shared .sess-pin { color: var(--env-remote); }
+.msg-user.has-from { padding-top: 6px; }
+.mx-from { font: 600 11.5px var(--sans); letter-spacing: .02em; color: var(--ink-3); margin-bottom: 2px; white-space: normal; }
+.composer.view-only textarea { cursor: not-allowed; opacity: .7; }
+.sh-card { width: min(520px, 100%); }
+.sh-card .sh-sub { font-size: 13.5px; color: var(--ink-2); }
+.sh-card .sh-input { font: 14px/1.4 var(--sans); width: 100%; }
+.sh-h { margin: 10px 0 2px; font: 600 11.5px var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.sh-found, .sh-members { display: grid; gap: 4px; }
+.sh-pick, .sh-member { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); text-align: left; }
+.sh-pick:hover:not(:disabled) { border-color: var(--ink-3); background: var(--surface-2); }
+.sh-pick:disabled { opacity: .5; cursor: default; }
+.sh-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.sh-add { font: 600 12px var(--sans); color: var(--ok); }
+.sh-none { color: var(--ink-3); font-size: 13px; padding: 4px 2px; }
+.sh-msg { min-height: 18px; font-size: 13px; color: var(--ok); }
+.sh-msg.bad { color: var(--accent); }
+.sh-role { font: 13px var(--sans); padding: 5px 8px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--bg); color: var(--ink); }
+.sh-rm { padding: 5px 10px; font-size: 13px; }

@@ -19,6 +19,7 @@ export function menuItems(spec) {
   const items = [
     { id: "settings", label: "Settings", icon: "i-gear" },
     { id: "pin", label: spec.pinned ? "Unpin" : "Pin", icon: "i-pin", pressed: !!spec.pinned },
+    ...(spec.share ? [{ id: "share", label: "Share thread", icon: "i-users", hint: "Add MIND people to it" }] : []),
     { id: "delete", label: "Delete", icon: "i-trash", danger: true },
     { id: "remote", label: "Run on a computer", icon: "i-link", type: "switch", checked: on, disabled: r.state === "disabled", hint: r.state === "disabled" ? (r.reason || "") : on ? (r.where ? `On, runs on ${r.where}` : "On") : "Off, runs in MIND Cloud" },
   ];

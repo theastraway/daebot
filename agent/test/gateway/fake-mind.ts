@@ -12,6 +12,8 @@ export interface FakeAgentSession { id: string; user: string; source_key: string
 export interface FakeMind {
   /** Agent Sessions (open is idempotent per user + source_key + external_session_id; append/close keep what they were given) */
   agentSessions: Map<string, FakeAgentSession>;
+  /** Agent Session shares (MIND agent_session_shares): who each session is shared with, and as what */
+  sessionShares: { id: string; session_id: string; owner: string; grantee: string; role: string }[];
   /** keys that lack chat:read/chat:write (agent-sessions answers 403 for them) until an admin key upgrades them via POST /agent-sessions/daebot-scopes */
   chatScopeless: Set<string>;
   /** admin API keys (may call /agent-sessions/daebot-scopes) */
@@ -70,7 +72,7 @@ const json = (res: ServerResponse, status: number, v: unknown, extra: Record<str
 export async function startFakeMind(initial: Record<string, string> = {}): Promise<FakeMind> {
   const m: FakeMind = {
     url: "", base: "", seen: [], keys: new Map(Object.entries(initial)), registered: [], consentUser: "", codes: new Map(), refreshTokens: new Map(),
-    minted: [], agentSessions: new Map(), chatScopeless: new Set(), adminKeys: new Set(), bots: new Map(), integrations: new Map(), usage: new Map(), life: new Map(),
+    minted: [], agentSessions: new Map(), sessionShares: [], chatScopeless: new Set(), adminKeys: new Set(), bots: new Map(), integrations: new Map(), usage: new Map(), life: new Map(),
     newKey(username) { const k = "mind_" + randomBytes(24).toString("base64url"); m.keys.set(k, username); return k; },
     close: () => new Promise((r) => { server.close(() => r()); server.closeAllConnections(); }),
   };
@@ -276,6 +278,39 @@ export async function startFakeMind(initial: Record<string, string> = {}): Promi
         const row = had ?? { id: `as_${m.agentSessions.size + 1}_${username}`, user: username, source_key: String(parsed?.source_key), external_session_id: String(parsed?.external_session_id), title: String(parsed?.title ?? ""), status: "active", messages: [] };
         m.agentSessions.set(k, row);
         return json(res, 200, { session_id: row.id, resumed: !!had, message_count: row.messages.length, pending_replies: [] });
+      }
+      if ((rest === "/agent-sessions" || rest === "/agent-sessions/") && req.method === "GET") {
+        const shared = new Set(m.sessionShares.filter((x) => x.grantee === username).map((x) => x.session_id));
+        const rows = [...m.agentSessions.values()].filter((r) => (r.user === username && !u.searchParams.get("shared_only")) || shared.has(r.id)).map((r) => {
+          const g = m.sessionShares.find((x) => x.session_id === r.id && x.grantee === username);
+          return { session_id: r.id, user_id: r.user, source_key: r.source_key, external_session_id: r.external_session_id, title: r.title, status: r.status, last_activity_at: "2026-11-12T00:00:00Z",
+            shared: g ? { shared_with_me: true, shared_by: r.user, owner: r.user, owner_label: r.user, role: g.role, unread: 0, muted: false, shared_at: "2026-11-12T00:00:00Z" } : { shared_with_me: false } };
+        });
+        return json(res, 200, { sessions: rows.slice(0, Number(u.searchParams.get("limit") ?? 30)), sources: [] });
+      }
+      if (rest === "/agent-sessions/share-targets" && req.method === "GET") {
+        const q = (u.searchParams.get("q") ?? "").toLowerCase();
+        return json(res, 200, { users: [...new Set(m.keys.values())].filter((n) => n !== username && n.toLowerCase().startsWith(q)).map((n) => ({ username: n, label: n.toUpperCase(), avatar_url: null })) });
+      }
+      const ash = /^\/agent-sessions\/([^/]+)\/shares(?:\/([^/]+))?$/.exec(rest);
+      if (ash) {
+        const row = [...m.agentSessions.values()].find((r) => r.id === ash[1] && r.user === username);
+        if (!row) return json(res, 404, { detail: "Agent session not found" });
+        if (req.method === "GET") return json(res, 200, { session_id: row.id, shares: m.sessionShares.filter((x) => x.session_id === row.id).map((x) => ({ id: x.id, session_id: x.session_id, grantee_username: x.grantee, grantee_label: x.grantee.toUpperCase(), role: x.role, shared_at: "2026-11-12T00:00:00Z" })) });
+        if (req.method === "POST") {
+          const who = String(parsed?.grantee_username ?? "");
+          if (![...m.keys.values()].includes(who)) return json(res, 404, { detail: `No MIND account named '${who}'.` });
+          if (who === username) return json(res, 400, { detail: "You can't share a session with yourself." });
+          const had = m.sessionShares.find((x) => x.session_id === row.id && x.grantee === who);
+          if (had) had.role = String(parsed?.role ?? "viewer"); else m.sessionShares.push({ id: `sh_${m.sessionShares.length + 1}`, session_id: row.id, owner: username, grantee: who, role: String(parsed?.role ?? "viewer") });
+          return json(res, 201, { ok: true });
+        }
+        if (req.method === "DELETE") {
+          const i = m.sessionShares.findIndex((x) => x.id === ash[2] && x.session_id === row.id);
+          if (i < 0) return json(res, 404, { detail: "Share grant not found." });
+          m.sessionShares.splice(i, 1);
+          return json(res, 200, { revoked: ash[2] });
+        }
       }
       const asg = /^\/agent-sessions\/([^/]+)$/.exec(rest);
       if (asg && req.method === "GET") {

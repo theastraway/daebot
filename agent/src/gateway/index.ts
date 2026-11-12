@@ -57,6 +57,8 @@ import { MindFeed } from "./mind-feed.ts";
 import { fetchUsage, setAdditional, UsageError } from "./usage.ts";
 import { fetchSpendCaps, putSpendCaps, SpendCapsError, toMindBody, validBotId } from "./spendcaps.ts";
 import { createMindClient } from "../mind/client.ts";
+import { SharedThreads, ShareError, attribute, DAEBOT_SOURCE } from "./shared-threads.ts";
+import type { SharedGrant, ShareRole } from "./shared-threads.ts";
 import { touchConnectedApps } from "../mind/connected.ts";
 import { addonWords, fetchIntegrations, providerFor } from "../mind/integrations.ts";
 import type { AppRow } from "../mind/integrations.ts";
@@ -156,6 +158,8 @@ export interface GatewayOptions {
   fetchImpl?: typeof fetch;
   /** Connected MCP servers (consent card routes under /mcp/*). Absent = the feature is not offered here. */
   mcpConnect?: McpConnectService;
+  /** Shared threads: how long a person's list of shared threads is trusted before MIND is asked again (default 3 s). Tests. */
+  sharedTtlMs?: number;
   /** Admin ledgers (/admin/mistakes, /admin/kpis, /api/admin/*). dir defaults to DATA_DIR; logKey to env DAEBOT_MISTAKE_LOG_KEY (read per request). */
   adminLog?: { dir?: string; logKey?: () => string | undefined; mindClient?: Pick<MindClient, "remember" | "call"> | null };
 }
@@ -212,8 +216,14 @@ function readBody(req: IncomingMessage, limit = MAX_BODY): Promise<Buffer> {
   });
 }
 
+const jsonBodies = new WeakMap<IncomingMessage, Record<string, unknown>>();
+/** The request's JSON body. Read once: a second call (a route that looks at the body, then hands the request on) gets the same object. */
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
-  return parseJsonObject(await readBody(req));
+  const have = jsonBodies.get(req);
+  if (have) return have;
+  const b = parseJsonObject(await readBody(req));
+  jsonBodies.set(req, b);
+  return b;
 }
 
 function parseJsonObject(buf: Buffer): Record<string, unknown> {
@@ -417,6 +427,25 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   const wsWho = new WeakMap<WsConnection, Principal>();
   const subscribers = new Map<string, Set<WsConnection>>(); // sessionId -> ws conns
   const runs = new RunRegistry(); // server-owned turns: they outlive the request that started them
+
+  // ---------- Shared threads: other MIND users in one thread of yours (see shared-threads.ts). Hosted only; the grant is MIND's own Agent Session share.
+  const sharedOn = !!(hosted && auth && opts.cfg);
+  const shareStreams = new Map<string, Set<ServerResponse>>(); // `${sessionId}|${inviteeId}` -> the invitee's open event streams of that thread
+  const closeShareStreams = (granteeId: string, sessionId: string): void => {
+    const set = shareStreams.get(`${sessionId}|${granteeId}`);
+    if (!set) return;
+    shareStreams.delete(`${sessionId}|${granteeId}`);
+    for (const r of set) { try { r.end(); } catch { /* already gone */ } }
+  };
+  const sharedThreads = sharedOn
+    ? new SharedThreads({
+        mindFor: (p) => (auth!.billingKey(p) ? createMindClient(opts.cfg!, opts.fetchImpl ?? opts.auth?.fetchImpl, { getKey: () => auth!.billingKey(p) ?? "" }) : undefined),
+        ttlMs: opts.sharedTtlMs,
+        onRevoke: closeShareStreams,
+      })
+    : undefined;
+  /** An invitee acting in someone else's thread: `me` is swapped for the owner (the owner's runtime, bot, home device and caps), `viewer` is who is really asking. */
+  interface Viewer { p: Principal; grant: SharedGrant }
   const deviceRelay = new DeviceRelay(); // tool -> the user's own device (Apple Calendar in the iPhone and Mac apps) and back
 
   // ---- Session sync across devices (see src/sync/). Hosted: SyncService answers /api/sync/*; a local gateway runs a SyncAgent that mirrors to it.
@@ -1651,6 +1680,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (hosted && path === AGENT_TURN_PATH) return agentTurn(req, res);
     if (hosted && path === AGENT_BOTS_PATH) return agentBots(req, res);
     if (hosted && path.startsWith("/api/sync/")) return syncApi(req, res, path, query);
+    if (hosted && path.startsWith("/api/shared/")) return sharedKeyApi(req, res, path, query);
     if (hosted && path === PROVISION_PATH) return provisionApi(req, res);
 
     // A routine's webhook: authenticated by the secret in the URL alone (a service calling in has no login), so it is answered before the cookie checks.
@@ -1756,7 +1786,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/envs" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/board" || path.startsWith("/board/") || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
+    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/board" || path.startsWith("/board/") || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -2445,6 +2475,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     method: string,
     hookChannel: string | undefined,
     hook: { handler: WebhookHandler; auth: "token" | "none" } | undefined,
+    meOverride?: Principal,
   ): Promise<void> {
     if (path === "/ws") return sendJson(res, 426, { error: "websocket upgrade required" });
 
@@ -2462,7 +2493,13 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       return void res.end(data);
     }
 
-    const me = who(req);
+    let me = meOverride ?? who(req);
+    let viewer: Viewer | undefined;
+    if (sharedThreads || cloudShare) {
+      const sp = await sharedPre(req, res, path, _query, method, me);
+      if (sp === "handled") return;
+      if (sp) { me = sp.me; viewer = sp.viewer; }
+    }
     if (path === "/sync/status") return method === "GET" ? sendJson(res, 200, syncAgent ? { ...syncAgent.status, ...(syncAgent.routineStats ? { routines: syncAgent.routineStats } : {}) } : { enabled: false }) : sendJson(res, 405, { error: "method not allowed" });
     if (path === "/sync/now") {
       if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
@@ -2588,13 +2625,13 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       // A turn still running on the server: hand back the transcript up to (not including) that turn plus a pointer to it,
       // so the client rebuilds the running turn from GET .../events (replay + live) and nothing is drawn twice.
       const run = runs.active(id);
-      let payload: unknown = { events, meta };
+      let payload: unknown = { events, meta, ...(viewer ? { shared: { role: viewer.grant.role, owner: viewer.grant.ownerUsername, ownerLabel: viewer.grant.ownerLabel, you: viewer.p.username } } : {}) };
       if (run) {
         let cut = events.length;
         for (let i = events.length - 1; i >= 0; i--) if (events[i].type === "user") { cut = i; break; }
         // A turn that runs on another device: its user message is in the saved transcript only once that device has synced. Until then nothing is cut.
         if (run.external && cut < events.length && (events[cut] as { text?: string }).text !== run.userText) cut = events.length;
-        payload = { events: events.slice(0, cut), run: { id: run.id, status: "running", startedAt: run.startedAt }, meta };
+        payload = { events: events.slice(0, cut), run: { id: run.id, status: "running", startedAt: run.startedAt }, meta, ...(viewer ? { shared: { role: viewer.grant.role, owner: viewer.grant.ownerUsername, ownerLabel: viewer.grant.ownerLabel, you: viewer.p.username } } : {}) };
       }
       // Conditional GET: the open chat is re-read every few seconds and on every switch; an unchanged transcript costs a 304, not a body to download and parse.
       return sendJsonTagged(req, res, payload);
@@ -2606,6 +2643,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       if (!run || !ls) return sendJson(res, 404, { error: "no run" });
       const after = Math.max(0, Number(_query.get("after") ?? headerOne(req, "last-event-id") ?? 0) || 0);
       res.writeHead(200, sseHeaders());
+      if (viewer) trackShareStream(viewer, id, res);
       return attachRun(res, run, after, undefined, true);
     }
 
@@ -2734,10 +2772,12 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       const raw = await readBody(req, MAX_PHOTO_BODY);
       const b = parseJsonObject(raw);
       if (raw.length > MAX_BODY && b.photos === undefined) throw new HttpError(413, "body too large");
-      const text = optStr(b.text, 200_000) ?? "";
+      // A guest of a shared thread: the message is theirs, so it carries their name (the page shows it above the message, the bot reads who is speaking).
+      const text = viewer ? ((t0) => (t0.trim() ? attribute(viewer.p.username, t0) : ""))(optStr(b.text, 200_000) ?? "") : optStr(b.text, 200_000) ?? "";
       const check = checkPhotos(b.photos);
       if (!check.ok) return sendJson(res, check.status, { error: check.error });
       if (!text.trim() && check.photos.length === 0) return sendJson(res, 400, { error: "text required" });
+      if (viewer && !text.trim()) return sendJson(res, 400, { error: "text required" }); // a guest's photo alone has no name on it
       if (ls.busy || remoteHub?.activeFor(me.id, id) || cloudRuns.has(id)) return sendJson(res, 409, { error: "session is busy with another turn" });
       // Desktop: a session that lives in MIND Cloud runs there; this computer is the window onto it.
       if (runsInCloud(me.id, ls)) {
@@ -2766,11 +2806,206 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         const qtext = (saved ?? optStr((qb as any).text, 600) ?? "").trim().slice(0, 600);
         if (qtext) quote = { ...(qid ? { id: qid } : {}), text: qtext };
       }
-      if (remoteHub && (await routeRemote(res, me, id, homePlanOf(me.id, id, ls.bot), ls.surface, ls.title, text, quote, refs, { interactive: true }))) return;
-      return streamTurn(res, id, text, {}, refs ? { type: "photos", photos: refs } : undefined, me, true, refs, parseCapabilities(b.capabilities), quote); // the web/desktop/mobile UI can answer a permission card
+      if (remoteHub && (await routeRemote(res, me, id, homePlanOf(me.id, id, ls.bot), ls.surface, ls.title, text, quote, refs, { interactive: !viewer }))) return;
+      // The web/desktop/mobile UI can answer a permission card. A guest's turn runs on the owner's account: no card goes to the guest's screen and no device of theirs is lent to it.
+      return streamTurn(res, id, text, {}, refs ? { type: "photos", photos: refs } : undefined, me, !viewer, refs, viewer ? [] : parseCapabilities(b.capabilities), quote);
     } finally {
       if (big) photoBodies--;
     }
+  }
+
+
+
+  // ---------- Shared threads on a computer's own gateway ----------
+  // A desktop is signed in with the person's MIND key and holds only that person's own chats. A thread someone shared with them lives on daebot.live
+  // (it is the owner's, and runs where the owner's bot runs), so the desktop's gateway hands those requests to daebot.live with the same key and
+  // streams the answer back. daebot.live decides (the same grant check as for its own web page); this side only forwards.
+  const SHARED_FORWARD = /^\/(shared-threads(\/search)?|sessions(\/[^/]+(\/(history|events|send|abort|members(\/[^/]+)?|photos\/[^/]+))?)?)$/;
+  // daebot.live: a request from a desktop's gateway (X-MIND-Key), run as that person through the same routes as the web page.
+  async function sharedKeyApi(req: IncomingMessage, res: ServerResponse, path: string, query: URLSearchParams): Promise<void> {
+    const rest = path.slice("/api/shared".length);
+    if (!sharedThreads || !SHARED_FORWARD.test(rest)) return sendJson(res, 404, { error: "not found" });
+    const me = await keyPrincipal(req, res);
+    if (!me) return;
+    return api(req, res, rest, query, req.method ?? "GET", undefined, undefined, me);
+  }
+  const cloudShare = !hosted && syncAgent ? { base: (opts.sync?.url ?? ((process.env.DAEBOT_SYNC_URL ?? "").trim() || "https://daebot.live")).replace(/\/+$/, ""), key: syncKey, fetchImpl: opts.sync?.fetchImpl ?? opts.fetchImpl ?? fetch } : undefined;
+  let cloudSharedIds: { at: number; ids: Set<string> } | undefined;
+  /** Is this thread one daebot.live lists as shared with this person? (read at most every few seconds) */
+  async function cloudHasShared(id: string): Promise<boolean> {
+    if (!cloudShare) return false;
+    const age = cloudSharedIds ? Date.now() - cloudSharedIds.at : Infinity;
+    if (!cloudSharedIds || age > 4000 || (!cloudSharedIds.ids.has(id) && age > 1500)) { // a thread just shared is found within about a second and a half
+      try {
+        const r = await cloudShare.fetchImpl(`${cloudShare.base}/api/shared/shared-threads`, { headers: { "x-mind-key": cloudShare.key, accept: "application/json" }, signal: AbortSignal.timeout(10_000) });
+        const j: any = r.ok ? await r.json().catch(() => ({})) : {};
+        cloudSharedIds = { at: Date.now(), ids: new Set<string>((Array.isArray(j.threads) ? j.threads : []).map((t: any) => String(t.id))) };
+      } catch { cloudSharedIds = { at: Date.now() - 2000, ids: cloudSharedIds?.ids ?? new Set() }; }
+    }
+    return cloudSharedIds.ids.has(id);
+  }
+  /** Forwards this request to daebot.live and streams the answer back (a turn is a long event stream: nothing is buffered). */
+  async function forwardToCloud(req: IncomingMessage, res: ServerResponse, path: string, query: URLSearchParams, method: string): Promise<"handled"> {
+    const c = cloudShare!;
+    const ctl = new AbortController();
+    res.on("close", () => ctl.abort());
+    try {
+      const body = method === "GET" || method === "HEAD" || method === "DELETE" ? undefined : jsonBodies.has(req) ? Buffer.from(JSON.stringify(jsonBodies.get(req))) : await readBody(req, MAX_PHOTO_BODY);
+      const qs = query.toString();
+      const hdrs: Record<string, string> = { "x-mind-key": c.key, accept: String(req.headers.accept ?? "*/*") };
+      if (body?.length) hdrs["content-type"] = "application/json";
+      const inm = headerOne(req, "if-none-match"); if (inm) hdrs["if-none-match"] = inm;
+      const up = await c.fetchImpl(`${c.base}/api/shared${path}${qs ? `?${qs}` : ""}`, { method, headers: hdrs, ...(body?.length ? { body: body.toString("utf8") } : {}), signal: ctl.signal });
+      const out: Record<string, string> = { ...BASE_HEADERS, "cache-control": "no-store" };
+      for (const k of ["content-type", "etag", "content-disposition", "x-daebot-session"]) { const v = up.headers.get(k); if (v) out[k] = v; }
+      res.writeHead(up.status, out);
+      if (!up.body || method === "HEAD") return void res.end(), "handled";
+      const reader = up.body.getReader();
+      for (;;) { const { done, value } = await reader.read(); if (done) break; if (value) res.write(value); }
+      res.end();
+    } catch (e) {
+      if (!res.headersSent) sendJson(res, 502, { error: "Could not reach MIND Cloud to open that shared thread." });
+      else res.end();
+      void e;
+    }
+    return "handled";
+  }
+
+  // ---------- Shared threads routes ----------
+  const decodeSeg = (v: string): string | undefined => { try { return decodeURIComponent(v); } catch { return undefined; } };
+  const shareFail = (res: ServerResponse, e: unknown): "handled" => {
+    if (e instanceof ShareError) sendJson(res, e.status, { error: e.message });
+    else if (e instanceof HttpError) sendJson(res, e.status, { error: e.message });
+    else sendJson(res, 502, { error: "Could not reach MIND to do that. Try again in a moment." });
+    return "handled";
+  };
+  /** Where one of THIS person's threads lives in MIND (its Agent Session source), or why it cannot be shared. */
+  function shareTarget(me: Principal, id: string): { sessionId: string; sourceKey: string; title: string } | { status: number; error: string } {
+    if (me.owner) return { status: 403, error: "Sign in with your MIND account to share threads." };
+    const own = manager.access(id, me.id);
+    if (own === "forbidden") return { status: 403, error: "forbidden" };
+    const rt = manager.runtimeOf(me.id);
+    const info = rt.sessionInfo?.(id);
+    const row = rt.listSessions().find((x) => x.id === id);
+    if (!own && !info && !row) return { status: 404, error: "no such session" };
+    if (info?.peer || row?.peer) return { status: 400, error: "A bot-to-bot thread cannot be shared." };
+    const botId = info?.bot ?? row?.bot ?? own?.bot;
+    const slug = botId ? rt.bots?.get(botId)?.slug : undefined;
+    const sourceKey = botId ? (slug ? `daebot-bot-${slug}` : "") : "daebot";
+    if (!sourceKey || !DAEBOT_SOURCE.test(sourceKey)) return { status: 400, error: "This thread cannot be shared." };
+    return { sessionId: id, sourceKey, title: row?.title || own?.title || "" };
+  }
+  function trackShareStream(v: Viewer, id: string, res: ServerResponse): void {
+    const key = `${id}|${v.p.id}`;
+    let set = shareStreams.get(key);
+    if (!set) shareStreams.set(key, (set = new Set()));
+    set.add(res);
+    res.on("close", () => { const s2 = shareStreams.get(key); if (s2) { s2.delete(res); if (!s2.size) shareStreams.delete(key); } });
+  }
+
+  /**
+   * Runs before the ordinary routes. "handled" = answered here. A viewer = the caller is a guest of someone else's thread and the request is one a guest
+   * may make: the ordinary route then runs as the OWNER (their runtime, bot, home computer and caps), so a guest gets exactly what the owner's own chat does
+   * and nothing else. Everything a guest may not do never reaches the ordinary route.
+   */
+  async function sharedPre(req: IncomingMessage, res: ServerResponse, path: string, query: URLSearchParams, method: string, me: Principal): Promise<"handled" | { me: Principal; viewer: Viewer } | undefined> {
+    const st = sharedThreads;
+    if (!st) {
+      // A computer's own gateway: the lists and the sharing dialog go to daebot.live; so does any thread that daebot.live lists as shared with this person.
+      if (!cloudShare) return undefined;
+      if (path === "/shared-threads" || path === "/shared-threads/search") { cloudSharedIds = undefined; return forwardToCloud(req, res, path, query, method); }
+      const lm = /^\/sessions\/([^/]+)\/members(?:\/[^/]+)?$/.exec(path);
+      if (lm) {
+        const sid = decodeSeg(lm[1]);
+        if (sid && method !== "GET") await syncAgent?.pushSession(sid).catch(() => {}); // the thread must exist on daebot.live before it can be shared
+        return forwardToCloud(req, res, path, query, method);
+      }
+      const gm = SESSION_ROUTE.exec(path) ?? PHOTO_ROUTE.exec(path);
+      let gid: string | undefined = gm ? decodeSeg(gm[1]) : undefined;
+      if (!gm && path === "/sessions" && method === "POST") { try { gid = optStr((await readJson(req)).resumeId, 200); } catch { return undefined; } }
+      if (!gid) return undefined;
+      if (manager.access(gid, me.id) !== undefined || manager.runtimeOf(me.id).history?.(gid)) return undefined; // one of this computer's own chats
+      return (await cloudHasShared(gid)) ? forwardToCloud(req, res, path, query, method) : undefined;
+    }
+    if (path === "/shared-threads") {
+      if (method !== "GET") { sendJson(res, 405, { error: "method not allowed" }); return "handled"; }
+      try {
+        const rows = await st.listFor(me);
+        const lists = new Map<string, ReturnType<Runtime["listSessions"]>>();
+        const threads: Record<string, unknown>[] = [];
+        for (const g of rows) {
+          const rt = manager.runtimeOf(g.ownerId);
+          let l = lists.get(g.ownerId);
+          if (!l) { try { l = rt.listSessions(); } catch { l = []; } lists.set(g.ownerId, l); }
+          const row = l.find((x) => x.id === g.sessionId);
+          const info = rt.sessionInfo?.(g.sessionId);
+          if (!row && !info) continue; // the owner deleted it
+          const botId = info?.bot ?? row?.bot;
+          threads.push({
+            id: g.sessionId, title: row?.title || g.title || "Untitled", updatedAt: row?.updatedAt ?? 0, busy: !!manager.get(g.sessionId)?.busy || !!runs.active(g.sessionId),
+            ...(botId ? { botName: rt.bots?.get(botId)?.name ?? "" } : {}), owner: { username: g.ownerUsername, label: g.ownerLabel }, role: g.role, unread: g.unread, ...(g.sharedAt ? { sharedAt: g.sharedAt } : {}),
+          });
+        }
+        threads.sort((a, b) => Number(b.updatedAt) - Number(a.updatedAt));
+        sendJson(res, 200, { threads });
+      } catch (e) { return shareFail(res, e); }
+      return "handled";
+    }
+    if (path === "/shared-threads/search") {
+      if (method !== "GET") { sendJson(res, 405, { error: "method not allowed" }); return "handled"; }
+      try { sendJson(res, 200, { users: await st.search(me, query.get("q") ?? "") }); } catch (e) { return shareFail(res, e); }
+      return "handled";
+    }
+    // Owner side: who is on one of MY threads.
+    const mem = /^\/sessions\/([^/]+)\/members(?:\/([^/]+))?$/.exec(path);
+    if (mem) {
+      const id = decodeSeg(mem[1]);
+      const who2 = mem[2] === undefined ? undefined : decodeSeg(mem[2]);
+      if (!id || (mem[2] !== undefined && !who2)) { sendJson(res, 400, { error: "bad id" }); return "handled"; }
+      const t = shareTarget(me, id);
+      if ("status" in t) { sendJson(res, t.status, { error: t.error }); return "handled"; }
+      try {
+        if (who2 === undefined && method === "GET") sendJson(res, 200, { members: await st.members(me, t) });
+        else if (who2 === undefined && method === "POST") {
+          const b = await readJson(req);
+          const username = optStr(b.username, 120) ?? "";
+          const role: ShareRole = b.role === "viewer" ? "viewer" : "editor";
+          sendJson(res, 200, { members: await st.add(me, t, username, role) });
+        } else if (who2 !== undefined && method === "DELETE") sendJson(res, 200, { members: await st.remove(me, t, who2) });
+        else sendJson(res, 405, { error: "method not allowed" });
+      } catch (e) { return shareFail(res, e); }
+      return "handled";
+    }
+    // Guest side: the thread-scoped routes.
+    let id: string | undefined;
+    let action: string | undefined;
+    const sm = SESSION_ROUTE.exec(path);
+    const pm = PHOTO_ROUTE.exec(path);
+    if (sm) { id = decodeSeg(sm[1]); action = sm[2] ?? (method === "PATCH" ? "patch" : method === "DELETE" ? "delete" : "root"); }
+    else if (pm) { id = decodeSeg(pm[1]); action = "photos"; }
+    else if (MSG_ROUTE.test(path)) { id = decodeSeg(MSG_ROUTE.exec(path)![1]); action = "message"; }
+    else if (path === "/sessions" && method === "POST") { try { id = optStr((await readJson(req)).resumeId, 200); } catch { return undefined; } action = "open"; }
+    else return undefined;
+    if (!id) return undefined;
+    const own = manager.access(id, me.id);
+    if (own && own !== "forbidden") return undefined;                       // the person's own live thread
+    if (!own && manager.runtimeOf(me.id).history?.(id)) return undefined; // the person's own saved thread
+    const g = await st.grantFor(me, id);
+    if (!g) return undefined;                                               // no grant: the ordinary route answers (403 / 404) exactly as before
+    const ownerP = auth!.store.principal(g.ownerId);
+    if (!ownerP) return undefined;
+    const isRead = (action === "history" || action === "events" || action === "photos") && (method === "GET" || method === "HEAD");
+    const isWrite = (action === "send" || action === "abort") && method === "POST";
+    if (action === "open") {
+      try {
+        const ls = await manager.open({ surface: "web", resumeId: id, owner: ownerP.id });
+        sendJson(res, 200, { sessionId: ls.id, shared: { role: g.role, owner: g.ownerUsername } });
+      } catch (e) { sendJson(res, 404, { error: "no such session" }); void e; }
+      return "handled";
+    }
+    if (isWrite && g.role !== "editor") { sendJson(res, 403, { error: "view_only", message: "You can read this thread but not post in it." }); return "handled"; }
+    if (!isRead && !isWrite) { sendJson(res, 403, { error: "owner_only", message: "Only the owner of a thread can do that." }); return "handled"; }
+    return { me: ownerP, viewer: { p: me, grant: g } };
   }
 
   // POST /sessions/:id/messages/:mid/react {emoji} | /feedback {rating: "up"|"down"|null, comment?} | /report {reason, comment?}
