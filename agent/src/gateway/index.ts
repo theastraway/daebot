@@ -333,6 +333,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     ? createVoiceHandler({
         baseUrl: voiceBase,
         keyFor: opts.voice?.keyFor ?? ((p) => (auth ? auth.billingKey(p) : opts.cfg?.mindApiKey || undefined)),
+        voiceOf: opts.voice?.voiceOf ?? ((p, bot) => (bot === "main" ? undefined : manager.runtimeOf(p.id).bots?.bySlug(bot)?.voice)),
         fetchImpl: opts.voice?.fetchImpl ?? opts.auth?.fetchImpl,
         now: opts.voice?.now,
         onUsed: opts.voice?.onUsed ?? ((key) => { try { auth?.credits?.get(key, true).catch(() => {}); } catch { /* best effort */ } }),
@@ -1992,7 +1993,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   }
 
   // ---------- bots + models REST (same cookie auth and origin rules as /sessions; one owner's bots are invisible to everyone else) ----------
-  const botView = (b: BotRecord) => ({ id: b.id, slug: b.slug, name: b.name, purpose: b.purpose, color: b.color, face: b.face ?? null, model: b.model ?? null, pinned: !!b.pinnedAt, pinnedAt: b.pinnedAt ?? null, remote: !!b.remote, remoteAt: b.remoteAt ?? null, remotePin: b.remote && b.remoteDevice ? b.remoteDevice : null, remoteLog: (b.remoteLog ?? []).slice(-5), createdAt: b.createdAt, updatedAt: b.updatedAt, ...versionInfo(b) });
+  const botView = (b: BotRecord) => ({ id: b.id, slug: b.slug, name: b.name, purpose: b.purpose, color: b.color, face: b.face ?? null, model: b.model ?? null, voice: b.voice ?? null, pinned: !!b.pinnedAt, pinnedAt: b.pinnedAt ?? null, remote: !!b.remote, remoteAt: b.remoteAt ?? null, remotePin: b.remote && b.remoteDevice ? b.remoteDevice : null, remoteLog: (b.remoteLog ?? []).slice(-5), createdAt: b.createdAt, updatedAt: b.updatedAt, ...versionInfo(b) });
 
   /** The computers and servers of an owner with duplicate registrations merged, renames applied (hosted: the Remote hub; a desktop: what daebot.live last sent). */
   function envState(owner: string): { groups: readonly EnvGroup[]; cloudName?: string } {
@@ -2163,8 +2164,9 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         if (b.remote !== undefined && typeof b.remote !== "boolean") return sendJson(res, 400, { error: "bad_remote", message: "remote must be true or false" });
         if (b.moveHere !== undefined && typeof b.moveHere !== "boolean") return sendJson(res, 400, { error: "bad_move", message: "moveHere must be true or false" });
         if (b.deviceId !== undefined && (typeof b.deviceId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(b.deviceId))) return sendJson(res, 400, { error: "bad_device", message: "deviceId is not a computer id" });
+        if (b.voice !== undefined && b.voice !== null && (typeof b.voice !== "object" || Array.isArray(b.voice))) return sendJson(res, 400, { error: "bad_voice", message: "voice must be an object of voice settings, or null to clear it" });
         syncAgent?.noteBotsChanged();
-        let upd = bots.update(id, { name: optStr(b.name, 120), purpose: optStr(b.purpose, 1000), color: optStr(b.color, 20), face: b.face, model, pinned: b.pinned, remote: b.remote });
+        let upd = bots.update(id, { name: optStr(b.name, 120), purpose: optStr(b.purpose, 1000), color: optStr(b.color, 20), face: b.face, model, voice: b.voice, pinned: b.pinned, remote: b.remote });
         // Run on a computer pins the bot to ONE computer: the one it was turned on from (a desktop: this computer; daebot.live: the computer named, else the first that carries the bot).
         // "Move to this computer" (moveHere, or a deviceId on daebot.live) re-pins it. Turning it off clears the pin (the store does that).
         if (upd.remote && bots.setRemote && (b.remote === true || b.moveHere === true)) {

@@ -22,6 +22,8 @@ export interface BotRecord {
   updatedAt: number;
   /** Definition version installed (absent = 1). See versions.ts. */
   version?: number;
+  /** This bot's own ElevenLabs voice and its settings (see voice.ts). Part of the look: it syncs across devices with the later change. Absent = the default voice. */
+  voice?: import("./voice.ts").BotVoice;
   /** LLM override: every turn of THIS bot's threads runs on this model, whatever the header/global choice is. Absent = no override. */
   model?: string;
   /** Remote: this bot's desktop is reachable from other devices (phone, web). Messages sent to it there run on the desktop, with its local tools. Absent = off. */
@@ -74,7 +76,7 @@ export interface BotsApi {
   bySlug(slug: string): BotRecord | undefined;
   create(a: { slug: string; name?: string; purpose?: string; color?: string; face?: unknown }): Promise<BotRecord>;
   /** `model`: a model id sets the override; null or "" clears it. The caller checks the id against the user's model list; the store checks its shape. */
-  update(id: string, patch: { name?: string; purpose?: string; color?: string; face?: unknown; model?: string | null; pinned?: boolean; remote?: boolean }): BotRecord;
+  update(id: string, patch: { name?: string; purpose?: string; color?: string; face?: unknown; model?: string | null; voice?: unknown; pinned?: boolean; remote?: boolean }): BotRecord;
   remove(id: string): Promise<void>;
   /** Moves a bot to the latest definition. Keeps its DAEBOT.md, threads and MIND data. */
   upgrade(id: string): BotRecord;

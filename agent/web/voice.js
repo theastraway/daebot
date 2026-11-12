@@ -354,7 +354,7 @@ export function initVoice(o) {
     const ac = new AbortController(); abortFetch = ac;
     let blob;
     try {
-      const res = await fetch("/voice/tts", { method: "POST", credentials: "same-origin", signal: ac.signal, headers: { ...o.authHeaders(), "content-type": "application/json" }, body: JSON.stringify({ text: t }) });
+      const res = await fetch("/voice/tts", { method: "POST", credentials: "same-origin", signal: ac.signal, headers: { ...o.authHeaders(), "content-type": "application/json" }, body: JSON.stringify({ text: t, ...(o.botSlug ? { bot: o.botSlug() } : {}) }) });
       if (!(await okOrExplain(res))) { abortFetch = null; return setState("idle"); }
       blob = await res.blob();
       o.creditsChanged();

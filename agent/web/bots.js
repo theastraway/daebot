@@ -13,6 +13,7 @@ import { FACES, faceOf } from "./faces.js";
 import { mascotFor, setMascot, wakeOn } from "./mbadge.js";
 import { groupModels, shortName, LOCKED_NOTE } from "./models.js";
 import { initRoutines } from "./routines.js";
+import { initBotVoice } from "./botvoice.js";
 import { currentMain, mainLook } from "./mainbot.js";
 
 export const VIEW_KEY = "mc_view";
@@ -162,6 +163,7 @@ export function initBots(ctx) {
     bnBrief: $("bn-brief"), bnAsk: $("bn-ask"), bnAskState: $("bn-ask-state"),
   };
   if (!el.tabBots || !el.botList) return null;
+  const botVoice = initBotVoice({ api, botOf: (id) => botById(id), drawerBot: () => st.drawerBot, onSaved: (id, rec) => { const b = botById(id); if (b) { Object.assign(b, rec, { id }); renderList(); sync(); app.botChanged(b); } }, notify });
   const routines = initRoutines({ json, api, h, ago, notify, confirmDialog, openThread: (s) => app.openThread(s) });
 
   const st = {
@@ -675,7 +677,7 @@ export function initBots(ctx) {
     el.purpose.value = bot ? bot.purpose || "" : "";
     st.color = safeColor(bot && bot.color);
     st.face = faceOf(bot && bot.face) ? bot.face : "";
-    paintColors(); paintFaces(); paintModel(bot); paintRemote(bot);
+    paintColors(); paintFaces(); paintModel(bot); paintRemote(bot); botVoice.paint(bot);
     if (el.modelState) el.modelState.textContent = "";
     el.detailsState.textContent = "";
     el.saveDetails.disabled = true;
