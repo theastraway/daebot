@@ -1604,6 +1604,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         feed: mindFeed,
         reconcile: hosted && auth?.store.enabled ? mindReconcileJob : undefined,
         envs: remoteHub ? (who) => adminEnvs(who) : undefined,
+        envsForget: remoteHub ? (who, ids) => { const id = /^u_/.test(who) ? who : auth?.store.list().find((u) => u.username.toLowerCase() === who.toLowerCase())?.id ?? who; return remoteHub.forgetDevices(id, ids); } : undefined,
+        envsRename: remoteHub ? (who, id, name) => { const o = /^u_/.test(who) ? who : auth?.store.list().find((u) => u.username.toLowerCase() === who.toLowerCase())?.id ?? who; return remoteHub.renameEnv(o, id, name); } : undefined,
         homes: homeSweep ? { run: (b) => (b.migrate === true || b.migrate === "dry" ? homeMigrate!({ force: b.force === true, dryRun: b.migrate === "dry", only: Array.isArray(b.owners) ? b.owners.map(String) : undefined }) : homeSweep(b.recheckCloud === true, Array.isArray(b.owners) ? b.owners.map(String) : undefined)), last: () => homesLast } : undefined,
         logKey: opts.adminLog?.logKey ?? (() => process.env.DAEBOT_MISTAKE_LOG_KEY?.trim() || undefined),
         isAdmin: (r) => (hosted ? principalOf(r)?.tier === "admin" : authorized(r, query, false)),

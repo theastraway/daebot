@@ -112,6 +112,15 @@ export class RemoteHub {
     return groupDevices(this.devices(owner), s.envNames);
   }
 
+  /** Admin repair: removes stale or test device records (and any rename keyed by them). Returns the ids actually removed. */
+  forgetDevices(owner: string, ids: string[]): string[] {
+    const s = this.st(owner);
+    const gone: string[] = [];
+    for (const id of ids) if (s.devices[id]) { delete s.devices[id]; delete s.envNames[id]; gone.push(id); }
+    if (gone.length) this.save(owner);
+    return gone;
+  }
+
   /** The names the person gave environments (device id or "cloud" -> name). */
   envNamesOf(owner: string): Record<string, string> { return { ...this.st(owner).envNames }; }
 

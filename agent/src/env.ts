@@ -69,7 +69,7 @@ export function tidyName(raw: string, kind: EnvKind = "machine"): string {
 
 /** What two registrations of the same computer have in common: the tidy name, lower case, letters and digits only. */
 export function deviceKey(raw: string): string {
-  return tidyName(raw, "machine").toLowerCase().replace(/[^a-z0-9]/g, "");
+  return tidyName(raw, "machine").replace(/^(.*\b(?:MacBook(?:[- ](?:Pro|Air))?|iMac|Mac[- ](?:mini|Studio|Pro)))[- ]\d{1,2}$/i, "$1").toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 /** Validates a tag that arrived over the wire or from disk. Anything malformed is dropped (never trusted into the UI). */
