@@ -70,6 +70,23 @@ test("outbound echoes, group messages, empty and duplicate deliveries are ignore
   assert.deepEqual(gw.opened[0]!.opts, { identity: "public" });
 });
 
+test("texts to another line on the same Sendblue account are ignored (receive webhooks are account-wide)", async () => {
+  const { a, gw, registered, calls } = setup();
+  await a.start(gw);
+  const h = registered[0].handler;
+  const other = await h(inbound({ to_number: "+16464012699", message_handle: "L1" }));
+  assert.equal(other.status, 200);
+  assert.equal(other.body.ignored, "other line");
+  const same = await h(inbound({ to_number: "15550009999", message_handle: "L2" }));
+  assert.equal(same.body.ignored, undefined, "same line in another format is answered");
+  const none = await h(inbound({ to_number: undefined, message_handle: "L3" }));
+  assert.equal(none.body.ignored, undefined, "no to_number is answered, as before");
+  await until(() => calls.length === 2, 2000, "two replies");
+  await a.stop();
+  assert.equal(gw.opened.length, 1, "one conversation for the sender");
+  assert.ok(calls.every((c) => JSON.parse(c.init.body).from_number === "+15550009999"));
+});
+
 test("long replies are chunked to 1000 chars and markdown is stripped", async () => {
   const gw = fakeGateway(() => [{ type: "text", delta: "**Heading**\n" + "sentence here. ".repeat(200) }, { type: "done", finalText: "" }]);
   const { a, registered, calls } = setup({}, gw);
