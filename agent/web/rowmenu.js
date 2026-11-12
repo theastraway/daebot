@@ -1,5 +1,5 @@
 // The row menu: a vertical pop-up that opens when you hover (or keyboard-focus, right-click, or long-press on touch) a session or bot row.
-// Exactly four items: Settings, Pin, Delete, and the "Run on a computer" switch (off = MIND Cloud, the standard). One menu exists at a time, appended to <body> so no sidebar
+// Four items: Settings, Pin, Delete, and the "Run on a computer" switch (off = MIND Cloud, the standard). A fifth, "Move to this computer", appears only when it is on, pinned to ANOTHER computer, and this window is a computer. One menu exists at a time, appended to <body> so no sidebar
 // overflow ever clips it, and it is clamped to the window. role=menu, arrow keys, Home/End, Escape; light and dark come from the tokens.
 // menuItems() and placeMenu() are pure (exported, unit tested). DOM is createElement + textContent only.
 
@@ -10,18 +10,21 @@ export const MENU_GAP = 6;
 export const EDGE = 8;
 
 /**
- * The four items for a row.
- *   spec: { pinned, remote: { state: "on"|"off"|"disabled", reason?, where? }, name }
+ * The items for a row.
+ *   spec: { pinned, remote: { state: "on"|"off"|"disabled", reason?, where?, moveHere? }, name }
  */
 export function menuItems(spec) {
   const r = spec.remote || { state: "disabled", reason: "Choose where this runs from its settings." };
   const on = r.state === "on";
-  return [
+  const items = [
     { id: "settings", label: "Settings", icon: "i-gear" },
     { id: "pin", label: spec.pinned ? "Unpin" : "Pin", icon: "i-pin", pressed: !!spec.pinned },
     { id: "delete", label: "Delete", icon: "i-trash", danger: true },
     { id: "remote", label: "Run on a computer", icon: "i-link", type: "switch", checked: on, disabled: r.state === "disabled", hint: r.state === "disabled" ? (r.reason || "") : on ? (r.where ? `On, runs on ${r.where}` : "On") : "Off, runs in MIND Cloud" },
   ];
+  // Pinned to another computer: one click re-pins it to the computer this window is on.
+  if (on && r.moveHere) items.push({ id: "movehere", label: "Move to this computer", icon: "i-desktop", hint: r.where ? `Now runs only on ${r.where}` : "" });
+  return items;
 }
 
 /**
@@ -42,7 +45,7 @@ export function placeMenu(anchor, size, view) {
 /**
  * createRowMenu({ h, icon }) -> { attach(row, getSpec, actions), close(), isOpen() }
  *   getSpec() -> { pinned, remote, name } (read when the menu opens, so it is always current)
- *   actions: { settings(), pin(), delete(), remote(nextOn) }
+ *   actions: { settings(), pin(), delete(), remote(nextOn), movehere() }
  */
 export function createRowMenu({ h, icon }) {
   let menu = null, current = null, openTimer = 0, closeTimer = 0, onDoc = null;

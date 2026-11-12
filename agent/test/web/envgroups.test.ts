@@ -106,3 +106,15 @@ test("wiring: the sidebar groups by environment, rows carry the menu, pin PATCHe
   assert.match(c, /:root\[data-theme="dark"\] \.rowmenu/);
   for (const id of ["i-cloud", "i-server", "i-desktop", "i-pin", "i-gear", "i-trash"]) assert.match(html, new RegExp(`id="${id}"`));
 });
+
+test("menu: 'Move to this computer' appears only when it is on and pinned to another computer; it is wired for bots and sessions", () => {
+  const ids = (spec: any) => rm.menuItems(spec).map((i: any) => i.id);
+  assert.deepEqual(ids({ pinned: false, remote: { state: "on", where: "Legion", moveHere: true } }), ["settings", "pin", "delete", "remote", "movehere"]);
+  const mv = rm.menuItems({ pinned: false, remote: { state: "on", where: "Legion", moveHere: true } })[4];
+  assert.equal(mv.label, "Move to this computer"); assert.match(mv.hint, /Legion/);
+  assert.equal(ids({ pinned: false, remote: { state: "on", where: "Legion" } }).length, 4, "pinned here (or unpinned): no move item");
+  assert.equal(ids({ pinned: false, remote: { state: "off", moveHere: true } }).length, 4, "off = MIND Cloud: nothing to move");
+  assert.match(src("bots.js"), /bot\.pinnedHere === false \? \{ moveHere: true \}/);
+  assert.match(src("bots.js"), /moveHere: true \}\) \}\)/, "the bot action PATCHes remote + moveHere");
+  assert.match(src("app.js"), /movehere: \(\) => \{ if \(s\.bot\) bots\.moveHere\(s\.bot\); else setSessionHome\(s, true\); \}/);
+});

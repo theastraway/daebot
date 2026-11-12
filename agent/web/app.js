@@ -826,7 +826,9 @@ function envFor(row) { const g = groupByEnv([row], state.envs); return g.envOf(r
 function sessionSpec(s) {
   const bot = s.bot ? bots.bot(s.bot) : null;
   const env = envFor(s), local = !!env && env.kind !== "cloud";
-  return { name: s.title || "Untitled", pinned: !!s.pinnedAt, remote: bot ? bots.remoteSpec(bot) : { state: local ? "on" : "off", where: local ? env.name : "" } };
+  // A session on ANOTHER computer can be moved to the one this window is on (a computer's own window only: daebot.live is not a computer).
+  const away = local && !state.hosted && env.current === false;
+  return { name: s.title || "Untitled", pinned: !!s.pinnedAt, remote: bot ? bots.remoteSpec(bot) : { state: local ? "on" : "off", where: local ? env.name : "", ...(away ? { moveHere: true } : {}) } };
 }
 function sessionActions(s) {
   return {
@@ -834,6 +836,7 @@ function sessionActions(s) {
     pin: () => pinSession(s, !s.pinnedAt),
     delete: () => deleteSession(s),
     remote: (on) => { if (s.bot) bots.setRemote(s.bot, on); else setSessionHome(s, on); },
+    movehere: () => { if (s.bot) bots.moveHere(s.bot); else setSessionHome(s, true); },
   };
 }
 /**

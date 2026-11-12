@@ -40,7 +40,7 @@ export interface RemoteAgentDeps {
 }
 
 interface FlagOut { slug: string; remote: boolean; at: number }
-interface FlagIn { slug: string; remote: boolean; at: number; by?: "user" | "auto"; note?: string }
+interface FlagIn { slug: string; remote: boolean; at: number; by?: "user" | "auto"; note?: string; /** The computer daebot.live pinned the bot to. */ device?: { id: string; name: string; kind?: "machine" | "server" } }
 
 export class RemoteAgent {
   private d: RemoteAgentDeps;
@@ -73,7 +73,7 @@ export class RemoteAgent {
     for (const f of incoming) {
       const b = bots.bySlug(f.slug);
       if (!b || typeof f.remote !== "boolean" || !(f.at > (b.remoteAt ?? 0))) continue;
-      try { bots.setRemote(b.id, f.remote, { by: f.by === "auto" ? "auto" : "user", note: f.note, at: f.at }); } catch { /* a bad row never stops the loop */ }
+      try { bots.setRemote(b.id, f.remote, { by: f.by === "auto" ? "auto" : "user", note: f.note, at: f.at, ...(f.remote && f.device ? { device: f.device } : {}) }); } catch { /* a bad row never stops the loop */ }
     }
   }
 
