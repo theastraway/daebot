@@ -246,7 +246,7 @@ function buildItem(it, tr) {
     case "user": {
       // In a shared thread every message says who wrote it: a guest's carries their name (the server puts it there); the owner's is unmarked.
       const sp = parseSender(it.text), sh = currentMeta()?.shared;
-      const who = sp.name ? (sh && sp.name === sh.you ? "You" : sp.name) : sh && sh.owner ? (sh.owner.label || sh.owner.username) : "";
+      const who = sp.name ? (sh && sp.name === sh.you ? "You" : sp.name) : it.mine ? "You" : sh && sh.owner ? (sh.owner.label || sh.owner.username) : "";
       node = h("div", (it.photos?.length ? "msg-user has-photos" : "msg-user") + (it.quote ? " has-quote" : ""), sp.text || undefined);
       if (who) { node.classList.add("has-from"); node.prepend(h("div", "mx-from", who)); }
       if (it.photos?.length) node.prepend(photos.thumbs(it.photos, tkey()));
@@ -1013,7 +1013,7 @@ async function selectSession(s, opts = {}) {
   state.curBot = s.bot || "";
   state.openedRow = s;
   const tr = transcript(s.id);
-  if (!tr.items.length) restoreTranscript(s.id); // this tab's saved copy of the thread
+  if (!tr.items.length && !s.shared) restoreTranscript(s.id); // this tab's saved copy of the thread (a shared thread is always read fresh: its names come from the server)
   const held = hist.get(s.id);
   if (!tr.items.length && held && !held.run) { fillTranscript(tr, held); tr.appliedEtag = undefined; }
   tr.pending = !tr.items.length; // nothing to show yet: a blank thread, not the "What should we work on?" card
@@ -1204,7 +1204,7 @@ async function sendMessage(text, attached = [], quote) {
   suggest.onSend(text); // tells Dae whether the suggested replies were taken, edited or ignored, and clears them
   // Show the message immediately; opening a session can take several seconds while MIND boots.
   const startKey = tkey();
-  const userItem = addItem(startKey, { kind: "user", text, ...(quote ? { quote: { id: quote.mid, text: quote.text } } : {}), ...(attached.length ? { photos: attached.map((p) => ({ name: p.name, dataUrl: p.dataUrl, width: p.width, height: p.height })) } : {}) });
+  const userItem = addItem(startKey, { kind: "user", text, ...(currentMeta()?.shared ? { mine: true } : {}), ...(quote ? { quote: { id: quote.mid, text: quote.text } } : {}), ...(attached.length ? { photos: attached.map((p) => ({ name: p.name, dataUrl: p.dataUrl, width: p.width, height: p.height })) } : {}) });
   voice.turnStart();
   const waiting = addItem(startKey, { kind: "notice", level: "info", text: "Thinking…" });
   state.busy.add(startKey); setBusyUi(); stick = true; toBottom(true);

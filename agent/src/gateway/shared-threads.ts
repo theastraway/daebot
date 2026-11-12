@@ -111,7 +111,9 @@ export class SharedThreads {
         const sh = s?.shared;
         const source = str(s?.source_key, 120);
         const ext = str(s?.external_session_id, 200);
-        if (!sh?.shared_with_me || !DAEBOT_SOURCE.test(source) || !ext || !s.session_id) continue;
+        // MIND files a session under "<runtime>@<device>" (source_key reads "mindclaw@unknown"), so Daebot's own sessions are told by runtime, with the source key as the older spelling.
+        const isDaebot = str(s?.runtime, 40) === "mindclaw" || str(s?.agent_key, 40) === "mindclaw" || DAEBOT_SOURCE.test(source);
+        if (!sh?.shared_with_me || !isDaebot || !ext || !s.session_id) continue;
         const owner = str(sh.owner ?? s.user_id, 120);
         if (!owner || owner.toLowerCase() === me.username.toLowerCase()) continue;
         rows.push({

@@ -283,7 +283,7 @@ export async function startFakeMind(initial: Record<string, string> = {}): Promi
         const shared = new Set(m.sessionShares.filter((x) => x.grantee === username).map((x) => x.session_id));
         const rows = [...m.agentSessions.values()].filter((r) => (r.user === username && !u.searchParams.get("shared_only")) || shared.has(r.id)).map((r) => {
           const g = m.sessionShares.find((x) => x.session_id === r.id && x.grantee === username);
-          return { session_id: r.id, user_id: r.user, source_key: r.source_key, external_session_id: r.external_session_id, title: r.title, status: r.status, last_activity_at: "2026-11-12T00:00:00Z",
+          return { session_id: r.id, user_id: r.user, source_key: r.source_key.startsWith("daebot") ? "mindclaw@unknown" : r.source_key, runtime: r.source_key.startsWith("daebot") ? "mindclaw" : "other", agent_key: r.source_key.startsWith("daebot") ? "mindclaw" : "other", external_session_id: r.external_session_id, title: r.title, status: r.status, last_activity_at: "2026-11-12T00:00:00Z",
             shared: g ? { shared_with_me: true, shared_by: r.user, owner: r.user, owner_label: r.user, role: g.role, unread: 0, muted: false, shared_at: "2026-11-12T00:00:00Z" } : { shared_with_me: false } };
         });
         return json(res, 200, { sessions: rows.slice(0, Number(u.searchParams.get("limit") ?? 30)), sources: [] });
