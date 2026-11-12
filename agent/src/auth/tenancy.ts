@@ -149,6 +149,7 @@ export function createRuntimeHub(o: HubOptions): { runtimeFor(p: Principal): Run
       setHome: (id, env, by, at) => inner.setHome?.(id, env, by, at) ?? Promise.resolve(false),
       messageMeta: (id) => inner.messageMeta?.(id),
       historyWithMeta: (id) => inner.historyWithMeta?.(id),
+      appendVoiceTranscript: (id, lines) => inner.appendVoiceTranscript?.(id, lines) ?? Promise.resolve(false),
       messageText: (id, mid) => inner.messageText?.(id, mid),
       setUnread: (id, mid) => inner.setUnread?.(id, mid) ?? Promise.resolve("nosession"),
       reactMessage: (id, mid, emoji) => inner.reactMessage?.(id, mid, emoji) ?? Promise.resolve("nosession"),
