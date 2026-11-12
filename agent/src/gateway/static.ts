@@ -20,7 +20,7 @@ const TYPES: Record<string, string> = {
 };
 
 export const STATIC_CSP =
-  "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; media-src 'self' blob:; " +
+  "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self' wss://api.elevenlabs.io; media-src 'self' blob:; " +
   "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 /** Resolves a raw request path to a file under root, or null. Never serves dotfiles or escapes root. */

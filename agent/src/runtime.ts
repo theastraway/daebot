@@ -21,6 +21,7 @@ import { createMindSessionsTool } from "./mind/sessions-tool.ts";
 import { ASTRA_BOARD_PROMPT, createAstraBoardTool } from "./astra/board-tool.ts";
 import { BotStore, botMindApi } from "./bots/store.ts";
 import { createBotTalkTool } from "./bots/talk-tool.ts";
+import { createStartVoiceAgentTool } from "./bots/voicechat-tool.ts";
 import { createBotManageTool } from "./bots/manage-tool.ts";
 import { createBotSelfTool } from "./bots/self-tool.ts";
 import type { ThreadView } from "./bots/self-tool.ts";
@@ -590,7 +591,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       ...(!selfBot && !peerMain ? [createMindSessionsTool({ client: () => clientForMind("main"), replyClient: () => sessionClient, user: hosted?.username })] : []),
       // astra_board: the Astra AI projects board, for the owner / admin main session only (static class outward keeps it from staff and public; a bot or a peer-driven turn never gets it). Offered only when PORTAL_DAEBOT_TOKEN is set.
       ...(!selfBot && !peerMain && cfg.portalDaebotToken ? [createAstraBoardTool({ baseUrl: cfg.astraPortalUrl, token: cfg.portalDaebotToken, fetchImpl: overrides.fetchImpl, actor: "Daebot" })] : []),
-      ...talk, ...manage, ...self2];
+      ...talk, ...manage, ...self2, ...(on && !peerMain ? [createStartVoiceAgentTool()] : [])];
     // mcp_connect is the user's own session only: a bot never proposes connections (and its turns could be peer-driven).
     // task_decision (the OOC/EMR decision skill) is stock for every Daebot and bot, like bot_manage; it files into the MIND the session is homed in.
     const decision = peerMain ? [] : [createTaskDecisionTool({ mind: home === "main" ? boardMind : createBoardMind(clientForMind(home), { clientNames: cfg.clientNames }), board: boardIO })];
@@ -1103,6 +1104,18 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       if (live) return { bot: live.bot, peer: live.peer, model: live.model, ...(live.permMode ? { permMode: live.permMode } : {}), ...(live.env ? { env: live.env } : {}) };
       const m = store?.meta?.(id);
       return m && mine(m) ? { bot: m.bot, peer: m.peer, model: m.model, ...(m.permMode ? { permMode: m.permMode } : {}), ...(m.env ? { env: m.env } : {}) } : undefined;
+    },
+    async appendVoiceTranscript(id, lines) {
+      const e = sessions.get(id);
+      if (!e) return false;
+      for (const l of lines) {
+        if (!l.text) continue;
+        if (l.role === "user") e.recorder.user(l.text);
+        else e.recorder.push({ type: "text", delta: l.text });
+      }
+      e.updatedAt = Date.now();
+      persist(id);
+      return true;
     },
     history(id): HistoryEvent[] | undefined {
       const live = sessions.get(id);

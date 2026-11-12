@@ -22,7 +22,7 @@ export function voiceLabel(v) {
 /** Only the fields the person actually set; null when there is nothing (clears the bot's voice). */
 export function voiceToSave(draft) {
   const o = {};
-  for (const k of ["voiceId", "voiceName", "model", "speed", "stability", "similarityBoost", "style", "useSpeakerBoost", "language", "outputFormat"]) if (draft[k] !== undefined && draft[k] !== "") o[k] = draft[k];
+  for (const k of ["voiceId", "voiceName", "model", "speed", "stability", "similarityBoost", "style", "useSpeakerBoost", "language", "outputFormat", "agentLlm", "agentFirstMessage", "agentPrompt"]) if (draft[k] !== undefined && draft[k] !== "") o[k] = draft[k];
   return Object.keys(o).length ? o : null;
 }
 
@@ -37,7 +37,7 @@ export function initBotVoice({ api, botOf, drawerBot, onSaved, notify }) {
   const $ = (id) => document.getElementById(id);
   const el = {
     sec: $("bd-voice-sec"), search: $("bv-search"), scope: $("bv-scope"), voice: $("bv-voice"), model: $("bv-model"), boost: $("bv-boost"),
-    lang: $("bv-lang"), fmt: $("bv-format"), preview: $("bv-preview"), save: $("bv-save"), reset: $("bv-reset"), state: $("bv-state"), summary: $("bv-summary"),
+    allm: $("bv-allm"), first: $("bv-first"), aprompt: $("bv-aprompt"), lang: $("bv-lang"), fmt: $("bv-format"), preview: $("bv-preview"), save: $("bv-save"), reset: $("bv-reset"), state: $("bv-state"), summary: $("bv-summary"),
   };
   if (!el.sec || !el.voice) return { paint() {} };
   let draft = {};
@@ -78,6 +78,8 @@ export function initBotVoice({ api, botOf, drawerBot, onSaved, notify }) {
     el.model.value = draft.model || "";
     paintModelDependent();
     el.fmt.value = draft.outputFormat || "";
+    el.allm.value = draft.agentLlm && [...el.allm.options].some((o) => o.value === draft.agentLlm) ? draft.agentLlm : "";
+    el.first.value = draft.agentFirstMessage || ""; el.aprompt.value = draft.agentPrompt || "";
     el.summary.textContent = voiceSummary(voiceToSave(draft));
     el.reset.disabled = !voiceToSave(draft);
   }
@@ -96,6 +98,16 @@ export function initBotVoice({ api, botOf, drawerBot, onSaved, notify }) {
       for (const f of j.output_formats || []) el.fmt.append(option(f, f.replace("mp3_", "mp3 ").replace(/_/g, " ")));
       paintForm();
     } catch (e) { if (e.message !== "unauthorized") say("Could not load the voice models.", true); }
+  }
+  let llmsLoaded = false;
+  async function loadLlms() {
+    if (llmsLoaded) return;
+    try {
+      const res = await api("/voice/agent/llms");
+      if (!res.ok) return;
+      for (const m of (await res.json()).llms || []) if (!m.deprecated) el.allm.append(option(m.llm, m.llm));
+      llmsLoaded = true; paintForm();
+    } catch { /* the default model still works */ }
   }
   async function searchVoices() {
     const mine = ++seq;
@@ -120,6 +132,9 @@ export function initBotVoice({ api, botOf, drawerBot, onSaved, notify }) {
   });
   el.model.addEventListener("change", () => { if (el.model.value) draft.model = el.model.value; else delete draft.model; paintModelDependent(); if (draft.language && el.lang.value !== draft.language) delete draft.language; setDirty(true); });
   el.lang.addEventListener("change", () => { if (el.lang.value) draft.language = el.lang.value; else delete draft.language; setDirty(true); });
+  el.allm.addEventListener("change", () => { if (el.allm.value) draft.agentLlm = el.allm.value; else delete draft.agentLlm; setDirty(true); });
+  el.first.addEventListener("input", () => { if (el.first.value.trim()) draft.agentFirstMessage = el.first.value; else delete draft.agentFirstMessage; setDirty(true); });
+  el.aprompt.addEventListener("input", () => { if (el.aprompt.value.trim()) draft.agentPrompt = el.aprompt.value; else delete draft.agentPrompt; setDirty(true); });
   el.fmt.addEventListener("change", () => { if (el.fmt.value) draft.outputFormat = el.fmt.value; else delete draft.outputFormat; setDirty(true); });
   el.boost.addEventListener("change", () => { draft.useSpeakerBoost = el.boost.checked; setDirty(true); });
   for (const s of SLIDERS) {
@@ -165,7 +180,7 @@ export function initBotVoice({ api, botOf, drawerBot, onSaved, notify }) {
       draft = { ...((bot && bot.voice) || {}) };
       dirty = false; el.save.disabled = true; say("");
       paintForm();
-      void loadModels();
+      void loadModels(); void loadLlms();
       if (!voices.length) void searchVoices();
     },
   };

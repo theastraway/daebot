@@ -74,7 +74,7 @@ test("voice needs a session; the static CSP allows blob media and nothing broade
     assert.equal((await stt(r, H)).status, 401);
     assert.equal((await tts(r, H, "hi")).status, 401);
     assert.match(STATIC_CSP, /media-src 'self' blob:;/);
-    assert.match(STATIC_CSP, /connect-src 'self';/);
+    assert.match(STATIC_CSP, /connect-src 'self' wss:\/\/api\.elevenlabs\.io;/); // voice chat: the signed ElevenLabs socket and nothing else
     assert.doesNotMatch(STATIC_CSP, /unsafe|\*/);
   } finally { await r.close(); }
 });

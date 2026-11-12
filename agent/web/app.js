@@ -2,6 +2,7 @@
 // All dynamic text goes through textContent / createTextNode. No innerHTML anywhere.
 
 import { initVoice } from "/voice.js";
+import { initVoiceAgent } from "/voiceagent.js";
 import { initScreen } from "/screen.js";
 import { initHotkeys } from "/hotkeys.js";
 import { initUpdates } from "/updates.js";
@@ -1338,6 +1339,8 @@ function onEvent(id, ev, asst, toolByReceipt) {
       if (asst) { asst.streaming = false; paintAssistant(asst); }
       const it = addItem(id, { kind: "tool", receiptId: ev.receiptId, tool: ev.tool, args: ev.args, status: "run" });
       toolByReceipt.set(ev.receiptId, it);
+      // A bot asked for a voice chat: open it on this screen (only the window showing this very thread, never a replay of a finished turn).
+      if (ev.tool === "start_voice_agent" && id === state.currentId && state.busy.has(id) && !voiceChat.active()) void voiceChat.start(typeof (ev.args || {}).prompt === "string" ? ev.args.prompt : undefined);
       return null; // text after a tool starts a new block
     }
     case "toolEnd": {
@@ -1625,6 +1628,15 @@ const voice = initVoice({
   bots: () => [...document.querySelectorAll(".hero-bot, .bot-dock m-bot")],
   botSlug: () => { const b = state.curBot ? bots.bot(state.curBot) : null; return b && b.slug ? b.slug : "main"; }, // whose voice speaks the answer
 });
+
+// Voice chat: a live voice agent for the bot on screen (its voice, its instructions, it can read the user's chats). The bot's start_voice_agent tool opens it too.
+const voiceChat = initVoiceAgent({
+  api, els: { dock: $("vc-dock"), status: $("vc-status"), stop: $("vc-stop") },
+  notify: (t) => notify(t),
+  botSlug: () => { const b = state.curBot ? bots.bot(state.curBot) : null; return b && b.slug ? b.slug : "main"; },
+  onSaved: () => { refreshSessions(); if (state.curBot) bots.refresh(); },
+});
+$("btn-vchat").addEventListener("click", () => { if (voiceChat.active()) voiceChat.stop(); else void voiceChat.start(); });
 
 // Hold-to-talk hotkeys (Right Option = dictation, Right Command = voice by default) + the Keyboard shortcuts card.
 const hotkeys = initHotkeys({
