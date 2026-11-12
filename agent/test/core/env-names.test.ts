@@ -111,3 +111,16 @@ test("admin repair: forgetting a stale device removes it and its rename; the mac
   const two = groupDevices([{ id: ID("a"), name: "Anthony’s MacBook Pro", host: "Anthonys-MacBook-Pro-7", lastSeen: 2, online: false }, { id: ID("e"), name: "Anthonys MacBook Pro", lastSeen: 1, online: false }], {});
   assert.equal(two.length, 1);
 });
+
+test("a bot carried by two online devices keeps one home: a computer before a server, then the first registered, never the last to poll", () => {
+  let t = 1000;
+  const hub = new RemoteHub({ now: () => t });
+  hub.heartbeat("o1", { id: ID("a"), name: "Legion", slugs: ["dae"], kind: "machine" });
+  t += 10; hub.heartbeat("o1", { id: ID("b"), name: "Texting Line", slugs: ["dae"], kind: "server" });
+  for (let i = 0; i < 4; i++) {
+    t += 5; hub.heartbeat("o1", { id: i % 2 ? ID("a") : ID("b"), name: i % 2 ? "Legion" : "Texting Line", slugs: ["dae"], kind: i % 2 ? "machine" : "server" });
+    assert.equal(hub.devicesFor("o1", "dae")[0].id, ID("a"), "the computer stays the home whoever polled last");
+  }
+  t += 100_000; hub.heartbeat("o1", { id: ID("b"), name: "Texting Line", slugs: ["dae"], kind: "server" });
+  assert.equal(hub.devicesFor("o1", "dae")[0].id, ID("b"), "an offline computer hands over to the one that is online");
+});

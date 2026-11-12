@@ -155,7 +155,8 @@ export class RemoteHub {
 
   /** Devices that carry this bot, online first, then most recently seen. */
   devicesFor(owner: string, slug: string): (DeviceInfo & { online: boolean })[] {
-    return this.devices(owner).filter((d) => d.slugs.includes(slug)).sort((a, b) => Number(b.online) - Number(a.online) || b.lastSeen - a.lastSeen);
+    return this.devices(owner).filter((d) => d.slugs.includes(slug)).sort((a, b) => Number(b.online) - Number(a.online) || Number(b.kind !== "server") - Number(a.kind !== "server") || (a.firstSeen ?? a.lastSeen) - (b.firstSeen ?? b.lastSeen) || (a.id < b.id ? -1 : 1));
+    // The order is STABLE: online first, a computer before a server, then the one registered first. It never follows who polled last, so a bot with Run on a computer does not hop between two devices that both carry it.
   }
 
   enqueue(owner: string, j: Omit<RemoteJob, "id" | "owner" | "createdAt" | "state">): RemoteJob {
