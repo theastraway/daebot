@@ -257,6 +257,7 @@ function buildItem(it, tr) {
     default: // a billing notice carries an upgrade link; anything else stays plain text
       node = h("div", `notice ${it.level === "warn" ? "warn" : ""}`, /https?:\/\//.test(it.text) ? undefined : it.text);
       if (/https?:\/\//.test(it.text)) inline(node, it.text);
+      if (it.action && it.action.label) { const ab = h("button", "btn-quiet notice-action", it.action.label); ab.type = "button"; ab.addEventListener("click", () => noticeAction(it, ab)); node.append(" ", ab); }
   }
   it.node = node;
   return node;
@@ -467,7 +468,7 @@ function itemsFromHistory(events) {
       case "confirm": asst = null; items.push({ kind: "confirm", id: ev.id, tool: ev.tool, args: ev.args, reason: ev.reason, done: true }); break;
       case "permission": { asst = null; const it = permissionItem(ev); items.push(it); permById.set(ev.id, it); break; }
       case "permissionResolved": { const it = permById.get(ev.id); if (it) resolvePermission(it, ev); break; }
-      case "notice": items.push({ kind: "notice", level: ev.level, text: ev.text }); break;
+      case "notice": items.push({ kind: "notice", level: ev.level, text: ev.text, ...(ev.action ? { action: ev.action } : {}) }); break;
       case "exchange": asst = null; items.push({ kind: "exchange", exchangeId: ev.exchangeId, from: ev.from, to: ev.to, message: ev.message, reply: ev.reply, at: ev.at }); break;
       case "usage": usage.in += ev.usage.promptTokens; usage.out += ev.usage.completionTokens; usage.cost = ev.totalCostUsd; if (ev.model) model = ev.model; break;
       default: break;
@@ -824,15 +825,49 @@ function envFor(row) { const g = groupByEnv([row], state.envs); return g.envOf(r
 /** What the row menu needs for a session or bot thread: its Remote state comes from the bot that owns it. */
 function sessionSpec(s) {
   const bot = s.bot ? bots.bot(s.bot) : null;
-  return { name: s.title || "Untitled", pinned: !!s.pinnedAt, remote: bot ? bots.remoteSpec(bot) : { state: "disabled", reason: "Bots only. No bot owns this chat." } };
+  const env = envFor(s), local = !!env && env.kind !== "cloud";
+  return { name: s.title || "Untitled", pinned: !!s.pinnedAt, remote: bot ? bots.remoteSpec(bot) : { state: local ? "on" : "off", where: local ? env.name : "" } };
 }
 function sessionActions(s) {
   return {
-    settings: () => { if (s.bot) { bots.ensureLoaded().then(() => bots.openSettings(s.bot)); return; } openSessionSettings({ s, env: envFor(s), h, icon, ago, onRename: (t) => renameThread(s, t) }); },
+    settings: () => { if (s.bot) { bots.ensureLoaded().then(() => bots.openSettings(s.bot)); return; } openSessionSettings({ s, env: envFor(s), h, icon, ago, onRename: (t) => renameThread(s, t), onHome: (on) => setSessionHome(s, on) }); },
     pin: () => pinSession(s, !s.pinnedAt),
     delete: () => deleteSession(s),
-    remote: (on) => { if (s.bot) bots.setRemote(s.bot, on); },
+    remote: (on) => { if (s.bot) bots.setRemote(s.bot, on); else setSessionHome(s, on); },
   };
+}
+/**
+ * Choose where a session runs: on a computer (on) or in MIND Cloud (off, the standard). Saved with the session, so it follows every device.
+ * Resolves to what the server answered ({ ok, home, env, queued? }) or null when it said no (the reason is shown).
+ */
+async function setSessionHome(s, on) {
+  try {
+    const r = await api(`/sessions/${encodeURIComponent(s.id)}`, { method: "PATCH", body: JSON.stringify({ home: on ? "local" : "cloud" }) });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) { notify(body.message || `Could not change where this session runs (${body.error || `HTTP ${r.status}`}).`); await refreshSessions(); return null; }
+    for (const x of [state.sessions, bots.threads(), ...bots.cached()]) for (const row of x) if (row.id === s.id && body.env) row.env = body.env;
+    renderSessions(); bots.renderList(); renderHeader();
+    notify(on ? `This session now runs on ${body.env ? body.env.name : "a computer"}.` : "This session now runs in MIND Cloud.");
+    return body;
+  } catch (e) { if (e.message !== "unauthorized") notify(`Could not change where this session runs: ${e.message}`); return null; }
+}
+/** A button under a notice: "Move to MIND Cloud" (the computer is off: the thread continues in the cloud now) or "Run on this computer" (the cloud could not answer). */
+async function noticeAction(it, btn) {
+  const a = it.action;
+  if (!a || btn.disabled) return;
+  btn.disabled = true;
+  const s = metaById(a.sessionId) || { id: a.sessionId };
+  const r = await setSessionHome(s, a.kind === "run_here");
+  if (!r) { btn.disabled = false; return; }
+  btn.textContent = a.kind === "run_here" ? "Running on this computer" : "Moved to MIND Cloud";
+  // The message that was waiting (or that the cloud could not answer) is sent again where the session now runs.
+  const tr = transcript(a.sessionId);
+  let text = (r.queued && r.queued[0]) || "";
+  if (!text) { for (let i = tr.items.length - 1; i >= 0; i--) if (tr.items[i].kind === "user") { text = tr.items[i].text || ""; break; } }
+  if (text && a.sessionId === state.currentId) {
+    for (let i = tr.items.length - 1; i >= 0; i--) if (tr.items[i].kind === "user" && tr.items[i].text === text) { const [gone] = tr.items.splice(i, 1); if (gone.node) gone.node.remove(); break; }
+    sendMessage(text);
+  }
 }
 /** Pin or unpin a session or bot thread. Saved with the session (it follows every device); optimistic, rolled back on failure. */
 async function pinSession(s, on) {
@@ -1334,7 +1369,7 @@ function onEvent(id, ev, asst, toolByReceipt) {
       return asst;
     }
     case "notice":
-      addItem(id, { kind: "notice", level: ev.level, text: ev.text });
+      addItem(id, { kind: "notice", level: ev.level, text: ev.text, ...(ev.action ? { action: ev.action } : {}) });
       return asst;
     case "exchange":
       if (asst) { asst.streaming = false; paintAssistant(asst); }

@@ -2,14 +2,14 @@
 process.env.DAEBOT_BOTS_ENABLED = "1";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { hostedRig, deskRig, until, H } from "./rig.ts";
+import { hostedRig, deskRig, until, H, localSession } from "./rig.ts";
 import { parseSse } from "../gateway/helpers.ts";
 
 test("a session created on the desktop appears on daebot.live for the same user, and only for that user", async () => {
   const hosted = await hostedRig();
   const desk = await deskRig(hosted, hosted.keys.alice);
   try {
-    const { sessionId } = JSON.parse((await desk.api("POST", "/sessions", { surface: "desktop", title: "from the mac" })).body);
+    const sessionId = await localSession(desk, { surface: "desktop", title: "from the mac" });
     await desk.api("POST", `/sessions/${sessionId}/send`, { text: "hello from the mac" });
     // the desktop agent mirrors it
     const row = await until(async () => {
@@ -58,11 +58,12 @@ test("both devices add messages to the same session: both survive, in both store
   const hosted = await hostedRig({ script: [{ text: "reply one" }, { text: "reply two" }] });
   const desk = await deskRig(hosted, hosted.keys.alice, { script: [{ text: "mac reply" }, { text: "mac reply 2" }] });
   try {
-    const { sessionId } = JSON.parse((await desk.api("POST", "/sessions", { surface: "desktop" })).body);
+    const sessionId = await localSession(desk, { surface: "desktop" });
     await desk.api("POST", `/sessions/${sessionId}/send`, { text: "first from mac" });
     await until(() => hosted.store.load(sessionId));
     await desk.api("POST", "/sync/now");
-    // the phone continues the same session on the hosted side
+    // the person moves the session to MIND Cloud, then the phone continues the same session on the hosted side
+    assert.equal((await (await hosted.as(hosted.keys.alice))("PATCH", `/sessions/${sessionId}`, { home: "cloud" })).status, 200);
     const turn = await hosted.host(hosted.keys.alice, "POST", "/api/agent/turn", { text: "second from phone", sessionId, surface: "web" });
     assert.equal(turn.status, 200, turn.body);
     await until(async () => { await desk.api("POST", "/sync/now"); return desk.store.load(sessionId)!.history.some((e: any) => e.type === "user" && e.text === "second from phone"); });
@@ -95,6 +96,7 @@ test("a bot thread syncs and maps to the bot's own id on each side (the same MIN
   const desk = await deskRig(hosted, hosted.keys.alice);
   try {
     const bot = JSON.parse((await desk.api("POST", "/bots", { slug: "scout", name: "Scout" })).body).bot;
+    await desk.api("PATCH", `/bots/${bot.id}`, { remote: true }); // "Run on a computer": the bot's threads run on this computer (the standard is MIND Cloud)
     const { sessionId } = JSON.parse((await desk.api("POST", "/sessions", { surface: "desktop", bot: bot.id })).body);
     await desk.api("POST", `/sessions/${sessionId}/send`, { text: "scout, look around" });
     await until(() => hosted.store.load(sessionId));

@@ -63,6 +63,7 @@ import { screenApi } from "./screen.ts";
 import { screenFeed } from "../screen/feed.ts";
 import type { ScreenFeed } from "../screen/feed.ts";
 import { MAX_PHOTO_BODY, checkPhotos, cleanName, isPhotoId } from "../photos.ts";
+import type { UploadedPhoto } from "../photos.ts";
 import type { PhotoMeta } from "../photos.ts";
 import type { SessionStore } from "../persist.ts";
 import { SyncService } from "../sync/service.ts";
@@ -70,14 +71,15 @@ import type { HomeCtx } from "../sync/home.ts";
 import { SyncAgent } from "../sync/agent.ts";
 import { RoutineSyncService } from "../sync/routines.ts";
 import { upgradeChatScopes } from "../mind/scope-upgrade.ts";
-import { SyncHttp } from "../sync/http.ts";
+import { SyncHttp, SyncHttpError } from "../sync/http.ts";
+import { BotSyncService } from "../sync/bots.ts";
 import { RemoteAgent, loadDeviceId } from "../sync/remote-agent.ts";
-import { CLOUD_ENV, canonEnv, cleanLabel, envViews, normalizeEnv } from "../env.ts";
+import { CLOUD_ENV, canonEnv, cleanLabel, envViews, isLocalHome, normalizeEnv } from "../env.ts";
 import type { EnvGroup } from "../env.ts";
 import type { EnvTag, EnvView } from "../env.ts";
 import { TombstoneBook } from "../sync/tombstones.ts";
 import { RemoteHub } from "../remote/hub.ts";
-import type { RemoteJob } from "../remote/hub.ts";
+import type { DeviceInfo, RemoteJob } from "../remote/hub.ts";
 import { daebotHome } from "../home.ts";
 import { hostname } from "node:os";
 
@@ -136,7 +138,7 @@ export interface GatewayOptions {
   /** How recent a poll makes a desktop "online" (default 45 s). Tests. */
   remoteOnlineMs?: number;
   /** Device sync (desktop <-> daebot.live). Local gateways start it only when `enabled` is true (the CLI sets it); tests inject `fetchImpl`/`url`/`key`. */
-  sync?: { enabled?: boolean; stateFile?: string; url?: string; key?: string; intervalMs?: number; fetchImpl?: typeof fetch; deviceId?: string; deviceName?: string; remoteWaitSec?: number };
+  sync?: { enabled?: boolean; stateFile?: string; url?: string; key?: string; intervalMs?: number; fetchImpl?: typeof fetch; deviceId?: string; deviceName?: string; remoteWaitSec?: number; botEveryMs?: number };
   /** MIND Voice (/voice/stt, /voice/tts). Defaults from cfg + auth; pass to override (tests). */
   voice?: Partial<VoiceOptions>;
   /** Apps card (/apps/integrations): MIND integrations proxied with the signed-in user's own key. Defaults from cfg + auth; pass to override (tests). */
@@ -387,7 +389,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     await manager.open({ surface, resumeId: id, owner, bot });
   };
   const syncSvc = hosted && auth?.store.enabled && storeOk
-    ? new SyncService({ store: fullStore!, bots: (owner) => manager.runtimeOf(owner).bots, isBusy: (id) => !!manager.get(id)?.busy, tierOf: (owner) => (owner === OWNER.id ? OWNER.tier : auth?.store.principal(owner)?.tier ?? "staff"), afterWrite: refreshLive, homeCtx: (owner) => homeCtxOf(owner), deleteSession: (owner, id) => manager.deleteSession(id, owner), tombstones: new TombstoneBook({ file: join(opts.remoteDir ?? dataDir(), "sync-tombstones.json") }) })
+    ? new SyncService({ store: fullStore!, bots: (owner) => manager.runtimeOf(owner).bots, isBusy: (id) => !!manager.get(id)?.busy, tierOf: (owner) => (owner === OWNER.id ? OWNER.tier : auth?.store.principal(owner)?.tier ?? "staff"), afterWrite: refreshLive, homeCtx: (owner) => homeCtxOf(owner), migrationDir: join(opts.remoteDir ?? dataDir(), "migrations"), deleteSession: (owner, id) => manager.deleteSession(id, owner), tombstones: new TombstoneBook({ file: join(opts.remoteDir ?? dataDir(), "sync-tombstones.json") }) })
     : undefined;
   // Admin backfill: every signed-in user (and the owner login) gets their MIND made to hold every saved session. One run at a time; the result is read back with GET.
   type ReconcileState = { running: boolean; startedAt?: number; finishedAt?: number; dryRun?: boolean; owners: Record<string, unknown>[] };
@@ -414,6 +416,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       return { started: true };
     },
   };
+  const botSync = hosted && auth?.store.enabled ? new BotSyncService({ bots: (owner) => manager.runtimeOf(owner).bots, settings: (owner) => manager.runtimeOf(owner).settings }) : undefined;
   const syncKey = opts.sync?.key ?? opts.cfg?.mindApiKey ?? "";
   const syncAgent = !hosted && storeOk && opts.sync?.enabled === true && syncKey
     ? new SyncAgent({
@@ -427,6 +430,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         afterWrite: (id) => refreshLive(OWNER.id, id),
         deleteLocal: async (id) => { await manager.deleteSession(id, OWNER.id); },
         photos: () => manager.runtimeOf(OWNER.id).photos,
+        settings: () => manager.runtimeOf(OWNER.id).settings,
+        botEveryMs: opts.sync?.botEveryMs,
         tombstones: new TombstoneBook({ file: opts.sync?.stateFile ?? join(dataDir(), "sync-state.json") }),
         routines: () => opts.bots?.routines,
         routineTombstones: new TombstoneBook({ file: opts.sync?.stateFile ? `${opts.sync.stateFile}.routines` : join(dataDir(), "sync-routines-state.json") }),
@@ -472,7 +477,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     };
   }
   // Every session that has no home gets the one its record proves (else MIND Cloud): once at start for every user, then each hour.
-  const homesLast: { at?: number; first?: boolean; owners?: unknown[]; error?: string } = {};
+  const homesLast: { at?: number; first?: boolean; owners?: unknown[]; error?: string; migration?: { at: number; owners: unknown[]; error?: string } } = {};
   const homeSweep = syncSvc ? async (first = false, only?: string[]): Promise<unknown> => {
     try {
       const r = await syncSvc.backfillHomes(only, { recheckCloud: first });
@@ -482,18 +487,34 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       return r;
     } catch (e) { homesLast.error = String((e as Error)?.message ?? e).split("\n")[0].slice(0, 160); process.stderr.write(`env backfill failed: ${homesLast.error}\n`); return { error: homesLast.error }; }
   } : undefined;
+  /** The one-time pass that puts sessions and bots that were stamped onto a computer (not chosen) back on MIND Cloud. Started by an admin for the accounts named (never automatically); each owner once (a marker); `force` / `dryRun` from the admin call. */
+  const homeMigrate = syncSvc ? async (o: { force?: boolean; dryRun?: boolean; only?: string[] } = {}): Promise<unknown> => {
+    try {
+      // Owners are named by id or by MIND username. It never runs on its own for anyone: an admin starts it (POST /api/admin/sync/homes {migrate}), for the accounts named.
+      const only = o.only?.map((x) => (/^u_/.test(x) || x === OWNER.id ? x : auth?.store.list().find((u) => u.username.toLowerCase() === x.toLowerCase())?.id ?? (x.toLowerCase() === OWNER.username.toLowerCase() ? OWNER.id : x)));
+      const r = await syncSvc.migrateToCloud(only, { force: o.force, dryRun: o.dryRun });
+      if (!o.dryRun) homesLast.migration = { at: Date.now(), owners: [...(homesLast.migration?.owners ?? []), ...r.map((x) => ({ ...x, kept: x.kept.length, keptList: x.kept }))] };
+      for (const x of r) { if (!o.dryRun && (x.moved.length || x.botsOff.length)) { process.stderr.write(`env migration: ${x.owner} moved ${x.moved.length}/${x.scanned} sessions to MIND Cloud, bots off ${JSON.stringify(x.botsOff.map((b) => b.slug))}\n`); remoteHub?.nudge(x.owner); } }
+      return r;
+    } catch (e) { const m = String((e as Error)?.message ?? e).split("\n")[0].slice(0, 160); homesLast.migration = { at: Date.now(), owners: homesLast.migration?.owners ?? [], error: m }; process.stderr.write(`env migration failed: ${m}\n`); return { error: m }; }
+  } : undefined;
   if (homeSweep) { setTimeout(() => void homeSweep(true), opts.envSweepMs ?? 15_000).unref(); const t = setInterval(() => void homeSweep(), 60 * 60_000); t.unref(); }
   /** Desktop: runs one message of a remote bot thread on this machine. */
   async function runRemoteJob(job: RemoteJob, emit: (ev: AgentEvent) => void, signal: AbortSignal): Promise<void> {
-    const bots = manager.runtimeOf(OWNER.id).bots;
-    if (!bots) throw new Error("bots are not available on this device");
-    let bot = bots.bySlug(job.botSlug);
-    if (!bot) { try { await bots.list(); } catch { /* MIND unreachable */ } bot = bots.bySlug(job.botSlug); }
-    if (!bot) throw new Error(`this device has no bot "${job.botSlug}"`);
+    // A job with a bot slug is a thread of that bot; one with none is a plain session whose home the person set to this computer.
+    let botId: string | undefined;
+    if (job.botSlug) {
+      const bots = manager.runtimeOf(OWNER.id).bots;
+      if (!bots) throw new Error("bots are not available on this device");
+      let bot = bots.bySlug(job.botSlug);
+      if (!bot) { try { await bots.list(); } catch { /* MIND unreachable */ } bot = bots.bySlug(job.botSlug); }
+      if (!bot) throw new Error(`this device has no bot "${job.botSlug}"`);
+      botId = bot.id;
+    }
     await syncAgent?.pullSession(job.sessionId); // the thread as it is on the other device
     const refs = job.photos?.length ? job.photos.slice(0, 5) : undefined;
     if (refs) await syncAgent?.fetchPhotos(job.sessionId, refs.map((r) => r.id)); // the photos sent with the message live on daebot.live
-    const ls = await manager.open({ surface: job.surface || "web", title: job.title || undefined, resumeId: job.sessionId, owner: OWNER.id, bot: bot.id });
+    const ls = await manager.open({ surface: job.surface || "web", title: job.title || undefined, resumeId: job.sessionId, owner: OWNER.id, ...(botId ? { bot: botId } : {}) });
     for (let i = 0; ls.busy && i < 100; i++) await new Promise((r) => setTimeout(r, 200));
     await manager.turn(ls.id, job.text, emit, signal, "user", job.interactive === true, refs, undefined, job.quote ? { ...(job.quote.id ? { id: job.quote.id } : {}), text: job.quote.text } : undefined);
   }
@@ -1026,28 +1047,116 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     return sendJson(res, 200, { ok: true, abort: upd.abort === true });
   }
 
-  /** A message to a bot thread whose desktop is reachable: it becomes a job for that desktop. false = not a remote thread (the hosted server answers as before). */
-  async function routeRemote(res: ServerResponse, me: Principal, sessionId: string, bot: string, surface: string, title: string, text: string, quote: MessageQuote | undefined, photos: PhotoRef[] | undefined, extra: { headers?: Record<string, string>; first?: Record<string, unknown>; interactive?: boolean } = {}): Promise<boolean> {
-    if (!remoteHub) return false;
-    const rec = manager.runtimeOf(me.id).bots?.get(bot);
-    if (!rec) return false;
-    const devs = remoteHub.devicesFor(me.id, rec.slug);
-    if (!devs.length) return false; // no computer of this user carries the bot: the server answers, as before
-    if (!rec.remote) {
-      // Auto-wake: someone messaged the bot from another device while Remote was off. Turn it on, say so in the bot's settings, and wake the desktop.
-      const from = surface === "ios" ? "your iPhone" : surface === "web" ? "the web" : `another device (${surface})`;
-      manager.runtimeOf(me.id).bots?.setRemote?.(rec.id, true, { by: "auto", note: `Turned on automatically: a message arrived from ${from} while Remote was off.` });
-      remoteHub.nudge(me.id);
+  /** Where a session RUNS when it is not in MIND Cloud: the computers that carry it. undefined = MIND Cloud (the standard, and the answer unless the person chose a computer). */
+  interface HomePlan { devs: (DeviceInfo & { online: boolean })[]; name: string; botId?: string; botSlug?: string }
+  function homePlanOf(owner: string, sessionId: string, botId: string | undefined): HomePlan | undefined {
+    if (!remoteHub) return undefined;
+    const rt = manager.runtimeOf(owner);
+    if (botId) {
+      const rec = rt.bots?.get(botId);
+      if (!rec?.remote) return undefined; // Run on a computer is off: the bot's threads run here, in MIND Cloud
+      const devs = remoteHub.devicesFor(owner, rec.slug);
+      return devs.length ? { devs, name: rec.name, botId: rec.id, botSlug: rec.slug } : undefined;
     }
-    const dev = devs[0];
-    const job = remoteHub.enqueue(me.id, { deviceId: dev.id, sessionId, botSlug: rec.slug, surface, title, text, ...(quote ? { quote } : {}), ...(photos?.length ? { photos } : {}), ...(extra.interactive ? { interactive: true } : {}) });
+    const env = rt.sessionInfo?.(sessionId)?.env;
+    if (!env || !isLocalHome(env)) return undefined;
+    const g = remoteHub.envGroups(owner).find((x) => x.id === env.id || x.members.includes(env.id));
+    if (!g) return undefined;
+    const devs = remoteHub.devices(owner).filter((d) => g.members.includes(d.id)).sort((x, y) => Number(y.online) - Number(x.online) || y.lastSeen - x.lastSeen);
+    return devs.length ? { devs, name: g.name } : undefined;
+  }
+
+  /** A message to a session (or bot thread) the person set to run on one of their computers: it becomes a job for that computer. false = not such a session (MIND Cloud answers). */
+  async function routeRemote(res: ServerResponse, me: Principal, sessionId: string, plan: HomePlan | undefined, surface: string, title: string, text: string, quote: MessageQuote | undefined, photos: PhotoRef[] | undefined, extra: { headers?: Record<string, string>; first?: Record<string, unknown>; interactive?: boolean } = {}): Promise<boolean> {
+    if (!remoteHub || !plan) return false;
+    const dev = plan.devs.find((d) => d.online) ?? plan.devs[0];
+    const job = remoteHub.enqueue(me.id, { deviceId: dev.id, sessionId, botSlug: plan.botSlug ?? "", surface, title, text, ...(quote ? { quote } : {}), ...(photos?.length ? { photos } : {}), ...(extra.interactive ? { interactive: true } : {}) });
     const run = runs.start(sessionId, text, photos);
     run.external = true;
     remoteRuns.set(job.id, { run, owner: me.id, sessionId, waiting: !dev.online });
     res.writeHead(200, sseHeaders({ ...(extra.headers ?? {}), "x-daebot-remote": dev.name }));
-    run.publish({ type: "notice", level: "info", text: dev.online ? `Sent to ${dev.name}.` : `Waiting for ${dev.name}: it is offline. It will answer when it is back.` });
+    // The computer is off or asleep: no raw error. Say so, say the message is waiting, and offer the one way out (the thread continues in MIND Cloud now).
+    run.publish(dev.online
+      ? { type: "notice", level: "info", text: `Sent to ${dev.name}.` }
+      : { type: "notice", level: "warn", text: `${dev.name} is asleep or offline, so it cannot answer right now. Your message is waiting and ${dev.name} will answer when it wakes. Or continue this ${plan.botSlug ? "bot" : "session"} in MIND Cloud now.`, action: { kind: "move_to_cloud", label: "Move to MIND Cloud", sessionId } });
     attachRun(res, run, 0, extra.first ?? (photos?.length ? { type: "photos", photos } : undefined));
     return true;
+  }
+
+  // ---- Desktop: a session that lives in MIND Cloud RUNS there. This computer is only the window onto it: the turn goes to daebot.live (the same session id, the
+  // account's own key), its events stream back into the run feed, and the finished transcript is pulled into the local store.
+  const cloudRuns = new Map<string, AbortController>();
+  function runsInCloud(owner: string, ls: { id: string; bot?: string; peer?: string }): boolean {
+    if (hosted || !syncAgent || ls.peer) return false;
+    const rt = manager.runtimeOf(owner);
+    if (ls.bot) { const b = rt.bots?.get(ls.bot); return !!b && !b.remote; } // Run on a computer off = the bot's threads run in MIND Cloud
+    return rt.sessionInfo?.(ls.id)?.env?.kind === "cloud";
+  }
+  async function routeCloud(res: ServerResponse, me: Principal, ls: { id: string; bot?: string; surface: string; title: string }, text: string, quote: MessageQuote | undefined, photos: unknown): Promise<void> {
+    const agent = syncAgent!;
+    const slug = ls.bot ? manager.runtimeOf(me.id).bots?.get(ls.bot)?.slug : undefined;
+    const run = runs.start(ls.id, text, undefined);
+    run.external = true;
+    const ctl = new AbortController();
+    cloudRuns.set(ls.id, ctl);
+    res.writeHead(200, sseHeaders({ "x-daebot-cloud": "1" }));
+    attachRun(res, run, 0);
+    void (async () => {
+      try {
+        await agent.pushSession(ls.id); // the thread as it is on this computer
+        await agent.cloudTurn({ sessionId: ls.id, text, surface: ls.surface, title: ls.title, ...(slug ? { botSlug: slug } : {}), ...(quote ? { quote } : {}), ...(Array.isArray(photos) && photos.length ? { photos: photos as { name: string; dataUrl: string }[] } : {}) }, (ev) => { run.publish(ev); broadcast(ls.id, ev); }, ctl.signal);
+      } catch (e) {
+        if (!ctl.signal.aborted) {
+          const why = e instanceof SyncHttpError && e.status >= 400 && e.status < 500 ? e.message : "MIND Cloud could not be reached";
+          run.publish({ type: "notice", level: "warn", text: `${why.replace(/[.\s]+$/, "")}. This session runs in MIND Cloud. You can run it on this computer instead.`, action: { kind: "run_here", label: "Run on this computer", sessionId: ls.id } });
+        } else run.publish({ type: "notice", level: "info", text: "Turn aborted." });
+      } finally {
+        cloudRuns.delete(ls.id);
+        await agent.pullSession(ls.id).catch(() => {}); // the cloud's transcript, whatever happened
+        run.finish();
+      }
+    })();
+  }
+
+  /**
+   * The person chose where a session runs: "cloud" (MIND Cloud, the standard) or "local" (a computer: this one on a desktop; on daebot.live the given
+   * device, else the first computer that is online). A bot thread follows its bot, so the choice turns the bot's "Run on a computer" on or off. A message
+   * that was waiting for a sleeping computer is handed back (`queued`) so the client can send it again where it now runs.
+   */
+  async function setHomeApi(me: Principal, id: string, home: "cloud" | "local", deviceId: string | undefined): Promise<{ status: number; body: Record<string, unknown> }> {
+    const rt = manager.runtimeOf(me.id);
+    const info = rt.sessionInfo?.(id);
+    if (!info) return { status: 404, body: { error: "no such session" } };
+    let env: EnvTag;
+    if (home === "cloud") env = canonEnv(CLOUD_ENV, envState(me.id).groups, envState(me.id).cloudName) ?? CLOUD_ENV;
+    else if (remoteHub) {
+      const gs = remoteHub.envGroups(me.id);
+      const g = (deviceId ? gs.find((x) => x.id === deviceId || x.members.includes(deviceId)) : undefined) ?? gs.find((x) => x.kind === "machine" && x.online) ?? gs.find((x) => x.online);
+      if (!g) return { status: 409, body: { error: "no_computer_online", message: "None of your computers is online, so this cannot run on one right now. Open Daebot on the computer, then try again." } };
+      env = { id: g.id, kind: g.kind, name: g.name };
+    } else {
+      env = ownEnvOf(me.id);
+      if (!isLocalHome(env)) return { status: 409, body: { error: "not_a_computer", message: "This is not a computer." } };
+    }
+    const bots = rt.bots;
+    const bot = info.bot ? bots?.get(info.bot) : undefined;
+    if (bot && bots?.setRemote) {
+      if (home === "local" && remoteHub && !remoteHub.devicesFor(me.id, bot.slug).length) return { status: 409, body: { error: "no_computer_has_bot", message: `None of your computers carries ${bot.name} yet. Open Daebot on the computer once so it picks the bot up.` } };
+      if (!!bot.remote !== (home === "local")) bots.setRemote(bot.id, home === "local", { by: "user", note: home === "local" ? `Run on a computer turned on (${env.name}).` : "Moved to MIND Cloud." });
+      remoteHub?.nudge(me.id); remoteAgent?.kick();
+    }
+    const ok = await manager.setHome(id, me.id, env, "user");
+    if (!ok) return { status: 404, body: { error: "no such session" } };
+    syncAgent?.noteHomeChanged(id);
+    const queued: string[] = [];
+    if (home === "cloud" && remoteHub) {
+      for (const j of remoteHub.cancelQueued(me.id, id)) {
+        queued.push(j.text);
+        const e = remoteRuns.get(j.id);
+        if (e) { remoteRuns.delete(j.id); e.run.publish({ type: "notice", level: "info", text: "Moved to MIND Cloud." }); e.run.finish(); }
+      }
+    }
+    return { status: 200, body: { ok: true, home, env, ...(queued.length ? { queued } : {}) } };
   }
 
   // /api/sync/photos/:sid (list) and /api/sync/photos/:sid/:pid (GET {meta,data base64} | POST {meta,data}): the photos of one of THIS user's sessions.
@@ -1123,6 +1232,22 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
     const rdel = /^\/api\/sync\/routines\/(r_[0-9a-f]{12})$/.exec(path);
     if (rdel && method === "DELETE") return routineSync ? sendJson(res, 200, { ok: routineSync.remove(me.id, rdel[1]) === "ok" }) : sendJson(res, 404, { error: "routine sync is not available on this deployment" });
+    // /api/sync/bots: the bots' look, pin, instructions and order (and the main Daebot's look) across devices. POST {bots, main, have, haveMain} merges what the device
+    // sends (per group the later change wins) and answers with every bot the device does not have as it is now; GET is the same with nothing sent.
+    if (path === "/api/sync/bots") {
+      if (!botSync || !botsOn()) return sendJson(res, 404, { error: "bot sync is not available on this deployment" });
+      if (method === "GET") return sendJson(res, 200, await botSync.exchange(me.id, {}));
+      if (method === "POST") return sendJson(res, 200, await botSync.exchange(me.id, parseJsonObject(await readBody(req, 4 * 1024 * 1024))));
+      return sendJson(res, 405, { error: "method not allowed" });
+    }
+    // POST /api/sync/sessions/:id/abort: a desktop stops a MIND Cloud turn it started (the key is the only credential it has here).
+    const am = /^\/api\/sync\/sessions\/([^/]+)\/abort$/.exec(path);
+    if (am && method === "POST") {
+      let id: string;
+      try { id = decodeURIComponent(am[1]); } catch { return sendJson(res, 400, { error: "bad session id" }); }
+      if (manager.access(id, me.id) === "forbidden") return sendJson(res, 403, { error: "forbidden" });
+      return sendJson(res, 200, { aborted: manager.abort(id) });
+    }
     if (path === "/api/sync/device/poll" && method === "POST") return devicePoll(req, res, me);
     const jm = /^\/api\/sync\/device\/jobs\/(rj_[0-9a-f]{16})\/events$/.exec(path);
     if (jm && method === "POST") return deviceJobEvents(req, res, me, jm[1]);
@@ -1216,9 +1341,21 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
     const principal = await agentPrincipal(req, res, { limitTurns: true });
     if (!principal) return;
-    const b = await readJson(req);
+    // A desktop running a MIND Cloud session sends photos inline (like the browser does), so this route takes the larger body only when asked to.
+    const declared = Number(headerOne(req, "content-length"));
+    const big = !(declared <= MAX_BODY);
+    if (big && photoBodies >= MAX_BIG_BODIES) { res.setHeader("retry-after", "5"); return sendJson(res, 429, { error: "too many photo uploads at once; try again in a moment" }); }
+    if (big) photoBodies++;
+    let b: Record<string, unknown>;
+    try {
+      const raw = await readBody(req, MAX_PHOTO_BODY);
+      b = parseJsonObject(raw);
+      if (raw.length > MAX_BODY && b.photos === undefined) throw new HttpError(413, "body too large");
+    } finally { if (big) photoBodies--; }
     const text = optStr(b.text, 200_000);
-    if (!text || !text.trim()) return sendJson(res, 400, { error: "text required" });
+    const check = b.photos === undefined ? { ok: true as const, photos: [] as UploadedPhoto[] } : checkPhotos(b.photos);
+    if (!check.ok) return sendJson(res, check.status, { error: check.error });
+    if ((!text || !text.trim()) && check.photos.length === 0) return sendJson(res, 400, { error: "text required" });
     const surface = optStr(b.surface, 40) ?? "mind-chat";
     if (!AGENT_SURFACE_RE.test(surface)) return sendJson(res, 400, { error: "bad surface" });
     const sessionId = optStr(b.sessionId, 200);
@@ -1245,8 +1382,24 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       return sendJson(res, 502, { error: e instanceof Error ? e.message.slice(0, 300) : "could not open a session" });
     }
     if (ls.busy || remoteHub?.activeFor(principal.id, ls.id)) return sendJson(res, 409, { error: "session is busy with another turn", sessionId: ls.id });
-    if (ls.bot && remoteHub && (await routeRemote(res, principal, ls.id, ls.bot, ls.surface, ls.title, text, undefined, undefined, { headers: { "x-daebot-session": ls.id }, first: { type: "session", sessionId: ls.id } }))) return;
-    return streamTurn(res, ls.id, text, { "x-daebot-session": ls.id }, { type: "session", sessionId: ls.id }, principal);
+    let refs: PhotoRef[] | undefined;
+    if (check.photos.length) {
+      const store = manager.runtimeOf(principal.id).photos;
+      if (!store) return sendJson(res, 404, { error: "photos are not available on this deployment" });
+      const added = await store.add(ls.id, check.photos);
+      if (!added.ok) return sendJson(res, added.status, { error: added.error });
+      refs = added.photos.map((p) => ({ id: p.id, name: p.name, width: p.width, height: p.height }));
+    }
+    let quote: MessageQuote | undefined;
+    const qb = b.quote;
+    if (qb && typeof qb === "object" && !Array.isArray(qb)) {
+      const qid = optStr((qb as any).id, 80);
+      const saved = qid ? manager.runtimeOf(principal.id).messageText?.(ls.id, qid) : undefined;
+      const qtext = (saved ?? optStr((qb as any).text, 600) ?? "").trim().slice(0, 600);
+      if (qtext) quote = { ...(qid ? { id: qid } : {}), text: qtext };
+    }
+    if (remoteHub && (await routeRemote(res, principal, ls.id, homePlanOf(principal.id, ls.id, ls.bot), ls.surface, ls.title, text ?? "", quote, refs, { headers: { "x-daebot-session": ls.id }, first: { type: "session", sessionId: ls.id } }))) return;
+    return streamTurn(res, ls.id, text ?? "", { "x-daebot-session": ls.id }, { type: "session", sessionId: ls.id }, principal, false, refs, [], quote);
   }
 
   // One turn, shared by POST /sessions/:id/send and POST /api/agent/turn. The turn is a server-owned run: it is started here
@@ -1378,7 +1531,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         get anger() { return anger(); },
         feed: mindFeed,
         reconcile: hosted && auth?.store.enabled ? mindReconcileJob : undefined,
-        homes: homeSweep ? { run: (b) => homeSweep(b.recheckCloud === true, Array.isArray(b.owners) ? b.owners.map(String) : undefined), last: () => homesLast } : undefined,
+        homes: homeSweep ? { run: (b) => (b.migrate === true || b.migrate === "dry" ? homeMigrate!({ force: b.force === true, dryRun: b.migrate === "dry", only: Array.isArray(b.owners) ? b.owners.map(String) : undefined }) : homeSweep(b.recheckCloud === true, Array.isArray(b.owners) ? b.owners.map(String) : undefined)), last: () => homesLast } : undefined,
         logKey: opts.adminLog?.logKey ?? (() => process.env.DAEBOT_MISTAKE_LOG_KEY?.trim() || undefined),
         isAdmin: (r) => (hosted ? principalOf(r)?.tier === "admin" : authorized(r, query, false)),
         signedIn: (r) => authorized(r, query, false),
@@ -1738,9 +1891,9 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   /** Hosted: which of the user's desktops carry this bot and whether they are online (the Remote switch shows it). */
   const remoteView = (owner: string, b: BotRecord): { remoteDevices?: { name: string; online: boolean }[]; env: EnvTag; runsOn?: boolean } => {
     const devs = remoteHub ? remoteHub.devicesFor(owner, b.slug) : [];
-    // A bot with Remote on and a computer that carries it runs THERE; otherwise it lives where it was created.
+    // A bot with Run on a computer on (Remote) and a computer that carries it runs THERE; otherwise it runs in MIND Cloud.
     const dev = b.remote ? (devs.find((d) => d.online) ?? devs[0]) : undefined;
-    const raw: EnvTag = dev ? { id: dev.id, kind: dev.kind ?? "machine", name: dev.name } : normalizeEnv(b.env) ?? manager.runtimeOf(owner).ownEnv?.() ?? CLOUD_ENV;
+    const raw: EnvTag = dev ? { id: dev.id, kind: dev.kind ?? "machine", name: dev.name } : b.remote && !remoteHub ? manager.runtimeOf(owner).ownEnv?.() ?? CLOUD_ENV : CLOUD_ENV; // a bot runs in MIND Cloud unless "Run on a computer" is on
     const env = canon(owner, raw) ?? raw;
     const names = new Map<string, { name: string; online: boolean }>();
     for (const d of devs) { const c = canon(owner, { id: d.id, kind: d.kind ?? "machine", name: d.name }); const k = c?.id ?? d.id; const prev = names.get(k); names.set(k, { name: c?.name ?? d.name, online: d.online || !!prev?.online }); }
@@ -1832,6 +1985,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
           if (instr !== undefined && Buffer.byteLength(instr, "utf8") > 8 * 1024) return sendJson(res, 413, { error: "instructions_too_long", message: "DAEBOT.md is capped at 8 KB" });
           const rec = await bots.create({ slug, name, purpose: optStr(b.purpose, 1000), color: optStr(b.color, 20), face: b.face });
           remoteAgent?.kick(); // a new bot is registered with daebot.live right away, not at the end of the current long poll
+          syncAgent?.noteBotsChanged();
           if (instr) bots.setInstructions(rec.id, instr);
           return sendJson(res, 201, { bot: { ...botView(rec), live: false, busy: false, ...remoteView(me.id, rec) } });
         }
@@ -1850,6 +2004,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
           const t = typeof b.text === "string" ? b.text : b.instructions;
           if (typeof t !== "string") return sendJson(res, 400, { error: "bad_instructions", message: "text must be a string" });
           bots.setInstructions(id, t); // counted in UTF-8 bytes (8 KB)
+          syncAgent?.noteBotsChanged();
           return sendJson(res, 200, { ok: true, updatedAt: bots.get(id)?.updatedAt ?? Date.now() });
         }
         return sendJson(res, 405, { error: "method not allowed" });
@@ -1872,6 +2027,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         if (b.pinned !== undefined && typeof b.pinned !== "boolean") return sendJson(res, 400, { error: "bad_pinned", message: "pinned must be true or false" });
         if (b.remote !== undefined && typeof b.remote !== "boolean") return sendJson(res, 400, { error: "bad_remote", message: "remote must be true or false" });
         if (b.remote !== undefined) { remoteHub?.nudge(me.id); remoteAgent?.kick(); }
+        syncAgent?.noteBotsChanged();
         const upd = bots.update(id, { name: optStr(b.name, 120), purpose: optStr(b.purpose, 1000), color: optStr(b.color, 20), face: b.face, model, pinned: b.pinned, remote: b.remote });
         return sendJson(res, 200, { bot: { ...botView(upd), ...remoteView(me.id, upd) } });
       }
@@ -2035,6 +2191,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (b.color !== undefined) { if (b.color !== null && !(typeof b.color === "string" && /^#[0-9a-fA-F]{6}$/.test(b.color))) return sendJson(res, 400, { error: "color must look like #1a2b3c" }); patch.color = b.color as string | null; }
     if (!Object.keys(patch).length) return sendJson(res, 400, { error: "send name, face or color" });
     settings.set({ main: patch });
+    syncAgent?.noteBotsChanged();
     return sendJson(res, 200, view());
   }
 
@@ -2049,6 +2206,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (typeof t !== "string") return sendJson(res, 400, { error: "bad_instructions", message: "text must be a string" });
     if (Buffer.byteLength(t, "utf8") > 8 * 1024) return sendJson(res, 413, { error: "instructions_too_long", message: "DAEBOT.md is capped at 8 KB" });
     settings.set({ main: { instructions: t.trim() ? t : null } });
+    syncAgent?.noteBotsChanged();
     const now = settings.get().main?.instructions ?? "";
     return sendJson(res, 200, { ok: true, bytes: Buffer.byteLength(now, "utf8") });
   }
@@ -2274,6 +2432,12 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         if (!ok) return sendJson(res, 404, { error: "no such session" });
         return sendJson(res, 200, { ok: true, pinned: b.pinned });
       }
+      // Where this session runs: "cloud" (MIND Cloud, the standard) or "local" (a computer). Saved with the session; the latest decision wins on every device.
+      if (b.home !== undefined) {
+        if (b.home !== "cloud" && b.home !== "local") return sendJson(res, 400, { error: "home must be cloud or local" });
+        const r = await setHomeApi(me, id, b.home, optStr(b.deviceId, 64));
+        return sendJson(res, r.status, r.body);
+      }
       // Mark as unread: the thread is unread from this message on (a message id), or unreadFrom: null marks it read. Per user, saved with the thread.
       if (b.unreadFrom !== undefined) {
         const mid = b.unreadFrom === null ? null : optStr(b.unreadFrom, 80);
@@ -2344,7 +2508,9 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
       const waiting = remoteHub?.cancelQueued(me.id, id) ?? [];
       for (const j of waiting) { const e = remoteRuns.get(j.id); if (e) { remoteRuns.delete(j.id); e.run.publish({ type: "notice", level: "info", text: "Stopped before the device picked it up." }); e.run.finish(); } }
-      return sendJson(res, 200, { aborted: manager.abort(id) || waiting.length > 0 || (remoteHub?.requestAbort(me.id, id) ?? false) });
+      const cloud = cloudRuns.get(id);
+      if (cloud) { cloud.abort(); void syncAgent?.abortCloud(id); }
+      return sendJson(res, 200, { aborted: manager.abort(id) || waiting.length > 0 || (remoteHub?.requestAbort(me.id, id) ?? false) || !!cloud });
     }
     if (action === "suggest") {
       // 1-3 replies Dae predicts the user will send next. Empty when the last message does not wait on them. Never sends anything.
@@ -2377,7 +2543,14 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       const check = checkPhotos(b.photos);
       if (!check.ok) return sendJson(res, check.status, { error: check.error });
       if (!text.trim() && check.photos.length === 0) return sendJson(res, 400, { error: "text required" });
-      if (ls.busy || remoteHub?.activeFor(me.id, id)) return sendJson(res, 409, { error: "session is busy with another turn" });
+      if (ls.busy || remoteHub?.activeFor(me.id, id) || cloudRuns.has(id)) return sendJson(res, 409, { error: "session is busy with another turn" });
+      // Desktop: a session that lives in MIND Cloud runs there; this computer is the window onto it.
+      if (runsInCloud(me.id, ls)) {
+        const qb0 = b.quote;
+        let q0: MessageQuote | undefined;
+        if (qb0 && typeof qb0 === "object" && !Array.isArray(qb0)) { const qt = (optStr((qb0 as any).text, 600) ?? "").trim(); const qi = optStr((qb0 as any).id, 80); if (qt) q0 = { ...(qi ? { id: qi } : {}), text: qt }; }
+        return routeCloud(res, me, ls, text, q0, b.photos);
+      }
       let refs: PhotoRef[] | undefined;
       if (check.photos.length) {
         const photos = manager.runtimeOf(me.id).photos;
@@ -2398,7 +2571,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         const qtext = (saved ?? optStr((qb as any).text, 600) ?? "").trim().slice(0, 600);
         if (qtext) quote = { ...(qid ? { id: qid } : {}), text: qtext };
       }
-      if (ls.bot && remoteHub && (await routeRemote(res, me, id, ls.bot, ls.surface, ls.title, text, quote, refs, { interactive: true }))) return;
+      if (remoteHub && (await routeRemote(res, me, id, homePlanOf(me.id, id, ls.bot), ls.surface, ls.title, text, quote, refs, { interactive: true }))) return;
       return streamTurn(res, id, text, {}, refs ? { type: "photos", photos: refs } : undefined, me, true, refs, parseCapabilities(b.capabilities), quote); // the web/desktop/mobile UI can answer a permission card
     } finally {
       if (big) photoBodies--;

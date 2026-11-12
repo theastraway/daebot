@@ -13,6 +13,11 @@ export interface BotRecord {
   pinnedAt?: number;
   /** Home environment: where this bot was created (MIND Cloud, a machine, a server). Absent on bots made before environments existed. */
   env?: import("../env.ts").EnvTag;
+  /** When name, purpose, colour, face or model last changed by the person's hand (ms, the writer's clock). Device sync keeps the later one per group, so an edit on any device reaches every other. */
+  profileAt?: number;
+  /** When pinning last changed, and when DAEBOT.md last changed (same rule: the later writer wins per group). */
+  pinAt?: number;
+  instructionsAt?: number;
   createdAt: number;
   updatedAt: number;
   /** Definition version installed (absent = 1). See versions.ts. */
@@ -65,6 +70,10 @@ export interface BotsApi {
   instructions(id: string): string;
   setInstructions(id: string, text: string): void;
   roster(): RosterEntry[];
+  /** Device sync (see sync/bots.ts): this bot's synced fields in wire form. undefined = unknown slug. */
+  exportSync?(slug: string): import("../sync/bots.ts").WireBot | undefined;
+  /** Device sync: takes in a wire bot (per group, the later change wins; the earlier createdAt wins). true = something changed here. Unknown slugs are ignored (MIND decides existence). */
+  applySync?(w: import("../sync/bots.ts").WireBot): boolean;
 }
 
 /** An upgrade link is shown to the user as a clickable link, so only m-i-n-d.ai (and its subdomains) over https passes. */

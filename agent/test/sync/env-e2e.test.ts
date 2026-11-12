@@ -2,7 +2,7 @@
 process.env.DAEBOT_BOTS_ENABLED = "1";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { hostedRig, deskRig, until } from "./rig.ts";
+import { hostedRig, deskRig, until, localSession } from "./rig.ts";
 import { rec } from "./helpers.ts";
 
 const MAC = "d_" + "1".repeat(16);
@@ -11,7 +11,7 @@ test("a desktop session's home is that desktop on every device; a hosted session
   const hosted = await hostedRig({ script: [{ text: "hosted reply" }] });
   const desk = await deskRig(hosted, hosted.keys.alice, { deviceName: "Anthonys MacBook Pro" });
   try {
-    const { sessionId: onMac } = JSON.parse((await desk.api("POST", "/sessions", { surface: "web", title: "from the mac" })).body);
+    const onMac = await localSession(desk, { surface: "web", title: "from the mac" });
     await desk.api("POST", `/sessions/${onMac}/send`, { text: "hello from the mac" });
     await until(() => hosted.store.load(onMac));
     assert.deepEqual(hosted.store.load(onMac)!.env, { id: MAC, kind: "machine", name: "Anthonys MacBook Pro" }, "stamped when created on the desktop, carried by sync");
@@ -50,7 +50,7 @@ test("a server device is shown as a server group with its poll-driven online sta
   const hosted = await hostedRig();
   const drop = await deskRig(hosted, hosted.keys.alice, { deviceId: "d_" + "9".repeat(16), deviceName: "droplet-45", kind: "server" });
   try {
-    const { sessionId } = JSON.parse((await drop.api("POST", "/sessions", { surface: "web", title: "on the droplet" })).body);
+    const sessionId = await localSession(drop, { surface: "web", title: "on the droplet" });
     await drop.api("POST", `/sessions/${sessionId}/send`, { text: "hi" });
     await until(() => hosted.store.load(sessionId));
     const as = await hosted.as(hosted.keys.alice);
@@ -66,7 +66,7 @@ test("pin: PATCH {pinned} saves with the session, syncs both ways, unpin clears 
   const hosted = await hostedRig({ script: [{ text: "hosted reply" }] });
   const desk = await deskRig(hosted, hosted.keys.alice);
   try {
-    const { sessionId } = JSON.parse((await desk.api("POST", "/sessions", { surface: "web", title: "pin me" })).body);
+    const sessionId = await localSession(desk, { surface: "web", title: "pin me" });
     await desk.api("POST", `/sessions/${sessionId}/send`, { text: "hi" });
     await until(() => hosted.store.load(sessionId));
     assert.equal((await desk.api("PATCH", `/sessions/${sessionId}`, { pinned: "yes" })).status, 400);

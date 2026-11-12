@@ -19,6 +19,23 @@ export interface EnvView extends EnvTag { online: boolean; current: boolean }
 export const CLOUD_ID = "cloud";
 export const CLOUD_ENV: EnvTag = { id: CLOUD_ID, kind: "cloud", name: "MIND Cloud" };
 
+/**
+ * Who decided a home. "default" = nobody did: the standard (MIND Cloud). "user" = the person turned "Run on a computer" on or off (the only way a
+ * session or bot comes to run on a computer). "auto" = the system moved it (the migration that put auto-stamped computers back on MIND Cloud).
+ * `envAt` (ms) says when, so every device settles on the latest decision.
+ */
+export type EnvBy = "user" | "auto" | "default";
+export const isEnvBy = (v: unknown): v is EnvBy => v === "user" || v === "auto" || v === "default";
+
+/** True for a home that is a computer or a server (anything but MIND Cloud). */
+export const isLocalHome = (e: { kind?: string } | undefined | null): boolean => !!e && e.kind !== "cloud";
+
+/**
+ * Where a NEW session or bot starts. MIND Cloud, everywhere (desktop, web, phone): a computer is only ever chosen by the person (a toggle).
+ * A headless server (a droplet's gateway) is the one exception: deploying a gateway there IS the choice, and nothing else can run its threads.
+ */
+export function defaultHome(own: EnvTag): EnvTag { return own.kind === "server" ? own : CLOUD_ENV; }
+
 const KINDS: ReadonlySet<string> = new Set(["cloud", "machine", "server"]);
 
 /** "Anthonys-MacBook-Pro.local" -> "Anthonys MacBook Pro". A name we are willing to show. */

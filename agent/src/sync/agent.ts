@@ -6,8 +6,8 @@
 import type { SessionStore, StoredSession } from "../persist.ts";
 import type { BotsApi } from "../bots/types.ts";
 import { homeSig, mergeRecords, recordSig } from "./merge.ts";
-import { normalizeEnv } from "../env.ts";
-import type { EnvGroup, EnvTag } from "../env.ts";
+import { defaultHome, isEnvBy, normalizeEnv } from "../env.ts";
+import type { EnvBy, EnvGroup, EnvTag } from "../env.ts";
 import { NOT_SYNCED_SURFACES, fromWire, toWire } from "./wire.ts";
 import type { WireRecord } from "./wire.ts";
 import { SyncHttp } from "./http.ts";
@@ -16,6 +16,8 @@ import type { PhotoStore } from "../photos.ts";
 import { photoIdsIn, reconcilePhotos } from "./photos.ts";
 import type { PushResult, SyncRow } from "./service.ts";
 import { RoutineSyncAgent } from "./routines.ts";
+import { BotSyncAgent } from "./bots.ts";
+import type { SettingsStore } from "../settings.ts";
 import type { RoutineHub } from "../routines/store.ts";
 
 export const SYNC_OWNER = "owner";
@@ -38,6 +40,10 @@ export interface SyncAgentDeps {
   photos?(): PhotoStore | undefined;
   /** Where this device remembers its deletes (a restart or an offline stretch must not lose them). Default: in memory. */
   tombstones?: TombstoneBook;
+  /** How often bots trade with the server when nothing changed here (ms). Default 15 s. */
+  botEveryMs?: number;
+  /** This device's per-user settings (the main Daebot's look and instructions sync with the bots). */
+  settings?(): SettingsStore | undefined;
   /** This device's routines (late-bound: the hub is built after the sync agent). Present = routine definitions and run records sync too. */
   routines?(): RoutineHub | undefined;
   /** Where this device remembers its routine deletes. Default: in memory. */
@@ -76,12 +82,16 @@ export class SyncAgent {
   cloudName?: string;
   private routineAgent?: RoutineSyncAgent;
   private routineErr = "";
+  private botAgent?: BotSyncAgent;
+  private botErr = "";
+  private botDue = 0;
 
   constructor(deps: SyncAgentDeps) {
     this.deps = deps;
     this.http = new SyncHttp({ baseUrl: deps.baseUrl, key: deps.key, fetchImpl: deps.fetchImpl });
     this.tombs = deps.tombstones ?? new TombstoneBook();
     if (deps.routines) this.routineAgent = new RoutineSyncAgent({ http: this.http, hub: deps.routines, owner: SYNC_OWNER, bots: () => deps.bots(), tombstones: deps.routineTombstones ?? new TombstoneBook(), log: deps.log });
+    this.botAgent = new BotSyncAgent({ http: this.http, bots: () => deps.bots(), settings: () => deps.settings?.(), log: deps.log });
     this.status = { enabled: true, url: this.http.url, lastOkAt: 0, lastError: "", pulled: 0, pushed: 0, dirty: 0, rounds: 0 };
   }
 
@@ -167,6 +177,7 @@ export class SyncAgent {
       await this.flush();
       if (this.retryPull.size) await this.pull(false);
       await this.routineRound(full);
+      await this.botRound(full);
       this.fails = 0;
       this.status.lastOkAt = Date.now();
       this.status.lastError = "";
@@ -193,6 +204,24 @@ export class SyncAgent {
     }
   }
 
+  /** Bots (look, pin, instructions, order) and the main Daebot's look trade after the routines: every ~15 s, at once after a local edit, and on a full round. A problem is logged and retried; it never fails the session sync. */
+  private async botRound(full: boolean): Promise<void> {
+    if (!this.botAgent) return;
+    const now = Date.now();
+    if (!full && now < this.botDue) return;
+    try { await this.botAgent.round(); this.botErr = ""; this.botDue = now + (this.deps.botEveryMs ?? 15_000); } catch (e) {
+      const msg = String((e as Error)?.message ?? e).slice(0, 160);
+      if (msg !== this.botErr) this.deps.log?.(`sync bots: ${msg}`);
+      this.botErr = msg;
+      this.botDue = now + (this.deps.botEveryMs ?? 15_000);
+    }
+  }
+
+  /** A bot (or the main Daebot's look) was edited here: trade it with the server at once. */
+  noteBotsChanged(): void { this.botDue = 0; this.kick(); }
+
+  get botStats(): { pushed: number; pulled: number; error: string } | undefined { return this.botAgent ? { ...this.botAgent.stats, error: this.botErr } : undefined; }
+
   /** Routine counters (pulled/pushed/deleted since start). */
   get routineStats(): { pulled: number; pushed: number; deleted: number; error: string } | undefined { return this.routineAgent ? { ...this.routineAgent.stats, error: this.routineErr } : undefined; }
 
@@ -201,6 +230,40 @@ export class SyncAgent {
     await this.http.json("POST", "/api/sync/envs/rename", { id, name });
     const r = await this.http.json<{ envGroups?: EnvGroup[]; cloudName?: string }>("GET", "/api/sync/sessions?since=9007199254740991&limit=1"); // no rows, just the names that ride on every list answer
     if (Array.isArray(r.envGroups)) { this.envGroups = r.envGroups.filter((g) => !!normalizeEnv(g) && Array.isArray(g.members) && Array.isArray(g.keys)).slice(0, 100); this.cloudName = typeof r.cloudName === "string" ? r.cloudName : undefined; }
+  }
+
+  /** The person moved a session between MIND Cloud and a computer: send it soon (the record carries the new home and its time). */
+  noteHomeChanged(id: string): void {
+    this.synced.delete(id);
+    this.dirty.add(id);
+    this.status.dirty = this.dirty.size;
+    this.kick();
+  }
+
+  /** Pushes one session to daebot.live right now: a turn that runs in MIND Cloud needs the thread as it is on this computer. A session that is not saved yet has nothing to send. */
+  async pushSession(id: string): Promise<void> {
+    if (this.running) await this.running.catch(() => {});
+    if (!this.deps.store.load(id)) return;
+    this.dirty.add(id);
+    await this.round(false);
+    if (this.status.lastError) throw new Error(this.status.lastError);
+  }
+
+  /**
+   * Runs one user message of a session in MIND Cloud (POST /api/agent/turn on daebot.live, with this account's key) and hands every event of the turn to
+   * `emit` as it streams. The cloud session is the same session (same id); when the turn ends the caller pulls the transcript back.
+   */
+  async cloudTurn(a: { sessionId: string; text: string; surface: string; title?: string; botSlug?: string; quote?: { id?: string; text: string }; photos?: { name: string; dataUrl: string }[] }, emit: (ev: import("../types.ts").AgentEvent) => void, signal?: AbortSignal): Promise<void> {
+    await this.http.sse("/api/agent/turn", { text: a.text, sessionId: a.sessionId, surface: a.surface, ...(a.title ? { title: a.title } : {}), ...(a.botSlug ? { bot: a.botSlug } : {}), ...(a.quote ? { quote: a.quote } : {}), ...(a.photos?.length ? { photos: a.photos } : {}) }, (o) => {
+      const ev = o as { type?: string };
+      if (!ev || typeof ev.type !== "string" || ev.type === "session") return;
+      emit(o as import("../types.ts").AgentEvent);
+    }, signal);
+  }
+
+  /** Stops a turn of this session that is running in MIND Cloud. */
+  async abortCloud(id: string): Promise<void> {
+    await this.http.json("POST", `/api/sync/sessions/${encodeURIComponent(id)}/abort`, {}).catch(() => {});
   }
 
   /** Brings one session up to date from the server right now (a remote job needs the thread as it is on the other device). */
@@ -219,7 +282,7 @@ export class SyncAgent {
         seen.add(row.id);
         if (!row.deleted) this.onServer.add(row.id);
         if (row.deleted) { await this.applyRemoteDelete(row.id); continue; }
-        await this.pullRow(row.id, row.sig, normalizeEnv(row.env));
+        await this.pullRow(row.id, row.sig, row.env ? { env: normalizeEnv(row.env), envAt: typeof row.envAt === "number" ? row.envAt : 0, envBy: isEnvBy(row.envBy) ? row.envBy : undefined } : undefined);
       }
       if (r.rows.length) { since = r.rows[r.rows.length - 1].touchedAt; this.cursor = Math.max(this.cursor, since); }
       if (!r.more) break;
@@ -228,14 +291,16 @@ export class SyncAgent {
     if (full) for (const m of this.deps.store.list()) if (!seen.has(m.id) && !this.tombs.has(SYNC_OWNER, m.id) && !NOT_SYNCED_SURFACES.has(m.surface) && (m.owner ?? SYNC_OWNER) === SYNC_OWNER) this.dirty.add(m.id);
   }
 
-  private async pullRow(id: string, remoteSig: string | undefined, remoteEnv?: EnvTag): Promise<void> {
+  private async pullRow(id: string, remoteSig: string | undefined, remoteHome?: { env?: EnvTag; envAt: number; envBy?: EnvBy }): Promise<void> {
     if (this.tombs.has(SYNC_OWNER, id)) return; // deleted here: never brought back (the delete itself is sent in flush)
     const local = this.deps.store.load(id);
     if (local && (local.owner ?? SYNC_OWNER) !== SYNC_OWNER) return;
     if (local && remoteSig && recordSig(local) === remoteSig) {
       this.synced.set(id, remoteSig); this.dirty.delete(id); this.onServer.add(id);
-      // Same transcript on both sides: only the home can differ. The server decides a home for every session it holds; a copy with none takes it.
-      if (remoteEnv && !local.env && (local.owner ?? SYNC_OWNER) === SYNC_OWNER && !this.deps.isBusy(id)) await this.deps.store.save({ ...local, env: remoteEnv }, { origin: "sync" });
+      // Same transcript on both sides: only the home can differ. The latest decision about it wins (the person's toggle, or the migration that put an
+      // auto-stamped computer back on MIND Cloud); a copy with no home takes the server's.
+      const re = remoteHome?.env;
+      if (re && (!local.env || (remoteHome!.envAt > (local.envAt ?? 0) && local.env.id !== re.id)) && (local.owner ?? SYNC_OWNER) === SYNC_OWNER && !this.deps.isBusy(id)) await this.deps.store.save({ ...local, env: re, ...(remoteHome!.envAt ? { envAt: remoteHome!.envAt } : {}), ...(remoteHome!.envBy ? { envBy: remoteHome!.envBy } : {}) }, { origin: "sync" });
       await this.syncPhotos(id, local.history); return;
     }
     if (this.deps.isBusy(id)) { this.retryPull.add(id); return; }
@@ -353,8 +418,9 @@ export class SyncAgent {
         w = toWire(rec, this.bots());
       }
       if (!w) { if (NOT_SYNCED_SURFACES.has(rec.surface)) this.dirty.delete(id); continue; }
-      // Born here: nobody else has it yet, so this device is its home. (A copy the server already holds keeps whatever home the server gave it.)
-      if (!w.env && this.deps.env && !this.onServer.has(id)) w.env = this.deps.env;
+      // A record with no home (made before environments) starts on MIND Cloud, the standard: a computer is only ever the person's choice. (A copy the
+      // server already holds keeps whatever home the server gave it.)
+      if (!w.env && this.deps.env && !this.onServer.has(id)) { w.env = defaultHome(this.deps.env); w.envAt = Date.now(); w.envBy = "default"; }
       const size = JSON.stringify(w).length;
       if (size > 6 * 1024 * 1024) { this.dirty.delete(id); continue; }
       if (batch.length >= 5 || bytes + size > 3 * 1024 * 1024) await send();

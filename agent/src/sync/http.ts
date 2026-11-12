@@ -33,4 +33,32 @@ export class SyncHttp {
     }
     try { return JSON.parse(text) as T; } catch { throw new SyncHttpError(502, "bad JSON from the server"); }
   }
+
+  /** POST that answers with a server-sent-event stream (one JSON object per `data:` line). Resolves when the stream ends; no overall timeout (a turn can run long), only `signal`. */
+  async sse(path: string, body: unknown, onData: (obj: unknown) => void, signal?: AbortSignal): Promise<void> {
+    const res = await this.f(this.base + path, { method: "POST", headers: { "x-mind-key": this.key, accept: "text/event-stream", "content-type": "application/json" }, body: JSON.stringify(body), ...(signal ? { signal } : {}) });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      let msg = text.slice(0, 200);
+      try { const j = JSON.parse(text); if (typeof j?.error === "string") msg = j.error; } catch { /* not JSON */ }
+      throw new SyncHttpError(res.status, msg || `HTTP ${res.status}`);
+    }
+    const reader = res.body?.getReader();
+    if (!reader) return;
+    const dec = new TextDecoder();
+    let buf = "";
+    const flushBlock = (block: string): void => {
+      const data = block.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).replace(/^ /, "")).join("\n");
+      if (!data) return;
+      try { onData(JSON.parse(data)); } catch { /* a malformed frame is skipped */ }
+    };
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (value) buf += dec.decode(value, { stream: true });
+      let i: number;
+      while ((i = buf.indexOf("\n\n")) !== -1) { flushBlock(buf.slice(0, i)); buf = buf.slice(i + 2); }
+      if (done) break;
+    }
+    if (buf.trim()) flushBlock(buf);
+  }
 }

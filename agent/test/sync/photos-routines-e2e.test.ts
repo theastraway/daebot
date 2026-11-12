@@ -3,7 +3,7 @@
 process.env.DAEBOT_BOTS_ENABLED = "1";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { hostedRig, deskRig, until } from "./rig.ts";
+import { hostedRig, deskRig, until, localSession } from "./rig.ts";
 import { parseSse } from "../gateway/helpers.ts";
 import { jpeg, png } from "../photos/images.ts";
 
@@ -13,7 +13,7 @@ test("a photo attached in a desktop chat is fetchable on daebot.live (same id, s
   const hosted = await hostedRig();
   const desk = await deskRig(hosted, hosted.keys.alice);
   try {
-    const { sessionId } = JSON.parse((await desk.api("POST", "/sessions", { surface: "desktop" })).body);
+    const sessionId = await localSession(desk, { surface: "desktop" });
     const img = jpeg(640, 480, 300);
     const send = await desk.api("POST", `/sessions/${sessionId}/send`, { text: "look at this", photos: [{ name: "cat.jpg", dataUrl: dataUrl(img) }] });
     assert.equal(send.status, 200, send.body);
@@ -80,7 +80,7 @@ test("deleting the chat deletes its photos on both sides", async () => {
   const hosted = await hostedRig();
   const desk = await deskRig(hosted, hosted.keys.alice);
   try {
-    const { sessionId } = JSON.parse((await desk.api("POST", "/sessions", { surface: "desktop" })).body);
+    const sessionId = await localSession(desk, { surface: "desktop" });
     await desk.api("POST", `/sessions/${sessionId}/send`, { text: "pic", photos: [{ name: "a.jpg", dataUrl: dataUrl(jpeg(10, 10)) }] });
     const web = await hosted.as(hosted.keys.alice);
     await until(async () => (await web("GET", `/sessions/${sessionId}/photos/p1`)).status === 200);

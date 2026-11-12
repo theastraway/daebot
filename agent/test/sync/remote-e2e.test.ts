@@ -74,9 +74,9 @@ test("a bot no desktop carries is answered by the server as before", async () =>
   } finally { await desk.close(); await hosted.close(); }
 });
 
-test("AUTO-WAKE: a message from the web to a bot whose Remote is OFF turns Remote on, logs it on both sides, and the desktop answers", async () => {
-  const hosted = await hostedRig({ script: [{ text: "SERVER SHOULD NOT ANSWER" }] });
-  const desk = await deskRig(hosted, hosted.keys.alice, { script: [{ text: "woke up and answered" }] });
+test("NO AUTO-WAKE: a message from the web to a bot whose Run on a computer is OFF is answered in MIND Cloud; the switch is never turned on for the person", async () => {
+  const hosted = await hostedRig({ script: [{ text: "answered in the cloud" }] });
+  const desk = await deskRig(hosted, hosted.keys.alice, { script: [{ text: "DESKTOP SHOULD NOT ANSWER" }] });
   try {
     const { bot, web, hostBot } = await botOnBoth(hosted, desk);
     assert.equal(hostBot.remote, false);
@@ -84,16 +84,13 @@ test("AUTO-WAKE: a message from the web to a bot whose Remote is OFF turns Remot
     const { sessionId } = JSON.parse((await web("POST", "/sessions", { surface: "ios", bot: hostBot.id })).body);
     const res = await web("POST", `/sessions/${sessionId}/send`, { text: "anyone home?" });
     const evs = parseSse(res.body) as any[];
-    assert.ok(evs.some((e) => e.type === "text" && /woke up and answered/.test(e.delta)), res.body);
-    assert.equal(hosted.provider.requests.length, 0);
-    // hosted flag + log
+    assert.ok(evs.some((e) => e.type === "text" && /answered in the cloud/.test(e.delta)), res.body);
+    assert.equal(desk.provider.requests.length, 0, "nothing reached the computer");
+    assert.ok(!evs.some((e) => e.type === "notice" && /asleep|offline|not awake/i.test(e.text)), "no raw error, no waiting notice");
     const h = JSON.parse((await web("GET", "/bots")).body).bots.find((b: any) => b.slug === "scout");
-    assert.equal(h.remote, true);
-    assert.equal(h.remoteLog.at(-1).by, "auto");
-    assert.match(h.remoteLog.at(-1).note, /iPhone/);
-    // the desktop's own settings show it turned on, and say why
-    const d = await until(async () => { const x = JSON.parse((await desk.api("GET", "/bots")).body).bots.find((b: any) => b.slug === "scout"); return x.remote ? x : undefined; });
-    assert.equal(d.remoteLog.at(-1).by, "auto");
+    assert.equal(h.remote, false, "still off: only the person turns it on");
+    assert.equal(h.remoteLog.length, 0);
+    assert.equal(h.env.kind, "cloud", "the bot's home is MIND Cloud");
   } finally { await desk.close(); await hosted.close(); }
 });
 
@@ -114,7 +111,10 @@ test("OFFLINE desktop: the sender sees 'Waiting for <device>', the message is qu
     desk2 = await deskRig(hosted, hosted.keys.alice, { script: [{ text: "back and answering" }], dir }); // the Mac wakes up
     const res = await pending;
     const evs = parseSse(res.body) as any[];
-    assert.ok(evs.some((e) => e.type === "notice" && /Waiting for Test Mac/.test(e.text)), res.body);
+    const waiting = evs.find((e) => e.type === "notice" && /Test Mac is asleep or offline/.test(e.text));
+    assert.ok(waiting, res.body);
+    assert.match(waiting.text, /waiting/i);
+    assert.deepEqual(waiting.action, { kind: "move_to_cloud", label: "Move to MIND Cloud", sessionId }, "one clear action, no raw error");
     assert.ok(evs.some((e) => e.type === "notice" && /Test Mac is back/.test(e.text)), res.body);
     assert.ok(evs.some((e) => e.type === "text" && /back and answering/.test(e.delta)), res.body);
     assert.equal(hosted.provider.requests.length, 0);
@@ -146,7 +146,9 @@ test("SERVER-TO-SERVER: /api/agent/turn with bot:<slug> runs on the desktop that
   const hosted = await hostedRig({ script: [{ text: "SERVER SHOULD NOT ANSWER" }] });
   const desk = await deskRig(hosted, hosted.keys.alice, { script: [{ text: "DRYWLL 1/2 hung taped finished: $2.31/SF" }] });
   try {
-    await botOnBoth(hosted, desk, "xactai");
+    const both = await botOnBoth(hosted, desk, "xactai");
+    await desk.api("PATCH", `/bots/${both.bot.id}`, { remote: true }); // "Run on a computer" is the person's choice
+    await until(async () => JSON.parse((await both.web("GET", "/bots")).body).bots.find((x: any) => x.slug === "xactai").remote);
     // the caller can find the bot and see which computer carries it
     const list = await hosted.host(hosted.keys.alice, "GET", "/api/agent/bots");
     assert.equal(list.status, 200, list.body);
