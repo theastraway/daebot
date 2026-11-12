@@ -50,6 +50,10 @@ export interface FakeMind {
   life: Map<string, { focuses: Map<string, any>; items: Map<string, any>; docs: Map<string, any> }>;
   /** when set, /life/*, /focuses and /documents answer this HTTP status */
   lifeStatus?: number;
+  /** multi-MIND accounts: grants by grantee username -> MINDs they hold (GET /developer/v1/accounts, POST /accounts/switch, POST /developer/keys). undefined = the routes answer 404 (feature off) */
+  grants?: Map<string, { username: string; role: "owner" | "viewer"; label?: string }[]>;
+  /** every key minted through /developer/keys with a switch token: [tenant, actor] */
+  minted: { key: string; tenant: string; actor: string }[];
   newKey(username: string): string;
   close(): Promise<void>;
 }
@@ -66,7 +70,7 @@ const json = (res: ServerResponse, status: number, v: unknown, extra: Record<str
 export async function startFakeMind(initial: Record<string, string> = {}): Promise<FakeMind> {
   const m: FakeMind = {
     url: "", base: "", seen: [], keys: new Map(Object.entries(initial)), registered: [], consentUser: "", codes: new Map(), refreshTokens: new Map(),
-    agentSessions: new Map(), chatScopeless: new Set(), adminKeys: new Set(), bots: new Map(), integrations: new Map(), usage: new Map(), life: new Map(),
+    minted: [], agentSessions: new Map(), chatScopeless: new Set(), adminKeys: new Set(), bots: new Map(), integrations: new Map(), usage: new Map(), life: new Map(),
     newKey(username) { const k = "mind_" + randomBytes(24).toString("base64url"); m.keys.set(k, username); return k; },
     close: () => new Promise((r) => { server.close(() => r()); server.closeAllConnections(); }),
   };
@@ -135,6 +139,14 @@ export async function startFakeMind(initial: Record<string, string> = {}): Promi
       if (!m.keys.has(target)) return json(res, 404, { detail: "no active key matches" });
       const had = m.chatScopeless.delete(target);
       return json(res, 200, { ok: true, added: had ? ["chat:read", "chat:write"] : [] });
+    }
+    if (u.pathname === "/developer/keys" && req.method === "POST") {
+      const jwt = String(req.headers["authorization"] ?? "").replace(/^Bearer /, "");
+      const [pre, tenant, actor] = jwt.split("|");
+      if (pre !== "fakejwt" || !tenant) return json(res, 401, { detail: "Not authenticated" });
+      const k = m.newKey(tenant);
+      m.minted.push({ key: k, tenant, actor });
+      return json(res, 200, { id: "k_" + m.minted.length, name: parsed?.name, key: k, prefix: k.slice(0, 12), scopes: [], created_at: new Date().toISOString() });
     }
     if (u.pathname.startsWith("/developer/v1/")) {
       const username = m.keys.get(key);
@@ -245,6 +257,14 @@ export async function startFakeMind(initial: Record<string, string> = {}): Promi
         if (rest === "/audio/transcriptions") return json(res, 200, { text: `hello from ${username}`, duration: 2.5, credits_used: 0.01 }, { "x-mind-credits-used": "0.01" });
         res.writeHead(200, { "content-type": "audio/mpeg", "x-mind-credits-used": "0.25" });
         return void res.end(Buffer.from("ID3fakemp3"));
+      }
+      if (rest === "/accounts" || rest === "/accounts/switch") {
+        if (!m.grants) return json(res, 404, { detail: "Not Found" });
+        const mine = [{ username, role: "owner" as const, label: username }, ...(m.grants.get(username) ?? [])];
+        if (rest === "/accounts") return json(res, 200, { enabled: true, actor: username, accounts: mine.map((g, i) => ({ username: g.username, label: g.label ?? g.username, role: g.role, is_self: i === 0, is_active: i === 0 })) });
+        const want = String(parsed?.username ?? "");
+        if (!mine.some((g) => g.username === want)) return json(res, 403, { detail: "You do not have access to that MIND." });
+        return json(res, 200, { access_token: `fakejwt|${want}|${username}`, token_type: "bearer", account: { username: want, role: mine.find((g) => g.username === want)!.role, is_self: want === username } });
       }
       if (rest === "/profile") return json(res, 200, { username, bio: "" });
       if (rest === "/profile/models" && m.models) return json(res, 200, { models: m.models, current: m.models[0]?.id });

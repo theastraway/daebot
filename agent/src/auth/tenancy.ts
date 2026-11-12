@@ -10,6 +10,7 @@ import type { MindCredits } from "../provider/mind.ts";
 import type { BotsContext } from "../bots/types.ts";
 import { MindOAuth } from "./mind-auth.ts";
 import { OWNER } from "./users.ts";
+import type { TenantDirectory } from "./tenants.ts";
 import type { EntryCodes, RuntimeAllowList } from "./provision.ts";
 import type { Principal, UserStore } from "./users.ts";
 import type { CoderGrant } from "../kernel/coder.ts";
@@ -33,6 +34,8 @@ export interface AuthContext {
   /** DAEBOT_BILLING=mind only: tier + credits cache shared with every provider, and the MIND key a principal's calls are billed to. */
   credits?: MindCredits;
   billingKey(p: Principal): string | undefined;
+  /** MIND tenants the signed-in user owns (MIND's accounts API); powers the Switch account list. */
+  tenants?: TenantDirectory;
   /** Live MIND API base the sign-in checks against. */
   mindBaseUrl: string;
   fetchImpl?: typeof fetch;
