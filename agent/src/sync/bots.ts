@@ -11,6 +11,8 @@ import { createHash } from "node:crypto";
 import type { BotsApi } from "../bots/types.ts";
 import type { SettingsStore, MainProfile } from "../settings.ts";
 import type { SyncHttp } from "./http.ts";
+import { canonVoice } from "../bots/voice.ts";
+import type { BotVoice } from "../bots/voice.ts";
 
 export const MAIN_SLUG = "main";
 
@@ -21,6 +23,7 @@ export interface WireBot {
   color: string;
   face?: string;
   model?: string;
+  voice?: BotVoice;
   profileAt: number;
   pinnedAt?: number;
   pinAt: number;
@@ -36,7 +39,7 @@ const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v)
 export function canonBot(w: WireBot): WireBot {
   return {
     slug: w.slug, name: w.name, purpose: w.purpose, color: w.color,
-    ...(w.face ? { face: w.face } : {}), ...(w.model ? { model: w.model } : {}),
+    ...(w.face ? { face: w.face } : {}), ...(w.model ? { model: w.model } : {}), ...(canonVoice(w.voice) ? { voice: canonVoice(w.voice) } : {}),
     profileAt: num(w.profileAt),
     ...(w.pinnedAt ? { pinnedAt: w.pinnedAt } : {}), pinAt: num(w.pinAt),
     ...(w.instructions ? { instructions: w.instructions } : {}), instructionsAt: num(w.instructionsAt),
@@ -52,7 +55,7 @@ export function validWireBot(v: unknown): v is WireBot {
   const r = v as Partial<WireBot> | null;
   return !!r && typeof r === "object" && typeof r.slug === "string" && /^[a-z0-9-]{1,32}$/.test(r.slug) && typeof r.name === "string" && r.name.length <= 200
     && typeof r.purpose === "string" && r.purpose.length <= 2000 && typeof r.color === "string" && /^#[0-9a-fA-F]{6}$/.test(r.color)
-    && (r.face === undefined || (typeof r.face === "string" && /^[a-z0-9-]{1,32}$/.test(r.face))) && (r.model === undefined || typeof r.model === "string")
+    && (r.face === undefined || (typeof r.face === "string" && /^[a-z0-9-]{1,32}$/.test(r.face))) && (r.model === undefined || typeof r.model === "string") && (r.voice === undefined || (typeof r.voice === "object" && r.voice !== null && JSON.stringify(r.voice).length <= 1000))
     && (r.instructions === undefined || (typeof r.instructions === "string" && Buffer.byteLength(r.instructions, "utf8") <= 8 * 1024));
 }
 export function validWireMain(v: unknown): v is WireMain {
@@ -61,7 +64,7 @@ export function validWireMain(v: unknown): v is WireMain {
     && (r.instructions === undefined || (typeof r.instructions === "string" && Buffer.byteLength(r.instructions, "utf8") <= 8 * 1024));
 }
 
-const look = (w: WireBot): string => JSON.stringify([w.name, w.purpose, w.color, w.face ?? "", w.model ?? ""]);
+const look = (w: WireBot): string => JSON.stringify([w.name, w.purpose, w.color, w.face ?? "", w.model ?? "", canonVoice(w.voice) ?? null]);
 /** The group a later change wins; a tie settles on the larger serialisation so both sides pick the same one. */
 const later = (aAt: number, bAt: number, aVal: string, bVal: string): "a" | "b" => (aAt !== bAt ? (aAt > bAt ? "a" : "b") : aVal >= bVal ? "a" : "b");
 
@@ -72,7 +75,7 @@ export function mergeWireBot(a: WireBot, b: WireBot): WireBot {
   const I = later(a.instructionsAt, b.instructionsAt, a.instructions ?? "", b.instructions ?? "") === "a" ? a : b;
   const created = Math.min(a.createdAt || b.createdAt, b.createdAt || a.createdAt);
   return canonBot({
-    slug: a.slug, name: L.name, purpose: L.purpose, color: L.color, face: L.face, model: L.model, profileAt: Math.max(a.profileAt, b.profileAt),
+    slug: a.slug, name: L.name, purpose: L.purpose, color: L.color, face: L.face, model: L.model, voice: L.voice, profileAt: Math.max(a.profileAt, b.profileAt),
     pinnedAt: P.pinnedAt, pinAt: Math.max(a.pinAt, b.pinAt), instructions: I.instructions, instructionsAt: Math.max(a.instructionsAt, b.instructionsAt), createdAt: created,
   });
 }

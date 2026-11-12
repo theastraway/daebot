@@ -39,3 +39,24 @@ test("web wiring: voice controls exist, app.js loads the module, voice.js never 
   assert.doesNotMatch(v, /innerHTML|insertAdjacentHTML|eval\(|new Function|document\.write/);
   assert.doesNotMatch(v, /fetch\((?!`\/voice\/|"\/voice\/)/, "voice.js only talks to /voice/*");
 });
+
+const bv: any = await import(new URL("../../web/botvoice.js", import.meta.url).href);
+
+test("bot voice form: only touched fields are saved, labels read well, summary names the voice", () => {
+  assert.equal(bv.voiceToSave({}), null);
+  assert.deepEqual(bv.voiceToSave({ voiceId: "abc", speed: 1.1, language: "" }), { voiceId: "abc", speed: 1.1 });
+  assert.equal(bv.voiceLabel({ name: "Rachel", labels: { accent: "american", gender: "female" } }), "Rachel · american, female");
+  assert.equal(bv.voiceLabel({ name: "Plain" }), "Plain");
+  assert.equal(bv.voiceSummary(null), "Default voice");
+  assert.equal(bv.voiceSummary({ voiceName: "George", speed: 1.1 }), "George · 1.1x");
+});
+
+test("bot voice wiring: section ids exist, app passes the bot slug to voice, botvoice.js has no innerHTML and only talks to the bot and voice APIs", () => {
+  const html = web("index.html");
+  for (const id of ["bd-voice-sec", "bv-search", "bv-scope", "bv-voice", "bv-model", "bv-speed", "bv-stab", "bv-sim", "bv-style", "bv-boost", "bv-lang", "bv-format", "bv-preview", "bv-save", "bv-reset", "bv-state"]) assert.match(html, new RegExp(`id="${id}"`), id);
+  assert.match(web("app.js"), /botSlug: \(\)/);
+  assert.match(web("voice.js"), /bot: o\.botSlug\(\)/);
+  const v = web("botvoice.js").replace(/^\s*\/\/.*$/gm, "");
+  assert.doesNotMatch(v, /innerHTML|insertAdjacentHTML|eval\(|new Function|document\.write/);
+  assert.doesNotMatch(v, /api\((?!`\/voice\/|"\/voice\/|`\/bots\/)/);
+});

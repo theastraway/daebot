@@ -1623,6 +1623,7 @@ const voice = initVoice({
   notify: (t) => notify(t),
   creditsChanged: () => refreshPlan(),
   bots: () => [...document.querySelectorAll(".hero-bot, .bot-dock m-bot")],
+  botSlug: () => { const b = state.curBot ? bots.bot(state.curBot) : null; return b && b.slug ? b.slug : "main"; }, // whose voice speaks the answer
 });
 
 // Hold-to-talk hotkeys (Right Option = dictation, Right Command = voice by default) + the Keyboard shortcuts card.

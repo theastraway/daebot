@@ -4,11 +4,14 @@
 // this process except as the X-API-Key of the call to MIND; it is never logged or echoed.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Principal } from "../auth/users.ts";
+import { cleanVoice, ttsBodyFor } from "../bots/voice.ts";
+import type { BotVoice } from "../bots/voice.ts";
 
 export const MAX_AUDIO_BYTES = 10 * 1024 * 1024; // one push-to-talk utterance; MIND itself allows 25 MB
 export const MAX_TTS_CHARS = 3000;               // MIND allows 4000
 export const STT_PER_MIN = 20;
 export const TTS_PER_MIN = 30;
+export const CATALOG_PER_MIN = 40;
 export const MAX_INFLIGHT = 2;                   // concurrent voice calls per principal
 const WINDOW_MS = 60_000;
 const UPSTREAM_TIMEOUT_MS = 60_000;
@@ -18,6 +21,8 @@ export interface VoiceOptions {
   baseUrl: string;
   /** The MIND key a principal's calls are billed to; undefined = voice unavailable for them. */
   keyFor(p: Principal): string | undefined;
+  /** The saved voice of a bot ("main" = the main Daebot) for this principal; undefined = default voice. */
+  voiceOf?(p: Principal, bot: string): BotVoice | undefined;
   fetchImpl?: typeof fetch;
   now?: () => number;
   /** Called with the key after a successful call so the credits chip can refresh. */
@@ -87,6 +92,7 @@ function mapError(status: number, body: string): { status: number; body: Record<
   if (status === 401 || status === 403) return { status: 401, body: { error: "mind_key_rejected", message: "Your MIND key was not accepted for voice. Sign in again." } };
   if (status === 404) return { status: 503, body: { error: "voice_unavailable", message: "MIND voice is not switched on yet." } };
   if (status === 413) return { status: 413, body: { error: "too_large" } };
+  if (status === 400 && typeof j?.error === "string" && /^(bad_voice|bad_model|bad_output_format|bad_language|voice_settings_rejected)$/.test(j.error)) return { status: 400, body: { error: j.error, message: typeof j?.message === "string" ? j.message.slice(0, 200) : "That voice setting is not accepted for this model." } };
   if (status === 503) return { status: 503, body: { error: "voice_unavailable", message: "MIND voice is temporarily unavailable." } };
   return { status: 502, body: { error: "voice_failed", message: "The voice service could not finish that request." } };
 }
@@ -99,7 +105,25 @@ export function createVoiceHandler(o: VoiceOptions): (req: IncomingMessage, res:
   return async (req, res, path, query, p) => {
     const isStt = path === "/voice/stt";
     const isTts = path === "/voice/tts";
-    if (!isStt && !isTts) return json(res, 404, { error: "not found" });
+    const isCatalog = path === "/voice/voices" || path === "/voice/models";
+    if (!isStt && !isTts && !isCatalog) return json(res, 404, { error: "not found" });
+    if (isCatalog) {
+      if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+      const ck = o.keyFor(p);
+      if (!ck) return json(res, 503, { error: "voice_unavailable", message: "Voice needs a MIND key. Sign in with your MIND account." });
+      const wait = limiter.take(p.id, "catalog", CATALOG_PER_MIN);
+      if (wait > 0) return json(res, 429, { error: "slow_down", message: "Too many requests. Try again shortly." }, { "retry-after": String(wait) });
+      try {
+        const qs = new URLSearchParams();
+        if (path === "/voice/voices") {
+          const q = (query.get("q") ?? "").slice(0, 80); if (q) qs.set("q", q);
+          qs.set("scope", query.get("scope") === "library" ? "library" : "mine");
+        }
+        const up = await f(`${base}/audio/${path === "/voice/voices" ? "voices" : "models"}${qs.size ? `?${qs}` : ""}`, { headers: { "X-API-Key": ck }, signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) });
+        if (!up.ok) { const m = mapError(up.status, await up.text().catch(() => "")); return json(res, m.status, m.body); }
+        return json(res, 200, await up.json().catch(() => ({})));
+      } catch { return json(res, 502, { error: "voice_failed", message: "The voice service could not be reached." }); }
+    }
     if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
     const key = o.keyFor(p);
     if (!key) { req.resume(); return json(res, 503, { error: "voice_unavailable", message: "Voice needs a MIND key. Sign in with your MIND account." }); }
@@ -127,7 +151,10 @@ export function createVoiceHandler(o: VoiceOptions): (req: IncomingMessage, res:
         const text = typeof b?.text === "string" ? b.text.trim() : "";
         if (!text) return json(res, 400, { error: "text required" });
         if (text.length > MAX_TTS_CHARS) return json(res, 413, { error: "too_large", message: `Speak at most ${MAX_TTS_CHARS} characters at a time.` });
-        upstream = await f(`${base}/audio/speech`, { method: "POST", headers: { "X-API-Key": key, "Content-Type": "application/json" }, body: JSON.stringify({ input: text }), signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) });
+        // The voice: an explicit `voice` object (the settings form previewing unsaved edits) or the saved voice of `bot` (a slug, or "main").
+        const bot = typeof b?.bot === "string" && /^[a-z0-9-]{1,32}$/.test(b.bot) ? b.bot : undefined;
+        const voice = b?.voice && typeof b.voice === "object" ? cleanVoice(b.voice) : bot ? o.voiceOf?.(p, bot) : undefined;
+        upstream = await f(`${base}/audio/speech`, { method: "POST", headers: { "X-API-Key": key, "Content-Type": "application/json" }, body: JSON.stringify(ttsBodyFor(voice, text)), signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) });
       }
       if (!upstream.ok) {
         const m = mapError(upstream.status, await upstream.text().catch(() => ""));

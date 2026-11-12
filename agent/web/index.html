@@ -222,6 +222,30 @@
         <p class="drawer-fine" id="bd-model-note">Applies to this bot's threads only. Main Daebot and other bots keep their own choice.</p>
         <span class="inline-state" id="bd-model-state" role="status" aria-live="polite"></span>
       </section>
+      <section class="dsec" id="bd-voice-sec">
+        <h3>Voice</h3>
+        <p class="drawer-fine">How this bot sounds when it speaks (ElevenLabs). Saved with the bot, so it is the same on every device. Billed to your MIND credits. <strong id="bv-summary">Default voice</strong></p>
+        <label class="fld-label" for="bv-search">Voice</label>
+        <div class="bv-row"><input class="fld" id="bv-search" type="search" placeholder="Search voices" autocomplete="off" aria-label="Search voices"><select class="fld" id="bv-scope" aria-label="Where to search"><option value="mine">My voices</option><option value="library">Voice Library</option></select></div>
+        <select class="fld" id="bv-voice" aria-label="Voice for this bot"><option value="">Default voice</option></select>
+        <label class="fld-label" for="bv-model">Model</label>
+        <select class="fld" id="bv-model" aria-label="Voice model"><option value="">Default (Flash v2.5)</option></select>
+        <label class="fld-label" for="bv-speed">Speed <output id="bv-speed-out">1</output></label>
+        <input class="bv-range" id="bv-speed" type="range" min="0.7" max="1.2" step="0.05" value="1">
+        <label class="fld-label" for="bv-stab">Stability <output id="bv-stab-out">0.5</output></label>
+        <input class="bv-range" id="bv-stab" type="range" min="0" max="1" step="0.05" value="0.5">
+        <label class="fld-label" for="bv-sim">Similarity boost <output id="bv-sim-out">0.75</output></label>
+        <input class="bv-range" id="bv-sim" type="range" min="0" max="1" step="0.05" value="0.75">
+        <label class="fld-label" for="bv-style">Style exaggeration <output id="bv-style-out">0</output></label>
+        <input class="bv-range" id="bv-style" type="range" min="0" max="1" step="0.05" value="0">
+        <label class="rt-check"><input type="checkbox" id="bv-boost" checked> <span>Speaker boost</span></label>
+        <label class="fld-label" for="bv-lang">Language</label>
+        <select class="fld" id="bv-lang" aria-label="Spoken language"><option value="">Auto-detect</option></select>
+        <label class="fld-label" for="bv-format">Audio format</label>
+        <select class="fld" id="bv-format" aria-label="Audio output format"><option value="">Default</option></select>
+        <div class="row"><button class="btn-quiet" id="bv-preview" type="button">Preview</button><button class="btn-primary" id="bv-save" type="button" disabled>Save voice</button><button class="btn-quiet" id="bv-reset" type="button">Reset</button></div>
+        <span class="inline-state" id="bv-state" role="status" aria-live="polite"></span>
+      </section>
       <section class="dsec" id="bd-cap-sec">
         <h3>Spend cap</h3>
         <div id="bd-cap"></div>
