@@ -75,8 +75,8 @@ function call(h: ReturnType<typeof createVoiceHandler>, path: string, method: st
 }
 
 test("/voice/tts speaks with the saved voice of the named bot; an explicit voice (preview) wins; main has none", async () => {
-  const sent: any[] = [];
-  const f = (async (_url: string, init: any) => { sent.push(JSON.parse(init.body)); return new Response(Buffer.from("ID3x"), { status: 200, headers: { "content-type": "audio/mpeg" } }); }) as unknown as typeof fetch;
+  const sent: any[] = [], heads: any[] = [];
+  const f = (async (_url: string, init: any) => { heads.push(init.headers); sent.push(JSON.parse(init.body)); return new Response(Buffer.from("ID3x"), { status: 200, headers: { "content-type": "audio/mpeg" } }); }) as unknown as typeof fetch;
   const saved = { voiceId: "JBFqnCBsd6RMkjVDRZzb", speed: 1.1 };
   const h = createVoiceHandler({ baseUrl: "http://m/developer/v1", keyFor: () => "k", voiceOf: (_p, bot) => (bot === "sam" ? saved : undefined), fetchImpl: f });
   assert.equal((await call(h, "/voice/tts", "POST", { text: "hello", bot: "sam" })).status, 200);
@@ -87,6 +87,8 @@ test("/voice/tts speaks with the saved voice of the named bot; an explicit voice
   assert.deepEqual(sent[2], { input: "hello", voice: "21m00Tcm4TlvDq8ikWAM", voice_settings: { stability: 0.2 } });
   await call(h, "/voice/tts", "POST", { text: "hello", bot: "../../etc" });
   assert.deepEqual(sent[3], { input: "hello" }, "a bad bot name is ignored, never forwarded");
+  assert.equal(heads[0]["X-Daebot-Bot"], "sam", "the bot slug goes to MIND so its spend cap and ledger apply");
+  assert.equal(heads[3]["X-Daebot-Bot"], undefined);
 });
 
 test("/voice/voices and /voice/models forward GET with the user's key and a fixed query; other methods refused", async () => {
