@@ -19,6 +19,12 @@ interface SendblueInbound {
   content?: string; is_outbound?: boolean; number?: string; to_number?: string; message_handle?: string; group_id?: string;
 }
 
+/** A phone number reduced to its digits, US country code dropped, so "+1 (213) 455-3913" and "2134553913" compare equal. */
+export function phoneKey(n: string): string {
+  const d = String(n ?? "").replace(/\D/g, "");
+  return d.length === 11 && d.startsWith("1") ? d.slice(1) : d;
+}
+
 export class IMessageAdapter implements ChannelAdapter {
   readonly name = "imessage";
   private cfg: IMessageConfig;
@@ -64,6 +70,10 @@ export class IMessageAdapter implements ChannelAdapter {
     const p = (json ?? {}) as SendblueInbound;
     if (p.is_outbound === true) return { status: 200, body: { ok: true, ignored: "outbound" } };
     if (p.group_id) return { status: 200, body: { ok: true, ignored: "group" } };
+    // Sendblue receive webhooks are account-wide: a text to ANY line on the account is posted here. Answer only texts to our line.
+    if (typeof p.to_number === "string" && p.to_number.trim() && this.cfg.fromNumber && phoneKey(p.to_number) !== phoneKey(this.cfg.fromNumber)) {
+      return { status: 200, body: { ok: true, ignored: "other line" } };
+    }
     const sender = typeof p.number === "string" ? p.number : "";
     const text = typeof p.content === "string" ? p.content : "";
     if (!sender || !text.trim()) return { status: 200, body: { ok: true, ignored: "empty" } };
