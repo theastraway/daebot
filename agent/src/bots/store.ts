@@ -9,8 +9,8 @@ import type { MindClient } from "../types.ts";
 import { LATEST_BOT_VERSION } from "./versions.ts";
 import { isFaceId } from "./faces.ts";
 import { validModelId } from "../settings.ts";
-import { BotError, MAX_INSTRUCTIONS_BYTES, MAX_REMOTE_LOG, SLUG_RE, safeUpgradeUrl } from "./types.ts";
-import type { BotRecord, BotsApi, RosterEntry } from "./types.ts";
+import { BotError, MAX_INSTRUCTIONS_BYTES, MAX_REMOTE_LOG, SLUG_RE, cleanDevice, safeUpgradeUrl } from "./types.ts";
+import type { BotRecord, BotsApi, RemoteDevice, RosterEntry } from "./types.ts";
 import { canonBot, mergeWireBot as mergeWire, sigOf } from "../sync/bots.ts";
 import type { WireBot } from "../sync/bots.ts";
 
@@ -284,16 +284,30 @@ export class BotStore implements BotsApi {
     return { ...b };
   }
 
-  private applyRemote(b: BotRecord, remote: boolean, o: { by: "user" | "auto"; note?: string; at?: number }): void {
+  private applyRemote(b: BotRecord, remote: boolean, o: { by: "user" | "auto"; note?: string; at?: number; device?: RemoteDevice }): void {
     const at = o.at ?? this.now();
-    if (!!b.remote === remote) { if (b.remoteAt !== undefined || remote) b.remoteAt = Math.max(b.remoteAt ?? 0, at); return; } // no change: nothing to log
+    const dev = cleanDevice(o.device);
+    if (!remote) delete b.remoteDevice; // off = MIND Cloud: nothing is pinned
+    if (!!b.remote === remote) {
+      // Already in that state. A different computer named while it is on = the person moved it: pin it there and say so.
+      if (remote && dev && b.remoteDevice?.id !== dev.id) {
+        const was = b.remoteDevice?.name;
+        b.remoteDevice = dev; b.remoteAt = Math.max(b.remoteAt ?? 0, at);
+        b.remoteLog = [...(b.remoteLog ?? []), { at: b.remoteAt, remote, by: o.by, note: (o.note ?? `Moved to ${dev.name}${was ? ` from ${was}` : ""}.`).slice(0, 200) }].slice(-MAX_REMOTE_LOG);
+        return;
+      }
+      if (remote && dev && b.remoteDevice && b.remoteDevice.name !== dev.name) b.remoteDevice = dev; // the same place under a new name
+      if (b.remoteAt !== undefined || remote) b.remoteAt = Math.max(b.remoteAt ?? 0, at);
+      return; // no change: nothing to log
+    }
     b.remote = remote;
     b.remoteAt = at;
+    if (remote && dev) b.remoteDevice = dev;
     const note = o.note ?? (o.by === "user" ? (remote ? "Turned on in settings." : "Turned off in settings.") : remote ? "Turned on automatically." : "Turned off automatically.");
     b.remoteLog = [...(b.remoteLog ?? []), { at, remote, by: o.by, note: note.slice(0, 200) }].slice(-MAX_REMOTE_LOG);
   }
 
-  setRemote(id: string, remote: boolean, o: { by: "user" | "auto"; note?: string; at?: number }): BotRecord {
+  setRemote(id: string, remote: boolean, o: { by: "user" | "auto"; note?: string; at?: number; device?: RemoteDevice }): BotRecord {
     const b = ID_RE.test(id) ? this.bots[id] : undefined;
     if (!b) throw new BotError(404, "not_found", "no such bot");
     this.applyRemote(b, remote, o);

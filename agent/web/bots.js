@@ -433,7 +433,25 @@ export function initBots(ctx) {
   /** The Remote switch state of a bot, for the row menu. */
   function remoteSpec(bot) {
     if (!bot) return { state: "disabled", reason: "Bots only. No bot owns this chat." };
-    return { state: bot.remote ? "on" : "off", where: bot.remote && bot.runsOn && bot.env ? bot.env.name : "" };
+    const pin = bot.remote && bot.remotePin ? bot.remotePin.name : "";
+    // Pinned to another computer and this window is a computer (the server says pinnedHere is false only on a computer's own gateway): offer "Move to this computer".
+    return { state: bot.remote ? "on" : "off", where: bot.remote ? (pin || (bot.runsOn && bot.env ? bot.env.name : "")) : "", ...(bot.remote && bot.remotePin && bot.pinnedHere === false ? { moveHere: true } : {}) };
+  }
+
+  /** Re-pin a bot to the computer this window is on ("Move to this computer"). */
+  async function moveHere(id) {
+    const bot = botById(id);
+    if (!bot) return;
+    try {
+      const res = await api(`/bots/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ remote: true, moveHere: true }) });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(botErrorMessage(res.status, body).text);
+      Object.assign(bot, body.bot || body, { id });
+      if (st.drawerOpen && st.drawerBot === id) paintRemote(bot);
+      app.botChanged(bot);
+      notify(`${bot.name} now runs only on ${bot.remotePin ? bot.remotePin.name : "this computer"}.`);
+    } catch (e) { if (e.message !== "unauthorized") notify(`Could not move ${bot.name}: ${e.message}`); }
+    renderList(); sync();
   }
 
   /** Turn Remote on or off for a bot (the same PATCH /bots/:id {remote} as the settings drawer). Optimistic; put back on failure. */
@@ -460,6 +478,7 @@ export function initBots(ctx) {
       pin: () => setPinned(bot, !(bot.pinned || bot.pinnedAt)),
       delete: () => deleteBot(bot.id),
       remote: (on) => setRemote(bot.id, on),
+      movehere: () => moveHere(bot.id),
     };
   }
 
@@ -908,7 +927,7 @@ export function initBots(ctx) {
     closeDrawer,
     /** Open Bot settings for a bot (the header's "set by bot" badge uses it). */
     openSettings: (id) => { if (!(st.drawerOpen && st.drawerBot === id)) openSettings(id); },
-    remoteSpec, setRemote, botActions,
+    remoteSpec, setRemote, moveHere, botActions,
     drawerOpen: () => st.drawerOpen,
     cardOpen: () => !el.card.hidden,
     threads: () => st.threads,

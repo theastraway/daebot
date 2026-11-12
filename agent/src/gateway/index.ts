@@ -69,6 +69,7 @@ import type { PhotoMeta } from "../photos.ts";
 import type { SessionStore } from "../persist.ts";
 import { SyncService } from "../sync/service.ts";
 import type { HomeCtx } from "../sync/home.ts";
+import { remoteBy } from "../sync/home.ts";
 import { SyncAgent } from "../sync/agent.ts";
 import { RoutineSyncService } from "../sync/routines.ts";
 import { upgradeChatScopes } from "../mind/scope-upgrade.ts";
@@ -463,6 +464,11 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     : undefined;
   const remoteSweep = remoteHub ? setInterval(() => remoteHub.sweep(), 30_000) : undefined;
   remoteSweep?.unref();
+  /** The devices a bot with Run on a computer may run on: ONLY the computer it is pinned to (online first within that one machine); an unpinned legacy bot keeps the stable order of every carrier until the migration pins it. */
+  function botDevices(owner: string, rec: { slug: string; remoteDevice?: { id: string; name: string; kind?: "machine" | "server" } }): (DeviceInfo & { online: boolean })[] {
+    if (!remoteHub) return [];
+    return rec.remoteDevice ? remoteHub.devicesForPin(owner, rec.slug, rec.remoteDevice) : remoteHub.devicesFor(owner, rec.slug);
+  }
   /** What a session's home is worked out from: this owner's computers and servers (one per physical machine) and where each Remote bot runs. */
   function homeCtxOf(owner: string): HomeCtx {
     const groups = remoteHub ? remoteHub.envGroups(owner) : [];
@@ -471,7 +477,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       botHome: (botId) => {
         const b = manager.runtimeOf(owner).bots?.get(botId);
         if (!b?.remote || !remoteHub) return undefined;
-        const d = remoteHub.devicesFor(owner, b.slug);
+        const d = botDevices(owner, b);
         const dev = d.find((x) => x.online) ?? d[0];
         return dev ? canonEnv({ id: dev.id, kind: dev.kind ?? "machine", name: dev.name }, groups) : undefined;
       },
@@ -500,6 +506,30 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     } catch (e) { const m = String((e as Error)?.message ?? e).split("\n")[0].slice(0, 160); homesLast.migration = { at: Date.now(), owners: homesLast.migration?.owners ?? [], error: m }; process.stderr.write(`env migration failed: ${m}\n`); return { error: m }; }
   } : undefined;
   if (homeSweep) { setTimeout(() => void homeSweep(true), opts.envSweepMs ?? 15_000).unref(); const t = setInterval(() => void homeSweep(), 60 * 60_000); t.unref(); }
+  /**
+   * Migration: every bot with Run on a computer on and no pin yet is pinned to its CURRENT stable home (online first, a computer before a server, the first registered), or to the
+   * computer an admin names for it (`devices`: slug -> a device id). A bot already pinned is left alone. `dryRun` only reports. Returns every pin made (or that would be made).
+   */
+  const pinMigrate = remoteHub ? async (who: string, o: { dryRun?: boolean; devices?: Record<string, string> } = {}): Promise<{ owner: string; pins: { slug: string; name: string; device: string; deviceId: string; online: boolean; kind?: string }[]; kept: { slug: string; device: string }[]; skipped: { slug: string; why: string }[] }> => {
+    const owner = /^u_/.test(who) || who === OWNER.id ? who : auth?.store.list().find((u) => u.username.toLowerCase() === who.toLowerCase())?.id ?? (who.toLowerCase() === OWNER.username.toLowerCase() ? OWNER.id : who);
+    const bots = manager.runtimeOf(owner).bots;
+    const out = { owner, pins: [] as { slug: string; name: string; device: string; deviceId: string; online: boolean; kind?: string }[], kept: [] as { slug: string; device: string }[], skipped: [] as { slug: string; why: string }[] };
+    if (!bots?.setRemote) return out;
+    let list: BotRecord[]; try { list = await bots.list(); } catch { list = bots.snapshot(); }
+    for (const b of list) {
+      if (!b.remote) continue;
+      if (b.remoteDevice) { out.kept.push({ slug: b.slug, device: b.remoteDevice.name }); continue; }
+      const named = o.devices?.[b.slug];
+      const home = named ? remoteHub.devices(owner).find((d) => d.id === named || remoteHub.envGroups(owner).some((g) => g.members.includes(d.id) && (g.id === named || g.members.includes(named)))) : remoteHub.devicesFor(owner, b.slug)[0];
+      const pin = home ? remoteHub.pinFor(owner, home.id) : undefined;
+      if (!home || !pin) { out.skipped.push({ slug: b.slug, why: named ? `device ${named} is not registered` : "no computer carries it" }); continue; }
+      out.pins.push({ slug: b.slug, name: b.name, device: pin.name, deviceId: pin.id, online: home.online, ...(pin.kind ? { kind: pin.kind } : {}) });
+      if (!o.dryRun) bots.setRemote(b.id, true, { by: remoteBy(b) ?? "user", device: pin, note: `Pinned to ${pin.name}: Run on a computer now runs on that one computer only.` });
+    }
+    if (!o.dryRun && out.pins.length) { remoteHub.nudge(owner); syncAgent?.noteBotsChanged(); }
+    return out;
+  } : undefined;
+
   /** Desktop: runs one message of a remote bot thread on this machine. */
   async function runRemoteJob(job: RemoteJob, emit: (ev: AgentEvent) => void, signal: AbortSignal): Promise<void> {
     // A job with a bot slug is a thread of that bot; one with none is a plain session whose home the person set to this computer.
@@ -1063,7 +1093,9 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (bots?.setRemote) {
       for (const f of flags) {
         const hb = bots.bySlug(f.slug);
-        if (hb && f.at > (hb.remoteAt ?? 0) && f.remote !== !!hb.remote) { bots.setRemote(hb.id, f.remote, { by: "user", note: `${f.remote ? "Turned on" : "Turned off"} on ${name}.`, at: f.at }); remoteHub.nudge(me.id); }
+        // A newer flag from a computer: turned on there = pinned to THAT computer (a bot already on and pinned elsewhere is moved when the person did it here).
+        const here = f.remote ? remoteHub.pinFor(me.id, deviceId) : undefined;
+        if (hb && f.at > (hb.remoteAt ?? 0) && (f.remote !== !!hb.remote || (f.remote && here && hb.remoteDevice?.id !== here.id))) { bots.setRemote(hb.id, f.remote, { by: "user", note: f.remote === !!hb.remote ? `Moved to ${here?.name ?? name}.` : `${f.remote ? "Turned on" : "Turned off"} on ${name}.`, at: f.at, ...(here ? { device: here } : {}) }); remoteHub.nudge(me.id); }
       }
     }
     const waitMs = Math.min(25, Math.max(0, Number(b.wait) || 0)) * 1000;
@@ -1074,10 +1106,10 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     for (const j of jobs) { const e = remoteRuns.get(j.id); if (e?.waiting) { e.waiting = false; e.run.publish({ type: "notice", level: "info", text: `${name} is back and picked it up.` }); } } // it had been waiting
     remoteHub.heartbeat(me.id, { id: deviceId, name, slugs: flags.map((f) => f.slug), kind, host, os, model });
     // What the device does not know yet (a flag turned on here, or automatically): computed after the wait so a change made while it waited is in this answer.
-    const reply: { slug: string; remote: boolean; at: number; by?: string; note?: string }[] = [];
+    const reply: { slug: string; remote: boolean; at: number; by?: string; note?: string; device?: { id: string; name: string; kind?: string } }[] = [];
     for (const f of flags) {
       const hb = bots?.bySlug(f.slug);
-      if (hb && (hb.remoteAt ?? 0) > f.at) { const last = hb.remoteLog?.[hb.remoteLog.length - 1]; reply.push({ slug: hb.slug, remote: !!hb.remote, at: hb.remoteAt!, by: last?.by, note: last?.note }); }
+      if (hb && (hb.remoteAt ?? 0) > f.at) { const last = hb.remoteLog?.[hb.remoteLog.length - 1]; reply.push({ slug: hb.slug, remote: !!hb.remote, at: hb.remoteAt!, by: last?.by, note: last?.note, ...(hb.remote && hb.remoteDevice ? { device: hb.remoteDevice } : {}) }); }
     }
     return sendJson(res, 200, { ok: true, bots: reply, jobs, decisions: remoteHub.takeDecisions(me.id, deviceId) });
   }
@@ -1127,7 +1159,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (botId) {
       const rec = rt.bots?.get(botId);
       if (!rec?.remote) return undefined; // Run on a computer is off: the bot's threads run here, in MIND Cloud
-      const devs = remoteHub.devicesFor(owner, rec.slug);
+      const devs = botDevices(owner, rec); // a pinned bot: that computer only, even when it is off (the message waits, "Move to MIND Cloud" is offered)
       return devs.length ? { devs, name: rec.name, botId: rec.id, botSlug: rec.slug } : undefined;
     }
     const env = rt.sessionInfo?.(sessionId)?.env;
@@ -1158,10 +1190,16 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   // ---- Desktop: a session that lives in MIND Cloud RUNS there. This computer is only the window onto it: the turn goes to daebot.live (the same session id, the
   // account's own key), its events stream back into the run feed, and the finished transcript is pulled into the local store.
   const cloudRuns = new Map<string, AbortController>();
+  /** On a computer's own gateway: is this computer the one the bot is pinned to? (An unpinned legacy bot counts as here.) */
+  function pinnedHereOf(owner: string, b: { remoteDevice?: { id: string; name: string; kind?: "machine" | "server" } }): boolean {
+    if (!b.remoteDevice) return true;
+    return canon(owner, { id: b.remoteDevice.id, kind: b.remoteDevice.kind ?? "machine", name: b.remoteDevice.name })?.id === ownEnvOf(owner).id;
+  }
   function runsInCloud(owner: string, ls: { id: string; bot?: string; peer?: string }): boolean {
     if (hosted || !syncAgent || ls.peer) return false;
     const rt = manager.runtimeOf(owner);
-    if (ls.bot) { const b = rt.bots?.get(ls.bot); return !!b && !b.remote; } // Run on a computer off = the bot's threads run in MIND Cloud
+    // Run on a computer off = the bot's threads run in MIND Cloud. On, and pinned to ANOTHER computer = this window is only a window: the turn goes to daebot.live, which hands it to the pinned computer (or says it is off). It never runs here.
+    if (ls.bot) { const b = rt.bots?.get(ls.bot); return !!b && (!b.remote || (!!b.remoteDevice && !pinnedHereOf(owner, b))); }
     return rt.sessionInfo?.(ls.id)?.env?.kind === "cloud";
   }
   async function routeCloud(res: ServerResponse, me: Principal, ls: { id: string; bot?: string; surface: string; title: string }, text: string, quote: MessageQuote | undefined, photos: unknown): Promise<void> {
@@ -1195,6 +1233,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
    * device, else the first computer that is online). A bot thread follows its bot, so the choice turns the bot's "Run on a computer" on or off. A message
    * that was waiting for a sleeping computer is handed back (`queued`) so the client can send it again where it now runs.
    */
+  const pinOf = (e: EnvTag): { id: string; name: string; kind?: "machine" | "server" } => ({ id: e.id, name: e.name, ...(e.kind === "server" || e.kind === "machine" ? { kind: e.kind } : {}) });
   async function setHomeApi(me: Principal, id: string, home: "cloud" | "local", deviceId: string | undefined): Promise<{ status: number; body: Record<string, unknown> }> {
     const rt = manager.runtimeOf(me.id);
     const info = rt.sessionInfo?.(id);
@@ -1214,7 +1253,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     const bot = info.bot ? bots?.get(info.bot) : undefined;
     if (bot && bots?.setRemote) {
       if (home === "local" && remoteHub && !remoteHub.devicesFor(me.id, bot.slug).length) return { status: 409, body: { error: "no_computer_has_bot", message: `None of your computers carries ${bot.name} yet. Open Daebot on the computer once so it picks the bot up.` } };
-      if (!!bot.remote !== (home === "local")) bots.setRemote(bot.id, home === "local", { by: "user", note: home === "local" ? `Run on a computer turned on (${env.name}).` : "Moved to MIND Cloud." });
+      // Turning it on (or moving it) pins the bot to the computer chosen; off clears the pin.
+      if (!!bot.remote !== (home === "local") || (home === "local" && bot.remoteDevice?.id !== env.id)) bots.setRemote(bot.id, home === "local", { by: "user", ...(home === "local" ? { device: pinOf(env), ...(bot.remote ? { note: `Moved to ${env.name}${bot.remoteDevice ? ` from ${bot.remoteDevice.name}` : ""}.` } : { note: `Run on a computer turned on (${env.name}).` }) } : { note: "Moved to MIND Cloud." }) });
       remoteHub?.nudge(me.id); remoteAgent?.kick();
     }
     const ok = await manager.setHome(id, me.id, env, "user");
@@ -1405,7 +1445,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     let list: BotRecord[] = [];
     try { list = (await reg?.list()) ?? []; } catch { return sendJson(res, 502, { error: "could not load your bots from MIND" }); }
     return sendJson(res, 200, {
-      bots: list.map((x) => ({ id: x.id, slug: x.slug, name: x.name, purpose: x.purpose ?? "", remote: !!x.remote, devices: remoteHub ? remoteHub.devicesFor(principal.id, x.slug).map((d) => ({ name: d.name, online: d.online, lastSeen: d.lastSeen })) : [] })),
+      bots: list.map((x) => ({ id: x.id, slug: x.slug, name: x.name, purpose: x.purpose ?? "", remote: !!x.remote, devices: remoteHub ? botDevices(principal.id, x).map((d) => ({ name: d.name, online: d.online, lastSeen: d.lastSeen })) : [] })),
     });
   }
 
@@ -1605,6 +1645,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         reconcile: hosted && auth?.store.enabled ? mindReconcileJob : undefined,
         envs: remoteHub ? (who) => adminEnvs(who) : undefined,
         envsForget: remoteHub ? (who, ids) => { const id = /^u_/.test(who) ? who : auth?.store.list().find((u) => u.username.toLowerCase() === who.toLowerCase())?.id ?? who; return remoteHub.forgetDevices(id, ids); } : undefined,
+        envsMerge: remoteHub ? (who, from, into) => { const o = /^u_/.test(who) ? who : auth?.store.list().find((u) => u.username.toLowerCase() === who.toLowerCase())?.id ?? who; return remoteHub.mergeDevices(o, from, into); } : undefined,
+        envsPin: pinMigrate ? (who, o) => pinMigrate(who, o) : undefined,
         envsRename: remoteHub ? (who, id, name) => { const o = /^u_/.test(who) ? who : auth?.store.list().find((u) => u.username.toLowerCase() === who.toLowerCase())?.id ?? who; return remoteHub.renameEnv(o, id, name); } : undefined,
         homes: homeSweep ? { run: (b) => (b.migrate === true || b.migrate === "dry" ? homeMigrate!({ force: b.force === true, dryRun: b.migrate === "dry", only: Array.isArray(b.owners) ? b.owners.map(String) : undefined }) : homeSweep(b.recheckCloud === true, Array.isArray(b.owners) ? b.owners.map(String) : undefined)), last: () => homesLast } : undefined,
         logKey: opts.adminLog?.logKey ?? (() => process.env.DAEBOT_MISTAKE_LOG_KEY?.trim() || undefined),
@@ -1950,7 +1992,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   }
 
   // ---------- bots + models REST (same cookie auth and origin rules as /sessions; one owner's bots are invisible to everyone else) ----------
-  const botView = (b: BotRecord) => ({ id: b.id, slug: b.slug, name: b.name, purpose: b.purpose, color: b.color, face: b.face ?? null, model: b.model ?? null, pinned: !!b.pinnedAt, pinnedAt: b.pinnedAt ?? null, remote: !!b.remote, remoteAt: b.remoteAt ?? null, remoteLog: (b.remoteLog ?? []).slice(-5), createdAt: b.createdAt, updatedAt: b.updatedAt, ...versionInfo(b) });
+  const botView = (b: BotRecord) => ({ id: b.id, slug: b.slug, name: b.name, purpose: b.purpose, color: b.color, face: b.face ?? null, model: b.model ?? null, pinned: !!b.pinnedAt, pinnedAt: b.pinnedAt ?? null, remote: !!b.remote, remoteAt: b.remoteAt ?? null, remotePin: b.remote && b.remoteDevice ? b.remoteDevice : null, remoteLog: (b.remoteLog ?? []).slice(-5), createdAt: b.createdAt, updatedAt: b.updatedAt, ...versionInfo(b) });
 
   /** The computers and servers of an owner with duplicate registrations merged, renames applied (hosted: the Remote hub; a desktop: what daebot.live last sent). */
   function envState(owner: string): { groups: readonly EnvGroup[]; cloudName?: string } {
@@ -1964,15 +2006,17 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   const ownEnvOf = (owner: string): EnvTag => { const e = manager.runtimeOf(owner).ownEnv?.() ?? CLOUD_ENV; return canon(owner, e) ?? e; };
 
   /** Hosted: which of the user's desktops carry this bot and whether they are online (the Remote switch shows it). */
-  const remoteView = (owner: string, b: BotRecord): { remoteDevices?: { name: string; online: boolean; lastSeen: number }[]; env: EnvTag; runsOn?: boolean } => {
-    const devs = remoteHub ? remoteHub.devicesFor(owner, b.slug) : [];
+  const remoteView = (owner: string, b: BotRecord): { remoteDevices?: { name: string; online: boolean; lastSeen: number }[]; env: EnvTag; runsOn?: boolean; pinnedHere?: boolean } => {
+    const devs = remoteHub ? botDevices(owner, b) : [];
     // A bot with Run on a computer on (Remote) and a computer that carries it runs THERE; otherwise it runs in MIND Cloud.
     const dev = b.remote ? (devs.find((d) => d.online) ?? devs[0]) : undefined;
-    const raw: EnvTag = dev ? { id: dev.id, kind: dev.kind ?? "machine", name: dev.name } : b.remote && !remoteHub ? manager.runtimeOf(owner).ownEnv?.() ?? CLOUD_ENV : CLOUD_ENV; // a bot runs in MIND Cloud unless "Run on a computer" is on
+    const raw: EnvTag = dev ? { id: dev.id, kind: dev.kind ?? "machine", name: dev.name } : b.remote && !remoteHub ? (b.remoteDevice ? { id: b.remoteDevice.id, kind: b.remoteDevice.kind ?? "machine", name: b.remoteDevice.name } : manager.runtimeOf(owner).ownEnv?.() ?? CLOUD_ENV) : CLOUD_ENV; // a bot runs in MIND Cloud unless "Run on a computer" is on
     const env = canon(owner, raw) ?? raw;
     const names = new Map<string, { name: string; online: boolean; lastSeen: number }>();
     for (const d of devs) { const c = canon(owner, { id: d.id, kind: d.kind ?? "machine", name: d.name }); const k = c?.id ?? d.id; const prev = names.get(k); names.set(k, { name: c?.name ?? d.name, online: d.online || !!prev?.online, lastSeen: Math.max(d.lastSeen, prev?.lastSeen ?? 0) }); }
-    return { ...(remoteHub ? { remoteDevices: [...names.values()] } : {}), env, ...(dev ? { runsOn: true } : {}) };
+    // On a computer's own gateway: is this the computer the bot is pinned to? (The menu offers "Move to this computer" when it is not.)
+    const pinnedHere = !remoteHub && b.remote && b.remoteDevice ? pinnedHereOf(owner, b) : undefined;
+    return { ...(remoteHub ? { remoteDevices: [...names.values()] } : {}), env, ...(dev ? { runsOn: true } : {}), ...(pinnedHere !== undefined ? { pinnedHere } : {}) };
   };
 
   /** The places to show in the sidebar: every one a row points at, plus the computers and servers this account has (one each), with their online state. */
@@ -2117,9 +2161,24 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         }
         if (b.pinned !== undefined && typeof b.pinned !== "boolean") return sendJson(res, 400, { error: "bad_pinned", message: "pinned must be true or false" });
         if (b.remote !== undefined && typeof b.remote !== "boolean") return sendJson(res, 400, { error: "bad_remote", message: "remote must be true or false" });
-        if (b.remote !== undefined) { remoteHub?.nudge(me.id); remoteAgent?.kick(); }
+        if (b.moveHere !== undefined && typeof b.moveHere !== "boolean") return sendJson(res, 400, { error: "bad_move", message: "moveHere must be true or false" });
+        if (b.deviceId !== undefined && (typeof b.deviceId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(b.deviceId))) return sendJson(res, 400, { error: "bad_device", message: "deviceId is not a computer id" });
         syncAgent?.noteBotsChanged();
-        const upd = bots.update(id, { name: optStr(b.name, 120), purpose: optStr(b.purpose, 1000), color: optStr(b.color, 20), face: b.face, model, pinned: b.pinned, remote: b.remote });
+        let upd = bots.update(id, { name: optStr(b.name, 120), purpose: optStr(b.purpose, 1000), color: optStr(b.color, 20), face: b.face, model, pinned: b.pinned, remote: b.remote });
+        // Run on a computer pins the bot to ONE computer: the one it was turned on from (a desktop: this computer; daebot.live: the computer named, else the first that carries the bot).
+        // "Move to this computer" (moveHere, or a deviceId on daebot.live) re-pins it. Turning it off clears the pin (the store does that).
+        if (upd.remote && bots.setRemote && (b.remote === true || b.moveHere === true)) {
+          let want: { id: string; name: string; kind?: "machine" | "server" } | undefined;
+          if (remoteHub) {
+            const carrier = typeof b.deviceId === "string" ? b.deviceId : !upd.remoteDevice ? remoteHub.devicesFor(me.id, upd.slug)[0]?.id : undefined;
+            want = carrier ? remoteHub.pinFor(me.id, carrier) : undefined;
+          } else if (b.moveHere === true || !upd.remoteDevice) {
+            const own = ownEnvOf(me.id);
+            want = isLocalHome(own) ? pinOf(own) : undefined;
+          }
+          if (want && upd.remoteDevice?.id !== want.id) upd = bots.setRemote(upd.id, true, { by: "user", device: want });
+        }
+        if (b.remote !== undefined || b.moveHere !== undefined) { remoteHub?.nudge(me.id); remoteAgent?.kick(); }
         return sendJson(res, 200, { bot: { ...botView(upd), ...remoteView(me.id, upd) } });
       }
       if (method === "DELETE") {

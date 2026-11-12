@@ -47,6 +47,10 @@ export interface AdminOptions {
   envs?: (who: string) => unknown;
   envsForget?: (who: string, ids: string[]) => string[];
   envsRename?: (who: string, id: string, name: string) => boolean;
+  /** Makes stale registrations part of one current environment (nothing deleted). Returns the ids merged. */
+  envsMerge?: (who: string, from: string[], into: string) => string[];
+  /** Pins every Run-on-a-computer bot of an owner that has no pin to its stable home (or the device named per slug). dryRun reports only. */
+  envsPin?: (who: string, o: { dryRun?: boolean; devices?: Record<string, string> }) => Promise<unknown>;
   homes?: { run(b: Record<string, unknown>): Promise<unknown>; last(): unknown };
   /** The secret for writes (DAEBOT_MISTAKE_LOG_KEY), read per request so setting it on Render needs no code change. */
   logKey: () => string | undefined;
@@ -126,7 +130,9 @@ export async function handleAdmin(o: AdminOptions, req: IncomingMessage, res: Se
       if (!who || who === "all") { json(res, 400, { error: "owner required" }); return true; }
       if (Array.isArray(b.forget) && o.envsForget) { json(res, 200, { ok: true, forgotten: o.envsForget(who, b.forget.map(String).slice(0, 100)) }); return true; }
       if (typeof b.rename === "object" && b.rename && o.envsRename) { const r = b.rename as { id?: unknown; name?: unknown }; json(res, 200, { ok: o.envsRename(who, String(r.id ?? ""), String(r.name ?? "")) }); return true; }
-      json(res, 400, { error: "forget:[ids] or rename:{id,name} required" }); return true;
+      if (typeof b.merge === "object" && b.merge && o.envsMerge) { const m = b.merge as { from?: unknown; into?: unknown }; json(res, 200, { ok: true, merged: o.envsMerge(who, Array.isArray(m.from) ? m.from.map(String).slice(0, 100) : [], String(m.into ?? "")) }); return true; }
+      if ((b.pinBots === true || b.pinBots === "dry") && o.envsPin) { const dv = b.devices && typeof b.devices === "object" ? Object.fromEntries(Object.entries(b.devices as Record<string, unknown>).slice(0, 100).map(([k, v]) => [k, String(v)])) : undefined; json(res, 200, { ok: true, result: await o.envsPin(who, { dryRun: b.pinBots === "dry", devices: dv }) }); return true; }
+      json(res, 400, { error: "forget:[ids], rename:{id,name}, merge:{from:[ids],into:id} or pinBots:true|\"dry\" required" }); return true;
     }
     if (isHomes) { if (!o.homes) { json(res, 503, { error: "not available here" }); return true; } json(res, 200, { ok: true, result: await o.homes.run(b) }); return true; }
     if (isReconcile) {

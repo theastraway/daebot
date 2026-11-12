@@ -30,6 +30,19 @@ export interface BotRecord {
   remoteAt?: number;
   /** The last few Remote changes, newest last, so the user sees when and why it turned on (for example "turned on automatically"). */
   remoteLog?: RemoteLogEntry[];
+  /** The ONE computer this bot runs on while Run on a computer is on (the environment it was turned on from). It runs only there: if that computer is off the message waits and the person is offered "Move to MIND Cloud"; it never runs on another device. Absent on a bot with Run on a computer off, and on a bot not pinned yet (the migration pins it). Cleared when Run on a computer turns off. */
+  remoteDevice?: RemoteDevice;
+}
+
+/** A pinned home: the environment id (a computer or a server), its name when it was pinned (the live name comes from the environment list) and its kind. */
+export interface RemoteDevice { id: string; name: string; kind?: "machine" | "server" }
+export const DEVICE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/** What a pin has to look like to be stored (a bad one is dropped, never half kept). */
+export function cleanDevice(v: unknown): RemoteDevice | undefined {
+  const d = v as Partial<RemoteDevice> | null;
+  if (!d || typeof d !== "object" || typeof d.id !== "string" || !DEVICE_ID_RE.test(d.id)) return undefined;
+  const name = typeof d.name === "string" ? d.name.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 60) : "";
+  return { id: d.id, name: name || "its computer", ...(d.kind === "server" || d.kind === "machine" ? { kind: d.kind } : {}) };
 }
 
 export interface RemoteLogEntry { at: number; remote: boolean; by: "user" | "auto"; note: string }
@@ -66,7 +79,7 @@ export interface BotsApi {
   /** Moves a bot to the latest definition. Keeps its DAEBOT.md, threads and MIND data. */
   upgrade(id: string): BotRecord;
   /** Turns Remote on or off and logs why. `at` lets a change that happened on another device keep its own time. */
-  setRemote?(id: string, remote: boolean, o: { by: "user" | "auto"; note?: string; at?: number }): BotRecord;
+  setRemote?(id: string, remote: boolean, o: { by: "user" | "auto"; note?: string; at?: number; /** The computer it is pinned to (turning on, or moving it). */ device?: RemoteDevice }): BotRecord;
   instructions(id: string): string;
   setInstructions(id: string, text: string): void;
   roster(): RosterEntry[];

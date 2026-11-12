@@ -121,6 +121,25 @@ export class RemoteHub {
     return gone;
   }
 
+  /**
+   * Admin repair, no data loss: makes the registrations in `from` part of the SAME environment as `into` by giving them its host and name, so every session, bot pin and rename that points
+   * at an old id still resolves (to the merged environment) and nothing is deleted. Returns the ids merged. Unknown ids are skipped; `into` itself is never changed.
+   */
+  mergeDevices(owner: string, from: string[], into: string): string[] {
+    const s = this.st(owner);
+    const target = s.devices[into];
+    if (!target) return [];
+    const done: string[] = [];
+    for (const id of from) {
+      const d = s.devices[id];
+      if (!d || id === into) continue;
+      d.name = target.name; d.host = target.host ?? target.name; if (target.kind) d.kind = target.kind;
+      done.push(id);
+    }
+    if (done.length) this.save(owner);
+    return done;
+  }
+
   /** The names the person gave environments (device id or "cloud" -> name). */
   envNamesOf(owner: string): Record<string, string> { return { ...this.st(owner).envNames }; }
 
@@ -157,6 +176,29 @@ export class RemoteHub {
   devicesFor(owner: string, slug: string): (DeviceInfo & { online: boolean })[] {
     return this.devices(owner).filter((d) => d.slugs.includes(slug)).sort((a, b) => Number(b.online) - Number(a.online) || Number(b.kind !== "server") - Number(a.kind !== "server") || (a.firstSeen ?? a.lastSeen) - (b.firstSeen ?? b.lastSeen) || (a.id < b.id ? -1 : 1));
     // The order is STABLE: online first, a computer before a server, then the one registered first. It never follows who polled last, so a bot with Run on a computer does not hop between two devices that both carry it.
+  }
+
+  /**
+   * The devices a PINNED bot may run on: the registrations of the computer it was pinned to (one physical machine can have several), online first, then the one registered
+   * first. Only those, never another device that also carries the bot. A pinned computer this hub has no record of (forgotten, or never seen) is still answered with an offline
+   * stand-in for it, so a message waits for that computer and the person is offered "Move to MIND Cloud"; it never runs somewhere else.
+   */
+  devicesForPin(owner: string, slug: string, pin: { id: string; name: string; kind?: "machine" | "server" }): (DeviceInfo & { online: boolean })[] {
+    const g = this.envGroups(owner).find((x) => x.id === pin.id || x.members.includes(pin.id));
+    const ids = new Set(g ? g.members : [pin.id]);
+    const mine = this.devices(owner).filter((d) => ids.has(d.id));
+    const carries = mine.filter((d) => d.slugs.includes(slug));
+    const pool = carries.length ? carries : mine;
+    if (!pool.length) return [{ id: pin.id, name: g?.name ?? pin.name, lastSeen: 0, slugs: [], ...(pin.kind ? { kind: pin.kind } : {}), online: false }];
+    return pool.sort((a, b) => Number(b.online) - Number(a.online) || (a.firstSeen ?? a.lastSeen) - (b.firstSeen ?? b.lastSeen) || (a.id < b.id ? -1 : 1));
+  }
+
+  /** The environment (merged computer) a device belongs to, as a pin: its group id, name and kind. */
+  pinFor(owner: string, deviceId: string): { id: string; name: string; kind?: "machine" | "server" } | undefined {
+    const g = this.envGroups(owner).find((x) => x.members.includes(deviceId) || x.id === deviceId);
+    if (g) return { id: g.id, name: g.name, ...(g.kind === "server" || g.kind === "machine" ? { kind: g.kind } : {}) };
+    const d = this.st(owner).devices[deviceId];
+    return d ? { id: d.id, name: d.name, ...(d.kind ? { kind: d.kind } : {}) } : undefined;
   }
 
   enqueue(owner: string, j: Omit<RemoteJob, "id" | "owner" | "createdAt" | "state">): RemoteJob {
