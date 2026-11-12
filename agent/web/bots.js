@@ -8,7 +8,7 @@
 // api()/json() helpers. The pure helpers are exported (and unit tested); everything that touches `document` lives in initBots().
 
 import { confirmDialog, isRenaming, botDeleteText, updateText } from "./manage.js";
-import { groupByEnv, renderGroups } from "./envgroups.js";
+import { groupByEnv, renderGroups, lastSeenText } from "./envgroups.js";
 import { FACES, faceOf } from "./faces.js";
 import { mascotFor, setMascot, wakeOn } from "./mbadge.js";
 import { groupModels, shortName, LOCKED_NOTE } from "./models.js";
@@ -343,6 +343,13 @@ export function initBots(ctx) {
     if (ex) box.append(ex);
   }
 
+  /** "Runs on Atlas Laptop. Online now." / "Offline, last seen 3 h ago." for the place a bot runs. */
+  function runsOnTitle(bot) {
+    const devs = Array.isArray(bot.remoteDevices) ? bot.remoteDevices : [];
+    const d = devs.find((x) => x.name === (bot.env && bot.env.name)) || devs[0];
+    const seen = d && d.lastSeen ? lastSeenText(d.lastSeen) : "";
+    return `Runs on ${bot.env && bot.env.name ? bot.env.name : "MIND Cloud"}${d ? (d.online ? ". Online now." : `. Offline${seen ? `, last seen ${seen}` : ""}.`) : "."}`;
+  }
   function botRow(bot, o = {}) {
     const row = h("div", "bot-row");
     const open = st.expanded.has(bot.id);
@@ -350,7 +357,7 @@ export function initBots(ctx) {
     if (activeBotId() === bot.id) item.setAttribute("aria-current", "true");
     const text = h("span", "bot-text");
     text.append(h("span", "bot-name", bot.name), h("span", "bot-purpose", bot.purpose || "No purpose yet"));
-    if (bot.remote && bot.runsOn && bot.env && bot.env.name) { const ro = h("span", "bot-runs"); const ri = icon("i-link"); ri.classList.add("ic"); ro.append(ri, document.createTextNode(`Runs on ${bot.env.name}`)); text.append(ro); } // Remote on: which environment carries it
+    if (bot.remote && bot.runsOn && bot.env && bot.env.name) { const ro = h("span", "bot-runs"); const ri = icon("i-link"); ri.classList.add("ic"); ro.append(ri, document.createTextNode(`Runs on ${bot.env.name}`)); ro.title = runsOnTitle(bot); text.append(ro); } // Remote on: which environment carries it
     const ds = dotState(bot);
     const dot = h("span", `bot-dot ${ds}`);
     dot.setAttribute("role", "img"); dot.setAttribute("aria-label", DOT_LABEL[ds]); dot.title = DOT_LABEL[ds];
@@ -686,7 +693,9 @@ export function initBots(ctx) {
     el.remote.checked = !!bot.remote;
     el.remote.disabled = false;
     const devs = Array.isArray(bot.remoteDevices) ? bot.remoteDevices : null;
-    el.remoteState.textContent = bot.remote && devs ? (devs.length ? (devs.some((d) => d.online) ? `Online: ${devs.filter((d) => d.online).map((d) => d.name).join(", ")}` : `Offline: ${devs.map((d) => d.name).join(", ")}. Messages wait until it is back.`) : "No computer has registered this bot yet.") : "";
+    const home = bot.remote && bot.runsOn && bot.env && bot.env.name ? bot.env.name : "";
+    const mine = devs ? devs.find((d) => d.name === home) || devs.find((d) => d.online) || devs[0] : undefined;
+    el.remoteState.textContent = !bot.remote ? `Runs on: ${bot.env && bot.env.name ? bot.env.name : "MIND Cloud"}.` : devs ? (devs.length ? (mine && mine.online ? `Runs on: ${mine.name}. Online now.` : `Runs on: ${mine ? mine.name : home}. Offline${mine && mine.lastSeen ? `, last seen ${lastSeenText(mine.lastSeen)}` : ""}. Messages wait until it is back.`) : "No computer has registered this bot yet.") : "";
     el.remoteLog.textContent = "";
     for (const e of Array.isArray(bot.remoteLog) ? bot.remoteLog.slice(-3).reverse() : []) {
       const li = document.createElement("li");

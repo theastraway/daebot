@@ -162,11 +162,31 @@ export function initAccount({ json, h, icon, notify, desktop, isHosted, closeSid
     sub.replaceChildren();
     let list = [];
     try { list = await listAccounts(); } catch { notify("Could not load your accounts."); }
+    // A person who owns many MINDs gets a search box (a long list is otherwise a scroll hunt, above all on a phone).
+    let search = null;
+    if (list.length > 7) {
+      search = h("input", "am-search"); search.type = "search"; search.placeholder = "Search accounts"; search.autocomplete = "off"; search.spellcheck = false;
+      search.setAttribute("aria-label", "Search accounts");
+      search.addEventListener("keydown", (e) => { if (e.key === "ArrowDown") { e.preventDefault(); sub.querySelector(".am-acct:not([hidden])")?.focus(); } });
+      sub.append(search);
+    }
     // Signed-in accounts first; then every MIND this person owns (listed by MIND itself, no extra sign-in).
-    let labelled = false;
+    let labelled = false, tenantLabel = null;
     for (const a of list) {
-      if (a.tenant && !labelled) { labelled = true; const l = h("div", "am-label", "Your MINDs"); l.setAttribute("role", "presentation"); sub.append(l); }
+      if (a.tenant && !labelled) { labelled = true; tenantLabel = h("div", "am-label", "Your MINDs"); tenantLabel.setAttribute("role", "presentation"); sub.append(tenantLabel); }
       sub.append(acctRow(a));
+    }
+    if (search) {
+      const none = h("div", "am-none", "No account matches"); none.hidden = true;
+      sub.append(none);
+      search.addEventListener("input", () => {
+        const q = search.value.trim().toLowerCase();
+        let shown = 0;
+        for (const row of sub.querySelectorAll(".am-acct:not(.add)")) { const t = (row.querySelector(".nm")?.textContent || "").toLowerCase() + " " + (row.querySelector(".nm")?.title || "").toLowerCase(); const hit = !q || t.includes(q); row.hidden = !hit; if (hit) shown++; }
+        if (tenantLabel) tenantLabel.hidden = !!q;
+        none.hidden = shown > 0;
+      });
+      search.focus({ preventScroll: true });
     }
     const add = h("button", "am-acct add"); add.type = "button"; add.setAttribute("role", "menuitem");
     const plus = h("span", "plus"); plus.append(icon("i-plus"));

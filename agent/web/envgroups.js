@@ -19,6 +19,41 @@ export function cleanEnv(e) {
   return { id, kind, name };
 }
 
+/**
+ * The dot beside an environment name.
+ *   here    (green)  : the environment this client is running on, the computer you are on right now
+ *   cloud   (neutral): MIND Cloud
+ *   remote  (blue)   : another computer or a server of this account that is reachable
+ *   offline (dimmed) : a remote computer or server that is not reachable right now
+ */
+export function dotKind(env) {
+  if (!env) return "offline";
+  if (env.current && env.kind !== "cloud") return "here";
+  if (env.kind === "cloud") return env.online === false ? "offline" : "cloud";
+  return env.online === false ? "offline" : "remote";
+}
+export const DOT_LABEL = { here: "this computer", cloud: "cloud", remote: "another computer, online", offline: "offline" };
+
+/** "just now", "5 min ago", "3 h ago", "2 days ago", "Nov 3"; "" when there is no time. */
+export function lastSeenText(ms, now = Date.now()) {
+  if (!ms || !Number.isFinite(ms)) return "";
+  const d = Math.max(0, now - ms);
+  if (d < 60_000) return "just now";
+  if (d < 3_600_000) return `${Math.floor(d / 60_000)} min ago`;
+  if (d < 86_400_000) return `${Math.floor(d / 3_600_000)} h ago`;
+  if (d < 7 * 86_400_000) return `${Math.floor(d / 86_400_000)} days ago`;
+  return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/** One line a person can read about an environment: "Atlas Laptop (computer, Windows, Legion 5), seen 5 min ago". */
+export function envDescription(env, now = Date.now()) {
+  if (!env) return "";
+  const os = env.os === "mac" ? "macOS" : env.os === "windows" ? "Windows" : env.os === "linux" ? "Linux" : "";
+  const bits = [KIND_LABEL[env.kind] ? KIND_LABEL[env.kind].toLowerCase() : "", os, env.model || ""].filter(Boolean).join(", ");
+  const seen = env.kind !== "cloud" && !env.current ? lastSeenText(env.lastSeen, now) : "";
+  return `${env.name}${bits ? ` (${bits})` : ""}${env.current ? ", this computer" : ""}${seen ? `, seen ${seen}` : ""}`;
+}
+
 /** The set of collapsed environment ids, as stored on this device. */
 export function parseCollapsed(raw) {
   try { const v = JSON.parse(raw || "[]"); return new Set(Array.isArray(v) ? v.filter((x) => typeof x === "string") : []); } catch { return new Set(); }
@@ -39,7 +74,10 @@ const pinOrder = (a, b) => (b.pinnedAt || 0) - (a.pinnedAt || 0) || (b.updatedAt
 export function groupByEnv(rows, envs, opts = {}) {
   const list = Array.isArray(rows) ? rows.filter(Boolean) : [];
   const known = new Map();
-  for (const e of Array.isArray(envs) ? envs : []) { const c = cleanEnv(e); if (c) known.set(c.id, { ...c, online: e.online !== false, current: !!e.current }); }
+  for (const e of Array.isArray(envs) ? envs : []) {
+    const c = cleanEnv(e);
+    if (c) known.set(c.id, { ...c, online: e.online !== false, current: !!e.current, ...(Number.isFinite(e.lastSeen) ? { lastSeen: e.lastSeen } : {}), ...(typeof e.os === "string" ? { os: e.os.slice(0, 10) } : {}), ...(typeof e.model === "string" ? { model: e.model.slice(0, 60) } : {}), ...(typeof e.host === "string" ? { host: e.host.slice(0, 80) } : {}) });
+  }
   const cur = [...known.values()].find((e) => e.current) || known.get(CLOUD.id) || { ...CLOUD, online: true, current: true };
   if (!known.has(cur.id)) known.set(cur.id, cur);
   const byId = new Map();
@@ -83,13 +121,15 @@ export function renderGroups(host, model, { build, collapsed, onToggle, onRename
     const head = h("button", "env-head"); head.type = "button";
     head.setAttribute("aria-expanded", String(open));
     const state = g.env.online ? "online" : "offline";
-    head.setAttribute("aria-label", `${g.env.name}, ${KIND_LABEL[g.env.kind]}, ${state}. ${open ? "Collapse" : "Expand"}`);
-    head.title = `${g.env.name} (${KIND_LABEL[g.env.kind].toLowerCase()}, ${state})${g.env.current ? " - you are here" : ""}`;
+    const dk = dotKind(g.env);
+    head.setAttribute("aria-label", `${g.env.name}, ${KIND_LABEL[g.env.kind]}, ${DOT_LABEL[dk]}. ${open ? "Collapse" : "Expand"}`);
+    head.title = `${envDescription(g.env)} - ${DOT_LABEL[dk]}`;
     const chev = icon("i-chev"); chev.classList.add("env-chev"); chev.setAttribute("aria-hidden", "true");
     const kind = icon(kindIcon(g.env.kind)); kind.classList.add("env-kind"); kind.setAttribute("aria-hidden", "true");
-    const dot = h("i", `env-dot ${state}`); dot.setAttribute("aria-hidden", "true");
+    const dot = h("i", `env-dot ${state} ${dk}`); dot.setAttribute("aria-hidden", "true");
     head.append(chev, kind, h("span", "env-name", g.env.name), dot, h("span", "env-count", countLabel(g.rows.length)));
     head.addEventListener("click", () => onToggle(g.env.id));
+    if (onRename) head.addEventListener("dblclick", (e) => { e.preventDefault(); startRename(row, g.env, onRename); });
     row.append(head);
     if (onRename) row.append(envMenuButton(g.env, { h, icon, row, onRename }));
     const body = h("div", "env-rows");

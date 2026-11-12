@@ -14,7 +14,17 @@ import { daebotHome } from "./home.ts";
 export type EnvKind = "cloud" | "machine" | "server";
 export interface EnvTag { id: string; kind: EnvKind; name: string }
 /** A tag as shown in the sidebar: the tag plus whether that place is reachable right now. */
-export interface EnvView extends EnvTag { online: boolean; current: boolean }
+export interface EnvView extends EnvTag {
+  online: boolean;
+  /** True for the place this client is running on right now (the computer you are on); everything else is remote. */
+  current: boolean;
+  /** When the device last checked in (ms). Absent for MIND Cloud and for places no device has reported. */
+  lastSeen?: number;
+  /** What the device said about itself: "mac", "windows" or "linux", and the hardware model when the OS has one ("Legion 5 15ITH6"). */
+  os?: string;
+  model?: string;
+  host?: string;
+}
 
 export const CLOUD_ID = "cloud";
 export const CLOUD_ENV: EnvTag = { id: CLOUD_ID, kind: "cloud", name: "MIND Cloud" };
@@ -40,7 +50,8 @@ const KINDS: ReadonlySet<string> = new Set(["cloud", "machine", "server"]);
 
 /** "Anthonys-MacBook-Pro.local" -> "Anthonys MacBook Pro". A name we are willing to show. */
 export function prettyHost(raw: string): string {
-  const t = tidyName(String(raw ?? ""), "machine").replace(/[-_]+/g, " ").replace(/[\u0000-\u001f\u007f]/g, "").replace(/\s+/g, " ").trim();
+  // macOS makes "Anthonys-MacBook-Pro-7" when another machine on the network already has the name: the "-7" is not part of what a person would say.
+  const t = tidyName(String(raw ?? ""), "machine").replace(/^(.*\b(?:MacBook(?:[- ](?:Pro|Air))?|iMac|Mac[- ](?:mini|Studio|Pro)))[- ]\d{1,2}$/i, "$1").replace(/[-_]+/g, " ").replace(/[\u0000-\u001f\u007f]/g, "").replace(/\s+/g, " ").trim();
   return t.slice(0, 60) || "This computer";
 }
 
@@ -94,6 +105,29 @@ export function readComputerName(platform: string = osPlatform(), env: NodeJS.Pr
   return undefined;
 }
 
+let modelCache: { key: string; v: string | undefined } | undefined;
+/** The hardware model of this computer, when the OS gives a readable one (Windows: the product name, e.g. "Legion 5 15ITH6"). Cached. Shown beside the name, never used as the name. */
+export function readHardwareModel(platform: string = osPlatform()): string | undefined {
+  if (modelCache?.key === platform) return modelCache.v;
+  let v: string | undefined;
+  try {
+    if (platform === "win32") {
+      const out = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "$p=Get-CimInstance Win32_ComputerSystemProduct; $m=Get-CimInstance Win32_ComputerSystem; ($p.Version, $m.Manufacturer, $m.Model) -join '|'"], { encoding: "utf8", timeout: 4000, stdio: ["ignore", "pipe", "ignore"], windowsHide: true }).trim();
+      const [ver, man, mod] = out.split("|").map((x) => x.trim());
+      const clean = (x: string | undefined): string => (x && !/^(none|to be filled|default string|system product name|system version|not applicable|o\.e\.m)/i.test(x) ? x : "");
+      v = clean(ver) || [clean(man), clean(mod)].filter(Boolean).join(" ") || undefined;
+    }
+  } catch { /* no model: the name stands alone */ }
+  v = v ? v.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").replace(/\s+/g, " ").trim().slice(0, 60) || undefined : undefined;
+  modelCache = { key: platform, v };
+  return v;
+}
+
+/** The short OS word a device reports about itself. */
+export function osLabel(platform: string = osPlatform()): "mac" | "windows" | "linux" | undefined {
+  return platform === "darwin" ? "mac" : platform === "win32" ? "windows" : platform === "linux" ? "linux" : undefined;
+}
+
 /** This process's own home environment. */
 export function detectEnv(o: DetectOpts = {}): EnvTag {
   if (o.hosted) return CLOUD_ENV;
@@ -128,7 +162,12 @@ export function envOf(rec: { env?: unknown } | undefined, fallback: EnvTag): Env
   return normalizeEnv(rec?.env) ?? fallback;
 }
 
-export interface EnvReach { cloudOnline: boolean; devices: ReadonlyMap<string, boolean> }
+export interface EnvReach {
+  cloudOnline: boolean;
+  devices: ReadonlyMap<string, boolean>;
+  /** What each device (by environment id) last reported: when it was seen, its OS, model and hostname. */
+  info?: ReadonlyMap<string, { lastSeen?: number; os?: string; model?: string; host?: string }>;
+}
 
 /** The environments to show: every one a row points at, plus the known devices, each with its online state. The current one is marked. */
 export function envViews(tags: Iterable<EnvTag>, current: EnvTag, reach: EnvReach): EnvView[] {
@@ -136,7 +175,10 @@ export function envViews(tags: Iterable<EnvTag>, current: EnvTag, reach: EnvReac
   by.set(current.id, current);
   for (const t of tags) if (!by.has(t.id)) by.set(t.id, t);
   const online = (t: EnvTag): boolean => (t.id === current.id ? true : t.kind === "cloud" ? reach.cloudOnline : reach.devices.get(t.id) === true);
-  return [...by.values()].map((t) => ({ ...t, online: online(t), current: t.id === current.id }));
+  return [...by.values()].map((t) => {
+    const i = t.kind === "cloud" ? undefined : reach.info?.get(t.id);
+    return { ...t, online: online(t), current: t.id === current.id, ...(i?.lastSeen ? { lastSeen: i.lastSeen } : {}), ...(i?.os ? { os: i.os } : {}), ...(i?.model ? { model: i.model } : {}), ...(i?.host ? { host: i.host } : {}) };
+  });
 }
 
 // ---------- one place per computer ----------
@@ -146,8 +188,8 @@ export function envViews(tags: Iterable<EnvTag>, current: EnvTag, reach: EnvReac
 /** A name a person typed: kept as typed (control characters out, one space between words, 60 characters). */
 export const cleanLabel = (s: string): string => String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, "").replace(/\s+/g, " ").trim().slice(0, 60);
 
-export interface DeviceLike { id: string; name: string; host?: string; kind?: "machine" | "server"; lastSeen: number; online: boolean }
-export interface EnvGroup extends EnvTag { members: string[]; keys: string[]; online: boolean; lastSeen: number }
+export interface DeviceLike { id: string; name: string; host?: string; kind?: "machine" | "server"; os?: string; model?: string; lastSeen: number; online: boolean }
+export interface EnvGroup extends EnvTag { members: string[]; keys: string[]; online: boolean; lastSeen: number; os?: string; model?: string; host?: string }
 
 /** Merges devices that are the same computer into one group each. The name shown is the person's rename, else the friendliest recent name. */
 export function groupDevices(devs: readonly DeviceLike[], renames: Readonly<Record<string, string>> = {}): EnvGroup[] {
@@ -167,7 +209,8 @@ export function groupDevices(devs: readonly DeviceLike[], renames: Readonly<Reco
     const renamed = sorted.map((d) => renames[d.id]).find((n) => typeof n === "string" && n.trim());
     const spaced = sorted.find((d) => tidyName(d.name, kind).includes(" "));
     const name = (renamed ? cleanLabel(renamed) : "") || tidyName((spaced ?? rep).name, kind) || (kind === "server" ? "Server" : "This computer");
-    out.push({ id: rep.id, kind, name, members: sorted.map((d) => d.id), keys: [...new Set(sorted.flatMap(keysOf))], online: sorted.some((d) => d.online), lastSeen: sorted[0].lastSeen });
+    const os = sorted.find((d) => d.os)?.os, model = sorted.find((d) => d.model)?.model, host = sorted.find((d) => d.host)?.host;
+    out.push({ id: rep.id, kind, name, members: sorted.map((d) => d.id), keys: [...new Set(sorted.flatMap(keysOf))], online: sorted.some((d) => d.online), lastSeen: sorted[0].lastSeen, ...(os ? { os } : {}), ...(model ? { model } : {}), ...(host ? { host } : {}) });
   }
   return out.sort((a, b) => b.lastSeen - a.lastSeen);
 }

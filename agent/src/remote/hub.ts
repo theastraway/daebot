@@ -2,7 +2,7 @@
 // thread from another device (phone, web) becomes a JOB for that desktop: the desktop runs it with its local tools and streams the reply
 // events back, which the hub forwards into the sender's run feed. Jobs wait here while the desktop is offline and are delivered when it
 // polls again. Everything is scoped to one owner (a MIND user); a device only ever sees its own owner's jobs.
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { cleanLabel, groupDevices, tidyName } from "../env.ts";
@@ -17,7 +17,7 @@ const MAX_JOBS_PER_OWNER = 200;
 /** An answer to a permission card, on its way to the desktop that asked. */
 export interface RemoteDecision { jobId: string; permId: string; decision: "allow" | "deny"; remember?: "once" | "always"; scope?: string }
 
-export interface DeviceInfo { id: string; name: string; lastSeen: number; slugs: string[]; /** machine (a computer) or server (a droplet); absent on a device that has not said. */ kind?: "machine" | "server"; /** The network hostname, when the device says its name is something friendlier (the same computer is then one environment). */ host?: string; firstSeen?: number }
+export interface DeviceInfo { id: string; name: string; lastSeen: number; slugs: string[]; /** machine (a computer) or server (a droplet); absent on a device that has not said. */ kind?: "machine" | "server"; /** The network hostname, when the device says its name is something friendlier (the same computer is then one environment). */ host?: string; firstSeen?: number; /** "mac", "windows" or "linux". */ os?: string; /** The hardware model, when the OS gives one. */ model?: string }
 export type JobState = "queued" | "delivered" | "done" | "failed";
 export interface RemoteJob {
   id: string;
@@ -93,14 +93,16 @@ export class RemoteHub {
   }
 
   /** A desktop checked in: it carries these bots (by slug). */
-  heartbeat(owner: string, d: { id: string; name: string; slugs: string[]; kind?: "machine" | "server"; host?: string }): DeviceInfo {
+  heartbeat(owner: string, d: { id: string; name: string; slugs: string[]; kind?: "machine" | "server"; host?: string; os?: string; model?: string }): DeviceInfo {
     const s = this.st(owner);
     const prev = s.devices[d.id];
     const kind = d.kind ?? prev?.kind;
     const host = (d.host ? tidyName(d.host, "server") : prev?.host)?.slice(0, 60) || undefined;
-    const info: DeviceInfo = { id: d.id, name: d.name.slice(0, 60) || "Desktop", lastSeen: this.now(), slugs: d.slugs.slice(0, 200), ...(kind ? { kind } : {}), ...(host ? { host } : {}), firstSeen: prev?.firstSeen ?? this.now() };
+    const os = d.os && /^(mac|windows|linux)$/.test(d.os) ? d.os : prev?.os;
+    const model = (d.model ? cleanLabel(d.model) : prev?.model) || undefined;
+    const info: DeviceInfo = { id: d.id, name: d.name.slice(0, 60) || "Desktop", lastSeen: this.now(), slugs: d.slugs.slice(0, 200), ...(kind ? { kind } : {}), ...(host ? { host } : {}), ...(os ? { os } : {}), ...(model ? { model } : {}), firstSeen: prev?.firstSeen ?? this.now() };
     s.devices[d.id] = info;
-    if (!prev || prev.name !== info.name || prev.kind !== info.kind || prev.host !== info.host || prev.slugs.join() !== info.slugs.join()) this.save(owner);
+    if (!prev || prev.name !== info.name || prev.kind !== info.kind || prev.host !== info.host || prev.os !== info.os || prev.model !== info.model || prev.slugs.join() !== info.slugs.join()) this.save(owner);
     return info;
   }
 
@@ -108,6 +110,16 @@ export class RemoteHub {
   envGroups(owner: string): EnvGroup[] {
     const s = this.st(owner);
     return groupDevices(this.devices(owner), s.envNames);
+  }
+
+  /** The names the person gave environments (device id or "cloud" -> name). */
+  envNamesOf(owner: string): Record<string, string> { return { ...this.st(owner).envNames }; }
+
+  /** Every owner this hub has a record for (in memory or on disk): ids. Used by the admin diagnostic only. */
+  knownOwners(): string[] {
+    const out = new Set<string>(this.owners.keys());
+    if (this.dir) { try { for (const f of readdirSync(this.dir)) if (f.endsWith(".json")) out.add(f.slice(0, -5)); } catch { /* none yet */ } }
+    return [...out];
   }
 
   /** The name the person gave MIND Cloud, if any. */
