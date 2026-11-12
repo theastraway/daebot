@@ -144,7 +144,8 @@ export function initAccount({ json, h, icon, notify, desktop, isHosted, closeSid
   function acctRow(a) {
     const b = h("button", "am-acct"); b.type = "button"; b.setAttribute("role", "menuitemradio"); b.setAttribute("aria-checked", String(!!a.active));
     const av = h("span", "avatar", initialOf(a.name)); av.setAttribute("aria-hidden", "true");
-    b.append(av, h("span", "nm", a.name));
+    const nm = h("span", "nm", a.name); if (a.title) nm.title = a.title;
+    b.append(av, nm);
     if (a.active) b.append(icon("i-check"));
     b.addEventListener("click", () => { if (a.active) { toggleMenu(false); return; } void switchTo(a); });
     return b;
@@ -154,13 +155,19 @@ export function initAccount({ json, h, icon, notify, desktop, isHosted, closeSid
     if (d && d.accounts) return (await d.accounts.list()) || [];
     if (!isHosted()) return me.name ? [{ id: "me", name: me.name, active: true }] : [];
     const r = await json("/auth/accounts");
-    return (r.accounts || []).map((a) => ({ id: a.id, name: a.username, active: a.active }));
+    if (r.reverted) { try { sessionStorage.removeItem("daebot:current"); sessionStorage.removeItem("daebot:bot"); } catch { /* none */ } location.replace("/"); }
+    return (r.accounts || []).map((a) => ({ id: a.id, name: a.username, title: a.label, active: a.active, tenant: !!a.tenant }));
   }
   async function paintSub() {
     sub.replaceChildren();
     let list = [];
     try { list = await listAccounts(); } catch { notify("Could not load your accounts."); }
-    for (const a of list) sub.append(acctRow(a));
+    // Signed-in accounts first; then every MIND this person owns (listed by MIND itself, no extra sign-in).
+    let labelled = false;
+    for (const a of list) {
+      if (a.tenant && !labelled) { labelled = true; const l = h("div", "am-label", "Your MINDs"); l.setAttribute("role", "presentation"); sub.append(l); }
+      sub.append(acctRow(a));
+    }
     const add = h("button", "am-acct add"); add.type = "button"; add.setAttribute("role", "menuitem");
     const plus = h("span", "plus"); plus.append(icon("i-plus"));
     add.append(plus, h("span", "nm", "Add another account"));
@@ -178,12 +185,13 @@ export function initAccount({ json, h, icon, notify, desktop, isHosted, closeSid
 
   async function switchTo(a) {
     const d = desktop();
+    for (const x of sub.querySelectorAll(".am-acct")) x.disabled = true; // minting the first key for a MIND takes a moment; no double clicks
     try {
       if (d && d.accounts) { toggleMenu(false); await d.accounts.switch(a.id); return; } // the shell restarts the gateway and reloads this window
       await json("/auth/switch", { method: "POST", body: JSON.stringify({ account: a.id }) });
       try { sessionStorage.removeItem("daebot:current"); sessionStorage.removeItem("daebot:bot"); localStorage.removeItem("daebot:inflight"); } catch { /* none */ }
       location.replace("/");
-    } catch (e) { notify(`Could not switch account: ${e.message}`); }
+    } catch (e) { for (const x of sub.querySelectorAll(".am-acct")) x.disabled = false; notify(`Could not switch account: ${e.message}`); }
   }
   async function addAccount() {
     const d = desktop();

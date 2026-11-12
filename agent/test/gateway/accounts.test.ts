@@ -18,7 +18,7 @@ import { http, tmpStatic } from "./helpers.ts";
 const rnd = () => randomBytes(18).toString("hex"); // throwaway test values
 const H = { host: "daebot.live", "x-forwarded-proto": "https" };
 
-async function rig() {
+async function rig(opts: { admins?: string; cacheMs?: string } = {}) {
   const keys = { alice: "mind_" + rnd(), bob: "mind_" + rnd(), carol: "mind_" + rnd() };
   const fake = await startFakeMind({ [keys.alice]: "alice", [keys.bob]: "bob", [keys.carol]: "carol" });
   const st = tmpStatic();
@@ -32,10 +32,10 @@ async function rig() {
   const sessionStore = createFileStore(dir);
   const bootCache = new BootCache();
   const ownerRuntime = createRuntime(cfg, { provider, store: sessionStore, bootCache, hosted: { dailyUsdCap: 50, sharedCap: globalCap, exempt: true } });
-  const env: NodeJS.ProcessEnv = { DATA_DIR: dir, DAEBOT_SECRET_KEY: rnd() + rnd(), DAEBOT_ADMINS: "", MIND_OAUTH_BASE_URL: fake.url, DAEBOT_PUBLIC_URL: "https://daebot.live" };
+  const env: NodeJS.ProcessEnv = { DATA_DIR: dir, DAEBOT_SECRET_KEY: rnd() + rnd(), DAEBOT_ADMINS: opts.admins ?? "", MIND_OAUTH_BASE_URL: fake.url, DAEBOT_PUBLIC_URL: "https://daebot.live", ...(opts.cacheMs ? { DAEBOT_OWNED_CACHE_MS: opts.cacheMs } : {}) };
   const auth = createAuthContext({ env, cfg, hosted: hostedOpts, ownerRuntime, globalCap, provider, sessionStore, bootCache });
   const gw = await startGateway({ runtime: ownerRuntime, port: 0, host: "127.0.0.1", staticDir: st.dir, hosted: hostedOpts, auth, sessionStore });
-  return { gw, keys, token, close: async () => { await gw.close(); await fake.close(); } };
+  return { gw, keys, token, fake, close: async () => { await gw.close(); await fake.close(); } };
 }
 
 type Res = { headers: Record<string, string | string[] | undefined> };
@@ -169,5 +169,106 @@ test("the owner access code is an account too", async () => {
     assert.equal(sw.status, 200);
     jar.take(sw);
     assert.equal(JSON.parse((await get(g, jar, "/auth/me")).body).owner, true);
+  } finally { await g.close(); }
+});
+
+// ---------- owned MIND tenants in the Switch account list (MIND's accounts API, the signed-in user's own credential)
+const accountsOf = async (g: Awaited<ReturnType<typeof rig>>, jar: Jar) => JSON.parse((await get(g, jar, "/auth/accounts")).body).accounts as any[];
+
+test("owned tenants are listed automatically, owner grants only, and switching runs the tenant's own Daebot account on a key MIND issued", async () => {
+  const g = await rig();
+  try {
+    g.fake.grants = new Map([["alice", [{ username: "acme", role: "owner" }, { username: "viewco", role: "viewer" }]]]);
+    g.fake.keys.set("mind_tenant_acme_placeholder_key_0001", "acme"); // acme exists as a MIND; carol exists too but alice holds no grant on her
+    const jar = new Jar();
+    await signIn(g, jar, g.keys.alice);
+    const list = await accountsOf(g, jar);
+    assert.deepEqual(list.map((x) => [x.username, x.active, !!x.owned]), [["alice", true, true], ["acme", false, true]], "alice + acme; never the viewer grant, never carol");
+    assert.ok(!JSON.stringify(list).includes("viewco") && !JSON.stringify(list).includes("carol"));
+    // a session made as alice stays alice's
+    const a = JSON.parse((await post(g, jar, "/sessions", { surface: "web", title: "alice chat" })).body).sessionId;
+    const sw = await post(g, jar, "/auth/switch", { account: userIdFor("acme") });
+    assert.equal(sw.status, 200, sw.body);
+    jar.take(sw);
+    const me = JSON.parse((await get(g, jar, "/auth/me")).body);
+    assert.equal(me.username, "acme");
+    assert.equal(me.tier, "staff", "tier follows the tenant: staff unless the tenant is in DAEBOT_ADMINS");
+    assert.equal(g.fake.minted.length, 1);
+    assert.deepEqual([g.fake.minted[0].tenant, g.fake.minted[0].actor], ["acme", "alice"], "MIND's accounts/switch token, asked with alice's own key");
+    // the list is still ALICE's list (not whatever acme owns), acme is active, and alice's chat is not visible inside acme
+    assert.deepEqual((await accountsOf(g, jar)).map((x) => [x.username, x.active]), [["alice", false], ["acme", true]]);
+    assert.ok(!JSON.stringify(JSON.parse((await get(g, jar, "/sessions")).body)).includes(a));
+    assert.equal((await get(g, jar, `/sessions/${a}/history`)).status, 403);
+    // a session created while switched belongs to acme (and its key is the minted one, never alice's)
+    const t = JSON.parse((await post(g, jar, "/sessions", { surface: "web", title: "acme chat" })).body).sessionId;
+    assert.equal((await post(g, jar, `/sessions/${t}/send`, { text: "hi" })).status, 200);
+    assert.ok(g.fake.seen.some((x) => x.key === g.fake.minted[0].key), "acme's runtime talks to MIND on acme's key");
+    assert.ok(JSON.stringify(JSON.parse((await get(g, jar, "/sessions")).body)).includes(t));
+    // switching again reuses acme's stored key instead of minting another
+    jar.take(await post(g, jar, "/auth/switch", { account: userIdFor("alice") }));
+    jar.take(await post(g, jar, "/auth/switch", { account: userIdFor("acme") }));
+    assert.equal(g.fake.minted.length, 1);
+    assert.ok(JSON.stringify(JSON.parse((await get(g, jar, "/sessions")).body)).includes(t), "acme's session is still there");
+  } finally { await g.close(); }
+});
+
+test("a MIND the user does not own is refused even when requested directly (carol, a viewer grant, a made-up name)", async () => {
+  const g = await rig();
+  try {
+    g.fake.grants = new Map([["alice", [{ username: "viewco", role: "viewer" }]]]);
+    const jar = new Jar();
+    await signIn(g, jar, g.keys.alice);
+    for (const body of [{ account: userIdFor("carol") }, { username: "carol" }, { account: userIdFor("viewco") }, { username: "viewco" }, { username: "nobody-here" }, { account: "owner" }, { account: "u_" + "0".repeat(24) }]) {
+      const r = await post(g, jar, "/auth/switch", body);
+      assert.equal(r.status, 404, `${JSON.stringify(body)} -> ${r.status}`);
+    }
+    assert.equal(g.fake.minted.length, 0, "nothing was minted for a refused switch");
+    assert.equal(JSON.parse((await get(g, jar, "/auth/me")).body).username, "alice");
+    // a forged actor claim in the cookie does not work: the actor is signed with the server secret
+    const forged = jar.copy();
+    forged.c.set("mc_session", issueSession("x".repeat(40), 60_000, Date.now(), userIdFor("carol"), userIdFor("alice")).value);
+    assert.equal((await get(g, forged, "/auth/me")).status, 401);
+    // MIND down or the feature off: the menu still shows what is signed in
+    g.fake.grants = undefined;
+    assert.deepEqual((await accountsOf(g, jar)).map((x) => x.username), ["alice"]);
+  } finally { await g.close(); }
+});
+
+test("switch back: to the person's own account, with a clean session; and a revoked grant puts the session back on its own", async () => {
+  const g = await rig({ cacheMs: "30" });
+  try {
+    g.fake.grants = new Map([["alice", [{ username: "acme", role: "owner" }]]]);
+    const jar = new Jar();
+    await signIn(g, jar, g.keys.alice);
+    jar.take(await post(g, jar, "/auth/switch", { account: userIdFor("acme") }));
+    assert.equal(JSON.parse((await get(g, jar, "/auth/me")).body).username, "acme");
+    const back = await post(g, jar, "/auth/switch", { account: userIdFor("alice") });
+    assert.equal(back.status, 200, back.body);
+    jar.take(back);
+    assert.equal(JSON.parse((await get(g, jar, "/auth/me")).body).username, "alice");
+    assert.deepEqual((await accountsOf(g, jar)).map((x) => [x.username, x.active]), [["alice", true], ["acme", false]]);
+    // switch in again, then MIND revokes the grant: the next menu open reverts to alice and acme is gone from the list
+    jar.take(await post(g, jar, "/auth/switch", { account: userIdFor("acme") }));
+    g.fake.grants.set("alice", []);
+    await new Promise((r) => setTimeout(r, 120)); // the owned list is cached briefly (30 ms here); the menu re-reads after that
+    const r = await get(g, jar, "/auth/accounts");
+    jar.take(r);
+    assert.equal(JSON.parse(r.body).reverted, true);
+    assert.equal(JSON.parse((await get(g, jar, "/auth/me")).body).username, "alice");
+    assert.deepEqual((await accountsOf(g, jar)).map((x) => x.username), ["alice"]);
+  } finally { await g.close(); }
+});
+
+test("a tenant named in DAEBOT_ADMINS gets the admin tier when switched into; the signed-in user's tier does not rub off", async () => {
+  const g = await rig({ admins: "adminco" });
+  try {
+    g.fake.grants = new Map([["alice", [{ username: "adminco", role: "owner" }]]]);
+    const jar = new Jar();
+    await signIn(g, jar, g.keys.alice);
+    assert.equal(JSON.parse((await get(g, jar, "/auth/me")).body).tier, "staff");
+    jar.take(await post(g, jar, "/auth/switch", { account: userIdFor("adminco") }));
+    assert.equal(JSON.parse((await get(g, jar, "/auth/me")).body).tier, "admin");
+    jar.take(await post(g, jar, "/auth/switch", { account: userIdFor("alice") }));
+    assert.equal(JSON.parse((await get(g, jar, "/auth/me")).body).tier, "staff");
   } finally { await g.close(); }
 });

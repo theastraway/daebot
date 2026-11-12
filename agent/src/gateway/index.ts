@@ -18,6 +18,7 @@ import { caelumToBot } from "./caelum.ts";
 import type { Principal } from "../auth/users.ts";
 import type { AuthContext } from "../auth/tenancy.ts";
 import { MindAuthError, whoami } from "../auth/mind-auth.ts";
+import { TenantError } from "../auth/tenants.ts";
 import { WAIVER_TEXT, WAIVER_VERSION, STANDING_ALLOW, isSessionMode } from "../permissions/index.ts";
 import { AppHandoff, appRedirect, isValidChallenge } from "../auth/app-handoff.ts";
 import { ENTER_PATH, PROVISION_PATH, bearerOf, provisionTokenOk } from "../auth/provision.ts";
@@ -687,28 +688,33 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   // Lax (not Strict): the MIND OAuth callback is a cross-site top-level navigation and must still see the list, so adding an account keeps the others.
   const accountsCookieAttrs = (maxAge: number): string => `HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
   const sessionTtl = (): number => hosted?.sessionTtlMs ?? SESSION_TTL_MS;
-  const mintSession = (uid: string): string => issueSession(token, sessionTtl(), Date.now(), uid === "owner" ? undefined : uid).value;
+  const mintSession = (uid: string, actor?: string): string => issueSession(token, sessionTtl(), Date.now(), uid === "owner" ? undefined : uid, uid === "owner" ? undefined : actor).value;
   const principalForUid = (uid: string): Principal | undefined => (uid === "owner" ? OWNER : auth?.store.principal(uid));
 
+  type Remembered = { uid: string; value: string; principal: Principal; actor?: string };
   /** Every account this browser has signed in to and that is still valid (signature, expiry, and the user still exists). Active one first. */
-  function rememberedAccounts(req: IncomingMessage): { uid: string; value: string; principal: Principal }[] {
+  function rememberedAccounts(req: IncomingMessage): Remembered[] {
     const ck = parseCookies(req.headers["cookie"]);
     const raw = [ck[HOSTED_COOKIE], ...(ck[ACCOUNTS_COOKIE] ?? "").split("~")];
-    const out: { uid: string; value: string; principal: Principal }[] = [];
+    const out: Remembered[] = [];
     for (const v of raw) {
       if (!v) continue;
       const s = parseSession(token, v);
       const p = s ? principalForUid(s.uid) : undefined;
       if (!s || !p || out.some((o) => o.uid === s.uid)) continue;
-      out.push({ uid: s.uid, value: v, principal: p });
+      out.push({ uid: s.uid, value: v, principal: p, ...(s.actor ? { actor: s.actor } : {}) });
     }
     return out.slice(0, MAX_ACCOUNTS);
   }
 
-  /** Set-Cookie pair for "uid is now the active account": a fresh mc_session plus the remembered list with uid first. */
-  function signInCookies(req: IncomingMessage, uid: string): string[] {
-    const fresh = mintSession(uid);
-    const others = rememberedAccounts(req).filter((a) => a.uid !== uid).map((a) => a.value);
+  /**
+   * Set-Cookie pair for "uid is now the active account": a fresh mc_session plus the remembered list with uid first. `actor` marks a MIND
+   * tenant the actor owns (switched into from the menu): that session is never kept in the remembered list once it is not the active one,
+   * because the owned-tenant list always comes from MIND, never from this browser.
+   */
+  function signInCookies(req: IncomingMessage, uid: string, actor?: string): string[] {
+    const fresh = mintSession(uid, actor);
+    const others = rememberedAccounts(req).filter((a) => a.uid !== uid && !a.actor).map((a) => a.value);
     const list = [fresh, ...others].slice(0, MAX_ACCOUNTS);
     const age = Math.floor(sessionTtl() / 1000);
     return [`${HOSTED_COOKIE}=${fresh}; ${cookieAttrs(age)}`, `${ACCOUNTS_COOKIE}=${list.join("~")}; ${accountsCookieAttrs(age)}`];
@@ -716,22 +722,85 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
 
   function userCookie(req: IncomingMessage, uid: string): string[] { return signInCookies(req, uid); }
 
+  const displayName = (p: Principal): string => (p.owner ? "Owner" : p.username);
+
+  /** The credential an account's own MIND calls run on: the owner login's server key, or a user's stored key. Never leaves the server. */
+  function actorKey(p: Principal): string | undefined { return auth?.billingKey(p); }
+
+  /** Who the active session really is: the human behind it (the session's signed actor when it is a switched-in tenant). */
+  function actorOf(req: IncomingMessage, cur: Principal): Principal {
+    const s = parseSession(token, parseCookies(req.headers["cookie"])[HOSTED_COOKIE]);
+    return (s?.actor ? principalForUid(s.actor) : undefined) ?? cur;
+  }
+
   async function accountsApi(req: IncomingMessage, res: ServerResponse, path: string, method: string): Promise<void> {
     const cur = principalOf(req);
     if (!cur) return sendJson(res, 401, { error: "unauthorized" });
+    const actor = actorOf(req, cur);
     if (path === "/auth/accounts") {
       if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-      const list = rememberedAccounts(req);
-      return sendJson(res, 200, { accounts: list.map((a) => ({ id: a.uid, username: a.principal.owner ? "Owner" : a.principal.username, owner: a.principal.owner, active: a.uid === cur.id })) });
+      const signedIn = rememberedAccounts(req).filter((a) => !a.actor);
+      const rows: { id: string; username: string; label?: string; owner: boolean; active: boolean; owned?: boolean; tenant?: boolean }[] = signedIn.map((a) => ({ id: a.uid, username: displayName(a.principal), owner: a.principal.owner, active: a.uid === cur.id }));
+      // Every MIND the signed-in person owns, straight from MIND with THEIR credential (cached for seconds). Failure never breaks the menu.
+      const key = actorKey(actor);
+      let reverted = false;
+      if (auth?.tenants && key) {
+        try {
+          const owned = await auth.tenants.owned(key);
+          const byId = new Map(rows.map((r) => [r.id, r]));
+          for (const t of owned) {
+            const id = t.self ? actor.id : userIdFor(t.username);
+            const have = byId.get(id);
+            if (have) { have.owned = true; continue; }
+            if (t.self) continue; // the actor's own row is the signed-in one above
+            const row = { id, username: t.username, ...(t.label !== t.username ? { label: t.label } : {}), owner: false, active: id === cur.id, owned: true, tenant: true };
+            rows.push(row); byId.set(id, row);
+          }
+          // The grant was revoked while switched in: the very next menu open puts the session back on the person's own account.
+          if (cur.id !== actor.id && !owned.some((t) => !t.self && userIdFor(t.username) === cur.id)) {
+            reverted = true;
+            res.setHeader("set-cookie", signInCookies(req, actor.id));
+            for (const r of rows) r.active = r.id === actor.id;
+          }
+        } catch { /* MIND unreachable: the signed-in accounts still show */ }
+      }
+      return sendJson(res, 200, { accounts: rows, ...(reverted ? { reverted: true } : {}) });
     }
     if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
     if (path === "/auth/switch") {
       const b = await readJson(req);
-      const want = typeof b.account === "string" ? b.account : "";
-      const target = rememberedAccounts(req).find((a) => a.uid === want);
-      if (!target) return sendJson(res, 404, { error: "that account is not signed in on this device; use Add another account" });
-      res.setHeader("set-cookie", signInCookies(req, target.uid));
-      return sendJson(res, 200, { ok: true, username: target.principal.owner ? "Owner" : target.principal.username });
+      const want = typeof b.account === "string" ? b.account : typeof b.username === "string" && b.username.trim() ? userIdFor(b.username) : "";
+      // Back to the person behind this session, or to an account that was signed in on this device: no MIND call needed.
+      const known = want === actor.id && principalForUid(actor.id) ? actor.id : rememberedAccounts(req).find((a) => a.uid === want && !a.actor)?.uid;
+      if (known) {
+        res.setHeader("set-cookie", signInCookies(req, known));
+        return sendJson(res, 200, { ok: true, username: displayName(principalForUid(known)!) });
+      }
+      // A MIND the person owns: MIND (not the browser) decides, fresh, with the person's own credential. Anything MIND does not list as owned is refused.
+      const key = actorKey(actor);
+      let tenant: { username: string } | undefined;
+      if (auth?.tenants && key && want) {
+        try { tenant = (await auth.tenants.owned(key, true)).find((t) => !t.self && userIdFor(t.username) === want); } catch { /* treated as not owned */ }
+      }
+      if (!auth?.tenants || !key || !tenant) return sendJson(res, 404, { error: "that account is not signed in on this device and MIND does not list it as one you own" });
+      try {
+        let ready = false;
+        const have = auth.store.creds(want);
+        if (have) {
+          try { ready = (await whoami(auth.mindBaseUrl, have.kind === "key" ? have.mindKey : have.accessToken, auth.fetchImpl)).username === tenant.username; } catch { ready = false; }
+        }
+        if (!ready) {
+          const minted = await auth.tenants.mintKey(key, tenant.username);
+          if ((await whoami(auth.mindBaseUrl, minted, auth.fetchImpl)).username !== tenant.username) return sendJson(res, 502, { error: "MIND issued a key for a different account" });
+          auth.store.upsert(tenant.username, { kind: "key", mindKey: minted });
+          auth.evict(want);
+        }
+      } catch (e) {
+        const st = e instanceof TenantError || e instanceof MindAuthError ? e.status : 502;
+        return sendJson(res, st === 401 ? 502 : st, { error: e instanceof Error ? e.message : "could not switch" });
+      }
+      res.setHeader("set-cookie", signInCookies(req, want, actor.id));
+      return sendJson(res, 200, { ok: true, username: tenant.username });
     }
     // /logout: signs out only the ACTIVE account and moves to the next remembered one; {all:true} signs out of every account on this device.
     const b = await readJson(req);

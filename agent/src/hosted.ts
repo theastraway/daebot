@@ -145,27 +145,31 @@ function mac(token: string, expiry: string, uid?: string): string {
   return createHmac("sha256", token).update(uid ? `mindclaw-session-v2:${uid}:${expiry}` : `mindclaw-session:${expiry}`).digest("base64url");
 }
 
-export function issueSession(token: string, ttlMs = SESSION_TTL_MS, now = Date.now(), uid?: string): { value: string; maxAgeSec: number } {
+/** `actor` (only with a uid): this session is a MIND tenant the actor owns and switched into; the actor is signed into the cookie so it cannot be forged. */
+export function issueSession(token: string, ttlMs = SESSION_TTL_MS, now = Date.now(), uid?: string, actor?: string): { value: string; maxAgeSec: number } {
   const expiry = String(now + ttlMs);
-  const value = uid ? `${uid}:${expiry}.${mac(token, expiry, uid)}` : `${expiry}.${mac(token, expiry)}`;
+  const subject = uid && actor ? `${uid}@${actor}` : uid;
+  const value = subject ? `${subject}:${expiry}.${mac(token, expiry, subject)}` : `${expiry}.${mac(token, expiry)}`;
   return { value, maxAgeSec: Math.floor(ttlMs / 1000) };
 }
 
 /** Verifies a session cookie. Returns the subject: "owner" for the access-code login, else the user id. */
-export function parseSession(token: string, value: string | undefined, now = Date.now()): { uid: string } | undefined {
+export function parseSession(token: string, value: string | undefined, now = Date.now()): { uid: string; actor?: string } | undefined {
   if (!value) return undefined;
   const dot = value.indexOf(".");
   if (dot < 1) return undefined;
   const head = value.slice(0, dot);
   const colon = head.indexOf(":");
-  const uid = colon === -1 ? undefined : head.slice(0, colon);
+  const subject = colon === -1 ? undefined : head.slice(0, colon);
   const expiry = colon === -1 ? head : head.slice(colon + 1);
+  const [uid, actor, extra] = subject === undefined ? [undefined, undefined, undefined] : subject.split("@");
   if (uid !== undefined && !/^u_[a-f0-9]{24}$/.test(uid)) return undefined;
+  if (extra !== undefined || (actor !== undefined && !/^(owner|u_[a-f0-9]{24})$/.test(actor))) return undefined;
   if (!/^\d{10,16}$/.test(expiry) || Number(expiry) <= now) return undefined;
-  const want = Buffer.from(mac(token, expiry, uid));
+  const want = Buffer.from(mac(token, expiry, subject));
   const got = Buffer.from(value.slice(dot + 1));
   if (want.length !== got.length || !timingSafeEqual(want, got)) return undefined;
-  return { uid: uid ?? "owner" };
+  return { uid: uid ?? "owner", ...(actor ? { actor } : {}) };
 }
 
 export function verifySession(token: string, value: string | undefined, now = Date.now()): boolean {

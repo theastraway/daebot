@@ -8,6 +8,7 @@
 //                                Ignored when DAEBOT_BILLING=mind: the user's MIND plan and credits are the cap.
 //   MIND_OAUTH_CLIENT_ID/SECRET  optional; Daebot registers itself with MIND (RFC 7591) when no client id is given
 //   MIND_OAUTH_BASE_URL          optional MIND origin for /oauth/mcp/* (default: origin of MIND_BASE_URL)
+//   DAEBOT_OWNED_CACHE_MS        optional; how long the owned-MIND list behind Switch account is cached (default 20000)
 //   DAEBOT_PUBLIC_URL            optional public origin for the OAuth redirect (default https://<first allowed host>)
 import { DailyCostCap } from "../hosted.ts";
 import type { HostedOptions } from "../hosted.ts";
@@ -23,6 +24,7 @@ import type { BootCache } from "../mind/boot-cache.ts";
 import type { MindCredits } from "../provider/mind.ts";
 import { UserStore, parseList } from "./users.ts";
 import { EntryCodes, RuntimeAllowList } from "./provision.ts";
+import { TenantDirectory } from "./tenants.ts";
 
 export const DEFAULT_USER_DAILY_USD_CAP = 1;
 
@@ -66,6 +68,7 @@ export function createAuthContext(o: {
     store, oauth, allowedUsers: parseList(env.DAEBOT_ALLOWED_USERS),
     runtimeAllow: new RuntimeAllowList(dir), entryCodes: new EntryCodes(), provisionToken: (env.DAEBOT_PROVISION_TOKEN ?? "").trim() || undefined,
     credits: o.credits,
+    tenants: new TenantDirectory(o.cfg.mindBaseUrl, o.fetchImpl, undefined, Number(env.DAEBOT_OWNED_CACHE_MS) >= 0 && env.DAEBOT_OWNED_CACHE_MS ? Number(env.DAEBOT_OWNED_CACHE_MS) : undefined),
     // A user's calls are billed to their own MIND key; the owner access-code login to the server MIND_API_KEY.
     billingKey: (p) => {
       if (p.owner) return o.cfg.mindApiKey || undefined;

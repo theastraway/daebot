@@ -856,6 +856,8 @@ a.bd-chip.decision:hover { text-decoration: underline; }
 .am-acct span.nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .am-acct .ic { flex: none; width: 16px; height: 16px; color: var(--ok); }
 .am-acct.add { color: var(--ink-2); }
+.am-label { padding: 8px 9px 3px; font: 600 11px var(--sans); letter-spacing: .04em; text-transform: uppercase; color: var(--ink-3); }
+.am-acct:disabled { opacity: .55; cursor: progress; }
 .am-acct.add .plus { display: grid; place-items: center; width: 26px; height: 26px; border: 1px dashed var(--line-strong); border-radius: 50%; }
 .am-acct.add .plus .ic { color: var(--ink-2); width: 14px; height: 14px; }
 .only-narrow-item { display: none; }
