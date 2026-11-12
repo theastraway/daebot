@@ -154,7 +154,8 @@ export function createVoiceHandler(o: VoiceOptions): (req: IncomingMessage, res:
         // The voice: an explicit `voice` object (the settings form previewing unsaved edits) or the saved voice of `bot` (a slug, or "main").
         const bot = typeof b?.bot === "string" && /^[a-z0-9-]{1,32}$/.test(b.bot) ? b.bot : undefined;
         const voice = b?.voice && typeof b.voice === "object" ? cleanVoice(b.voice) : bot ? o.voiceOf?.(p, bot) : undefined;
-        upstream = await f(`${base}/audio/speech`, { method: "POST", headers: { "X-API-Key": key, "Content-Type": "application/json", ...(bot ? { "X-Daebot-Bot": bot } : {}) }, // the bot slug: MIND applies that bot's spend cap and ledgers the spend to it body: JSON.stringify(ttsBodyFor(voice, text)), signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) });
+        // The bot slug goes along so MIND applies that bot's spend cap and ledgers the spend to it.
+        upstream = await f(`${base}/audio/speech`, { method: "POST", headers: { "X-API-Key": key, "Content-Type": "application/json", ...(bot ? { "X-Daebot-Bot": bot } : {}) }, body: JSON.stringify(ttsBodyFor(voice, text)), signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) });
       }
       if (!upstream.ok) {
         const m = mapError(upstream.status, await upstream.text().catch(() => ""));
