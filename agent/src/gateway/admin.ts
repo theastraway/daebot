@@ -45,6 +45,8 @@ export interface AdminOptions {
   reconcile?: { start(b: Record<string, unknown>): { started: boolean }; state(): unknown };
   /** Admin: give every session that has no home environment the one its record proves (else MIND Cloud). GET reads the last run, POST runs it now. */
   envs?: (who: string) => unknown;
+  envsForget?: (who: string, ids: string[]) => string[];
+  envsRename?: (who: string, id: string, name: string) => boolean;
   homes?: { run(b: Record<string, unknown>): Promise<unknown>; last(): unknown };
   /** The secret for writes (DAEBOT_MISTAKE_LOG_KEY), read per request so setting it on Render needs no code change. */
   logKey: () => string | undefined;
@@ -119,6 +121,13 @@ export async function handleAdmin(o: AdminOptions, req: IncomingMessage, res: Se
     if (!b || typeof b !== "object") { json(res, 400, { error: "object body required" }); return true; }
     if (isAnger) { if (!o.anger) { json(res, 503, { error: "anger ledger not configured" }); return true; } json(res, 200, { ok: true, ...o.anger.ingest(b) }); return true; }
     if (isSnap) { const r = o.feed ? await o.feed.snapshot() : { day: "", id: undefined }; json(res, 200, { ok: true, mind_document_id: r.id ?? null, day: r.day, kpis: o.ledger.kpiSnapshot() }); return true; }
+    if (isEnvs) {
+      const who = typeof b.owner === "string" ? b.owner.slice(0, 80) : "";
+      if (!who || who === "all") { json(res, 400, { error: "owner required" }); return true; }
+      if (Array.isArray(b.forget) && o.envsForget) { json(res, 200, { ok: true, forgotten: o.envsForget(who, b.forget.map(String).slice(0, 100)) }); return true; }
+      if (typeof b.rename === "object" && b.rename && o.envsRename) { const r = b.rename as { id?: unknown; name?: unknown }; json(res, 200, { ok: o.envsRename(who, String(r.id ?? ""), String(r.name ?? "")) }); return true; }
+      json(res, 400, { error: "forget:[ids] or rename:{id,name} required" }); return true;
+    }
     if (isHomes) { if (!o.homes) { json(res, 503, { error: "not available here" }); return true; } json(res, 200, { ok: true, result: await o.homes.run(b) }); return true; }
     if (isReconcile) {
       if (!o.reconcile) { json(res, 503, { error: "reconcile is not available here" }); return true; }

@@ -99,3 +99,15 @@ test("dots: green = this computer, blue = another computer or server, neutral = 
   assert.match(eg.envDescription({ ...other, os: "mac", lastSeen: 0 }), /Mac \(computer, macOS\)/);
   assert.match(eg.envDescription({ ...here, os: "windows", model: "Legion 5" }), /Legion \(computer, Windows, Legion 5\), this computer/);
 });
+
+test("admin repair: forgetting a stale device removes it and its rename; the macOS -N hostname suffix does not split one Mac in two", () => {
+  const hub = new RemoteHub({ now: () => 9000 });
+  hub.heartbeat("o1", dev(ID("a"), "Anthony’s MacBook Pro", { kind: "machine", host: "Anthonys-MacBook-Pro-7" }));
+  hub.heartbeat("o1", dev(ID("f"), "fixture", { kind: "server" }));
+  hub.renameEnv("o1", ID("f"), "Fixture box");
+  assert.deepEqual(hub.forgetDevices("o1", [ID("f"), ID("9")]), [ID("f")]);
+  assert.equal(hub.envGroups("o1").length, 1);
+  assert.equal(hub.envNamesOf("o1")[ID("f")], undefined);
+  const two = groupDevices([{ id: ID("a"), name: "Anthony’s MacBook Pro", host: "Anthonys-MacBook-Pro-7", lastSeen: 2, online: false }, { id: ID("e"), name: "Anthonys MacBook Pro", lastSeen: 1, online: false }], {});
+  assert.equal(two.length, 1);
+});
