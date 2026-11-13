@@ -9,11 +9,11 @@
         {
           "label": "Download for Mac",
           "kind": "dmg",
-          "file": "Daebot-0.3.45-mac-universal.dmg",
-          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-0.3.45-mac-universal.dmg",
-          "size": 282889673,
-          "sha256": "c27d4e84d725ff6ac3baf2bd4107f67a0969918aeaf8c3fb436129e3cffefefe",
-          "version": "0.3.45"
+          "file": "Daebot-0.3.46-mac-universal.dmg",
+          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-0.3.46-mac-universal.dmg",
+          "size": 282894865,
+          "sha256": "f7ebd8ca96ceec1c349fe549a1a93299d58c9768bda9eb3b489de968b1e5e666",
+          "version": "0.3.46"
         }
       ]
     },
