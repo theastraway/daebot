@@ -36,6 +36,7 @@ import { initPhotos, normQueue, packQueue, queueLabel, SAYS as PHOTO_SAYS } from
 import { calendarCapabilities, createDeviceCalls } from "/device-calendar.js";
 import { initMessageMenu, copyText } from "/msgmenu.js";
 import { initToolRoll } from "/toolroll.js";
+import { argSummary } from "/toolargs.js";
 initScrollbars(); // scrollbars stay hidden until the user scrolls
 
 const $ = (id) => document.getElementById(id);
@@ -196,15 +197,6 @@ function h(tag, cls, text) {
   if (cls) e.className = cls;
   if (text !== undefined) e.textContent = text;
   return e;
-}
-function argSummary(args) {
-  const parts = [];
-  for (const [k, v] of Object.entries(args || {})) {
-    const s = typeof v === "string" ? v : JSON.stringify(v);
-    parts.push(`${k}=${s.replace(/\s+/g, " ").slice(0, 70)}`);
-    if (parts.join(" ").length > 90) break;
-  }
-  return parts.join("  ");
 }
 const pretty = (v) => { try { return JSON.stringify(v, null, 2); } catch { return String(v); } };
 function ago(ms) {
