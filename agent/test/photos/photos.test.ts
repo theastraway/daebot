@@ -46,9 +46,10 @@ test("checkPhotos: a valid jpeg, png, webp and gif pass and carry their real siz
   assert.deepEqual(checkPhotos([]), { ok: true, photos: [] });
 });
 
-test("checkPhotos: a bad mime prefix is refused (svg, pdf, text, HEIC with its own message)", () => {
+test("checkPhotos: a bad mime prefix is refused (svg, text, HEIC with its own message)", () => {
   assert.equal(bad([{ name: "a", dataUrl: dataUrl("image/svg+xml", Buffer.from("<svg/>")) }]).status, 415);
-  assert.equal(bad([{ name: "a", dataUrl: dataUrl("application/pdf", Buffer.from("%PDF-1.4")) }]).status, 415);
+  // a file labelled PDF that is not one is refused, like any other bad file
+  assert.match(bad([{ name: "a", dataUrl: dataUrl("application/pdf", Buffer.from("%PDF")) }]).error, /not a PDF file/);
   assert.equal(bad([{ name: "a", dataUrl: dataUrl("text/html", Buffer.from("<script>")) }]).status, 415);
   const heic = bad([{ name: "IMG_1.HEIC", dataUrl: dataUrl("image/heic", Buffer.alloc(40)) }]);
   assert.equal(heic.status, 415);
@@ -82,7 +83,7 @@ test("checkPhotos: per-photo size cap", () => {
 
 test("checkPhotos: more than 5 photos, and a request over the total cap, are refused", () => {
   const six = Array.from({ length: MAX_PHOTOS_PER_MESSAGE + 1 }, (_, i) => sample(`p${i}.jpg`));
-  assert.match(bad(six).error, /at most 5 photos/);
+  assert.match(bad(six).error, /at most 5 attachments/);
   assert.equal(good(six.slice(0, 5)).length, 5);
   // 4 x 7 MB = 28 MB decoded: each is under the per-photo cap, together they are over the per-request cap
   const sevens = Array.from({ length: 4 }, (_, i) => ({ name: `s${i}.jpg`, dataUrl: jpegUrl(3000, 2000, 7 * 1024 * 1024) }));
@@ -104,7 +105,12 @@ test("the lines the model reads: one per photo, and an empty message still says 
   assert.equal(photoLines(refs), "[photo p1: estimate.jpg, 1024x768]\n[photo p2: b.png, 5x6]");
   assert.equal(messageWithPhotos("What is the total?", refs), "What is the total?\n\n[photo p1: estimate.jpg, 1024x768]\n[photo p2: b.png, 5x6]");
   assert.match(messageWithPhotos("", [refs[0]]), /^\(The user attached a photo without a message\.\)\n\[photo p1: /);
-  assert.match(messageWithPhotos("  ", refs), /attached 2 photos/);
+  assert.match(messageWithPhotos("  ", refs), /attached 2 attachments/);
+  // a PDF is named as a document, with its page count, and read_document is what the model is told to use
+  const doc = [{ id: "p3", name: "agreement.pdf", width: 0, height: 0, kind: "document" as const, pages: 2 }];
+  assert.equal(photoLines(doc), "[document p3: agreement.pdf, 2 pages]");
+  assert.match(messageWithPhotos("", doc), /^\(The user attached a document without a message\.\)\n\[document p3: /);
+  assert.equal(photoLines([{ id: "p4", name: "one.pdf", width: 0, height: 0, kind: "document" as const, pages: 1 }]), "[document p4: one.pdf, 1 page]");
   assert.equal(messageWithPhotos("hello", undefined), "hello");
   assert.equal(messageWithPhotos("hello", []), "hello");
 });

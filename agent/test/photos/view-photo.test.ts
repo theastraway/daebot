@@ -260,12 +260,12 @@ test("MIND provider: pinModel on the free plan uses the exact model asked for (n
 // ---------------------------------------------------------------- prompt skill, allowlist, config
 test("the system prompt has a short ## Photos skill when view_photo is offered, and not otherwise", () => {
   const withIt = composeSystemPrompt({ bootContext: "", surface: "web", cwd: "/", photos: true });
-  assert.match(withIt, /## Photos/);
+  assert.match(withIt, /## Photos and attached documents/);
   assert.match(withIt, /\[photo p1: name\.jpg, 1024x768\]/);
   assert.match(withIt, /Call view_photo FIRST, with a specific question tied to what they asked/);
   assert.match(withIt, /read every line item, amount and total exactly/);
-  assert.match(withIt, /Never describe or summarise a photo/);
-  assert.match(withIt, /Quote numbers and text exactly as view_photo returned them/);
+  assert.match(withIt, /Never describe or summarise a photo or a document/);
+  assert.match(withIt, /Quote numbers and text exactly as the tool returned them/);
   assert.match(withIt, /SURFACE✓ #cN/);
   assert.match(withIt, /unreadable.*ask for a clearer photo/);
   assert.ok(PHOTOS_SECTION.join("\n").length < 1200, "short");
