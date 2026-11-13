@@ -102,6 +102,56 @@ unsigned (no code-signing certificate yet), so SmartScreen asks to confirm the f
 3. `node agent/scripts/release-manifest.mjs <folder-with-the-files> <version>` fills `agent/web/download/releases.json` (size, sha256,
    URL; a missing file stays "Coming soon"). Merge it and deploy; `daebot.live/download` updates.
 
+#### The script does all of it: `agent/desktop/scripts/publish-release.sh`
+```
+agent/desktop/scripts/publish-release.sh <artifactsDir> <version> --notes "..." \
+    [--platforms mac,windows,linux] [--dry-run] [--force] [--skip-registry]
+```
+`<artifactsDir>` is what electron-builder wrote (`agent/desktop/dist`). It uploads atomically (`scp` to
+`.tmp`, then `mv`), skips a file already present with the same sha256, refuses to overwrite a different one
+without `--force`, verifies every file over HTTPS (200 + matching `content-length`), writes the download
+manifest, registers each `(platform, arch)` with MIND, and prints a receipt with the sha256s. Always run
+`--dry-run` first. Modeled on the proven MIND publisher (`mindapp-sandbox/.../publish-dmg.sh`).
+
+#### A release is THREE things — all three, or it is not shipped
+1. **The installers** on the droplet (`/var/www/evie/download/daebot/`, Caddy, public at
+   `https://download.m-i-n-d.ai/download/daebot/`).
+2. **The electron-updater feed files** (`latest-mac.yml`, `latest.yml`, `latest-arm64.yml`,
+   `latest-linux.yml`) plus the `.blockmap` files. This is what an ALREADY-INSTALLED app checks. An installer
+   uploaded without its feed file never reaches anyone already running Daebot.
+3. **The records**: the MIND registry (`POST /developer/v1/mac-releases`, admin key, keyed on
+   version+build+platform+arch) and `agent/web/download/releases.json` (the website's download buttons).
+
+#### Credentials each step needs
+| Step | Needs | Where it lives |
+|---|---|---|
+| Upload to the droplet | the SSH private key | `~/.ssh/droplet_170_key` (or `DAEBOT_SSH_KEY`) |
+| Mac sign + notarize | Developer ID `ANTHONY JOSEPH CONTI (VJ44THJ238)`, `MINDNotarize` profile, `DAEBOT_SIGN=1` | only the signing Mac |
+| MIND registry | an admin `mind_` key | `~/.daebot/mind-key`, or `MIND_API_KEY` |
+
+Build commands: Mac `DAEBOT_SIGN=1 npm run dist:mac` (signing Mac only); Windows/Linux need no secrets —
+CI builds them on a `daebot-v*` tag or `workflow_dispatch`. `bun` is required to compile the gateway binary
+(`curl -fsSL https://bun.sh/install | bash`).
+
+#### Traps that cost real time
+- **The desktop app bundles its own gateway** (`Contents/Resources/bin/daebot-darwin-*` embeds the web UI), so
+  a web-only change does not reach an installed app until a desktop build ships. Check an installed app with
+  `.../bin/daebot-darwin-arm64 --version`.
+- **A build with no signing identity SUCCEEDS but is adhoc-signed** (`codesign -dv` -> `Signature=adhoc`,
+  `TeamIdentifier=not set`; `spctl -a` -> "rejected"). Do not publish it: it would replace a notarized app
+  with an untrusted one and break the update chain.
+- **CI's `verify` job already fails on `main`** (run 39975530745, 2026-10-23, before this work). Reproduce
+  locally at the tag before blaming a change, and compare failing test NAMES against a `main` run: the flaky
+  set is the device-relay / connected-apps / apple_calendar group.
+- In a fresh `git worktree`, `npx tsc` fails with "This is not the tsc command you are looking for" until you
+  run `npm install` there. `timeout` is not installed on macOS.
+
+#### Done means (do not claim it earlier)
+`curl -sIL https://download.m-i-n-d.ai/download/daebot/<file>` is 200 with the right `content-length`;
+the server's `latest-mac.yml` names the new version; the registry `GET /latest` confirms version+build;
+`releases.json` on main has the URL; and `scripts/verify-feed.cjs` shows the update offered to an app on the
+previous version.
+
 ## Memory
 Measured by `npm run smoke` (sum of Electron per-process working sets + the gateway child RSS; this over-counts shared pages,
 and the child runs the scripted fake runtime, so the real runtime will add some): see the numbers in the task report.
