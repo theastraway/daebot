@@ -74,6 +74,7 @@ import { createFakeSimulatorService, simulatorFakeEnabled } from "../devices/sim
 import { simulatorService, useSimulatorService } from "../devices/simulator-service.ts";
 import type { SimulatorService } from "../devices/simulator-service.ts";
 import { createSimulatorTool, runSimulatorJob } from "../tools/simulator.ts";
+import { announcePty, attachPtyBackend, withTerminalBackend } from "../devices/pty-bridge.ts";
 import { terminalRegistry } from "../tools/terminal.ts";
 import { browserApi, isBrowserPath } from "./browser.ts";
 import { createBrowserBridge, installBrowserBridge } from "../browser/bridge.ts";
@@ -1900,7 +1901,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/board" || path.startsWith("/board/") || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/devices" || path.startsWith("/browser/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
+    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/board" || path.startsWith("/board/") || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/devices" || path === "/devices/pty" || path.startsWith("/browser/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -2615,10 +2616,18 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       if (sp) { me = sp.me; viewer = sp.viewer; }
     }
     // Shell sessions the pane watches, and the device-support seam. Local gateways only: a hosted server has no shell and must not stream one.
-    if (path === "/devices") {
+    if (path === "/devices" || path === "/devices/pty") {
+      if (path === "/devices/pty") {
+        if (hosted) return sendJson(res, 404, { error: "not found" });
+        if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+        const b = await readJson(req);
+        const terms = opts.terminals ?? terminalRegistry();
+        const out = await announcePty({ hosted: !!hosted, remoteAddress: req.socket.remoteAddress, port: b.port, token, registry: terms });
+        return sendJson(res, out.status, out.body);
+      }
       if (hosted) return sendJson(res, 404, { error: "not found" });
       if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-      let body = deviceSupport(process.platform);
+      let body = withTerminalBackend(deviceSupport(process.platform), opts.terminals ?? terminalRegistry());
       const hub = opts.simulatorHub ?? remoteHub;
       if (hub) body = withPairedMac(body, pairedMac(hub.devices(me.id)));
       return sendJson(res, 200, { ...body, browser: browserSupport(browserBus.connected()) });
@@ -2661,7 +2670,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         const rt = manager.runtimeOf(me.id);
         return rt.history?.(id) || rt.sessionInfo?.(id) ? "ok" : "missing";
       };
-      if (terminalsApi(req, res, path, _query, method, { hosted: !!hosted, viewer: !!viewer, access: known, registry: terms, sendJson, heartbeatMs: opts.terminalHeartbeatMs })) return;
+      if (await terminalsApi(req, res, path, _query, method, { hosted: !!hosted, viewer: !!viewer, access: known, registry: terms, sendJson, readJson, heartbeatMs: opts.terminalHeartbeatMs })) return;
       return sendJson(res, 404, { error: "not found" });
     }
     if (path === "/sync/status") return method === "GET" ? sendJson(res, 200, syncAgent ? { ...syncAgent.status, ...(syncAgent.routineStats ? { routines: syncAgent.routineStats } : {}) } : { enabled: false }) : sendJson(res, 405, { error: "method not allowed" });
@@ -3388,6 +3397,22 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   const addr = server.address() as AddressInfo;
   const shownHost = host === "::1" ? "[::1]" : host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
   const url = `http://${shownHost}:${addr.port}`;
+
+  // The desktop smoke harness starts the PTY host before the gateway and passes the port. A bad port keeps pipes.
+  if (!hosted) {
+    const raw = process.env.DAEBOT_PTY_PORT ?? "";
+    if (/^\d{1,5}$/.test(raw)) {
+      const port = Number(raw);
+      if (port > 0 && port < 65536) {
+        try {
+          await attachPtyBackend({ port, token, registry: opts.terminals ?? terminalRegistry() });
+        } catch (e) {
+          const msg = String((e as Error)?.message ?? e).replace(/[0-9a-f]{32,}/gi, "[redacted]").split("\n")[0]!.slice(0, 180);
+          process.stderr.write(`[daebot] PTY not attached: ${msg}\n`);
+        }
+      }
+    }
+  }
 
   return {
     url,

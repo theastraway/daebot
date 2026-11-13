@@ -1,6 +1,6 @@
-// Local-only read API for the terminal pane. The user can watch a shell the agent already opened.
-// Nothing here writes to the shell: there is no POST. Output is a peek, so the agent's own `read` still sees every byte.
-// A shared-thread guest is refused (the scrollback can contain secrets). The hosted deployment never mounts these routes.
+// Local-only API for the terminal pane. GET peeks, so the agent's own `read` still sees every byte.
+// POST .../input and .../resize are the person's keystrokes and the pane size. A pipe session refuses them.
+// The bare session URL stays GET-only. A shared-thread guest is refused. The hosted deployment never mounts these routes.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { TerminalRegistry } from "../tools/terminal.ts";
 
@@ -13,6 +13,7 @@ export interface TerminalCtx {
   access(sessionId: string): SessionAccess;
   registry: TerminalRegistry;
   sendJson(res: ServerResponse, status: number, body: unknown): void;
+  readJson?(req: IncomingMessage): Promise<Record<string, unknown>>;
   /** Tests. Production heartbeats every 15s. */
   heartbeatMs?: number;
 }
@@ -30,6 +31,8 @@ const SSE_HEADERS: Record<string, string> = {
 const LIST_RE = /^\/sessions\/([^/]+)\/terminals$/;
 const ONE_RE = /^\/sessions\/([^/]+)\/terminals\/([^/]+)$/;
 const STREAM_RE = /^\/sessions\/([^/]+)\/terminals\/([^/]+)\/stream$/;
+const INPUT_RE = /^\/sessions\/([^/]+)\/terminals\/([^/]+)\/input$/;
+const RESIZE_RE = /^\/sessions\/([^/]+)\/terminals\/([^/]+)\/resize$/;
 
 export function isTerminalPath(path: string): boolean {
   return /^\/sessions\/[^/]+\/terminals(?:\/|$)/.test(path);
@@ -47,15 +50,17 @@ function fromOffset(query: URLSearchParams): number | undefined | "bad" {
 }
 
 /** Returns true when the path is a terminal route (and the response has been sent, or an SSE stream is open). */
-export function terminalsApi(_req: IncomingMessage, res: ServerResponse, path: string, query: URLSearchParams, method: string, ctx: TerminalCtx): boolean {
+export async function terminalsApi(req: IncomingMessage, res: ServerResponse, path: string, query: URLSearchParams, method: string, ctx: TerminalCtx): Promise<boolean> {
   const list = LIST_RE.exec(path);
   const stream = STREAM_RE.exec(path);
-  const one = stream ? null : ONE_RE.exec(path);
-  const hit = list ?? stream ?? one;
+  const input = INPUT_RE.exec(path);
+  const resize = RESIZE_RE.exec(path);
+  const one = stream || input || resize ? null : ONE_RE.exec(path);
+  const hit = list ?? stream ?? input ?? resize ?? one;
   if (!hit) return false;
 
   const sessionId = decodeSeg(hit[1]);
-  const termId = stream ? decodeSeg(stream[2]) : one ? decodeSeg(one[2]) : undefined;
+  const termId = stream ? decodeSeg(stream[2]) : input ? decodeSeg(input[2]) : resize ? decodeSeg(resize[2]) : one ? decodeSeg(one[2]) : undefined;
   if (!sessionId || ((stream || one) && !termId)) {
     ctx.sendJson(res, 400, { error: "bad id" });
     return true;
@@ -74,7 +79,8 @@ export function terminalsApi(_req: IncomingMessage, res: ServerResponse, path: s
     ctx.sendJson(res, 404, { error: "not found" });
     return true;
   }
-  if (method !== "GET") {
+  const writing = !!(input || resize);
+  if (writing ? method !== "POST" : method !== "GET") {
     ctx.sendJson(res, 405, { error: "method not allowed" });
     return true;
   }
@@ -91,6 +97,37 @@ export function terminalsApi(_req: IncomingMessage, res: ServerResponse, path: s
 
   if (list) {
     ctx.sendJson(res, 200, { terminals: ctx.registry.list(sessionId) });
+    return true;
+  }
+
+  if (input || resize) {
+    let body: Record<string, unknown> = {};
+    try { body = ctx.readJson ? await ctx.readJson(req) : {}; }
+    catch (e) {
+      const msg = String((e as Error)?.message ?? e).split("\n")[0]!.slice(0, 200);
+      ctx.sendJson(res, 400, { error: msg || "bad body" });
+      return true;
+    }
+    try {
+      if (input) {
+        const data = typeof body.data === "string" ? body.data : "";
+        const r = ctx.registry.input(sessionId, termId as string, data);
+        ctx.sendJson(res, 200, { ok: true, bytes: r.bytes });
+      } else {
+        const cols = body.cols;
+        const rows = body.rows;
+        if (typeof cols !== "number" || typeof rows !== "number") {
+          ctx.sendJson(res, 400, { error: "cols and rows are required" });
+          return true;
+        }
+        ctx.registry.resize(sessionId, termId as string, cols, rows);
+        ctx.sendJson(res, 200, { ok: true, cols, rows });
+      }
+    } catch (e) {
+      const msg = String((e as Error)?.message ?? e).split("\n")[0]!.slice(0, 300);
+      const status = /unknown session/.test(msg) ? 404 : /too long|out of range|required/.test(msg) ? 400 : /pipe, not a PTY|has exited|has closed/.test(msg) ? 409 : 400;
+      ctx.sendJson(res, status, { error: msg });
+    }
     return true;
   }
 
@@ -119,6 +156,7 @@ function eventChunk(event: string, body: unknown): string {
 
 function streamOne(res: ServerResponse, ctx: TerminalCtx, sessionId: string, tid: string, snap: ReturnType<TerminalRegistry["peek"]>): void {
   let cursor = snap.total;
+  let screenCursor = typeof snap.screenTotal === "number" ? snap.screenTotal : 0;
   let status = snap.info.status;
   let unsub = (): void => {};
   let ended = false;
@@ -143,9 +181,24 @@ function streamOne(res: ServerResponse, ctx: TerminalCtx, sessionId: string, tid
     try { res.write(chunk); return true; } catch { end(true); return false; }
   };
 
+  // The snapshot carries the whole retained PTY screen. Later events carry only the new raw bytes.
+  const screenDelta = (p: ReturnType<TerminalRegistry["peek"]>): { screen: string; screenTotal: number; screenGap?: boolean } | undefined => {
+    if (typeof p.screen !== "string" || typeof p.screenTotal !== "number") return undefined;
+    const start = p.screenTotal - p.screen.length;
+    if (screenCursor < start) {
+      screenCursor = p.screenTotal;
+      return { screen: p.screen, screenTotal: p.screenTotal, screenGap: true };
+    }
+    const screen = screenCursor >= p.screenTotal ? "" : p.screen.slice(screenCursor - start);
+    screenCursor = p.screenTotal;
+    return { screen, screenTotal: p.screenTotal };
+  };
+
   const sendData = (p: ReturnType<TerminalRegistry["peek"]>): boolean => {
-    if (!p.text && !(p.dropped > 0)) return true;
-    return writeRaw(eventChunk("data", { text: p.text, total: p.total, dropped: p.dropped }));
+    const extra = screenDelta(p);
+    const hasScreen = !!extra && (extra.screen.length > 0 || extra.screenGap === true);
+    if (!p.text && !(p.dropped > 0) && !hasScreen) return true;
+    return writeRaw(eventChunk("data", { text: p.text, total: p.total, dropped: p.dropped, ...(extra ?? {}) }));
   };
 
   // Subscribe before the snapshot is committed so a byte that arrives in between is still delivered.

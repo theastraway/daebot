@@ -129,6 +129,8 @@ export function createIsolationGate(opts: IsolationOptions = {}): Gate {
       if (FILE_TOOLS.has(call.name)) {
         const p = call.args.path ?? call.args.file_path ?? call.args.file;
         if (typeof p === "string") targets = [isAbsolute(p) ? p : resolve(cwd, p)];
+      } else if (call.name === "terminal" && call.args.action === "open") {
+        targets = [cwd];
       } else if (call.name === "bash" || (call.name === "process" && call.args.action === "start") || (call.name === "terminal" && call.args.action === "send")) {
         const cmd = call.name === "terminal" ? call.args.text : (call.args.command ?? call.args.cmd);
         if (typeof cmd === "string") targets = bashWriteTargets(cmd, cwd);
