@@ -1,6 +1,13 @@
 # Daebot devices scope: iOS simulator, own browser, and terminal
 
-Daebot devices scope for theastraway/daebot, written Nov 13 2026 on request from Anthony via Daebot Build. Three new Daebot capabilities modeled on Claude Code: (1) an iOS simulator the bot drives, (2) Daebot's own browser that the agent drives, (3) a user-visible terminal. Base: daebot main 8a076fc (v0.3.46). First slice branch: feat/daebot-devices-terminal. Nothing merged.
+Daebot devices scope for theastraway/daebot, written Nov 13 2026 on request from Anthony via Daebot Build. Three new Daebot capabilities modeled on Claude Code: (1) an iOS simulator the bot drives, (2) Daebot's own browser that the agent drives, (3) a user-visible terminal. Base: daebot main 8a076fc (v0.3.46). Nothing merged.
+
+Per-slice branches (each slice lands on its own branch; none of these are merged):
+
+- Terminal pane, read-only: `feat/daebot-devices-terminal` (this branch).
+- Browser: `feat/daebot-devices-browser`.
+- Terminal PTY (typeable): `feat/daebot-devices-pty`.
+- iOS simulator: `feat/daebot-devices-ios-sim`.
 
 ## 1. What already exists in daebot (paths under agent/)
 
@@ -60,13 +67,13 @@ flowchart LR
 ```
 
 ### 2a. Terminal (slice 1, then PTY)
-- Now: keep the existing TerminalRegistry and terminal tool (its open/send/read/signal/close/list map to the asked-for term_open/term_write/term_read/term_kill; no duplicate tool). Add a read-only live pane: registry peek and subscribe that never move the agent's read cursor, local gateway routes GET /sessions/:id/terminals, /:tid, /:tid/stream (SSE), and agent/web/terminal-pane.js.
-- Later PTY: node-pty in the desktop Electron main process, not in the bun-compiled gateway (bun cannot load a node-pty .node built for Electron's ABI, and the gateway ships as a single binary). The gateway asks the desktop over a local authenticated channel (same shape as /screen frames, reversed), xterm.js vendored into agent/web for the pane, and the user can type into it. Windows uses ConPTY (node-pty's default on Windows 10 1809+); Unix uses forkpty. Gateway-only installs (CLI, server) keep the pipe backend.
+- Now: keep the existing TerminalRegistry and terminal tool (its open/send/read/signal/close/list map to the asked-for term_open/term_write/term_read/term_kill; no duplicate tool). Add a read-only live pane: registry peek and subscribe that never move the agent's read cursor, local gateway routes GET /sessions/:id/terminals, /:tid, /:tid/stream (SSE), and agent/web/terminal-pane.js. Decision (Nov 13 2026): the pane stays read-only until the PTY slice, and that slice is what makes it typeable.
+- Later PTY: node-pty in the desktop Electron main process, not in the bun-compiled gateway (bun cannot load a node-pty .node built for Electron's ABI, and the gateway ships as a single binary). Decision (Nov 13 2026): node-pty is approved as the first native add-on, packaged and signed for mac universal (x64+arm64) and win x64/arm64. The gateway asks the desktop over a local authenticated channel (same shape as /screen frames, reversed), xterm.js vendored into agent/web for the pane, and the user can type into it. Windows uses ConPTY (node-pty's default on Windows 10 1809+); Unix uses forkpty. Gateway-only installs (CLI, server) keep the pipe backend.
 - Packaging for node-pty: native dep rebuilt per Electron ABI and per arch (@electron/rebuild, or electron-builder npmRebuild with buildDependenciesFromSource on the matching host). Win x64 and arm64 each need their own build; Mac universal needs arm64 and x64 .node merged or both shipped (x64ArchFiles or a lipo step); Linux x64. asar is false in this config, so asarUnpack is not needed today; if asar is ever turned on, add asarUnpack: ["**/node_modules/node-pty/**"]. Windows signing (the Azure Artifact Signing branch) must also sign conpty.dll / winpty binaries it ships. Mac hardened runtime: node-pty's spawn-helper must be signed with the app.
 - Safety: cwd defaults to the chat's cwd and goes through the isolation gate; every send goes through the same permission rules as bash (prefix/exact allow, bash denies apply); destructive patterns (rm -rf, git push --force, deploy commands) classify as irreversible and need the user's go; output capped (256 KB buffer, 30 KB per read, ANSI stripped for the model); 30 min idle reap; sessions owned by one chat; shared-thread guests can never see a pane (secrets); hosted never.
 
 ### 2b. Browser
-- Recommended: a Daebot-owned browser pane inside the desktop window, an Electron WebContentsView in its own persistent partition ("persist:daebot-browser", never the app's "mindclaw" partition and never the user's Chrome profile). The desktop main process attaches webContents.debugger (CDP 1.3) and exposes a small local API to the gateway; the gateway's `browser` tool calls it. Playwright-over-CDP is optional (playwright-core connectOverCDP to an Electron started with a remote-debugging port), but it adds a large dependency and opening a debugging port is a local attack surface, so start with the built-in debugger API.
+- Decision (Nov 13 2026): Electron's built-in webContents.debugger (CDP). Not Playwright, and no remote-debugging port. A Daebot-owned browser pane inside the desktop window, an Electron WebContentsView in its own persistent partition ("persist:daebot-browser", never the app's "mindclaw" partition and never the user's Chrome profile). The desktop main process attaches webContents.debugger (CDP 1.3) and exposes a small local API to the gateway; the gateway's `browser` tool calls it. The agent may use sites the user is signed into in that browser. The partition persists across restarts.
 - Tools (one `browser` tool with actions, like terminal): tabs, open {url}, navigate, back, read (accessibility tree / page text with element refs, preferred), screenshot (JPEG to ToolResult.images and the chat), click {ref|x,y}, type {ref,text}, key, scroll, wait_for {text|selector}, close. Read-first like Claude Code's read_page / get_page_text.
 - Headless on the server: not for daebot.live (hosted runs no host-level tools). A local headless Chromium (CLI installs without Electron) is a later fallback using the same tool contract.
 - User-visible pane: the user watches it live and can take over (pause the agent on user input in the pane).
@@ -74,23 +81,28 @@ flowchart LR
 - Platform limits: works on Mac, Windows and Linux desktop. Not in the iPhone/Android apps (they can drive the owner's desktop browser through the remote hub). Not hosted.
 
 ### 2c. iOS simulator
-- Host: Mac only, needs Xcode and an iOS runtime installed (xcode-select -p pointing at Xcode.app, not CommandLineTools). Everything is xcrun simctl: list devices (simctl list -j), boot, shutdown, install <app>, launch <bundle id>, terminate, openurl, io <udid> screenshot, io recordVideo, privacy grant, ui appearance, status_bar override. Touch input: simctl has no tap. Options: idb (fb-idb companion, brew install, ui tap/swipe/text/describe-all gives an accessibility tree) or AppleScript/JXA CGEvents into the Simulator window (reuse computer-mac.ts, works without extra installs but needs Accessibility permission and takes over the mouse). Recommend idb when present, JXA fallback in-window.
+- Host: Mac only, needs Xcode and an iOS runtime installed (xcode-select -p pointing at Xcode.app, not CommandLineTools). Everything is xcrun simctl: list devices (simctl list -j), boot, shutdown, install <app>, launch <bundle id>, terminate, openurl, io <udid> screenshot, io recordVideo, privacy grant, ui appearance, status_bar override. Touch input: simctl has no tap. Decision (Nov 13 2026): idb first, and a JXA click into the Simulator window as the fallback.
 - How the bot reaches it: a `simulator` tool in the gateway on the Mac desktop (spawn xcrun with argv, no shell, like computer-mac.ts). From the iPhone app or web, the owner's Mac is reached through the remote hub (a bot thread job runs on the Mac). Screenshots go back as ToolResult.images and into chat as a photo; a simulator pane in the web UI shows a 1-2 fps screenshot stream (same SSE pattern as the terminal pane), with a record-a-clip action using io recordVideo.
 - Errors: when xcrun or a runtime is missing, return the exact fix (xcode-select -s /Applications/Xcode.app, install the iOS platform in Xcode Settings) and say it needs the user's password; never silently switch to screen control.
-- Windows and Linux: not available. deviceSupport reports ios_simulator unavailable with the reason; the tool is not offered. Option for Windows/Linux users: run on a paired Mac through the remote hub, or a hosted Mac (MacStadium / EC2 mac) later. Android emulator (adb/emulator) is the cross-platform analogue for a later slice.
+- Windows and Linux: not available on that machine. Decision (Nov 13 2026): they reach the simulator only through a paired Mac over the remote hub (src/remote/hub.ts). deviceSupport reports ios_simulator unavailable with the reason; the tool is not offered locally. Android emulator (adb/emulator) is the cross-platform analogue for a later slice. Desktop first: no iPhone-app UI for these panes in the current slices.
 - Safety: only simulators, never a physical device; install only .app bundles built locally; simulator erase is irreversible (needs the go).
 
 ## 3. Ranked first-PR plan
-1. Terminal pane, read-only (highest value, lowest risk: tool already exists, no new deps). PR: registry peek/subscribe, local SSE routes, terminal-pane.js, GET /devices status seam, tests. Effort: about 1 day. Tests: peek never steals the agent's output, ring overflow counts, subscribe/unsubscribe, owner scoping, guest 403, hosted 404, SSE snapshot then data, devices status per platform. Status: built on feat/daebot-devices-terminal.
+1. Terminal pane, read-only (highest value, lowest risk: tool already exists, no new deps). PR: registry peek/subscribe, local SSE routes, terminal-pane.js, GET /devices status seam, tests. Effort: about 1 day. Tests: peek never steals the agent's output, ring overflow counts, subscribe/unsubscribe, owner scoping, guest 403, hosted 404, SSE snapshot then data, devices status per platform. Status: polished on feat/daebot-devices-terminal (read-only pane, edge-case tests, dev-only screenshot harness). Not merged.
 2. Browser pane MVP. PR: WebContentsView in persist:daebot-browser, CDP via webContents.debugger, `browser` tool with open/navigate/read/screenshot/click/type/close, submit and purchase clicks classed irreversible, password/payment fields refused. Effort: 3-4 days. Tests: tool contract with a fake CDP; classifier for submit buttons; partition isolation; untrusted wrapping; an Electron smoke test (desktop npm run smoke) on Mac and Windows.
 3. Terminal PTY upgrade. PR: node-pty in Electron main, gateway-to-desktop channel, xterm.js pane with user typing, electron-builder native rebuild per arch and Mac universal handling, signing of spawn-helper and conpty. Effort: 3-5 days, mostly packaging and CI per platform. Tests: PTY open/resize/write/read with a fake pty; packaging check that the .node for each arch is present; Windows ConPTY smoke.
 4. iOS simulator MVP (Mac only). PR: `simulator` tool with list/boot/install/launch/openurl/screenshot/shutdown via simctl, tap/type via idb if installed, deviceSupport detection, pane with a screenshot stream. Effort: 2-3 days. Tests: fake xcrun exec with recorded simctl list -j output, argv never through a shell, unavailable on win32/linux, missing-Xcode error text. Needs a Mac with Xcode to verify for real.
 
-## 4. Open decisions for Anthony
-1. Terminal pane: read-only first (built), or let the user type into Daebot's terminal in slice 1b before the PTY work?
-2. PTY: accept node-pty as the first native dependency in the desktop app (per-arch rebuilds, signing spawn-helper and conpty), or stay pipe-only?
-3. Browser: built-in Electron debugger (no new deps, recommended) or Playwright-over-CDP (more features, big dependency, opens a debugging port)?
-4. Browser sign-ins: may the agent use sites the user signs into inside Daebot's browser, and should that partition persist across restarts?
-5. Simulator touch input: require idb (brew install idb-companion) or fall back to AppleScript/JXA screen control of the Simulator window?
-6. Windows/Linux users and the simulator: reach a paired Mac through the remote hub only, or plan a hosted Mac?
-7. Should these panes work from the iPhone app by driving the owner's desktop through the remote hub, or desktop only at first?
+## 4. Decisions (Anthony, Nov 13 2026)
+
+Anthony's instruction that day: "bring all to the fullest level of production for daebot". Answers to the seven questions that were open in this section:
+
+1. Terminal: read-only until the PTY slice. The PTY slice makes it typeable.
+2. node-pty is approved as the first native add-on, packaged and signed for mac universal (x64+arm64) and win x64/arm64.
+3. Browser: Electron's built-in webContents.debugger (CDP). Not Playwright. No remote-debugging port.
+4. The agent may use sites the user is signed into in Daebot's browser. The partition `persist:daebot-browser` persists across restarts.
+5. Simulator taps: idb first, and a JXA click into the Simulator window as the fallback.
+6. Windows and Linux reach the simulator only through a paired Mac over the remote hub (`src/remote/hub.ts`).
+7. Desktop first. No iPhone-app UI for these panes yet.
+
+Branches for the remaining slices: `feat/daebot-devices-browser`, `feat/daebot-devices-pty`, `feat/daebot-devices-ios-sim`. The read-only terminal pane is `feat/daebot-devices-terminal`.
