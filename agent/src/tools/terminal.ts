@@ -30,6 +30,27 @@ interface Session extends TermInfo { owner: string; child: ChildProcess; buf: st
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\x1b[=>]/g;
 export const stripAnsi = (s: string): string => s.replace(ANSI, "").replace(/\r\n/g, "\n").replace(/\r(?!\n)/g, "\n");
 
+// A colour sequence often arrives split across two reads (`\x1b[31` then `m`). Holding a short unfinished tail
+// keeps the escape out of the scrollback; a longer tail is flushed so a stray ESC cannot stall output forever.
+const ANSI_HOLD_MAX = 64;
+
+function partialAnsi(tail: string): boolean {
+  if (tail === "\x1b") return true;
+  if (/^\x1b\[[0-9;?]*[ -/]*$/.test(tail)) return true; // CSI with no final byte yet
+  if (/^\x1b[()]$/.test(tail)) return true; // charset designator missing its one byte
+  if (tail.startsWith("\x1b]") && !tail.includes("\x07") && !tail.endsWith("\x1b\\")) return true; // OSC not yet BEL or ST
+  return false;
+}
+
+/** Split a raw chunk into text that is safe to strip now, and a short unfinished escape to keep for the next chunk. */
+export function splitAnsiHold(s: string): { done: string; held: string } {
+  const esc = s.lastIndexOf("\x1b");
+  if (esc < 0) return { done: s, held: "" };
+  const tail = s.slice(esc);
+  if (tail.length > ANSI_HOLD_MAX || !partialAnsi(tail)) return { done: s, held: "" };
+  return { done: s.slice(0, esc), held: tail };
+}
+
 export type ShellName = "bash" | "pwsh" | "powershell" | "cmd";
 /** The shell to run for a name. Default: bash everywhere but a Windows machine without bash (then Windows PowerShell). */
 export function shellSpec(shell: string | undefined, platform: string = process.platform): { name: ShellName; file: string; args: string[]; eol: string } | { error: string } {
@@ -81,26 +102,41 @@ export class TerminalRegistry {
     const t = this.now();
     const s: Session = { id: `t${++this.seq}`, owner, shell: sp.name, cwd, pid: child.pid, status: "running", exitCode: null, startedAt: t, lastActiveAt: t, child, buf: "", dropped: 0, total: 0, readPos: 0, lastDataAt: t, listeners: new Set() };
     this.sessions.set(s.id, s);
-    const onData = (d: Buffer | string) => {
-      const text = stripAnsi(d.toString());
+    let holdOut = "";
+    let holdErr = "";
+    const commit = (raw: string): void => {
+      const text = stripAnsi(raw);
+      if (!text) return;
       s.buf += text;
       s.total += text.length;
       if (s.buf.length > BUF_CAP) { const cut = s.buf.length - BUF_CAP; s.buf = s.buf.slice(cut); s.dropped += cut; }
       s.lastDataAt = Date.now();
       this.wake(s);
     };
-    child.stdout?.on("data", onData);
-    child.stderr?.on("data", onData);
+    // stdout and stderr each keep their own unfinished escape, so a split colour code is not glued to the other stream.
+    const push = (which: "out" | "err", chunk: string, final: boolean): void => {
+      const prev = which === "out" ? holdOut : holdErr;
+      const merged = prev + chunk;
+      const split = final ? { done: merged, held: "" } : splitAnsiHold(merged);
+      if (which === "out") holdOut = split.held; else holdErr = split.held;
+      if (split.done) commit(split.done);
+    };
+    const flushHold = (): void => { push("out", "", true); push("err", "", true); };
+    child.stdout?.on("data", (d: Buffer | string) => push("out", d.toString(), false));
+    child.stderr?.on("data", (d: Buffer | string) => push("err", d.toString(), false));
     child.stdin?.on("error", () => { /* shell already gone: the close handler records it */ });
-    child.on("error", (err) => { onData(`[spawn error: ${err.message}]\n`); if (s.status === "running") s.status = "exited"; this.wake(s); });
-    child.on("close", (code) => { if (s.status === "running") s.status = "exited"; s.exitCode = code; this.wake(s); });
+    child.on("error", (err) => { flushHold(); commit(`[spawn error: ${err.message}]\n`); if (s.status === "running") s.status = "exited"; this.wake(s); });
+    child.on("close", (code) => { flushHold(); if (s.status === "running") s.status = "exited"; s.exitCode = code; this.wake(s); });
     return this.info(s);
   }
 
   private info(s: Session): TermInfo {
     return { id: s.id, shell: s.shell, cwd: s.cwd, pid: s.pid, status: s.status, exitCode: s.exitCode, startedAt: s.startedAt, lastActiveAt: s.lastActiveAt };
   }
-  private wake(s: Session): void { for (const l of [...s.listeners]) l(); }
+  private wake(s: Session): void {
+    // Copy first: a listener may unsubscribe itself. A throw stays inside that listener so the agent's read still wakes.
+    for (const l of [...s.listeners]) { try { l(); } catch { /* the pane must not stall the shell */ } }
+  }
   private mine(owner: string, id: string): Session {
     const s = this.sessions.get(id);
     if (!s || s.owner !== owner) throw new Error(`terminal: unknown session ${id || "(none)"}; open one first`);

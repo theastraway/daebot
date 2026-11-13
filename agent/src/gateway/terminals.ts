@@ -113,9 +113,8 @@ export function terminalsApi(_req: IncomingMessage, res: ServerResponse, path: s
   return true;
 }
 
-function writeEvent(res: ServerResponse, event: string, body: unknown): void {
-  if (res.writableEnded || res.destroyed) return;
-  res.write(`event: ${event}\ndata: ${JSON.stringify(body)}\n\n`);
+function eventChunk(event: string, body: unknown): string {
+  return `event: ${event}\ndata: ${JSON.stringify(body)}\n\n`;
 }
 
 function streamOne(res: ServerResponse, ctx: TerminalCtx, sessionId: string, tid: string, snap: ReturnType<TerminalRegistry["peek"]>): void {
@@ -131,22 +130,39 @@ function streamOne(res: ServerResponse, ctx: TerminalCtx, sessionId: string, tid
     ended = true;
     unsub();
     if (hb) clearInterval(hb);
-    if (closeResponse && !res.writableEnded && !res.destroyed) res.end();
+    hb = undefined;
+    if (closeResponse && !res.writableEnded && !res.destroyed) {
+      try { res.end(); } catch { /* the client already went away */ }
+    }
+  };
+
+  // A failed write must not throw into the shell's data handler: that wake is shared with the agent's read.
+  const writeRaw = (chunk: string): boolean => {
+    if (ended || res.writableEnded || res.destroyed) return false;
+    if (!res.writable) { end(true); return false; }
+    try { res.write(chunk); return true; } catch { end(true); return false; }
+  };
+
+  const sendData = (p: ReturnType<TerminalRegistry["peek"]>): boolean => {
+    if (!p.text && !(p.dropped > 0)) return true;
+    return writeRaw(eventChunk("data", { text: p.text, total: p.total, dropped: p.dropped }));
   };
 
   // Subscribe before the snapshot is committed so a byte that arrives in between is still delivered.
   try {
     unsub = ctx.registry.subscribe(sessionId, tid, () => {
-      if (ended) return;
-      let p: ReturnType<TerminalRegistry["peek"]>;
-      try { p = ctx.registry.peek(sessionId, tid, cursor); } catch { return end(true); }
-      if (p.text) writeEvent(res, "data", { text: p.text, total: p.total });
-      cursor = p.total;
-      if (p.info.status !== status) {
-        status = p.info.status;
-        writeEvent(res, "status", { status: p.info.status, exitCode: p.info.exitCode, info: p.info });
-      }
-      if (status !== "running") end(true);
+      try {
+        if (ended) return;
+        let p: ReturnType<TerminalRegistry["peek"]>;
+        try { p = ctx.registry.peek(sessionId, tid, cursor); } catch { end(true); return; }
+        if (!sendData(p)) return;
+        cursor = p.total;
+        if (p.info.status !== status) {
+          status = p.info.status;
+          if (!writeRaw(eventChunk("status", { status: p.info.status, exitCode: p.info.exitCode, info: p.info }))) return;
+        }
+        if (status !== "running") end(true);
+      } catch { end(true); }
     });
   } catch (e) {
     const msg = String((e as Error)?.message ?? e);
@@ -154,31 +170,33 @@ function streamOne(res: ServerResponse, ctx: TerminalCtx, sessionId: string, tid
     return;
   }
 
-  res.writeHead(200, SSE_HEADERS);
-  res.write(": open\n\n");
-  writeEvent(res, "snapshot", snap);
+  // Detach as soon as the socket dies, including a client that is already gone before the headers go out.
+  // "close" covers the client hanging up and our own res.end(). (The request's "close" is the wrong signal: a GET
+  // with no body completes as soon as the headers are in, which would drop the subscription immediately.)
+  res.on("close", () => end(false));
+  res.on("error", () => end(true));
+
+  try { res.writeHead(200, SSE_HEADERS); } catch { end(true); return; }
+  if (!writeRaw(": open\n\n")) return;
+  if (!writeRaw(eventChunk("snapshot", snap))) return;
   if (snap.info.status !== "running") {
-    writeEvent(res, "status", { status: snap.info.status, exitCode: snap.info.exitCode, info: snap.info });
+    if (!writeRaw(eventChunk("status", { status: snap.info.status, exitCode: snap.info.exitCode, info: snap.info }))) return;
     end(true);
     return;
   }
   // Catch output that landed after the peek the caller took and before subscribe.
   try {
     const again = ctx.registry.peek(sessionId, tid, cursor);
-    if (again.text) writeEvent(res, "data", { text: again.text, total: again.total });
+    if (!sendData(again)) return;
     cursor = again.total;
     if (again.info.status !== status) {
       status = again.info.status;
-      writeEvent(res, "status", { status: again.info.status, exitCode: again.info.exitCode, info: again.info });
+      if (!writeRaw(eventChunk("status", { status: again.info.status, exitCode: again.info.exitCode, info: again.info }))) return;
       if (status !== "running") { end(true); return; }
     }
   } catch { /* the subscribe wake handles a session that vanished */ }
+  if (ended) return;
 
-  hb = setInterval(() => {
-    if (!res.writableEnded && !res.destroyed) res.write(": ping\n\n");
-  }, hbMs);
+  hb = setInterval(() => { writeRaw(": ping\n\n"); }, hbMs);
   hb.unref();
-  // "close" covers the client hanging up and our own res.end(). (The request's "close" is the wrong signal: a GET
-  // with no body completes as soon as the headers are in, which would drop the subscription immediately.)
-  res.on("close", () => end(false));
 }
