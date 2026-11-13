@@ -1,6 +1,8 @@
 import { test } from "node:test";
 process.env.DAEBOT_FOCUSED_CONTEXT = "0"; // these assertions are about the full (pre-focus) prompt and tool set; test/core/focused-context.test.ts covers the focused path
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { shellCommand } from "../../src/tools/bash.ts";
 import { composeSystemPrompt, DOCUMENTS_SECTION } from "../../src/runtime.ts";
 import { hostedToolAllowed } from "../../src/hosted.ts";
@@ -16,6 +18,13 @@ test("Windows PowerShell fallback drops the curl alias so curl is the real curl.
 
 test("hosted still never offers a shell, process, terminal or file write/edit", () => {
   for (const n of ["bash", "process", "terminal", "write_file", "edit_file"]) assert.equal(hostedToolAllowed(n), false, n);
+});
+
+test("local tools doc describes the read-only terminal pane", () => {
+  const doc = readFileSync(fileURLToPath(new URL("../../docs/local-tools.md", import.meta.url)), "utf8");
+  assert.match(doc, /Terminal pane/);
+  assert.match(doc, /read-only/);
+  assert.match(doc, /Daebot's terminal — read-only/);
 });
 
 test("system prompt: MIND is the main document database; Dropbox and Drive are third-party connectors", () => {
