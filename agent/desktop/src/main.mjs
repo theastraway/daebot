@@ -1,6 +1,6 @@
 // Daebot desktop shell (Electron main process). Thin: it starts the gateway as a child, waits for /health,
 // and shows the existing web UI. All decisions live in src/lib/* (unit-tested); this file is glue.
-import { app, BrowserWindow, Tray, Menu, powerSaveBlocker, globalShortcut, Notification, ipcMain, shell, nativeImage, nativeTheme, screen, session, dialog, systemPreferences, desktopCapturer } from "electron";
+import { app, BrowserWindow, WebContentsView, Tray, Menu, powerSaveBlocker, globalShortcut, Notification, ipcMain, shell, nativeImage, nativeTheme, screen, session, dialog, systemPreferences, desktopCapturer } from "electron";
 import { createRequire } from "node:module";
 import { spawn, execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -29,18 +29,32 @@ import { screenAccess, permissionSettingsUrl } from "./lib/screen-permission.mjs
 import { frameQuery, redDotBitmap } from "./lib/screen-frame.mjs";
 import { CALENDAR_CHANNEL, createCalendarBridge, createCalendarHandler, findCalendarHelper } from "./lib/calendar.mjs";
 import { devicesShotsFromArgv, shotFilesFor, shotProbeFor } from "./lib/devices-shots.mjs";
+import { createBrowserPane } from "./lib/browser-pane.mjs";
+import { startBrowserChannel } from "./lib/browser-channel.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SMOKE = process.argv.includes("--mindclaw-smoke");
 // Screenshot flags are ignored unless this is the smoke process. A normal launch never sees them.
 const DEVICE_SHOTS = devicesShotsFromArgv(process.argv, SMOKE);
+const argValue = (name) => {
+  const hit = process.argv.find((a) => a.startsWith(name + "="));
+  return hit ? hit.slice(name.length + 1) : "";
+};
+// Persistence proof only. Visual panes use --daebot-devices-pane. Both are ignored without --mindclaw-smoke.
+const BROWSER_PHASE = SMOKE ? argValue("--daebot-browser-phase") : "";
+const BROWSER_PAGE = SMOKE ? argValue("--daebot-browser-page") : "";
 const log = (...a) => process.stderr.write(`[daebot-desktop] ${a.join(" ")}\n`);
 
 // --- process-level hygiene (before ready) ---
 app.disableHardwareAcceleration(); // text UI: software rendering is plenty and drops the always-on GPU process (~70 MB)
 app.commandLine.appendSwitch("use-mock-keychain"); // never touch the login keychain (no "Safe Storage" prompt)
 if (SMOKE) {
-  app.setPath("userData", mkdtempSync(join(tmpdir(), "mindclaw-desktop-smoke-")));
+  // Browser shots reuse one userData so the partition can still be signed in on the second process.
+  const browserShots = !!(DEVICE_SHOTS && !DEVICE_SHOTS.error && DEVICE_SHOTS.pane === "browser");
+  const dir = browserShots ? join(DEVICE_SHOTS.dir, "userdata") : mkdtempSync(join(tmpdir(), "mindclaw-desktop-smoke-"));
+  if (browserShots) mkdirSync(dir, { recursive: true });
+  app.setPath("userData", dir);
+  if (browserShots) process.env.DAEBOT_BROWSER_SHOTS = "1";
   app.setActivationPolicy?.("accessory");
   app.dock?.hide();
 }
@@ -64,6 +78,8 @@ let win = null;
 let tray = null;
 let quitting = false;
 let gatewayInfo = null; // { url, token, origin }
+let browserPane = null;
+let browserChannel = null;
 let watcher = null;
 const notifyAllowed = createRateLimiter(5, 10_000);
 
@@ -99,6 +115,12 @@ function saveBounds() {
     const b = win.getNormalBounds();
     writeJson(statePath(), { ...loadState(), bounds: { ...b, maximized: win.isMaximized() } });
   } catch (e) { log("could not save window state:", String(e?.message ?? e)); }
+}
+
+function saveBrowserWidth(width) {
+  if (SMOKE) return;
+  try { writeJson(statePath(), { ...loadState(), browserPaneWidth: width }); }
+  catch (e) { log("could not save browser width:", String(e?.message ?? e)); }
 }
 
 function createWindow() {
@@ -158,6 +180,23 @@ function createWindow() {
   win.on("resized", saveBounds);
   win.on("moved", saveBounds);
   win.once("ready-to-show", () => { if (!SMOKE) win.show(); });
+  try {
+    try { browserPane?.destroy?.(); } catch { /* the previous window took its views with it */ }
+    stopBrowserChannel();
+    const savedWidth = !SMOKE && typeof loadState().browserPaneWidth === "number" ? loadState().browserPaneWidth : undefined;
+    browserPane = createBrowserPane({
+      WebContentsView,
+      session,
+      userData: app.getPath("userData"),
+      log,
+      contentView: win.contentView,
+      getContentBounds: () => (win && !win.isDestroyed() ? win.getContentBounds() : { width: 1440, height: 900 }),
+      getGatewayOrigin: () => gatewayInfo?.origin,
+      initialWidth: savedWidth,
+      onWidth: saveBrowserWidth,
+    });
+  } catch (e) { log("browser pane did not start:", String(e?.message ?? e)); }
+  if (gatewayInfo) startBrowserChannelIfNeeded();
   return win;
 }
 
@@ -210,7 +249,20 @@ async function startGateway() {
   gatewayInfo = { ...info, origin: originOf(info.url) };
   startWatcher();
   void resumeScreenAfterGateway();
+  startBrowserChannelIfNeeded();
   return gatewayInfo;
+}
+
+function stopBrowserChannel() {
+  try { browserChannel?.stop(); } catch { /* ignore */ }
+  browserChannel = null;
+}
+
+function startBrowserChannelIfNeeded() {
+  if (!gatewayInfo || !browserPane || browserChannel) return;
+  try {
+    browserChannel = startBrowserChannel({ fetch: globalThis.fetch.bind(globalThis), origin: gatewayInfo.origin, token: gatewayInfo.token, pane: browserPane, log });
+  } catch (e) { log("browser channel did not start:", String(e?.message ?? e)); }
 }
 
 async function loadUi() {
@@ -293,6 +345,7 @@ ipcMain.on("desktop:titlebar-theme", (e, dark) => {
 });
 
 const fromOurUi = (e) => classifyUrl(e.senderFrame?.url ?? "", gatewayInfo?.origin) === "internal";
+ipcMain.on("desktop:browser-viewport", (e, rect) => { if (fromOurUi(e)) browserPane?.setViewport(rect); });
 // Apple Calendar (Mac only): the bundled EventKit helper, run once per call and answered to our own window only. On other systems the channel
 // does not exist and the preload exposes no `calendar`, so the web UI sees no Calendar bridge.
 if (process.platform === "darwin") {
@@ -415,6 +468,7 @@ async function registerAccount(key, { legacy = false } = {}) {
 async function restartAsActive() {
   stopWatcher();
   screenCapture.stop(); // no gateway to feed: stop capturing (the saved switch is kept; it resumes when the next gateway is up)
+  stopBrowserChannel();
   gatewayInfo = null;
   await gateway.stop();
   if (win && !win.isDestroyed()) await loadUi();
@@ -467,6 +521,7 @@ async function signOut(opts = {}) {
   mindKey = null;
   stopWatcher();
   screenCapture.stop(); // no gateway to feed: stop capturing (the saved switch is kept; it resumes when the next gateway is up)
+  stopBrowserChannel();
   gatewayInfo = null;
   await gateway.stop();
   if (win && !win.isDestroyed()) win.hide();
@@ -481,6 +536,7 @@ async function setKernelMode(mode) {
   if (!SMOKE) { try { saveKernelMode(mode); } catch (e) { log("could not save kernel mode:", String(e?.message ?? e)); } }
   stopWatcher();
   screenCapture.stop(); // no gateway to feed: stop capturing (the saved switch is kept; it resumes when the next gateway is up)
+  stopBrowserChannel();
   gatewayInfo = null;
   try {
     await gateway.stop();
@@ -671,6 +727,7 @@ gateway.on("crashed", async ({ code, signal }) => {
   log(`gateway exited unexpectedly (${code ?? signal}); restarting`);
   stopWatcher();
   screenCapture.stop(); // no gateway to feed: stop capturing (the saved switch is kept; it resumes when the next gateway is up)
+  stopBrowserChannel();
   gatewayInfo = null;
   await loadUi();
 });
@@ -684,6 +741,7 @@ app.on("before-quit", (e) => {
   quitting = true;
   e.preventDefault();
   screenCapture.stop();
+  stopBrowserChannel();
   stopWatcher();
   saveBounds();
   // A downloaded update is applied on the way out (electron-updater's quit hook may not run after app.exit).
@@ -753,12 +811,14 @@ async function runSmoke() {
 
 // Dev-only: open one device pane in the smoke window and write PNGs. A pane adds a branch in shotFilesFor
 // and a probe in shotProbeFor. Flags without --mindclaw-smoke never reach this function.
+// The browser pane composites the child view itself (capturePage misses it): shots-browser.mjs.
 async function runDeviceShots(spec) {
+  const browser = spec.pane === "browser";
   const hard = setTimeout(() => {
     log("shots: hard timeout");
     try { gateway.child?.kill("SIGKILL"); } catch { /* ignore */ }
     app.exit(2);
-  }, 90_000);
+  }, browser ? 120_000 : 90_000);
   hard.unref?.();
   const finish = async (code, result) => {
     clearTimeout(hard);
@@ -770,6 +830,29 @@ async function runDeviceShots(spec) {
   };
   const plan = shotFilesFor(spec.pane, process.env);
   if (plan.error) { await finish(1, { ok: false, pane: spec.pane, error: plan.error }); return; }
+  if (browser) {
+    try {
+      const { runBrowserShots } = await import("./lib/shots-browser.mjs");
+      const outcome = await runBrowserShots({
+        win, pane: browserPane, gatewayInfo, shotsDir: spec.dir, log,
+        phase: BROWSER_PHASE || "capture", pageUrl: BROWSER_PAGE, nativeImage,
+      });
+      if (!outcome?.ok) {
+        await finish(1, { ok: false, pane: "browser", phase: outcome?.phase || BROWSER_PHASE || "capture", error: outcome?.error || "browser shots failed" });
+        return;
+      }
+      clearTimeout(hard);
+      quitting = true;
+      stopBrowserChannel();
+      try { await browserPane?.flush?.(); } catch { /* ignore */ }
+      try { browserPane?.destroy?.(); } catch { /* release the cookie database before the next process */ }
+      await gateway.stop();
+      app.exit(0);
+    } catch (e) {
+      await finish(1, { ok: false, pane: "browser", error: String(e?.message ?? e).slice(0, 300) });
+    }
+    return;
+  }
   mkdirSync(spec.dir, { recursive: true });
   try {
     win.webContents.setZoomLevel(0);
@@ -851,6 +934,9 @@ app.whenReady().then(async () => {
   void updater.start().catch((e) => log("updater did not start:", String(e?.message ?? e)));
   if (SMOKE) {
     await loading;
-    if (gatewayInfo) { if (DEVICE_SHOTS) await runDeviceShots(DEVICE_SHOTS); else await runSmoke(); }
+    if (gatewayInfo) {
+      if (DEVICE_SHOTS) await runDeviceShots(DEVICE_SHOTS);
+      else await runSmoke();
+    }
   }
 });

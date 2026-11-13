@@ -70,6 +70,9 @@ export function iosSimShotMode(env = {}) {
  */
 export function shotFilesFor(pane, env = {}) {
   if (pane === "terminal") return { files: ["live.png", "closed.png", "empty.png"] };
+  // Browser shots are written by shots-browser.mjs: capturePage of the window misses the child WebContentsView, so they are composited.
+  // persist.png is the second process and is not part of this list.
+  if (pane === "browser") return { files: ["pane-loaded.png", "after-typing.png", "refusal.png", "approval.png", "takeover.png"] };
   if (pane === "ios-sim") {
     const mode = iosSimShotMode(env);
     return { files: [`${mode}-window.png`, `${mode}-pane.png`] };
