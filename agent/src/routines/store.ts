@@ -62,7 +62,7 @@ export interface Routine {
   lastThreadId?: string;
   runs?: RunRecord[];
   /** Heartbeat only: fingerprint of the bot's threads/tasks/routines when it last looked, and counters. */
-  hb?: { fp?: string; checkedAt?: number; reviews: number; idle: number };
+  hb?: { fp?: string; checkedAt?: number; reviews: number; idle: number; /** waiting-on-the-user items already brought up: key -> hash of the item when it was surfaced */ surfaced?: Record<string, string> };
 }
 
 export class RoutineError extends Error {
@@ -92,6 +92,7 @@ export const HEARTBEAT_PROMPT = [
   "3. Give ONE short line per thread you looked at as your final answer: thread title, state, what you did. Leave threads you did not need to touch out.",
   "4. Record what you learned with bot_self learn: what worked, what failed, a correction the user made. At most 3 lessons, each one rule you would follow next time. Skip it when you learned nothing new.",
   "Never contact anyone outside Astra, never delete anything, never guess. If a thread needs the user, stop it with the exact question.",
+  "Report ONLY the items in the digest. Never bring up an item that is already waiting on the user (a stopped thread, a card in \"Needs your answer\", a blocked task in MIND), and never carry anything over from an earlier run: every run starts fresh. Never send a message into a thread the user is chatting in. If the digest has nothing new, end with an empty reply.",
 ].join("\n");
 
 export interface RoutineInput {
@@ -187,6 +188,7 @@ export class RoutineBook {
       const j = JSON.parse(readFileSync(this.file, "utf8"));
       if (j && j.v === 1 && Array.isArray(j.routines)) {
         this.routines = j.routines.filter((r: any) => r && ID_RE.test(r.id) && typeof r.name === "string" && (r.kind === "timed" || r.kind === "trigger"));
+        for (const r of this.routines) if (r.builtin === "heartbeat") r.prompt = HEARTBEAT_PROMPT; // the built-in task text is ours: a saved copy never goes stale
         this.lessons = Number(j.lessons) > 0 ? Number(j.lessons) : 0;
       }
     } catch { /* absent or torn file = no routines yet */ }
@@ -466,7 +468,7 @@ export class RoutineBook {
     this.save();
   }
 
-  setHeartbeat(id: string, p: { fp?: string; checkedAt?: number; reviewed?: boolean; idle?: boolean }): void {
+  setHeartbeat(id: string, p: { fp?: string; checkedAt?: number; reviewed?: boolean; idle?: boolean; surfaced?: Record<string, string> }): void {
     const r = this.routines.find((x) => x.id === id);
     if (!r || r.builtin !== "heartbeat") return;
     const h = r.hb ?? { reviews: 0, idle: 0 };
@@ -474,6 +476,7 @@ export class RoutineBook {
     if (p.checkedAt !== undefined) h.checkedAt = p.checkedAt;
     if (p.reviewed) h.reviews++;
     if (p.idle) h.idle++;
+    if (p.surfaced !== undefined) h.surfaced = p.surfaced;
     r.hb = h;
     this.save();
   }

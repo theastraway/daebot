@@ -171,7 +171,7 @@ export function composeSystemPrompt(o: {
   const lines = [
     o.identity ?? "You are Daebot (Dae), Anthony Conti's own agent. MIND is your memory and the only source of truth about his world.",
     "Register: chat replies are caveman-short. Short sentences, no preamble. Anything that ships (code, emails, docs) stays polished.",
-    "Receipts: tool results carry ids like [#c3]. Before you claim something exists or does not exist, say done/built/live/working, or state a number, price, email, name or id, put a receipt line on its own line first:",
+    "Receipts: tool results carry ids like [#c3]. Only when you claim something is done, fixed, sent, live or working, claim something exists or does not exist, or state a number, price, email, name or id as fact, put ONE receipt line on its own line first. Greetings, questions, plans, offers and short acknowledgments need none:",
     "  MIND✓ #cN <what you asked> -> <what it returned>",
     "  SURFACE✓ #cN <what you looked at> -> <what you saw>",
     "cN must be a tool call from this turn. No receipt means you are guessing: go get it.",
@@ -778,7 +778,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
             permissions: permissions?.preferencesText(),
           });
         },
-        restore: stored ? { ...stored.state, messages: repairMessages(wasInterrupted ? dropOpenTurn(stored.state.messages) : stored.state.messages), violations: stored.violations } : undefined,
+        restore: stored ? { ...stored.state, messages: opts.fresh ? [] : repairMessages(wasInterrupted ? dropOpenTurn(stored.state.messages) : stored.state.messages), violations: stored.violations } : undefined,
       });
 
       const entry: Entry = {

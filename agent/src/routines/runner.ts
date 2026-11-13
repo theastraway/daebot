@@ -2,7 +2,7 @@
 // webhooks, internal triggers and "Run now" use. A fire is: claim the slot on disk first (so a restart cannot repeat it), refuse to overlap
 // a run of the same routine, and hand the work to `runTurn`, which runs a durable server-side turn in the bot's thread.
 import { TurnRateLimiter } from "../gateway/agent-api.ts";
-import { probeBot } from "./heartbeat.ts";
+import { freshAttention, probeBot, surfacedNow } from "./heartbeat.ts";
 import type { BoardLite, Probe, ThreadLite } from "./heartbeat.ts";
 import { RoutineHub, STALE_RUN_MS } from "./store.ts";
 import type { Routine, RoutineBook, RunStatus, TriggerType } from "./store.ts";
@@ -16,7 +16,8 @@ export interface TurnResult { ok: boolean; threadId: string; finalText: string; 
 export interface RunnerDeps {
   hub: RoutineHub;
   /** Runs `text` as one turn in the bot's thread titled `thread`. Returns ok:false for an ordinary failure. */
-  runTurn(a: { owner: string; botId: string; thread: string; text: string; signal: AbortSignal }): Promise<TurnResult>;
+  /** `fresh` is always true for a routine run: the thread keeps its transcript for the user to read, but the model starts the run with NO memory of earlier runs. */
+  runTurn(a: { owner: string; botId: string; thread: string; text: string; signal: AbortSignal; fresh: true }): Promise<TurnResult>;
   /** What the gateway knows about a bot without calling a model. undefined = the bot no longer exists. */
   state(owner: string, botId: string): { threads: ThreadLite[]; board: BoardLite[] } | undefined;
   /** Folder name -> live owner id (undefined = skip that folder). */
@@ -248,20 +249,29 @@ export class RoutineRunner {
   private async execute(book: RoutineBook, r: Routine, source: string, payload: string | undefined, t0: number): Promise<void> {
     if (!this.d.state(book.owner, book.botId)) { book.recordRun(r.id, { at: t0, source, status: "error", model: false, ms: 0, result: "the bot no longer exists" }); return; }
     let digest = "";
+    let surfacedAfter: Record<string, string> | undefined;
     if (r.builtin === "heartbeat") {
       const p = this.probe(book)!;
-      if (r.hb?.fp === p.fp || (r.hb?.fp === undefined && p.threads === 0 && !p.attention.length)) {
-        // Nothing moved since the last look (or a brand-new bot with no threads at all): no model call and nothing to pay for.
-        if (r.hb?.fp === undefined) book.setHeartbeat(r.id, { fp: p.fp });
-        book.setHeartbeat(r.id, { checkedAt: t0, idle: true });
-        book.recordRun(r.id, { at: t0, source, status: "idle", model: false, ms: this.now() - t0, result: "nothing to do" });
+      // Items waiting on the user are brought up ONCE; they come back only when they changed. A run that is only about repeating them is not run at all.
+      const legacy = r.hb?.surfaced === undefined && (r.hb?.reviews ?? 0) > 0;           // saved before this existed: what is waiting now was already surfaced, do not repeat it once more
+      const surfaced = legacy ? surfacedNow(p) : r.hb?.surfaced;
+      const fresh = freshAttention(p, surfaced);
+      const firstLook = r.hb?.fp === undefined;
+      const quiet = r.hb?.fp === p.fp || (firstLook && p.threads === 0 && !p.attention.length) || (!firstLook && p.attention.length > 0 && fresh.length === 0);
+      if (quiet) {
+        // Nothing moved since the last look, or only things the user already knows about are waiting: no model call, no message, nothing to pay for.
+        book.setHeartbeat(r.id, { fp: p.fp, checkedAt: t0, idle: true, surfaced: surfacedNow(p) });
+        book.recordRun(r.id, { at: t0, source, status: "idle", model: false, ms: this.now() - t0, result: p.waiting.length && r.hb?.fp !== p.fp ? `nothing new (${p.waiting.length} still waiting on the user)` : "nothing to do" });
         this.stats.idleHeartbeats++;
         return;
       }
-      digest = p.attention.length
-        ? `\n\nWhat the check found:\n${p.attention.map((a) => `- ${a}`).join("\n")}`
+      digest = fresh.length
+        ? `\n\nWhat the check found:\n${fresh.map((a) => `- ${a}`).join("\n")}`
         : "\n\nThe check found no stalled item, but your threads changed since the last look: skim them and note any lesson worth keeping.";
+      surfacedAfter = surfacedNow(p);
     }
+    // Every run starts with a clean memory. The only thing carried over is a one-line digest of how the last run ended.
+    const last = r.lastRunAt && r.lastStatus && r.lastStatus !== "running" ? `\n\nLast run (${new Date(r.lastRunAt).toISOString()}, ${r.lastStatus}): ${(r.lastResult ?? "").replace(/\s+/g, " ").trim().slice(0, 240) || "(no result)"}\nThat is all you remember of earlier runs. Do not repeat it unless something changed.` : "";
     const thread = r.thread || `Routine: ${r.name}`;
     const how = source === "timer" ? "its timer" : source === "manual" ? "Run now" : `a ${source.replace(/_/g, " ")}`;
     const head = `[Routine "${r.name.replace(/[[\]"]/g, "")}" started by ${how} at ${new Date(t0).toISOString()}. Nobody is watching this thread: do the task, keep the reply short. Do nothing that reaches a real person or cannot be undone; instead stop and end with the exact question for the user.]`;
@@ -270,12 +280,12 @@ export class RoutineRunner {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), this.d.runTimeoutMs ?? 10 * 60_000);
     let res: TurnResult;
-    try { res = await this.d.runTurn({ owner: book.owner, botId: book.botId, thread, text: `${head}\nTask:\n${r.prompt}${digest}${data}`, signal: ac.signal }); }
+    try { res = await this.d.runTurn({ owner: book.owner, botId: book.botId, thread, text: `${head}\nTask:\n${r.prompt}${last}${digest}${data}`, signal: ac.signal, fresh: true }); }
     finally { clearTimeout(timer); }
     this.stats.modelRuns++;
     const status: RunStatus = res.ok ? "ok" : "error";
     const out = (res.ok ? res.finalText : res.error ?? "the run failed").replace(/\s+/g, " ").trim();
     book.recordRun(r.id, { at: t0, source, status, model: true, ms: this.now() - t0, threadId: res.threadId || undefined, result: out || (res.ok ? "(no reply)" : "failed") });
-    if (r.builtin === "heartbeat") book.setHeartbeat(r.id, { fp: this.probe(book)?.fp, checkedAt: this.now(), reviewed: true });
+    if (r.builtin === "heartbeat") book.setHeartbeat(r.id, { fp: this.probe(book)?.fp, checkedAt: this.now(), reviewed: true, ...(surfacedAfter ? { surfaced: surfacedAfter } : {}) });
   }
 }
