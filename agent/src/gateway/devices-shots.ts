@@ -6,6 +6,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { terminalRegistry, type TerminalRegistry } from "../tools/terminal.ts";
 
+/** Must match desktop/src/lib/devices-shots.mjs IOS_SIM_SHOT. The shot probe looks for these strings. */
+export const IOS_SIM_SHOT = {
+  title: "iOS Simulator",
+  fixtureBanner: "Fixture. This picture is not a live simulator.",
+  needsMac: "needs a Mac with Xcode",
+  device: "iPhone 16",
+  emptyDevice: "No simulator",
+} as const;
+
 /** Must match desktop/src/lib/devices-shots.mjs TERMINAL_SHOT. The shot probes the page for these strings. */
 export const TERMINAL_SHOT = {
   title: "Show the terminal",
@@ -36,6 +45,9 @@ export interface ShotDeps {
 /**
  * Prepare one pane's realistic content before the smoke window loads.
  * `terminal` opens a real pipe shell (or the injected registry) in a chat the UI can select.
+ * `ios-sim` opens that chat and nothing else. The fixture phone is the smoke child env
+ * (DAEBOT_SIMULATOR_FAKE plus DAEBOT_DEV_SHOTS), not this function. needs-mac leaves those unset
+ * so the real Linux gateway reports that Xcode is required.
  */
 export async function seedDevicesShot(gw: ShotHost, pane: string, deps: ShotDeps = {}): Promise<void> {
   if (process.env.MINDCLAW_DESKTOP_FAKE !== "1") {
@@ -45,7 +57,17 @@ export async function seedDevicesShot(gw: ShotHost, pane: string, deps: ShotDeps
     await seedTerminalPane(gw, deps);
     return;
   }
+  if (pane === "ios-sim") {
+    await seedIosSimPane(gw);
+    return;
+  }
   throw new Error(`devices shots: no seed for pane ${JSON.stringify(pane)}`);
+}
+
+async function seedIosSimPane(gw: ShotHost): Promise<void> {
+  // No message: the scripted fake runtime would answer with an unrelated tool story.
+  // The pane is the content. The empty chat still shows the composer beside it.
+  await gw.open("web", IOS_SIM_SHOT.title);
 }
 
 async function seedTerminalPane(gw: ShotHost, deps: ShotDeps): Promise<void> {

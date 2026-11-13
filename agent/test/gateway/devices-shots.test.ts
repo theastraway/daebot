@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import { execFileSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { TerminalRegistry } from "../../src/tools/terminal.ts";
-import { seedDevicesShot, TERMINAL_SHOT } from "../../src/gateway/devices-shots.ts";
+import { seedDevicesShot, TERMINAL_SHOT, IOS_SIM_SHOT } from "../../src/gateway/devices-shots.ts";
 
 function restoreFake(prev: string | undefined): void {
   if (prev === undefined) delete process.env.MINDCLAW_DESKTOP_FAKE;
@@ -21,6 +21,23 @@ test("devices shots refuse to run outside the smoke fake gateway", async () => {
       /smoke/,
     );
     assert.equal(opened, 0);
+  } finally { restoreFake(prev); }
+});
+
+test("the ios-sim seed opens a chat and does not start a shell", async () => {
+  const prev = process.env.MINDCLAW_DESKTOP_FAKE;
+  process.env.MINDCLAW_DESKTOP_FAKE = "1";
+  const opened: string[] = [];
+  let sent = 0;
+  try {
+    await seedDevicesShot({
+      async open(surface, title) {
+        opened.push(`${surface}:${title ?? ""}`);
+        return { id: "s-sim", async *send() { sent++; yield { type: "done" }; } };
+      },
+    }, "ios-sim");
+    assert.deepEqual(opened, [`web:${IOS_SIM_SHOT.title}`]);
+    assert.equal(sent, 0);
   } finally { restoreFake(prev); }
 });
 
