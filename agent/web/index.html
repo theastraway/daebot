@@ -150,6 +150,7 @@
       <button class="icon-btn voice-btn" id="btn-convo" type="button" aria-label="Voice conversation, hands-free" aria-pressed="false" title="Voice conversation, hands-free (uses MIND credits)"><svg class="ic"><use href="#i-wave"/></svg></button>
       <button class="term-chip" id="btn-terminal" type="button" hidden aria-expanded="false" aria-controls="term-pane">Terminal</button>
       <button class="term-chip" id="btn-simulator" type="button" hidden aria-expanded="false" aria-controls="sim-pane">Simulator</button>
+      <button class="browser-chip" id="btn-browser" type="button" hidden aria-expanded="false" aria-controls="browser-pane">Browser</button>
       <button class="icon-btn" id="btn-board" type="button" aria-label="Task board" aria-expanded="false" aria-controls="board-drawer"><svg class="ic"><use href="#i-board"/></svg><span class="badge" id="board-count" hidden>0</span></button>
       <button class="icon-btn" id="btn-violations" type="button" aria-label="Kernel violations" aria-expanded="false"><svg class="ic"><use href="#i-shield"/></svg><span class="badge" id="viol-count" hidden>0</span></button>
       <button class="icon-btn" id="btn-theme" type="button" aria-label="Toggle theme"><svg class="ic" id="theme-ic"><use href="#i-moon"/></svg></button>
@@ -226,6 +227,22 @@
       <pre class="term-out" id="term-out"></pre>
     </div>
     <p class="term-exit" id="term-exit" hidden></p>
+  </aside>
+
+  <aside class="browser-pane" id="browser-pane" aria-label="Daebot's browser" hidden>
+    <div class="browser-resize" id="browser-resize" title="Drag to resize"></div>
+    <div class="browser-head">
+      <h2>Daebot's browser</h2>
+      <button class="icon-btn" id="btn-browser-close" type="button" aria-label="Close browser"><svg class="ic"><use href="#i-x"/></svg></button>
+    </div>
+    <p class="browser-url" id="browser-url"></p>
+    <div class="browser-bar" id="browser-bar">
+      <span class="browser-control" id="browser-control">Daebot has control</span>
+      <button class="btn-quiet" id="browser-take" type="button">Take over</button>
+      <button class="btn-quiet" id="browser-give" type="button" hidden>Give back to Daebot</button>
+    </div>
+    <p class="browser-notice" id="browser-notice" hidden></p>
+    <div class="browser-view" id="browser-view"></div>
   </aside>
 
   <aside class="drawer" id="drawer" aria-label="Kernel violations" hidden>

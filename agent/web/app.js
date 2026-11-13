@@ -38,6 +38,7 @@ import { initMessageMenu, copyText } from "/msgmenu.js";
 import { initToolRoll } from "/toolroll.js";
 import { initTerminalPane } from "/terminal-pane.js";
 import { initSimulatorPane } from "/simulator-pane.js";
+import { initBrowserPane, browserActionLabel, browserArgsForCard } from "/browser-pane.js";
 import { argSummary } from "/toolargs.js";
 initScrollbars(); // scrollbars stay hidden until the user scrolls
 
@@ -144,6 +145,20 @@ simPane = initSimulatorPane({
   tools: $("sim-tools"),
   closeBtn: $("btn-sim-close"),
   onOpen(open) { if (open) termPane.close(); },
+});
+const browserPane = initBrowserPane({
+  json,
+  authHeaders: () => (token ? { authorization: `Bearer ${token}` } : {}),
+  currentId: () => state.currentId,
+  chip: $("btn-browser"),
+  pane: $("browser-pane"),
+  urlEl: $("browser-url"),
+  controlEl: $("browser-control"),
+  noticeEl: $("browser-notice"),
+  viewEl: $("browser-view"),
+  takeBtn: $("browser-take"),
+  giveBtn: $("browser-give"),
+  closeBtn: $("btn-browser-close"),
 });
 
 // ---------- markdown-lite (DOM-built; escapes everything by construction) ----------
@@ -313,9 +328,15 @@ function buildTool(it) {
   const s = document.createElement("summary");
   const chev = icon("i-chev"); chev.classList.add("chev");
   const state = h("span", "tool-state");
-  s.append(chev, h("span", "tool-name", it.tool), h("span", "tool-args", argSummary(it.args)), state);
+  const shownArgs = it.tool === "browser" ? browserArgsForCard(it.args) : it.args;
+  const toolName = it.tool === "browser" ? browserActionLabel(it.args) : it.tool;
+  // Browser cards redact typed text before the summary. Every other tool keeps
+  // the shared argSummary(it.args) call the rest of the page already uses.
+  const argsEl = h("span", "tool-args", argSummary(it.args));
+  if (it.tool === "browser") argsEl.textContent = argSummary(shownArgs);
+  s.append(chev, h("span", "tool-name", toolName), argsEl, state);
   const body = h("div", "tool-body");
-  const a = h("div"); a.append(h("h4", "", "Arguments"), h("pre", "", pretty(it.args)));
+  const a = h("div"); a.append(h("h4", "", "Arguments"), h("pre", "", pretty(shownArgs)));
   body.append(a);
   const r = h("div"); r.hidden = true; r.append(h("h4", "", "Result"), h("pre", "", ""));
   body.append(r);
@@ -1076,6 +1097,7 @@ async function selectSession(s, opts = {}) {
   if (gone()) return;
   termPane.sync();
   simPane.sync();
+  browserPane.sync();
   if (!els.drawer.hidden) loadViolations();
   whenIdle(() => { if (!gone()) { saveTranscriptSoon(state.currentId); prefetchNeighbors(); } });
 }
@@ -1110,6 +1132,7 @@ function newSession() {
   renderSessions(); renderThread();
   termPane.sync();
   simPane.sync();
+  browserPane.sync();
   els.input.focus();
 }
 // A new thread with one of the user's bots: a draft until the first message, like a new session.
@@ -1125,6 +1148,7 @@ function newBotThread(botId) {
   bots.renderList();
   termPane.sync();
   simPane.sync();
+  browserPane.sync();
   els.input.focus();
 }
 function notify(text) { addItem(tkey(), { kind: "notice", level: "warn", text }); }
@@ -1145,6 +1169,7 @@ async function ensureSession() {
       const draft = state.transcripts.get(DRAFT);
       if (draft && !state.transcripts.has(sessionId)) { state.transcripts.set(sessionId, draft); state.transcripts.delete(DRAFT); }
       state.currentId = sessionId;
+      browserPane.sync();
       return sessionId;
     })().finally(() => { opening = null; });
   }
@@ -1423,6 +1448,7 @@ function onEvent(id, ev, asst, toolByReceipt) {
       toolByReceipt.set(ev.receiptId, it);
       if (ev.tool === "terminal" && id === state.currentId) termPane.noteTool();
       if (ev.tool === "simulator" && id === state.currentId) simPane.noteTool();
+      if (ev.tool === "browser" && id === state.currentId) browserPane.noteTool();
       // A bot asked for a voice chat: open it on this screen (only the window showing this very thread, never a replay of a finished turn).
       if (ev.tool === "start_voice_agent" && id === state.currentId && state.busy.has(id) && !voiceChat.active()) void voiceChat.start(typeof (ev.args || {}).prompt === "string" ? ev.args.prompt : undefined);
       return null; // text after a tool starts a new block
@@ -1433,6 +1459,7 @@ function onEvent(id, ev, asst, toolByReceipt) {
       // Daebot proposed an MCP server: put the consent card in the thread (only the card's Connect button can connect it).
       if (ev.tool === "terminal" && id === state.currentId) termPane.noteTool();
       if (ev.tool === "simulator" && id === state.currentId) simPane.noteTool();
+      if (ev.tool === "browser" && id === state.currentId) browserPane.noteTool();
       if (ev.tool === "task_board") board.poke(); // the board changed: refresh it if it is open
       if (ev.tool === "bot_manage") bots.refresh(); // Daebot just made, changed or deleted a bot: the Bots tab shows it without a reload
       // Daebot put an Authorize card for a MIND app in the chat (the click on it is the only thing that connects anything).
@@ -1886,6 +1913,7 @@ async function boot() {
   else if (!state.currentId) { ensureSession().then(() => { renderSessions(); renderHeader(); }).catch(() => { /* first send retries */ }); }
   termPane.sync();
   simPane.sync();
+  browserPane.sync();
   syncCurrent(); // a reply still running on the server is picked up and keeps streaming
 }
 boot();
