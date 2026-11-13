@@ -41,15 +41,15 @@ test("the ios-sim seed opens a chat and does not start a shell", async () => {
   } finally { restoreFake(prev); }
 });
 
-test("an unknown pane is rejected and does not open a chat", async () => {
+test("an unknown pane is rejected and the browser seed does not open a chat", async () => {
   const prev = process.env.MINDCLAW_DESKTOP_FAKE;
   process.env.MINDCLAW_DESKTOP_FAKE = "1";
   let opened = 0;
+  const host = { async open() { opened++; return { id: "s", async *send() {} }; } };
   try {
-    await assert.rejects(
-      seedDevicesShot({ async open() { opened++; return { id: "s", async *send() {} }; } }, "browser"),
-      /browser/,
-    );
+    await assert.rejects(seedDevicesShot(host, "ios-sim"), /ios-sim/);
+    assert.equal(opened, 0);
+    await seedDevicesShot(host, "browser");
     assert.equal(opened, 0);
   } finally { restoreFake(prev); }
 });

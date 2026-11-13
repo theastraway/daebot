@@ -19,7 +19,9 @@ test("deviceSupport: darwin with simctl can offer the iOS Simulator; the termina
   assert.equal(d.terminal.available, true);
   assert.equal(d.terminal.pty, false);
   assert.match(d.terminal.note, /no PTY/);
-  assert.deepEqual(d.browser, { available: false, note: "not built yet" });
+  assert.equal(d.browser.available, false);
+  assert.match(d.browser.note, /persist:daebot-browser/);
+  assert.match(d.browser.note, /desktop app/);
   // a boolean hit counts, the same as a path
   const flag = deviceSupport("darwin", (name) => name === "simctl" || name === "bash");
   assert.equal(flag.ios_simulator.available, true);
@@ -32,7 +34,9 @@ test("deviceSupport: linux and win32 have no iOS Simulator", () => {
   assert.match(linux.ios_simulator.note, /not available/);
   assert.match(linux.ios_simulator.note, /Mac/);
   assert.equal(linux.terminal.pty, false);
-  assert.equal(linux.browser.note, "not built yet");
+  assert.equal(linux.browser.available, false);
+  assert.match(linux.browser.note, /desktop app/);
+  assert.match(linux.browser.note, /cannot browse/);
 
   const win = deviceSupport("win32", (name) => name === "powershell" || name === "cmd");
   assert.equal(win.ios_simulator.available, false);
@@ -66,7 +70,9 @@ test("GET /devices is local, and the hosted deployment does not mount it", async
     assert.equal(body.terminal.pty, false);
     assert.equal(typeof body.terminal.available, "boolean");
     assert.equal(typeof body.terminal.note, "string");
-    assert.deepEqual(body.browser, { available: false, note: "not built yet" });
+    assert.equal(body.browser.available, false);
+    assert.match(body.browser.note, /persist:daebot-browser/);
+    assert.match(body.browser.note, /no desktop connected/);
     if (process.platform !== "darwin") {
       assert.equal(body.ios_simulator.available, false);
       assert.match(body.ios_simulator.note, /not available|Mac|simctl/);
