@@ -50,8 +50,11 @@ m-bot svg { display: block; width: 100%; height: 100%; overflow: visible; transf
 .mode-btn.is-bypass .mode-label, .mode-btn.is-bypass:hover .mode-label { color: var(--accent); }
 
 /* messages: the M is the assistant avatar */
-.msg-asst { position: relative; padding-left: 44px; font: 16.5px/1.68 var(--sans); }
-.msg-asst::before { content: ""; position: absolute; left: -2px; top: 0; width: 34px; height: 34px; background: url("/brand/daebot-avatar.png") center / contain no-repeat; filter: drop-shadow(0 3px 4px rgba(0,0,0,.25)); }
+/* The avatar is absolutely positioned, so it does not size its row. One variable drives both the mark and the
+   height the message keeps for it: without the min-height an empty or one-line reply is shorter than the avatar
+   and the mark spills onto the next row, covering its chevron (the row is static, the message positioned). */
+.msg-asst { --avatar: 34px; position: relative; padding-left: 44px; min-height: var(--avatar); font: 16.5px/1.68 var(--sans); }
+.msg-asst::before { content: ""; position: absolute; left: -2px; top: 0; width: var(--avatar); height: var(--avatar); background: url("/brand/daebot-avatar.png") center / contain no-repeat; filter: drop-shadow(0 3px 4px rgba(0,0,0,.25)); }
 .msg-asst h3, .msg-asst h4 { font-family: var(--display); font-weight: 650; }
 .msg-asst.streaming::after { width: 8px; background: var(--led-deep); box-shadow: 0 0 10px 1px rgba(255,210,90,.6); border-radius: 3px; }
 .msg-user { background: var(--ink); color: var(--bg); border-radius: 18px 18px 5px 18px; }
@@ -88,7 +91,7 @@ m-bot svg { display: block; width: 100%; height: 100%; overflow: visible; transf
 @media (max-width: 760px) {
   .bot-dock { right: 10px; bottom: 96px; width: 54px; height: 54px; }
   .hero-bot { width: 160px; height: 160px; }
-  .msg-asst { padding-left: 40px; font-size: 16px; }
+  .msg-asst { --avatar: 28px; padding-left: 40px; font-size: 16px; }
   .msg-asst::before, .notice.thinking::before { width: 28px; height: 28px; }
   .model-badge, .mode-btn { --ctl-h: 36px; } /* touch: a 36px target; the extra height is padding, nothing shows at rest */
   .model-badge { max-width: 42vw; gap: 7px; }
