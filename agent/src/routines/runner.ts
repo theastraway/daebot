@@ -2,7 +2,7 @@
 // webhooks, internal triggers and "Run now" use. A fire is: claim the slot on disk first (so a restart cannot repeat it), refuse to overlap
 // a run of the same routine, and hand the work to `runTurn`, which runs a durable server-side turn in the bot's thread.
 import { TurnRateLimiter } from "../gateway/agent-api.ts";
-import { freshAttention, probeBot, surfacedNow } from "./heartbeat.ts";
+import { freshAttention, movedThreads, probeBot, stampsNow, surfacedNow } from "./heartbeat.ts";
 import type { BoardLite, Probe, ThreadLite } from "./heartbeat.ts";
 import { RoutineHub, STALE_RUN_MS } from "./store.ts";
 import type { Routine, RoutineBook, RunStatus, TriggerType } from "./store.ts";
@@ -250,6 +250,7 @@ export class RoutineRunner {
     if (!this.d.state(book.owner, book.botId)) { book.recordRun(r.id, { at: t0, source, status: "error", model: false, ms: 0, result: "the bot no longer exists" }); return; }
     let digest = "";
     let surfacedAfter: Record<string, string> | undefined;
+    let seenAfter: Record<string, number> | undefined;
     if (r.builtin === "heartbeat") {
       const p = this.probe(book)!;
       // Items waiting on the user are brought up ONCE; they come back only when they changed. A run that is only about repeating them is not run at all.
@@ -257,18 +258,22 @@ export class RoutineRunner {
       const surfaced = legacy ? surfacedNow(p) : r.hb?.surfaced;
       const fresh = freshAttention(p, surfaced);
       const firstLook = r.hb?.fp === undefined;
-      const quiet = r.hb?.fp === p.fp || (firstLook && p.threads === 0 && !p.attention.length) || (!firstLook && p.attention.length > 0 && fresh.length === 0);
+      const moved = movedThreads(p, r.hb?.seen);
+      // Saved before thread stamps existed: take today's threads as already seen, so the first look after the upgrade is not a review of everything.
+      const seenLegacy = !firstLook && r.hb?.seen === undefined;
+      const quiet = r.hb?.fp === p.fp || (!p.attention.length && !firstLook && (seenLegacy || moved.length === 0)) || (firstLook && p.threads === 0 && !p.attention.length) || (!firstLook && p.attention.length > 0 && fresh.length === 0);
       if (quiet) {
         // Nothing moved since the last look, or only things the user already knows about are waiting: no model call, no message, nothing to pay for.
-        book.setHeartbeat(r.id, { fp: p.fp, checkedAt: t0, idle: true, surfaced: surfacedNow(p) });
+        book.setHeartbeat(r.id, { fp: p.fp, checkedAt: t0, idle: true, surfaced: surfacedNow(p), seen: stampsNow(p) });
         book.recordRun(r.id, { at: t0, source, status: "idle", model: false, ms: this.now() - t0, result: p.waiting.length && r.hb?.fp !== p.fp ? `nothing new (${p.waiting.length} still waiting on the user)` : "nothing to do" });
         this.stats.idleHeartbeats++;
         return;
       }
       digest = fresh.length
         ? `\n\nWhat the check found:\n${fresh.map((a) => `- ${a}`).join("\n")}`
-        : "\n\nThe check found no stalled item, but your threads changed since the last look: skim them and note any lesson worth keeping.";
+        : `\n\nNothing is stalled. These threads had new activity since the last look (look at these and nothing else): ${moved.map((t) => `"${t}"`).join(", ")}. Note a lesson only if one of them taught you something; otherwise end with an empty reply.`;
       surfacedAfter = surfacedNow(p);
+      seenAfter = stampsNow(p);
     }
     // Every run starts with a clean memory. The only thing carried over is a one-line digest of how the last run ended.
     const last = r.lastRunAt && r.lastStatus && r.lastStatus !== "running" ? `\n\nLast run (${new Date(r.lastRunAt).toISOString()}, ${r.lastStatus}): ${(r.lastResult ?? "").replace(/\s+/g, " ").trim().slice(0, 240) || "(no result)"}\nThat is all you remember of earlier runs. Do not repeat it unless something changed.` : "";
@@ -286,6 +291,6 @@ export class RoutineRunner {
     const status: RunStatus = res.ok ? "ok" : "error";
     const out = (res.ok ? res.finalText : res.error ?? "the run failed").replace(/\s+/g, " ").trim();
     book.recordRun(r.id, { at: t0, source, status, model: true, ms: this.now() - t0, threadId: res.threadId || undefined, result: out || (res.ok ? "(no reply)" : "failed") });
-    if (r.builtin === "heartbeat") book.setHeartbeat(r.id, { fp: this.probe(book)?.fp, checkedAt: this.now(), reviewed: true, ...(surfacedAfter ? { surfaced: surfacedAfter } : {}) });
+    if (r.builtin === "heartbeat") book.setHeartbeat(r.id, { fp: this.probe(book)?.fp, checkedAt: this.now(), reviewed: true, ...(surfacedAfter ? { surfaced: surfacedAfter } : {}), ...(seenAfter ? { seen: seenAfter } : {}) });
   }
 }
