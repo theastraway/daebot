@@ -2611,7 +2611,12 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     const action = m[2];
     const acc = manager.access(id, me.id);
     if (acc === "forbidden") return sendJson(res, 403, { error: "forbidden" });
-    const ls = acc;
+    let ls = acc;
+    // A live session is dropped when it sits idle (an empty draft after 15 minutes, any chat after 6 hours) and on every restart or deploy; the chat itself is saved.
+    // A message (or any action that needs the live session) for a saved chat of this owner brings it back first, instead of answering "no such session".
+    if (!ls && action && action !== "history" && action !== "events" && manager.runtimeOf(me.id).history?.(id)) {
+      try { ls = await manager.open({ surface: "web", resumeId: id, owner: me.id }); } catch (e) { if (e instanceof ForbiddenError) throw e; /* falls through to the 404 below */ }
+    }
 
     if (action === "history") {
       // The visible transcript, from the live session or from disk after a restart (no live session needed).
@@ -3128,8 +3133,10 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
           if (typeof f.sessionId !== "string" || typeof f.text !== "string" || !f.text.trim()) {
             return sendFrame(c, { t: "error", message: "send needs sessionId and text" });
           }
-          const ls = manager.access(f.sessionId, me.id);
+          let ls = manager.access(f.sessionId, me.id);
           if (ls === "forbidden") return sendFrame(c, { t: "error", message: "forbidden" });
+          // A saved chat whose live session was dropped (idle, restart) is brought back, not refused.
+          if (!ls && manager.runtimeOf(me.id).history?.(f.sessionId)) ls = await manager.open({ surface: "web", resumeId: f.sessionId, owner: me.id });
           if (!ls) return sendFrame(c, { t: "error", message: "no such session" });
           if (ls.busy) return sendFrame(c, { t: "error", message: "session is busy with another turn" });
           subscribe(ls.id, c);

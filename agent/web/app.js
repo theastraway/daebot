@@ -1234,7 +1234,17 @@ async function sendMessage(text, attached = [], quote) {
   try {
     const capabilities = calendarCapabilities(); // ["apple_calendar"] inside the iPhone and Mac apps, [] anywhere else
     const body = { text, ...(quote ? { quote: { id: quote.mid, text: (quote.full || quote.text).slice(0, 600) } } : {}), ...(attached.length ? { photos: attached.map(({ name, dataUrl }) => ({ name, dataUrl })) } : {}), ...(capabilities.length ? { capabilities } : {}) };
-    const res = await api(`/sessions/${encodeURIComponent(id)}/send`, { method: "POST", body: JSON.stringify(body) });
+    let res = await api(`/sessions/${encodeURIComponent(id)}/send`, { method: "POST", body: JSON.stringify(body) });
+    if (res.status === 404 && (await res.clone().json().catch(() => ({}))).error === "no such session") {
+      // The server dropped this empty chat (idle timeout or a restart) before anything was saved: nothing is lost, so start a fresh one and send there.
+      const fresh = await json("/sessions", { method: "POST", body: JSON.stringify({ surface: "web", title: "New session", ...(state.curBot ? { bot: state.curBot } : {}) }) });
+      const old = id; markInflight(old, false); markInflight(fresh.sessionId, true);
+      if (state.currentId === old) state.currentId = fresh.sessionId;
+      const t = state.transcripts.get(old);
+      if (t && !state.transcripts.has(fresh.sessionId)) { state.transcripts.set(fresh.sessionId, t); state.transcripts.delete(old); }
+      id = fresh.sessionId;
+      res = await api(`/sessions/${encodeURIComponent(id)}/send`, { method: "POST", body: JSON.stringify(body) });
+    }
     if (res.status === 409) throw new Error("This session is busy with another turn.");
     if (!res.ok) { refused = true; throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`); }
     setOnline(true);
