@@ -7,7 +7,7 @@ import { TerminalRegistry, terminalRegistry } from "../../src/tools/terminal.ts"
 const BUF_CAP = 256 * 1024;
 const READ_CAP = 30_000;
 
-interface FakeChild {
+interface FakeChild extends EventEmitter {
   pid: number;
   stdout: EventEmitter;
   stderr: EventEmitter;
@@ -153,6 +153,31 @@ test("peek and subscribe refuse a session owned by another chat", () => {
   assert.equal(reg.peek("chatA", info.id).text, "secret-scrollback");
   assert.equal(reg.list("chatB").length, 0);
   assert.equal(reg.list("chatA").length, 1);
+});
+
+test("a throwing subscriber does not stop the agent's wake", () => {
+  const { reg, children } = registry();
+  const info = reg.open("chatA", "C:\\work", "bash");
+  let n = 0;
+  reg.subscribe("chatA", info.id, () => { throw new Error("pane broke"); });
+  reg.subscribe("chatA", info.id, () => { n++; });
+  children[0].stdout.emit("data", Buffer.from("z"));
+  assert.equal(n, 1);
+  assert.equal(reg.peek("chatA", info.id).text, "z");
+});
+
+test("a colour sequence split across chunks is stripped before the pane can see it", () => {
+  const { reg, children } = registry();
+  const info = reg.open("chatA", "C:\\work", "bash");
+  children[0].stdout.emit("data", Buffer.from("\x1b[31"));
+  assert.equal(reg.peek("chatA", info.id).text, "", "an unfinished escape is held, not shown");
+  children[0].stdout.emit("data", Buffer.from("mred\x1b[0m!\n"));
+  assert.equal(reg.peek("chatA", info.id).text, "red!\n");
+  children[0].stderr.emit("data", Buffer.from("\x1b]0;title"));
+  children[0].stderr.emit("data", Buffer.from("\x07err\n"));
+  assert.equal(reg.peek("chatA", info.id).text, "red!\nerr\n");
+  const read = reg.read("chatA", info.id, { waitMs: 0 });
+  return read.then((r) => assert.equal(r.text, "red!\nerr\n", "the agent sees the same stripped text"));
 });
 
 test("terminalRegistry() is one shared registry", () => {

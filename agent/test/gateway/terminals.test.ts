@@ -19,7 +19,7 @@ import { startFakeMind } from "./fake-mind.ts";
 import type { FakeMind } from "./fake-mind.ts";
 import { auth, fakeRuntime, http, parseSse, tmpStatic } from "./helpers.ts";
 
-interface FakeChild {
+interface FakeChild extends EventEmitter {
   pid: number;
   stdout: EventEmitter;
   stderr: EventEmitter;
@@ -211,6 +211,31 @@ test("SSE sends a snapshot, then data and status, heartbeats, and unsubscribes w
     while (g.subs() !== 0 && Date.now() - start2 < 1000) await new Promise((r) => setTimeout(r, 20));
     assert.equal(g.subs(), 0, "the shell exiting ends the stream and detaches");
     again.stop();
+  } finally { await g.gw.close(); }
+});
+
+test("SSE tells the pane when a burst overflowed the read cap, and a dead socket still detaches", async () => {
+  const g = await localGateway({ heartbeatMs: 40 });
+  try {
+    const id = await g.openChat();
+    const info = g.reg.open(id, "C:\\work", "bash");
+    const sse = await openSse(g.gw.url, `/sessions/${id}/terminals/${info.id}/stream`, g.headers);
+    await sse.waitFor(/event: snapshot/);
+    assert.equal(g.subs(), 1);
+    const flood = "y".repeat(80_000);
+    g.children[0].stdout.emit("data", Buffer.from(flood));
+    const body = await sse.waitFor(/event: data/);
+    const data = named(body).find((e) => e.event === "data");
+    assert.equal(typeof data?.data.text, "string");
+    assert.ok(String(data?.data.text).endsWith("y"));
+    assert.equal(String(data?.data.text).length, 30_000);
+    assert.equal(data?.data.total, flood.length);
+    assert.equal(data?.data.dropped, flood.length - 30_000);
+    assert.doesNotMatch(String(data?.data.text), /<script>/);
+    sse.stop();
+    const start = Date.now();
+    while (g.subs() !== 0 && Date.now() - start < 1000) await new Promise((r) => setTimeout(r, 20));
+    assert.equal(g.subs(), 0);
   } finally { await g.gw.close(); }
 });
 
