@@ -20,11 +20,12 @@ test("hosted still never offers a shell, process, terminal or file write/edit", 
   for (const n of ["bash", "process", "terminal", "write_file", "edit_file"]) assert.equal(hostedToolAllowed(n), false, n);
 });
 
-test("local tools doc describes the read-only terminal pane", () => {
+test("local tools doc describes the terminal pane", () => {
   const doc = readFileSync(fileURLToPath(new URL("../../docs/local-tools.md", import.meta.url)), "utf8");
   assert.match(doc, /Terminal pane/);
-  assert.match(doc, /read-only/);
-  assert.match(doc, /Daebot's terminal — read-only/);
+  assert.match(doc, /Daebot's terminal/);
+  assert.match(doc, /pane is typeable/);
+  assert.match(doc, /pipe session is read-only/);
 });
 
 test("system prompt: MIND is the main document database; Dropbox and Drive are third-party connectors", () => {
