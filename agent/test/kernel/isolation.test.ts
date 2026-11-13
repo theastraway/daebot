@@ -68,6 +68,12 @@ test("isolation: non-write tools ignored; missing paths tolerated", () => {
   assert.equal(run("write_file", { path: "/definitely/not/here/a.txt" }), undefined);
   assert.equal(run("write_file", {}), undefined);
 });
+test("isolation: terminal open uses the cwd, and a worktree is allowed", () => {
+  assert.equal(run("terminal", { action: "open" })?.action, "block");
+  assert.equal(run("terminal", { action: "open", cwd: worktree }), undefined);
+  assert.equal(run("terminal", { action: "open", cwd: plain }), undefined);
+  assert.equal(run("terminal", { action: "send", text: "echo hi" }), undefined);
+});
 test("isolation: bashWriteTargets finds redirect and rm targets", () => {
   const t = bashWriteTargets("echo a > out.txt && rm -f old.log", "/w");
   assert.ok(t.includes("/w/out.txt") && t.includes("/w/old.log"), JSON.stringify(t));

@@ -15,6 +15,17 @@ export const IOS_SIM_SHOT = {
   emptyDevice: "No simulator",
 } as const;
 
+/** Must match desktop/src/lib/devices-shots.mjs PTY_SHOT. */
+export const PTY_SHOT = {
+  title: "Show the PTY",
+  colorMarker: "daebot-pty-color",
+  typedMarker: "USER-TYPED-OK",
+  closedMarker: "pty-session-closed",
+  colorDir: "pty-color",
+  tuiDir: "pty-tui",
+  closedDir: "pty-closed",
+} as const;
+
 /** Must match desktop/src/lib/devices-shots.mjs TERMINAL_SHOT. The shot probes the page for these strings. */
 export const TERMINAL_SHOT = {
   title: "Show the terminal",
@@ -61,6 +72,10 @@ export async function seedDevicesShot(gw: ShotHost, pane: string, deps: ShotDeps
     await seedIosSimPane(gw);
     return;
   }
+  if (pane === "pty") {
+    await seedPtyPane(gw, deps);
+    return;
+  }
   // The browser page is a local shop server the shots harness opens. Nothing to seed in the fake gateway.
   if (pane === "browser") return;
   throw new Error(`devices shots: no seed for pane ${JSON.stringify(pane)}`);
@@ -70,6 +85,57 @@ async function seedIosSimPane(gw: ShotHost): Promise<void> {
   // No message: the scripted fake runtime would answer with an unrelated tool story.
   // The pane is the content. The empty chat still shows the composer beside it.
   await gw.open("web", IOS_SIM_SHOT.title);
+}
+
+async function seedPtyPane(gw: ShotHost, deps: ShotDeps): Promise<void> {
+  const reg = deps.registry ?? terminalRegistry();
+  if (reg.backendKind() !== "pty") throw new Error("devices shots: pty pane needs the desktop PTY host");
+  const session = await gw.open("web", PTY_SHOT.title);
+  for await (const _ev of session.send("Open the PTY and show me the screen.")) { /* recorded on the fake runtime */ }
+  const root = mkdtempSync(join(tmpdir(), "daebot-pty-shot-"));
+  const colorDir = join(root, PTY_SHOT.colorDir);
+  const tuiDir = join(root, PTY_SHOT.tuiDir);
+  const closedDir = join(root, PTY_SHOT.closedDir);
+  mkdirSync(colorDir);
+  mkdirSync(join(colorDir, "src"));
+  mkdirSync(tuiDir);
+  mkdirSync(closedDir);
+  writeFileSync(join(colorDir, "README.txt"), "shot\n");
+  writeFileSync(join(colorDir, "notes.txt"), "alpha\n");
+  const waitMs = deps.commandWaitMs ?? 8000;
+  const color = await reg.openSession(session.id, colorDir, "bash");
+  for (const line of [
+    "ls --color=always",
+    "printf '\\033[1;32mgreen-pty\\033[0m \\033[31mred-pty\\033[0m\\n'",
+    `echo ${PTY_SHOT.colorMarker}`,
+    "echo COLS=$(tput cols)",
+    "stty size",
+  ]) reg.send(session.id, color.id, line);
+  if (waitMs > 0) {
+    const seen = await reg.read(session.id, color.id, { waitMs, until: new RegExp(PTY_SHOT.colorMarker) });
+    if (!seen.text.includes(PTY_SHOT.colorMarker) || !seen.text.includes("notes.txt")) {
+      throw new Error("devices shots: pty color shell did not finish printing");
+    }
+  }
+
+  const tui = await reg.openSession(session.id, tuiDir, "bash");
+  reg.send(session.id, tui.id, "top");
+  if (waitMs > 0) {
+    const seen = await reg.read(session.id, tui.id, { waitMs, until: /PID|%CPU|Tasks/ });
+    if (!/PID|%CPU|Tasks/.test(seen.text)) throw new Error("devices shots: top did not draw");
+  }
+
+  const closed = await reg.openSession(session.id, closedDir, "bash");
+  reg.send(session.id, closed.id, `echo ${PTY_SHOT.closedMarker}`);
+  reg.send(session.id, closed.id, "exit");
+  if (waitMs > 0) {
+    const seen = await reg.read(session.id, closed.id, { waitMs, until: new RegExp(PTY_SHOT.closedMarker) });
+    if (!seen.text.includes(PTY_SHOT.closedMarker)) throw new Error("devices shots: closed pty did not print its marker");
+    if (seen.info.status === "running") {
+      const rest = await reg.read(session.id, closed.id, { waitMs });
+      if (rest.info.status === "running") throw new Error("devices shots: closed pty did not exit");
+    }
+  }
 }
 
 async function seedTerminalPane(gw: ShotHost, deps: ShotDeps): Promise<void> {
