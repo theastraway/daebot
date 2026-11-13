@@ -1393,6 +1393,24 @@ button.env-head:hover { background: var(--surface-2); color: var(--ink-2); }
   .model-badge { min-width: 0; }
 }
 
+/* Daebot's terminal, read-only. Side panel on a wide window, bottom sheet on a phone. Colours come from the theme variables. */
+.term-chip { flex: none; height: 28px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--surface-2); color: var(--ink); font: 600 12px var(--sans); white-space: nowrap; }
+.term-chip[aria-expanded="true"] { background: var(--ink); color: var(--bg); }
+.term-pane { position: fixed; z-index: 32; top: 0; right: 0; bottom: 0; width: min(440px, 42vw); display: flex; flex-direction: column; background: var(--surface); color: var(--ink); border-left: 1px solid var(--line); box-shadow: var(--shadow); }
+.win-overlay .term-pane, .mac-inset .term-pane { -webkit-app-region: no-drag; }
+.term-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: calc(10px + env(safe-area-inset-top)) 12px 10px 16px; border-bottom: 1px solid var(--line); flex: none; }
+.term-head h2 { margin: 0; font-size: 14px; font-weight: 650; }
+.term-list { display: flex; gap: 6px; overflow-x: auto; padding: 8px 10px; border-bottom: 1px solid var(--line); flex: none; }
+.term-sess { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; max-width: 220px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink-2); text-align: left; }
+.term-sess[aria-selected="true"] { border-color: var(--ink); color: var(--ink); background: var(--surface); }
+.term-id { font: 600 12px var(--mono); }
+.term-meta, .term-cwd { font: 11px var(--sans); color: var(--ink-3); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.term-out { flex: 1; min-height: 0; margin: 0; padding: 12px 14px; overflow: auto; white-space: pre-wrap; word-break: break-word; font: 12.5px/1.45 var(--mono); background: var(--bg); color: var(--ink); }
+.term-exit { margin: 0; padding: 8px 14px calc(8px + env(safe-area-inset-bottom)); font-size: 12.5px; color: var(--ink-2); border-top: 1px solid var(--line); flex: none; }
+@media (max-width: 760px) {
+  .term-pane { top: auto; left: 0; width: auto; height: min(52dvh, 440px); border-left: 0; border-top: 1px solid var(--line); border-radius: 16px 16px 0 0; }
+}
+
 /* Phone width (iPhone Pro Max is 440pt): the top bar never runs past the right edge. The bot pill shrinks and truncates its name
    (it was flex:none, so a long name pushed the mute, mic and voice buttons off screen), and the model picker collapses to its LED
    and chevron; the model name stays in the accessibility tree and the full name is in the menu it opens. Wider screens are untouched.
