@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-// @ts-expect-error plain browser module, no types
+// @ts-expect-error plain browser module (same convention as the other web/*.js unit tests)
 import { argSummary, oneLine, ARG_MAX, BREAK_MARK } from "../../web/toolargs.js";
 
 // A real one from the transcript: two lines, joined by the shell.
