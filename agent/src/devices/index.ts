@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { MSG_UNAVAILABLE } from "./simulator-mac.ts";
 
 // What this machine can attach for later device slices. No agent tool yet: the gateway only reports it.
 // `which` is injected in tests. The default looks the binary up on PATH (`xcrun --find simctl` for the simulator).
@@ -59,7 +60,7 @@ export function deviceSupport(platform: string, which: WhichFn = defaultWhich): 
     ios_simulator: {
       available: sim,
       note: !mac
-        ? "iOS Simulator is not available on this platform. It needs a Mac with xcrun simctl."
+        ? MSG_UNAVAILABLE
         : sim
           ? "xcrun simctl is available on this Mac."
           : "xcrun simctl was not found on this Mac.",
