@@ -8,30 +8,35 @@ export const MAX_PHOTOS = 5;
 export const MAX_EDGE = 1568;
 export const QUALITY = 0.85;
 export const MAX_BYTES = 8 * 1024 * 1024;       // per photo, after shrinking (the server enforces the same)
-export const MAX_TOTAL_BYTES = 24 * 1024 * 1024; // all photos of one message (the server enforces the same)
+export const MAX_TOTAL_BYTES = 24 * 1024 * 1024; // all attachments of one message (the server enforces the same)
 export const MAX_RAW_BYTES = 40 * 1024 * 1024;  // a file bigger than this is not even decoded
+export const MAX_DOC_BYTES = 16 * 1024 * 1024;  // per PDF, as sent (a PDF is never re-encoded)
 export const QUEUE_PHOTO_BUDGET = 3_000_000;    // characters of photo data a queued message may keep in sessionStorage
 
 const OK_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
-const EXT_TYPE = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif" };
+const DOC_TYPES = new Set(["application/pdf"]);
+const EXT_TYPE = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif", pdf: "application/pdf" };
 
 export const SAYS = {
   heic: "HEIC photos can't be read here. Convert it to JPEG and attach it again.",
-  other: "Only JPEG, PNG, WebP or GIF photos can be attached.",
-  limit: `You can attach up to ${MAX_PHOTOS} photos per message.`,
+  other: "Only JPEG, PNG, WebP or GIF photos and PDF files can be attached.",
+  limit: `You can attach up to ${MAX_PHOTOS} files per message.`,
   unreadable: (n) => `"${n}" could not be read as an image.`,
   big: (n) => `"${n}" is still over ${MAX_BYTES / 1048576} MB after shrinking. Try a smaller photo.`,
   huge: (n) => `"${n}" is too large to open here (over ${MAX_RAW_BYTES / 1048576} MB).`,
-  total: `These photos are over ${MAX_TOTAL_BYTES / 1048576} MB together. Remove one or attach fewer.`,
-  preparing: "Still preparing your photos. Send again in a moment.",
+  docBig: (n) => `"${n}" is over ${MAX_DOC_BYTES / 1048576} MB. Attach a smaller PDF.`,
+  docFailed: (n) => `"${n}" could not be attached. Try saving the PDF again and re-attaching it.`,
+  total: `These files are over ${MAX_TOTAL_BYTES / 1048576} MB together. Remove one or attach fewer.`,
+  preparing: "Still preparing your files. Send again in a moment.",
 };
 
 const extOf = (name) => (/\.([A-Za-z0-9]+)$/.exec(String(name || "")) || [])[1]?.toLowerCase() || "";
 
-/** "ok" (a type we accept), "heic" (iPhone format we cannot read) or "other". Falls back to the extension when the type is empty. */
+/** "ok" (a type we accept), "heic" (iPhone format we cannot read), "document" (a PDF) or "other". Falls back to the extension when the type is empty. */
 export function classifyFile(file) {
   const type = String(file?.type || "").toLowerCase() || EXT_TYPE[extOf(file?.name)] || "";
   if (OK_TYPES.has(type)) return "ok";
+  if (DOC_TYPES.has(type)) return "document";
   if (/^image\/hei[cf]/.test(type) || /^(heic|heif)$/.test(extOf(file?.name))) return "heic";
   return "other";
 }
@@ -54,7 +59,8 @@ export function dataUrlBytes(url) {
   return Math.max(0, Math.floor((b64.length * 3) / 4) - pad);
 }
 
-const isPhoto = (p) => p && typeof p === "object" && typeof p.dataUrl === "string" && p.dataUrl.startsWith("data:image/");
+const isPhoto = (p) => p && typeof p === "object" && typeof p.dataUrl === "string" && (p.dataUrl.startsWith("data:image/") || p.dataUrl.startsWith("data:application/pdf"));
+const isDoc = (p) => String(p?.mime || p?.type || "").includes("pdf") || String(p?.dataUrl || "").startsWith("data:application/pdf") || p?.kind === "document";
 
 /** Reads the queue back from sessionStorage JSON. Older versions stored plain strings. Never throws. */
 export function normQueue(raw) {
@@ -66,7 +72,7 @@ export function normQueue(raw) {
     for (const x of list) {
       if (typeof x === "string") { if (x.trim()) items.push({ text: x, photos: [], lost: 0 }); continue; }
       if (!x || typeof x !== "object") continue;
-      const photos = Array.isArray(x.photos) ? x.photos.filter(isPhoto).map((p) => ({ name: String(p.name || "photo"), dataUrl: p.dataUrl, width: Number(p.width) || 0, height: Number(p.height) || 0 })) : [];
+      const photos = Array.isArray(x.photos) ? x.photos.filter(isPhoto).map((p) => ({ name: String(p.name || (isDoc(p) ? "document" : "photo")), dataUrl: p.dataUrl, width: Number(p.width) || 0, height: Number(p.height) || 0, ...(isDoc(p) ? { kind: "document" } : {}) })) : [];
       const text = typeof x.text === "string" ? x.text : "";
       if (text.trim() || photos.length || x.lost) items.push({ text, photos, lost: Number(x.lost) || 0 });
     }
@@ -87,7 +93,7 @@ export function packQueue(queue, budget = QUEUE_PHOTO_BUDGET) {
       const photos = it.photos || [];
       const size = photos.reduce((n, p) => n + p.dataUrl.length, 0);
       if (!photos.length) return { text: it.text, lost: it.lost || 0 };
-      if (size <= left) { left -= size; return { text: it.text, photos: photos.map(({ name, dataUrl, width, height }) => ({ name, dataUrl, width, height })), lost: it.lost || 0 }; }
+      if (size <= left) { left -= size; return { text: it.text, photos: photos.map(({ name, dataUrl, width, height, kind }) => ({ name, dataUrl, width, height, ...(kind ? { kind } : {}) })), lost: it.lost || 0 }; }
       dropped += photos.length;
       return { text: it.text, lost: (it.lost || 0) + photos.length };
     });
@@ -100,7 +106,11 @@ export function queueLabel(it) {
   const t = String(it?.text || "").trim();
   const n = (it?.photos || []).length + (it?.lost || 0);
   if (t) return t;
-  return n ? `${n} photo${n === 1 ? "" : "s"}` : "";
+  const docs = (it?.photos || []).filter((p) => p.kind === "document").length;
+  if (!n) return "";
+  if (docs === n) return `${n} file${n === 1 ? "" : "s"}`;
+  if (docs > 0) return `${n} attachment${n === 1 ? "" : "s"}`;
+  return `${n} photo${n === 1 ? "" : "s"}`;
 }
 
 // ---------------------------------------------------------------- browser side
@@ -157,23 +167,49 @@ export function initPhotos({ els, h, icon, api, onChange }) {
     if (text) noteTimer = setTimeout(() => say(""), 7000);
   }
 
-  // ---- the strip of thumbnails above the composer
+  // ---- the strip of attachments above the composer (a photo thumbnail, or a PDF chip)
   function render() {
     els.strip.replaceChildren();
     items.forEach((p, i) => {
-      const t = h("div", "attach-thumb");
-      const img = document.createElement("img");
-      img.src = p.dataUrl; img.alt = p.name; img.draggable = false;
+      const doc = p.kind === "document";
+      const t = h("div", doc ? "attach-thumb attach-doc" : "attach-thumb");
+      if (doc) {
+        t.append(icon("i-doc"));
+        const label = h("span", "attach-doc-name");
+        label.textContent = p.name || "PDF";
+        t.append(label);
+      } else {
+        const img = document.createElement("img");
+        img.src = p.dataUrl; img.alt = p.name; img.draggable = false;
+        t.append(img);
+      }
       const x = h("button", "attach-x"); x.type = "button";
-      x.setAttribute("aria-label", `Remove photo ${p.name}`); x.title = "Remove";
+      x.setAttribute("aria-label", `Remove ${doc ? "file" : "photo"} ${p.name}`); x.title = "Remove";
       x.append(icon("i-x"));
       x.addEventListener("click", () => { items.splice(i, 1); render(); onChange?.(); els.input.focus(); });
-      t.append(img, x);
+      t.append(x);
       t.title = p.name;
       els.strip.append(t);
     });
-    for (let i = 0; i < preparing; i++) { const t = h("div", "attach-thumb loading"); t.setAttribute("aria-label", "Preparing photo"); els.strip.append(t); }
+    for (let i = 0; i < preparing; i++) { const t = h("div", "attach-thumb loading"); t.setAttribute("aria-label", "Preparing file"); els.strip.append(t); }
     els.strip.hidden = items.length + preparing === 0;
+  }
+
+  /** A PDF is sent as it is (never re-encoded): read it into a data URL and cap its size. Returns a note to show, if any. */
+  async function addDocument(file) {
+    const name = file.name || `document-${Date.now().toString(36)}.pdf`;
+    if (file.size > MAX_DOC_BYTES) return SAYS.docBig(name);
+    preparing++; render();
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      const size = dataUrlBytes(dataUrl);
+      if (size > MAX_DOC_BYTES) return SAYS.docBig(name);
+      if (items.reduce((n, p) => n + dataUrlBytes(p.dataUrl), size) > MAX_TOTAL_BYTES) return SAYS.total;
+      // A PDF keeps its own bytes and name; the server reads its text (read_document).
+      items.push({ name, kind: "document", dataUrl, width: 0, height: 0 });
+      return "";
+    } catch { return SAYS.docFailed(name); }
+    finally { preparing--; render(); onChange?.(); }
   }
 
   async function add(fileList) {
@@ -181,6 +217,12 @@ export function initPhotos({ els, h, icon, api, onChange }) {
     for (const file of [...fileList]) {
       const kind = classifyFile(file);
       if (kind === "heic") { notes = SAYS.heic; continue; }
+      if (kind === "document") {
+        if (items.length + preparing >= MAX_PHOTOS) { notes = SAYS.limit; break; }
+        const note = await addDocument(file);
+        if (note) notes = note;
+        continue;
+      }
       if (kind !== "ok") { notes = SAYS.other; continue; }
       if (items.length + preparing >= MAX_PHOTOS) { notes = SAYS.limit; break; }
       const name = (file.name && !/^image\.(png|jpe?g)$/i.test(file.name) ? file.name : "") || `pasted-${Date.now().toString(36)}.jpg`;
@@ -191,7 +233,7 @@ export function initPhotos({ els, h, icon, api, onChange }) {
         const size = dataUrlBytes(r.dataUrl);
         if (size > MAX_BYTES) notes = SAYS.big(name);
         else if (items.reduce((n, p) => n + dataUrlBytes(p.dataUrl), size) > MAX_TOTAL_BYTES) notes = SAYS.total;
-        else items.push({ name: name.replace(/\.[A-Za-z0-9]+$/, "") + ".jpg", ...r });
+        else items.push({ name: name.replace(/\.[A-Za-z0-9]+$/, "") + ".jpg", kind: "photo", ...r });
       } catch { notes = SAYS.unreadable(name); }
       finally { preparing--; render(); onChange?.(); }
     }
@@ -267,12 +309,26 @@ export function initPhotos({ els, h, icon, api, onChange }) {
   // Capture phase and stopImmediatePropagation: Escape closes the photo and must not also stop a running turn.
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && viewer) { e.preventDefault(); e.stopImmediatePropagation(); closeViewer(); } }, true);
 
-  /** The thumbnails of a sent message. Photos carry a dataUrl (just sent) or an id (loaded from the server for sessionId). */
+  /** The attachments of a sent message. Each carries a dataUrl (just sent) or an id (loaded from the server for sessionId). */
   function thumbs(list, sessionId) {
     const box = h("div", "msg-photos");
     for (const p of list || []) {
-      const b = h("button", "msg-photo"); b.type = "button";
-      b.setAttribute("aria-label", `Open photo ${p.name || ""}`.trim());
+      const doc = p.kind === "document";
+      const b = h("button", doc ? "msg-photo msg-doc" : "msg-photo"); b.type = "button";
+      b.setAttribute("aria-label", `Open ${doc ? "document" : "photo"} ${p.name || ""}`.trim());
+      if (doc) {
+        b.append(icon("i-doc"));
+        const label = h("span", "msg-doc-name"); label.textContent = p.name || "PDF"; b.append(label);
+        const open = () => {
+          // A PDF cannot be shown in an <img>; in-page viewers are blocked by the CSP (object-src 'none'), so open the stored file itself.
+          if (p.id && sessionId) window.open(`/sessions/${encodeURIComponent(sessionId)}/photos/${encodeURIComponent(p.id)}`, "_blank", "noopener");
+          else if (p.dataUrl) { const a = document.createElement("a"); a.href = p.dataUrl; a.download = p.name || "document.pdf"; a.rel = "noopener"; a.click(); }
+        };
+        b.addEventListener("click", open);
+        b.title = p.pages ? `${p.name} · ${p.pages} page${p.pages === 1 ? "" : "s"}` : p.name || "PDF";
+        box.append(b);
+        continue;
+      }
       const img = document.createElement("img"); img.alt = p.name || "photo"; img.draggable = false;
       b.append(img);
       const show = (src) => { if (src) { img.src = src; b.addEventListener("click", () => openViewer(src, p.name)); } else { b.classList.add("gone"); b.title = "This photo is no longer stored"; b.disabled = true; } };
@@ -287,7 +343,10 @@ export function initPhotos({ els, h, icon, api, onChange }) {
   /** Small previews for the queued-message row. */
   function mini(list) {
     const box = h("span", "queue-photos");
-    for (const p of list || []) { const img = document.createElement("img"); img.src = p.dataUrl; img.alt = p.name || "photo"; img.draggable = false; box.append(img); }
+    for (const p of list || []) {
+      if (p.kind === "document") { const chip = h("span", "queue-doc"); chip.append(icon("i-doc")); const t = h("span"); t.textContent = p.name || "PDF"; chip.append(t); box.append(chip); continue; }
+      const img = document.createElement("img"); img.src = p.dataUrl; img.alt = p.name || "photo"; img.draggable = false; box.append(img);
+    }
     return box;
   }
 

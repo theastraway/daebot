@@ -67,7 +67,7 @@ import { dataDir, cleanTitle } from "../persist.ts";
 import { screenApi } from "./screen.ts";
 import { screenFeed } from "../screen/feed.ts";
 import type { ScreenFeed } from "../screen/feed.ts";
-import { MAX_PHOTO_BODY, checkPhotos, cleanName, isPhotoId } from "../photos.ts";
+import { MAX_PHOTO_BODY, checkPhotos, cleanName, isPhotoId, photoRef } from "../photos.ts";
 import type { UploadedPhoto } from "../photos.ts";
 import type { PhotoMeta } from "../photos.ts";
 import type { SessionStore } from "../persist.ts";
@@ -1363,7 +1363,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (photoBodies >= MAX_BIG_BODIES) { res.setHeader("retry-after", "5"); return sendJson(res, 429, { error: "too many photo uploads at once; try again in a moment" }); }
     photoBodies++;
     try {
-      const b = parseJsonObject(await readBody(req, 12 * 1024 * 1024));
+      const b = parseJsonObject(await readBody(req, MAX_PHOTO_BODY));
       const meta = b.meta as PhotoMeta | undefined;
       if (!meta || typeof meta !== "object" || meta.id !== pid || typeof b.data !== "string") return sendJson(res, 400, { error: "meta and data required" });
       const data = Buffer.from(b.data, "base64");
@@ -1570,7 +1570,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       if (!store) return sendJson(res, 404, { error: "photos are not available on this deployment" });
       const added = await store.add(ls.id, check.photos);
       if (!added.ok) return sendJson(res, added.status, { error: added.error });
-      refs = added.photos.map((p) => ({ id: p.id, name: p.name, width: p.width, height: p.height }));
+      refs = added.photos.map(photoRef);
     }
     let quote: MessageQuote | undefined;
     const qb = b.quote;
@@ -2818,7 +2818,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         const added = await photos.add(id, check.photos);
         if (!added.ok) return sendJson(res, added.status, { error: added.error });
         if (ls.busy) return sendJson(res, 409, { error: "session is busy with another turn" });
-        refs = added.photos.map((p) => ({ id: p.id, name: p.name, width: p.width, height: p.height }));
+        refs = added.photos.map(photoRef);
       }
       // The first SSE event of a photo send names the stored photos, so the client can show them from the server after a reload.
       // capabilities: what THIS client can do (the iPhone or Mac app lists "apple_calendar"); the agent offers a device tool only to a client that says so.
