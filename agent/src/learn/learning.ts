@@ -3,6 +3,7 @@
 // time-bounded and fails open to "no note"; afterTurn is fire-and-forget.
 import type { Config, MindClient, Provider } from "../types.ts";
 import type { LearnConfig } from "./config.ts";
+import { focusedContextOn, isTrivialMessage } from "../focus.ts";
 import { contentProblem, lengthProblem, writeTrust } from "./guard.ts";
 import { buildNote } from "./recall.ts";
 import { reflect } from "./reflect.ts";
@@ -76,10 +77,13 @@ export function createLearning(d: LearningDeps): Learning {
       pending = undefined;
       history.push(userMessage);
 
+      // Focused context: a greeting or acknowledgement has nothing to recall; skip the MIND query and the note entirely.
+      if (focusedContextOn() && isTrivialMessage(userMessage)) return undefined;
+
       const retrieval = Promise.all([store.search(userMessage), store.loadUserModel()]).then(() => undefined);
       await withTimeout(retrieval, d.learn.beforeTurnTimeoutMs);
       const { note, cited } = buildNote({
-        message: userMessage, items: store.all(), userModel: store.currentUserModel(),
+        message: userMessage, items: focusedContextOn() ? store.turn() : store.all(), userModel: store.currentUserModel(),
         cfg: d.learn, clientNames: d.cfg.clientNames, now: d.now?.(),
       });
       if (!note) return undefined;
@@ -94,6 +98,17 @@ export function createLearning(d: LearningDeps): Learning {
     }
   }
 
+  const failSeen = new Map<string, number>();
+  function repeatedFailure(t: TurnSummary): boolean {
+    let again = false;
+    for (const tool of new Set(t.calls.filter((c) => !c.result.ok).map((c) => c.tool))) {
+      const n = (failSeen.get(tool) ?? 0) + 1;
+      failSeen.set(tool, n);
+      if (n >= 2) again = true;
+    }
+    return again;
+  }
+
   function afterTurn(t: TurnSummary): void {
     try {
       // Immediate failure inside a turn that had items injected = they were in play when it broke.
@@ -103,7 +118,9 @@ export function createLearning(d: LearningDeps): Learning {
       }
       if (!d.learn.enabled) return;
       const trust = writeTrust(d.tier, t.calls);
-      const triggers = detectTriggers(t);
+      let triggers = detectTriggers(t);
+      // Focused context: one tool failure is noise. A failure pattern becomes a lesson only the second time the same tool fails in this session.
+      if (focusedContextOn()) triggers = triggers.filter((x) => x.kind !== "tool_failure" || repeatedFailure(t));
       if (!triggers.length) return;
       if (!trust.ok) { log({ type: "refused", detail: `no learning from this turn: ${trust.why}` }); return; }
       if (stats.reflections >= d.learn.maxReflectionsPerSession) { log({ type: "skipped", detail: "reflection budget for this session used" }); return; }
@@ -173,6 +190,9 @@ export function createLearning(d: LearningDeps): Learning {
         return x && !contentProblem(x, co) ? x : "";
       };
       const comment = clean(f.comment, 140), reason = clean(f.reason, 60), gist = clean(f.reply, 100);
+      // Focused context: a bare thumb says nothing about WHAT was good or bad, so it is not stored as a lesson (it used to fire on unrelated messages).
+      // A rating that carries a comment or reason is topical; recall still needs two shared terms with the message before it ever shows.
+      if (focusedContextOn() && !comment && !reason) { log({ type: "skipped", detail: "feedback: a bare thumb is not stored as a lesson" }); return false; }
       const down = f.rating === "down";
       const behavior = down ? (f.report ? "Reply reported wrong" : "Reply rated down") : "Reply rated up";
       const trigger = down

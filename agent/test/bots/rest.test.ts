@@ -1,4 +1,5 @@
 // REST for bots, models and bot-aware sessions: hosted (two users + the owner login) and local mode. Fake MIND on localhost only.
+process.env.DAEBOT_FOCUSED_CONTEXT = "0"; // these assertions are about the full (pre-focus) prompt and tool set; test/core/focused-context.test.ts covers the focused path
 process.env.DAEBOT_BOTS_ENABLED = "1"; // the Bots feature flag (default off)
 import { test } from "node:test";
 import assert from "node:assert/strict";

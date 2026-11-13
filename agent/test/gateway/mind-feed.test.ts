@@ -1,4 +1,5 @@
 import { test } from "node:test";
+process.env.DAEBOT_FOCUSED_CONTEXT = "0"; // the boot-context mistake brief is the pre-focus behaviour; focused is covered in test/core/focused-context.test.ts
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

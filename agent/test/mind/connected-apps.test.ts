@@ -1,4 +1,5 @@
 // The user's connected apps, as Daebot knows them: the provider list MIND sends, the cache, the "## Connected apps" section of the
+process.env.DAEBOT_FOCUSED_CONTEXT = "0"; // these assertions are about the full (pre-focus) prompt and tool set; test/core/focused-context.test.ts covers the focused path
 // system prompt, the mind_apps tool, and the one-product-one-row rule. Every read uses THE USER'S OWN MIND key.
 import { test } from "node:test";
 import assert from "node:assert/strict";

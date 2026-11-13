@@ -14,7 +14,7 @@ test("defaults", () => {
   assert.equal(c.models.cheap, "qwen/qwen3.8-flash");
   assert.deepEqual(c.models.fallback, ["deepseek/deepseek-v4-flash"]);
   assert.equal(c.contextWindow, 128000);
-  assert.equal(c.compactAt, 0.6);
+  assert.equal(c.compactAt, 0.4, "focused context compacts at 40%");
   assert.equal(c.maxToolRoundsPerTurn, undefined); // no round limit by default
   assert.equal(c.checkInMs, 300_000);
   assert.equal(c.kernel, true);

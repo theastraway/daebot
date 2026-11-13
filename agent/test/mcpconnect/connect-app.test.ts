@@ -1,4 +1,5 @@
 // Daebot helps people connect: MIND apps (Google, Dropbox, ...) are in the catalog the model reads, mcp_connect action connect_app puts an
+process.env.DAEBOT_FOCUSED_CONTEXT = "0"; // these assertions are about the full (pre-focus) prompt and tool set; test/core/focused-context.test.ts covers the focused path
 // Authorize card in the chat (connects nothing itself), the prompt says to show the right card in the same turn, and the web card reuses the Apps connect path.
 import { test } from "node:test";
 import assert from "node:assert/strict";

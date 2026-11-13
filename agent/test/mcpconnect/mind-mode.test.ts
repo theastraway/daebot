@@ -1,4 +1,5 @@
 // MIND owns the MCP connections: "you connect to MIND one time, whether from the web, the desktop app or the phone".
+process.env.DAEBOT_FOCUSED_CONTEXT = "0"; // these assertions are about the full (pre-focus) prompt and tool set; test/core/focused-context.test.ts covers the focused path
 // Daebot is a client of MIND's /mcp/* routes (the written contract), tested here against an in-memory fake MIND. No network, no real third-party server.
 // What is proved: mode selection and the local-store fallback; connect / list / allow / enable / refresh / remove all in MIND; a tool run goes through tools/call and
 // comes back wrapped as untrusted; the credential never lands in anything Daebot stores, shows or logs; the one-time move of local servers (exactly once, local copy

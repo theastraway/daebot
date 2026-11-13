@@ -1,4 +1,5 @@
 // "self" in the plain Sessions chat is the MAIN Daebot: its own name, face, LED colour, instructions, threads and routines,
+process.env.DAEBOT_FOCUSED_CONTEXT = "0"; // these assertions are about the full (pre-focus) prompt and tool set; test/core/focused-context.test.ts covers the focused path
 // edited through the same bot_manage tool; stored per user in the settings; shown in the sidebar header.
 process.env.DAEBOT_BOTS_ENABLED = "1";
 import { test } from "node:test";

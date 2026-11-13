@@ -2,6 +2,7 @@
 // pre_turn, pre_tool, pre_answer and post_turn; this file only routes verdicts, it holds no policy.
 import { createHash } from "node:crypto";
 import { effectiveClass } from "./tool-class.ts";
+import { computeFocus, isAutomatedMessage, type TurnFocus } from "./focus.ts";
 import type { LearnHooks } from "./learn/types.ts";
 import type {
   AgentEvent, AgentSession, CallRecord, Config, DecisionReceipt, GateVerdict, Kernel, Message, Provider,
@@ -53,7 +54,11 @@ export interface SessionDeps {
   cfg: Config;
   cwd: string;
   /** A function is re-evaluated at the start of EVERY turn (so DAEBOT.md edits and roster changes apply on the next message). */
-  systemPrompt: string | (() => string);
+  systemPrompt: string | ((focus?: TurnFocus) => string);
+  /** Focused context (DAEBOT_FOCUSED_CONTEXT). On: a typed human turn gets only the skill text and tools its message needs; routine, heartbeat and bot turns keep the full set. Absent = as before. */
+  focus?: boolean;
+  /** Focused context: per-turn volatile block (relevant MIND items, matching mistakes) for a typed human message. Injected AFTER the user message so the cached prefix is unchanged. */
+  turnContext?: (message: string) => Promise<string | undefined>;
   bootContext: string;
   /** Model for this session's turns (read per turn); absent = cfg.models.default. */
   model?: string;
@@ -120,8 +125,8 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     shadow: cfg.shadow,
   };
 
-  const buildSystem = (): string => {
-    let t = typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt;
+  const buildSystem = (focus?: TurnFocus): string => {
+    let t = typeof deps.systemPrompt === "function" ? deps.systemPrompt(focus) : deps.systemPrompt;
     if (deps.bootContext && !t.includes(deps.bootContext)) t += `\n\n${deps.bootContext}`;
     return t;
   };
@@ -132,13 +137,20 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
   // Learning hook state: the one "What you learned before" note currently in the transcript, and earlier user messages.
   const learn = deps.learn;
   let learnedNote: Message | undefined;
+  // Focused context state: the per-turn MIND block, the tool names used in the last rounds, and the last focus key the prompt was built for.
+  let ctxNote: Message | undefined;
+  const recentRounds: string[][] = [];
+  let focusKey = "";
+  let turnFocused = false;
+  let turnText = "";
   const userHistory: string[] = [];
 
   let receiptCounter = 0;
   let totalCost = 0;
   const localViolations: Violation[] = [];
   if (deps.restore) {
-    messages.push(...deps.restore.messages.filter((m) => !(m.role === "system" && m.content.startsWith("[learned]"))));
+    messages.push(...deps.restore.messages.filter((m) => !(m.role === "system" && (m.content.startsWith("[learned]") || m.content.startsWith("Relevant from MIND for this message")))));
+    for (const m of deps.restore.messages) if (m.role === "assistant" && m.toolCalls?.length) { recentRounds.push(m.toolCalls.map((c) => c.name)); if (recentRounds.length > 3) recentRounds.shift(); }
     for (const m of deps.restore.messages) if (m.role === "user") userHistory.push(m.content);
     receiptCounter = deps.restore.receiptCounter ?? 0;
     totalCost = deps.restore.totalCostUsd ?? 0;
@@ -193,7 +205,17 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     // A granted confirmation is valid for ONE turn only (the one it was granted in); a bot-originated turn starts with none at all.
     state.confirmations = origin === "bot" ? [] : state.confirmations.filter((c) => c.grantedAtUserMsg === undefined);
     // The system prompt is rebuilt each turn (a function prompt reads fresh DAEBOT.md / roster).
-    try { if (messages[0]?.role === "system") messages[0] = { role: "system", content: buildSystem() }; } catch { /* keep the previous prompt */ }
+    // Focused context applies to what a human typed; a routine, heartbeat, check-in or peer turn keeps the full prompt and tool set.
+    turnFocused = deps.focus === true && origin === "user" && surface !== "routine" && !isAutomatedMessage(userMessage);
+    turnText = userMessage;
+    focusKey = "";
+    try {
+      if (messages[0]?.role === "system") {
+        let f: TurnFocus | undefined;
+        if (turnFocused) { refreshDynamic(); f = computeFocus(liveTools, userMessage, recentRounds); focusKey = f.key; }
+        messages[0] = { role: "system", content: buildSystem(f) };
+      }
+    } catch { /* keep the previous prompt */ }
 
     // Pending confirmations from earlier turns are granted by the kernel only on an explicit action phrase, spoken by a HUMAN.
     if (origin !== "bot") { try { kernel.onUserMessage?.(state, userMessage); } catch { /* gate bug must not kill the turn */ } }
@@ -215,10 +237,17 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
 
     // ---- learning: recalled lessons/skills for this message (bounded, fails open to no note)
     const turnStartedAt = Date.now();
+    // Focused context: no per-turn recall on automated turns (routine, heartbeat, check-in, a peer bot's turn).
+    const skipRecall = deps.focus === true && (origin === "bot" || surface === "routine" || isAutomatedMessage(userMessage));
     if (learn) {
       if (learnedNote) { const i = messages.indexOf(learnedNote); if (i >= 0) messages.splice(i, 1); learnedNote = undefined; }
-      const note = await learn.beforeTurn(userMessage).catch(() => undefined);
+      const note = skipRecall ? undefined : await learn.beforeTurn(userMessage).catch(() => undefined);
       if (note) { learnedNote = { role: "system", content: note }; messages.push(learnedNote); }
+    }
+    if (ctxNote) { const i = messages.indexOf(ctxNote); if (i >= 0) messages.splice(i, 1); ctxNote = undefined; }
+    if (turnFocused && deps.turnContext) {
+      const c = await deps.turnContext(userMessage).catch(() => undefined);
+      if (c) { ctxNote = { role: "system", content: c }; messages.push(ctxNote); }
     }
 
     const clock = deps.now ?? Date.now;
@@ -252,7 +281,13 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
         yield* maybeCompact(signal);
 
         refreshDynamic();
-        const offered = safe(() => kernel.allowedTools(state, liveTools), liveTools).filter(hasCap);
+        let offered = safe(() => kernel.allowedTools(state, liveTools), liveTools).filter(hasCap);
+        if (turnFocused) {
+          // Only the tools this message needs (plus core and anything used in the last 3 rounds); skill text follows the same groups.
+          const f = computeFocus(offered, turnText, recentRounds);
+          offered = offered.filter((t) => f.toolNames.has(t.spec.name));
+          if (f.key !== focusKey) { focusKey = f.key; try { if (messages[0]?.role === "system") messages[0] = { role: "system", content: buildSystem(f) }; } catch { /* keep */ } }
+        }
         const specs = offered.map((t) => t.spec);
 
         // ---- provider call. Text streams to the client as it arrives; if pre_answer then withholds the draft,
@@ -295,6 +330,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
             }
           }
           messages.push({ role: "assistant", content: shown, toolCalls });
+          recentRounds.push(toolCalls.map((c) => c.name)); if (recentRounds.length > 3) recentRounds.shift();
           if (shown) pendingNarration += (pendingNarration ? "\n" : "") + shown; // already streamed above
           yield* emitUsage();
 
@@ -398,7 +434,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
   // Context compaction: past compactAt x contextWindow, older turns become one summary note (cheap model).
   async function* maybeCompact(signal?: AbortSignal): AsyncGenerator<AgentEvent> {
     const window = cfg.contextWindow ?? 128_000;
-    const ratio = cfg.compactAt ?? 0.6;
+    const ratio = cfg.compactAt ?? (deps.focus === true ? 0.4 : 0.6);
     if (!needsCompaction(messages, window, ratio)) return;
     let r: Awaited<ReturnType<typeof compactMessages>>;
     try { r = await compactMessages(messages, { provider, model: cfg.models.cheap, signal }); } catch (e) {

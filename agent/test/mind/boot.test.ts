@@ -16,7 +16,7 @@ function client(o: { context?: () => Promise<string>; profile?: () => Promise<st
 
 test("happy path: context with the five boot sections", async () => {
   const { c, log } = client({});
-  const r = await bootMind(c);
+  const r = await bootMind(c, { focused: false });
   assert.deepEqual(r, { ok: true, context: "CTX" });
   assert.deepEqual(log, ["context:soul,user,rules,priorities,recent"]);
 });
@@ -24,7 +24,7 @@ test("happy path: context with the five boot sections", async () => {
 test("one context failure is retried and recovers", async () => {
   let n = 0;
   const { c, log } = client({ context: async () => { if (++n === 1) throw new Error("502"); return "CTX2"; } });
-  const r = await bootMind(c);
+  const r = await bootMind(c, { focused: false });
   assert.equal(r.ok, true);
   assert.equal(r.context, "CTX2");
   assert.equal(log.filter((l) => l.startsWith("context")).length, 2);
@@ -32,7 +32,7 @@ test("one context failure is retried and recovers", async () => {
 
 test("two context failures fall back to profile + priorities query: ok:true with a note", async () => {
   const { c, log } = client({ context: async () => { throw new Error("synthesis 502"); } });
-  const r = await bootMind(c);
+  const r = await bootMind(c, { focused: false });
   assert.equal(r.ok, true);
   assert.match(r.context, /PROFILE/);
   assert.match(r.context, /PRIORITIES\nPRIO/);
@@ -44,7 +44,7 @@ test("two context failures fall back to profile + priorities query: ok:true with
 
 test("fallback needs both profile and query to work", async () => {
   const { c } = client({ context: async () => { throw new Error("x"); }, query: async () => { throw new Error("q down"); } });
-  const r = await bootMind(c);
+  const r = await bootMind(c, { focused: false });
   assert.equal(r.ok, false);
   assert.match(r.error ?? "", /q down/);
 });
@@ -52,7 +52,7 @@ test("fallback needs both profile and query to work", async () => {
 test("everything unreachable: ok:false with all three causes", async () => {
   const dead = async () => { throw new Error("ECONNREFUSED"); };
   const { c } = client({ context: dead, profile: dead, query: dead });
-  const r = await bootMind(c);
+  const r = await bootMind(c, { focused: false });
   assert.equal(r.ok, false);
   assert.match(r.error ?? "", /unreachable/);
   assert.match(r.error ?? "", /ECONNREFUSED/);
@@ -62,11 +62,29 @@ test("degraded flag: set only on the fallback path", async () => {
   const ok = await bootMind(client({}).c);
   assert.equal(ok.degraded, undefined);
   const { c } = client({ context: async () => { throw new Error("synthesis 502"); } });
-  const r = await bootMind(c);
+  const r = await bootMind(c, { focused: false });
   assert.equal(r.ok, true);
   assert.equal(r.degraded, true);
   const dead = async () => { throw new Error("down"); };
   const bad = await bootMind(client({ context: dead, profile: dead, query: dead }).c);
   assert.equal(bad.ok, false);
   assert.equal(bad.degraded, undefined);
+});
+
+test("focused boot: only soul and rules are fetched, logged, and capped at ~6000 chars", async () => {
+  const lines: string[] = [];
+  const { c, log } = client({ context: async () => "## SOUL\nsoul\n\n## RULES\n" + "rule\n".repeat(5000) });
+  const r = await bootMind(c, { focused: true, log: (l) => lines.push(l) });
+  assert.equal(r.ok, true);
+  assert.deepEqual(log, ["context:soul,rules"]);
+  assert.ok(r.context.length < 6_300, `len ${r.context.length}`);
+  assert.match(r.context, /## SOUL\nsoul/);
+  assert.match(lines[0], /boot context \(soul\+rules\) \d+ chars, capped to \d+/);
+});
+
+test("focused boot: two context failures fall back to the profile only (no priorities query)", async () => {
+  const { c, log } = client({ context: async () => { throw new Error("502"); } });
+  const r = await bootMind(c, { focused: true, log: () => {} });
+  assert.equal(r.ok, true); assert.equal(r.degraded, true);
+  assert.ok(!log.some((l) => l.startsWith("query:")));
 });

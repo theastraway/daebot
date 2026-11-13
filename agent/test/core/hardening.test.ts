@@ -1,4 +1,5 @@
 // Regression tests: narration gating (D7), loop/kernel wiring, config keys, runtime tiers, degraded boot, session keys.
+process.env.DAEBOT_FOCUSED_CONTEXT = "0"; // these assertions are about the full (pre-focus) prompt and tool set; test/core/focused-context.test.ts covers the focused path
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";

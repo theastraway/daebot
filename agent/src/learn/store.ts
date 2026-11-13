@@ -61,6 +61,9 @@ export class LearnStore {
   }
 
   all(): Item[] { return [...this.pool.values()].map((i) => this.view(i)); }
+  /** Items the LAST search returned (focused context: recall ranks this turn's results only, not everything seen earlier in the session). */
+  turn(): Item[] { return [...this.turnKeys].map((k) => this.pool.get(k)).filter((i): i is Item => !!i).map((i) => this.view(i)); }
+  private turnKeys = new Set<string>();
   get(key: string): Item | undefined { const i = this.pool.get(key); return i ? this.view(i) : undefined; }
 
   private merge(items: Item[]): void {
@@ -80,11 +83,12 @@ export class LearnStore {
   async search(message: string): Promise<Item[]> {
     const norm = [...tokenSet(message)].sort().join(" ");
     const hit = this.queryCache.get(norm);
-    if (hit) return hit;
+    if (hit) { this.turnKeys = new Set(hit.map((i) => i.key)); return hit; }
     const text = await this.rawQuery(`Daebot learned lessons (daebot-lesson) and skills (daebot-skill) that apply to this request: ${clip(oneLine(message, 400), 300)}`);
     const p = parseRecords(text);
     const found = [...latestByKey(p.lessons), ...latestByKey(p.skills)];
     this.merge(found);
+    this.turnKeys = new Set(found.map((i) => i.key));
     this.queryCache.set(norm, found);
     return found;
   }
