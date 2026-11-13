@@ -2,6 +2,11 @@
 // Unsigned by default, so local and CI builds never touch the keychain. The same DAEBOT_SIGN=1 switch turns on
 // Developer ID signing, hardened runtime and the MINDNotarize notarization hook (see scripts/notarize.cjs) on the
 // signing Mac. Windows is unsigned unless DAEBOT_WIN_SIGN=azure (see azureSignOptions below).
+// node-pty is rebuilt for Electron's ABI (npmRebuild + buildDependenciesFromSource). Windows signing of conpty.dll,
+// OpenConsole.exe and winpty goes through scripts/sign-pty-win.mjs (packager.signIf), and only when DAEBOT_WIN_SIGN=azure.
+import { macPtyBinaries, PTY_ASAR_UNPACK, PTY_WIN_SIGN_EXTS, PTY_X64_ARCH_FILES } from "./src/lib/pty-pack.mjs";
+import { signPtyWindows } from "./scripts/sign-pty-win.mjs";
+
 const sign = process.env.DAEBOT_SIGN === "1";
 
 // Windows signing is OPT-IN: unsigned Windows installers are the default and build on any machine (including cross-built from a Mac).
@@ -40,7 +45,10 @@ export default {
   productName: "Daebot",
   copyright: "Copyright © 2026 Astra AI",
   directories: { output: "dist", buildResources: "build-resources" },
-  files: ["src/**/*", "package.json"],
+  files: ["src/**/*", "package.json", "node_modules/node-pty/**/*"],
+  npmRebuild: true,
+  buildDependenciesFromSource: true,
+  asarUnpack: PTY_ASAR_UNPACK,
   // Auto-update feed (electron-updater, generic provider): the installers and the latest*.yml files live in this one folder.
   // Windows on ARM is built with DAEBOT_FEED_CHANNEL=latest-arm64 (-> latest-arm64.yml) so it does not collide with the x64 latest.yml;
   // the app picks its channel by process.arch (src/lib/updater.mjs). Mac -> latest-mac.yml (zip + dmg), Linux -> latest-linux.yml.
@@ -76,17 +84,23 @@ export default {
     extraResources: [{ from: "build/bin", to: "bin", filter: ["daebot-darwin-*", "daebot-calendar"] }],
     // Both thin gateway binaries (and the already-universal Calendar helper) are identical in the arm64 and x64 halves of the universal app.
     // The gateways must not be merged into one fat Mach-O (bun finds its embedded payload at the end of its own file), so all are copied through as they are.
-    x64ArchFiles: "Contents/Resources/bin/*",
+    // Prebuilt darwin pty.node and spawn-helper are byte-identical in both arch folders, so the universal merge must not lipo them.
+    // build/Release differs per arch (electron-rebuild) and is merged. spawn-helper is signed with the app (hardened runtime).
+    x64ArchFiles: PTY_X64_ARCH_FILES,
+    mergeASARs: true,
+    binaries: macPtyBinaries(false),
   },
   dmg: { title: "Daebot", sign },
   afterSign: sign ? "scripts/notarize.cjs" : undefined,
+  afterPack: (context) => signPtyWindows(context),
   win: {
     icon: "build-resources/icon.ico",
     target: [{ target: "nsis", arch: ["x64", "arm64"] }],
     artifactName: "Daebot-Setup-${version}-${arch}.${ext}",
     extraResources: [{ from: "build/bin", to: "bin", filter: ["daebot-windows-${arch}.exe"] }],
-    // Unsigned unless DAEBOT_WIN_SIGN=azure (see azureSignOptions above).
+    // Unsigned unless DAEBOT_WIN_SIGN=azure (see azureSignOptions above). .dll and .node cover ConPTY and the pty addon when signing.
     azureSignOptions,
+    ...(winSign ? { signExts: PTY_WIN_SIGN_EXTS } : {}),
   },
   nsis: {
     oneClick: false,

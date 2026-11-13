@@ -20,16 +20,19 @@
     "dist:mac": "node scripts/stage-bin.mjs mac && electron-builder --config electron-builder.config.mjs --mac --universal --publish never",
     "dist:win": "node scripts/stage-bin.mjs win && electron-builder --config electron-builder.config.mjs --win --x64 --publish never && DAEBOT_FEED_CHANNEL=latest-arm64 electron-builder --config electron-builder.config.mjs --win --arm64 --publish never",
     "dist:linux": "node scripts/stage-bin.mjs linux && electron-builder --config electron-builder.config.mjs --linux --x64 --publish never",
-    "verify:feed": "node scripts/verify-feed.cjs"
+    "verify:feed": "node scripts/verify-feed.cjs",
+    "check:pty": "node scripts/check-pty-pack.mjs"
   },
   "devDependencies": {
+    "@electron/notarize": "^2.5.0",
+    "@electron/rebuild": "^4.2.1",
     "electron": "43.7.7",
-    "electron-builder": "26.17.0",
-    "@electron/notarize": "^2.5.0"
+    "electron-builder": "26.17.0"
   },
   "homepage": "https://daebot.live",
   "desktopName": "daebot.desktop",
   "dependencies": {
-    "electron-updater": "6.8.9"
+    "electron-updater": "6.8.9",
+    "node-pty": "1.1.0"
   }
 }
