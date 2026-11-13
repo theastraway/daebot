@@ -6,10 +6,34 @@ import { MSG_UNAVAILABLE } from "./simulator-mac.ts";
 
 export type WhichFn = (name: string) => string | boolean | null | undefined;
 
+export const BROWSER_PARTITION = "persist:daebot-browser";
+
+export interface BrowserSupport {
+  available: boolean;
+  note: string;
+  /** Set when a desktop app is connected. Always this partition; never the app session and never the user's Chrome. */
+  partition?: typeof BROWSER_PARTITION;
+}
+
 export interface DeviceSupport {
   terminal: { available: boolean; pty: false; note: string };
-  browser: { available: false; note: string };
+  browser: BrowserSupport;
   ios_simulator: { available: boolean; note: string };
+}
+
+/** Browser availability is whether the desktop pane is connected, not whether a binary is on PATH. */
+export function browserSupport(connected: boolean): BrowserSupport {
+  if (!connected) {
+    return {
+      available: false,
+      note: "Daebot's browser pane runs in the desktop app (partition persist:daebot-browser). This gateway has no desktop connected, so the browser is unavailable. A CLI or server install without the desktop app cannot browse.",
+    };
+  }
+  return {
+    available: true,
+    partition: BROWSER_PARTITION,
+    note: "The desktop app is connected. Pages open in Daebot's own pane (partition persist:daebot-browser), not the app session and not the user's Chrome. Sign-ins stay in that partition; cookies never leave it.",
+  };
 }
 
 function hit(which: WhichFn, name: string): boolean {
@@ -42,9 +66,10 @@ function simctlFound(which: WhichFn): boolean {
 
 /**
  * Device support for one platform. `terminal.pty` is always false in this slice (pipes, not a PTY).
- * `browser` is not built. `ios_simulator` is available only on darwin when xcrun simctl is found.
+ * `browser` is available only when the desktop app is connected (`live.browserConnected`).
+ * `ios_simulator` is available only on darwin when xcrun simctl is found.
  */
-export function deviceSupport(platform: string, which: WhichFn = defaultWhich): DeviceSupport {
+export function deviceSupport(platform: string, which: WhichFn = defaultWhich, live?: { browserConnected?: boolean }): DeviceSupport {
   const shell = hit(which, "bash") || hit(which, "pwsh") || hit(which, "powershell") || hit(which, "cmd");
   const mac = platform === "darwin";
   const sim = mac && simctlFound(which);
@@ -56,7 +81,7 @@ export function deviceSupport(platform: string, which: WhichFn = defaultWhich): 
         ? "A hidden pipe shell is available (no PTY). The terminal pane can show it read-only; full-screen programs do not work."
         : "No shell was found on this machine, so there is no terminal session to show (no PTY either).",
     },
-    browser: { available: false, note: "not built yet" },
+    browser: browserSupport(!!live?.browserConnected),
     ios_simulator: {
       available: sim,
       note: !mac
