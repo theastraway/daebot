@@ -10,8 +10,8 @@ const U = (text: string) => ({ type: "user", text });
 const D = { type: "done", finalText: "ok" };
 
 test("historyMarks counts user messages and completed turns, ignores junk", () => {
-  assert.deepEqual(sync.historyMarks([U("a"), { type: "text", delta: "x" }, D, U("b"), D, null, {}]), { users: 2, dones: 2 });
-  assert.deepEqual(sync.historyMarks(undefined), { users: 0, dones: 0 });
+  assert.deepEqual(sync.historyMarks([U("a"), { type: "text", delta: "x" }, D, U("b"), D, null, {}]), { users: 2, dones: 2, text: 1 });
+  assert.deepEqual(sync.historyMarks(undefined), { users: 0, dones: 0, text: 0 });
 });
 
 test("a message that arrived from elsewhere (MINDbots reply) makes the transcript behind", () => {
@@ -24,6 +24,14 @@ test("the answer finishing later (done count moves) makes the transcript behind"
   const events = [U("hi"), D, U("can you try?"), D];
   assert.equal(sync.transcriptBehind({ events, localUsers: 2, lastDones: 1 }).behind, true);
   assert.equal(sync.transcriptBehind({ events, localUsers: 2, lastDones: 2 }).behind, false);
+});
+
+test("an assistant post with no new user message (voice chat_post) makes a baselined transcript behind", () => {
+  const events = [U("hi"), { type: "text", delta: "hello" }];
+  assert.equal(sync.transcriptBehind({ events, localUsers: 1, lastDones: 0, lastText: "hello".length }).behind, false);
+  assert.equal(sync.transcriptBehind({ events, localUsers: 1, lastDones: 0, lastText: 0 }).behind, true);
+  assert.equal(sync.transcriptBehind({ events, localUsers: 1, lastDones: 0, lastText: undefined }).behind, false);
+  assert.equal(sync.transcriptBehind({ events, localUsers: 1, lastDones: 0, lastText: 0 }).text, 5);
 });
 
 test("no baseline yet (first look, or just after a local send): only a user-message gap counts", () => {

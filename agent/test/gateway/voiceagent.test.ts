@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { createVoiceAgent, checkToolToken, toolToken, sessionBody, agentPrompt, TOOL_PATH } from "../../src/gateway/voiceagent.ts";
-import type { AgentBot, VoiceAgentOptions } from "../../src/gateway/voiceagent.ts";
+import type { AgentBot, ToolBackend, VoiceAgentOptions } from "../../src/gateway/voiceagent.ts";
 import { createStartVoiceAgentTool } from "../../src/bots/voicechat-tool.ts";
 import { hostedToolAllowed } from "../../src/hosted.ts";
 
@@ -12,22 +12,30 @@ const SECRET = "s".repeat(32);
 const ME: any = { id: "u_alice", username: "alice", owner: false, tier: "staff" };
 const BOT: AgentBot = { id: "b_1", slug: "sam", name: "Sam", purpose: "Chief of staff", instructions: "# Role\nBe brief.", voice: { voiceId: "MiueK1FXuZTCItgbQwPu", speed: 1.1, agentLlm: "claude-haiku-4-5", agentFirstMessage: "Yo", agentPrompt: "Sound relaxed.", language: "es" } };
 
-function rig(over: Partial<VoiceAgentOptions> = {}, mind: (url: string, init: any) => { status: number; body: any } = () => ({ status: 200, body: {} })) {
+const WSS = "wss://api.elevenlabs.io/v1/convai/conversation?agent_id=a&conversation_signature=x";
+const NO_LIVE = "No live call chat. Start voice chat from a chat first.";
+
+function rig(over: Partial<Omit<VoiceAgentOptions, "tools">> & { tools?: Partial<ToolBackend> } = {}, mind: (url: string, init: any) => { status: number; body: any } = () => ({ status: 200, body: {} })) {
   const calls: { url: string; init: any }[] = [];
   const posted: any[] = [];
+  const said: { id: string; text: string }[] = [];
   const saved: any[] = [];
+  const savedChat: (string | undefined)[] = [];
+  const { tools: toolOver, ...rest } = over;
   const f = (async (url: string, init: any) => { calls.push({ url, init }); const r = mind(url, init); return new Response(JSON.stringify(r.body), { status: r.status }); }) as unknown as typeof fetch;
   const opts: VoiceAgentOptions = {
     baseUrl: "http://m/developer/v1", keyFor: (p) => (p.id === "u_alice" ? "alicekey" : undefined), secret: SECRET, publicBase: () => "https://daebot.live",
     botOf: (p, slug) => (p.id === "u_alice" && slug === "sam" ? BOT : undefined),
-    saveTranscript: async (_p, _b, lines) => { saved.push(lines); return "sess_1"; },
-    principalOf: (o) => (o === "u_alice" ? ME : undefined), fetchImpl: f,
+    saveTranscript: async (_p, _b, lines, chatId?) => { saved.push(lines); savedChat.push(chatId); return chatId || "sess_1"; },
+    principalOf: (o) => (o === "u_alice" ? ME : undefined), fetchImpl: f, now: () => Date.now(),
     tools: {
       list: (o) => (o === "u_alice" ? [{ id: "s1", title: "Pricing chat", updatedAt: 2000 }, { id: "s2", title: "Hiring", updatedAt: 3000, bot: "b_1" }] : [{ id: "x9", title: "Bob secret", updatedAt: 1 }]),
-      read: (o, id) => (o === "u_alice" && id === "s1" ? [{ role: "user", text: "What is our price?" }, { role: "assistant", text: "We charge $99 a month." }] : undefined),
+      read: (o, id) => (o === "u_alice" && (id === "s1" || id === "s_opened") ? [{ role: "user", text: "What is our price?" }, { role: "assistant", text: "We charge $99 a month." }] : undefined),
       post: async (o, id, text) => { if (o !== "u_alice" || id !== "s1") return "missing"; posted.push(text); return "sent"; },
+      say: async (o, id, text) => { if (o !== "u_alice") return "missing"; said.push({ id, text }); return "sent"; },
+      ...toolOver,
     },
-    ...over,
+    ...rest,
   };
   const h = createVoiceAgent(opts);
   const call = (kind: "handle" | "tool", path: string, method: string, body?: unknown, headers: Record<string, string> = {}, p = ME) => {
@@ -37,7 +45,7 @@ function rig(over: Partial<VoiceAgentOptions> = {}, mind: (url: string, init: an
     const res: any = { headersSent: false, writeHead(s: number) { out.status = s; }, end(d?: string) { if (d) out.body = JSON.parse(d); } };
     return (kind === "handle" ? h.handle(req, res, path, p) : h.tool(req, res, path)).then(() => out);
   };
-  return { call, calls, posted, saved };
+  return { call, calls, posted, said, saved, savedChat };
 }
 const bearer = (owner = "u_alice", slug = "sam") => ({ authorization: `Bearer ${toolToken(SECRET, owner, slug)}` });
 
@@ -56,8 +64,11 @@ test("session body carries the bot's voice, llm, first message, prompt and its o
   assert.equal(b.bot, "sam"); assert.equal(b.llm, "claude-haiku-4-5"); assert.equal(b.first_message, "Yo"); assert.equal(b.language, "es");
   assert.deepEqual(b.voice, { voice_id: "MiueK1FXuZTCItgbQwPu", speed: 1.1 });
   assert.equal(b.tools_base_url, "https://daebot.live/voice-agent/tools");
-  assert.deepEqual(b.tools.map((t: any) => t.name), ["list_sessions", "read_session", "search_chats", "post_to_session"]);
+  assert.equal(b.tools.length, 7);
+  assert.deepEqual(b.tools.map((t: any) => t.name), ["list_sessions", "read_session", "search_chats", "post_to_session", "chat_read", "chat_post", "chat_post_link"]);
+  assert.ok(b.tools.every((t: any) => Object.keys(t.properties).length <= 8));
   assert.match(b.prompt, /You are Sam, Chief of staff/); assert.match(b.prompt, /Be brief\./); assert.match(b.prompt, /Sound relaxed\./); assert.match(b.prompt, /Plan the launch\./);
+  assert.match(b.prompt, /no reading out links/); assert.match(b.prompt, /chat_read/); assert.match(b.prompt, /chat_post_link/); assert.match(b.prompt, /I put it in the chat/);
   assert.equal(checkToolToken(SECRET, b.tools_token)?.owner, "u_alice");
   assert.match(agentPrompt({ ...BOT, voice: undefined }, undefined), /list_sessions/);
 });
@@ -108,6 +119,133 @@ test("server tools: need the bearer token, are scoped to its owner, and read/sea
   assert.equal((await r.call("tool", `${P}list_sessions`, "GET", undefined, bearer())).status, 405);
 });
 
+const signed = (max = 900) => ({ status: 200, body: { signed_url: WSS, session: "s", max_seconds: max, first_message: "Yo" } });
+
+test("session binds a chat the user owns, opens one when none is given, and a foreign id is 404", async () => {
+  let opened = 0;
+  const r = rig({ openCallChat: async () => { opened++; return "s1"; } }, () => signed());
+  const foreign = await r.call("handle", "/voice/agent/session", "POST", { bot: "sam", chat: "x9" });
+  assert.equal(foreign.status, 404);
+  assert.equal(r.calls.length, 0, "a chat the user does not own never starts a billed call");
+  const given = await r.call("handle", "/voice/agent/session", "POST", { bot: "sam", chat: "s1" });
+  assert.equal(given.status, 200);
+  assert.equal(given.body.chatId, "s1");
+  assert.equal(opened, 0);
+  assert.deepEqual(Object.keys(given.body).sort(), ["botName", "chatId", "firstMessage", "maxSeconds", "session", "signedUrl"]);
+  const fresh = rig({ openCallChat: async () => "s_opened" }, () => signed());
+  const openedOut = await fresh.call("handle", "/voice/agent/session", "POST", { bot: "sam" });
+  assert.equal(openedOut.status, 200);
+  assert.equal(openedOut.body.chatId, "s_opened");
+});
+
+test("chat_read clamps limit, caps length, and errors when no call is bound", async () => {
+  const lines = Array.from({ length: 60 }, (_, i) => ({ role: (i % 2 ? "assistant" : "user") as "user" | "assistant", text: `m${i}` }));
+  const r = rig({ openCallChat: async () => "s1", tools: { read: () => lines } }, () => signed());
+  assert.equal((await r.call("tool", `${TOOL_PATH}chat_read`, "POST", {}, bearer())).body.error, NO_LIVE);
+  assert.equal((await r.call("handle", "/voice/agent/session", "POST", { bot: "sam" })).body.chatId, "s1");
+  const dflt = await r.call("tool", `${TOOL_PATH}chat_read`, "POST", {}, bearer());
+  assert.equal(dflt.status, 200);
+  assert.equal(dflt.body.chat_id, "s1");
+  assert.equal(dflt.body.messages, 20);
+  assert.equal(dflt.body.total_messages, 60);
+  assert.match(dflt.body.transcript, /^User: m40\n/);
+  assert.match(dflt.body.transcript, /Assistant: m59$/);
+  const hi = await r.call("tool", `${TOOL_PATH}chat_read`, "POST", { limit: "80" }, bearer());
+  assert.equal(hi.body.messages, 50);
+  assert.match(hi.body.transcript, /^User: m10\n/);
+  const lo = await r.call("tool", `${TOOL_PATH}chat_read`, "POST", { limit: "0" }, bearer());
+  assert.equal(lo.body.messages, 1);
+  assert.equal(lo.body.transcript, "Assistant: m59");
+  assert.equal((await r.call("tool", `${TOOL_PATH}chat_read`, "POST", { limit: "-4" }, bearer())).body.messages, 1);
+  assert.equal((await r.call("tool", `${TOOL_PATH}chat_read`, "POST", { limit: "nope" }, bearer())).body.messages, 20);
+  const long = Array.from({ length: 10 }, () => ({ role: "user" as const, text: "a".repeat(1000) }));
+  const capped = rig({ openCallChat: async () => "s1", tools: { read: () => long } }, () => signed());
+  await capped.call("handle", "/voice/agent/session", "POST", { bot: "sam" });
+  const cut = await capped.call("tool", `${TOOL_PATH}chat_read`, "POST", { limit: "50" }, bearer());
+  assert.ok(cut.body.messages < 10);
+  assert.ok(cut.body.transcript.length <= 6000);
+  assert.equal(cut.body.total_messages, 10);
+});
+
+test("chat_post writes as the bot and does not start a turn", async () => {
+  const r = rig({ openCallChat: async () => "s1" }, () => signed());
+  await r.call("handle", "/voice/agent/session", "POST", { bot: "sam", chat: "s1" });
+  const out = await r.call("tool", `${TOOL_PATH}chat_post`, "POST", { text: "1. one\n2. two" }, bearer());
+  assert.equal(out.status, 200);
+  assert.equal(out.body.ok, true);
+  assert.deepEqual(r.said, [{ id: "s1", text: "1. one\n2. two" }]);
+  assert.deepEqual(r.posted, []);
+  const big = await r.call("tool", `${TOOL_PATH}chat_post`, "POST", { text: "b".repeat(2500) }, bearer());
+  assert.equal(big.body.ok, true);
+  assert.equal(r.said[1].text.length, 2000);
+  assert.match((await r.call("tool", `${TOOL_PATH}chat_post`, "POST", { text: "  " }, bearer())).body.error, /text is required/);
+});
+
+test("chat_post_link posts a markdown link and rejects unsafe urls", async () => {
+  const r = rig({ openCallChat: async () => "s1" }, () => signed());
+  await r.call("handle", "/voice/agent/session", "POST", { bot: "sam", chat: "s1" });
+  const ok = await r.call("tool", `${TOOL_PATH}chat_post_link`, "POST", { url: "https://docs.example.com/guide", label: "See [docs](now)\nplease" }, bearer());
+  assert.equal(ok.body.ok, true);
+  assert.equal(ok.body.posted, "[See docsnowplease](https://docs.example.com/guide)");
+  assert.deepEqual(r.said, [{ id: "s1", text: ok.body.posted }]);
+  const plain = await r.call("tool", `${TOOL_PATH}chat_post_link`, "POST", { url: "http://example.com/a" }, bearer());
+  assert.equal(plain.body.posted, "[example.com](http://example.com/a)");
+  const longLabel = "L".repeat(150);
+  const trimmed = await r.call("tool", `${TOOL_PATH}chat_post_link`, "POST", { url: "https://example.com/a", label: longLabel }, bearer());
+  assert.equal(trimmed.body.posted, `[${"L".repeat(120)}](https://example.com/a)`);
+  for (const url of ["javascript:alert(1)", "JavaScript:alert(1)", "data:text/html,hi", "file:///etc/passwd", "https://user:pass@example.com/a", "http://user:pass@example.com/a", "https://user@example.com/a", "https://example.com/" + "a".repeat(2000)]) {
+    const bad = await r.call("tool", `${TOOL_PATH}chat_post_link`, "POST", { url }, bearer());
+    assert.equal(bad.status, 200, url);
+    assert.equal(bad.body.ok, false, url);
+    assert.equal(typeof bad.body.error, "string", url);
+  }
+  assert.equal(r.said.length, 3, "rejected urls are not posted");
+  assert.equal((await rig().call("tool", `${TOOL_PATH}chat_post_link`, "POST", { url: "https://example.com/a" }, bearer())).body.error, NO_LIVE);
+});
+
+test("an expired live-call binding is ignored", async () => {
+  let t = 1_700_000_000_000;
+  const r = rig({ now: () => t, openCallChat: async () => "s1" }, (url) => String(url).includes("/finish")
+    ? { status: 200, body: { seconds: 1, credits_used: 0, transcript: [{ role: "user", text: "later" }] } }
+    : signed(10));
+  assert.equal((await r.call("handle", "/voice/agent/session", "POST", { bot: "sam" })).body.chatId, "s1");
+  assert.equal((await r.call("tool", `${TOOL_PATH}chat_read`, "POST", {}, bearer())).body.chat_id, "s1");
+  t += 10_000 + 60_000;
+  assert.equal((await r.call("tool", `${TOOL_PATH}chat_read`, "POST", {}, bearer())).body.error, NO_LIVE);
+  const fin = await r.call("handle", "/voice/agent/finish", "POST", { bot: "sam", conversationId: "conv_abc123" });
+  assert.equal(fin.status, 200);
+  assert.equal(r.savedChat[0], undefined);
+  assert.equal(fin.body.sessionId, "sess_1");
+});
+
+test("finish appends the transcript into the bound chat and clears the binding", async () => {
+  const r = rig({ openCallChat: async () => "s1" }, (url) => String(url).includes("/finish")
+    ? { status: 200, body: { seconds: 5, credits_used: 0, transcript: [{ role: "agent", text: "Hi" }, { role: "user", text: "Yes" }] } }
+    : signed());
+  await r.call("handle", "/voice/agent/session", "POST", { bot: "sam", chat: "s1" });
+  const fin = await r.call("handle", "/voice/agent/finish", "POST", { bot: "sam", conversationId: "conv_abc123" });
+  assert.equal(fin.status, 200);
+  assert.equal(fin.body.sessionId, "s1");
+  assert.deepEqual(r.saved[0], [{ role: "agent", text: "Hi" }, { role: "user", text: "Yes" }]);
+  assert.deepEqual(r.savedChat, ["s1"]);
+  assert.equal((await r.call("tool", `${TOOL_PATH}chat_read`, "POST", {}, bearer())).body.error, NO_LIVE);
+});
+
+test("a tool token is still per owner: bob cannot read alice's live call chat", async () => {
+  const BOB: any = { ...ME, id: "u_bob", username: "bob" };
+  const r = rig({
+    principalOf: (o) => (o === "u_alice" ? ME : o === "u_bob" ? BOB : undefined),
+    openCallChat: async () => "s1",
+  }, () => signed());
+  assert.equal((await r.call("handle", "/voice/agent/session", "POST", { bot: "sam" })).body.chatId, "s1");
+  assert.equal((await r.call("tool", `${TOOL_PATH}chat_read`, "POST", {}, bearer())).body.chat_id, "s1");
+  const bob = await r.call("tool", `${TOOL_PATH}chat_read`, "POST", {}, bearer("u_bob"));
+  assert.equal(bob.status, 200);
+  assert.equal(bob.body.error, NO_LIVE);
+  assert.equal(bob.body.transcript, undefined);
+  assert.match((await r.call("tool", `${TOOL_PATH}read_session`, "POST", { session_id: "s1" }, bearer("u_bob"))).body.error, /No such chat/);
+});
+
 test("start_voice_agent: needs a prompt, is read class, and a hosted session may offer it", async () => {
   const t = createStartVoiceAgentTool();
   assert.equal(t.class, "read");
@@ -137,4 +275,28 @@ test("voice chat client helpers: PCM round trip and socket event parsing", async
   assert.deepEqual(va.parseEvent(JSON.stringify({ type: "user_transcript", user_transcription_event: { user_transcript: "hi" } })), { kind: "user", text: "hi" });
   assert.deepEqual(va.parseEvent(JSON.stringify({ type: "ping", ping_event: { event_id: 7, ping_ms: 10 } })), { kind: "ping", id: 7, ms: 10 });
   assert.equal(va.parseEvent("{nope"), undefined); assert.equal(va.parseEvent(JSON.stringify({ type: "weird" })), undefined);
+});
+
+test("voice chat bridge: typed chat is context, bang and interrupt barge in, own posts are dropped", async () => {
+  const b: any = await import(new URL("../../web/voicechat-bridge.js", import.meta.url).href);
+  assert.deepEqual(b.chatEventToCall({ type: "user", text: "look at this" }), { type: "contextual_update", text: "User typed in chat: look at this" });
+  assert.deepEqual(b.chatEventToCall({ kind: "user", text: "  from the composer  " }), { type: "contextual_update", text: "User typed in chat: from the composer" });
+  assert.deepEqual(b.chatEventToCall({ type: "user", text: "!ship it" }), { type: "user_message", text: "!ship it", stopPlayback: true });
+  assert.deepEqual(b.chatEventToCall({ type: "user", text: "hello", interrupt: true }, { speaking: false }), { type: "contextual_update", text: "User typed in chat: hello" });
+  assert.deepEqual(b.chatEventToCall({ type: "user", text: "hello", interrupt: true }, { speaking: true }), { type: "user_message", text: "hello", stopPlayback: true });
+  assert.equal(b.chatEventToCall({ type: "text", delta: "I put it in the chat." }), null);
+  assert.equal(b.chatEventToCall({ role: "assistant", text: "posted" }), null);
+  assert.equal(b.chatEventToCall({ role: "agent", text: "posted" }), null);
+  assert.equal(b.chatEventToCall({ type: "user", text: "echo", fromAgent: true }), null);
+  assert.equal(b.chatEventToCall({ type: "notice", text: "hi" }), null);
+  assert.equal(b.chatEventToCall({ type: "user", text: "   " }), null);
+  const sent: any[] = [];
+  let stopped = 0;
+  assert.equal(b.forwardChatEvent({ type: "user", text: "!now" }, { send: (m: any) => sent.push(m), stopPlayback: () => { stopped++; } }), true);
+  assert.deepEqual(sent, [{ type: "user_message", text: "!now" }]);
+  assert.equal(stopped, 1);
+  assert.equal(b.forwardChatEvent({ type: "text", delta: "mine" }, { send: (m: any) => sent.push(m), stopPlayback: () => { stopped++; } }), false);
+  assert.equal(sent.length, 1);
+  assert.match(readFileSync(join(import.meta.dirname, "..", "..", "web", "voiceagent.js"), "utf8"), /\.\.\.\(chat \? \{ chat \} : \{\}\)/);
+  assert.match(readFileSync(join(import.meta.dirname, "..", "..", "web", "app.js"), "utf8"), /chatId: \(\) => state\.currentId \|\| undefined/);
 });

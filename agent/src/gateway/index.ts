@@ -351,6 +351,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       })
     : undefined;
   // ---- Voice chat: a live ElevenLabs agent per bot (MIND makes the session and bills it; its server tools call back into /voice-agent/tools/*).
+  const voiceChatTitle = () => `Voice chat ${new Date().toISOString().slice(0, 16).replace("T", " ")}`;
   const voiceAgent = voiceBase
     ? createVoiceAgent({
         baseUrl: voiceBase,
@@ -364,11 +365,23 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
           const b = manager.runtimeOf(p.id).bots?.bySlug(slug);
           return b ? { id: b.id, slug: b.slug, name: b.name, purpose: b.purpose, voice: b.voice, instructions: manager.runtimeOf(p.id).bots?.instructions(b.id) ?? "" } : undefined;
         },
-        saveTranscript: async (p, bot, lines) => {
-          const rt = manager.runtimeOf(p.id);
-          const ls = await manager.open({ surface: "voice", title: `Voice chat ${new Date().toISOString().slice(0, 16).replace("T", " ")}`, owner: p.id, ...(bot.id !== "main" ? { bot: bot.id } : {}) });
-          if (!(await rt.appendVoiceTranscript?.(ls.id, lines))) return undefined;
+        // The call's own thread, opened up front when the client did not name a chat. Same open the transcript save uses.
+        openCallChat: async (p, bot) => {
+          const ls = await manager.open({ surface: "voice", title: voiceChatTitle(), owner: p.id, ...(bot.id !== "main" ? { bot: bot.id } : {}) });
           return ls.id;
+        },
+        saveTranscript: async (p, bot, lines, chatId) => {
+          const rt = manager.runtimeOf(p.id);
+          let id = chatId;
+          if (id) {
+            // Resume the bound chat (a saved one comes back live) instead of opening a second thread for this call.
+            if (!rt.history?.(id)) return undefined;
+            try { await manager.open({ surface: "voice", resumeId: id, owner: p.id }); } catch { return undefined; }
+          } else {
+            id = (await manager.open({ surface: "voice", title: voiceChatTitle(), owner: p.id, ...(bot.id !== "main" ? { bot: bot.id } : {}) })).id;
+          }
+          if (!(await rt.appendVoiceTranscript?.(id, lines))) return undefined;
+          return id;
         },
         tools: {
           list: (owner) => manager.list(owner).map((r) => ({ id: r.id, title: r.title, updatedAt: r.updatedAt, ...(r.bot ? { bot: r.bot } : {}) })),
@@ -383,6 +396,15 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
             if (!manager.runtimeOf(owner).history?.(id)) return "missing";
             try { await manager.open({ surface: "voice", resumeId: id, owner }); } catch { return "missing"; }
             void manager.turn(id, text, (ev) => broadcast(id, ev), undefined, "user", false).catch(() => {});
+            return "sent";
+          },
+          // As the bot, into the call's chat, with no bot turn. { type: "text" } is the assistant text open windows already render.
+          say: async (owner, id, text) => {
+            const rt = manager.runtimeOf(owner);
+            if (!rt.history?.(id)) return "missing";
+            try { await manager.open({ surface: "voice", resumeId: id, owner }); } catch { return "missing"; }
+            if (!(await rt.appendVoiceTranscript?.(id, [{ role: "agent", text }]))) return "missing";
+            broadcast(id, { type: "text", delta: text });
             return "sent";
           },
         },
