@@ -89,12 +89,12 @@ const noKernelSpoof = (s: string): string => s.replace(/\[kernel/gi, "[ kernel")
 /**
  * web_search stays "read" in a bot session exactly as in the main chat (the query goes only to the MIND LLM proxy, billed to the user's own credits); reclassifying it as outward blocked it for every staff user.
  * A bot's writes go ONLY to its own MIND, and a web_fetch that carries a query string or a body can leak data, so it counts as an outward action there.
- * Apple Calendar (a device bridge) is never a bot tool. The shell, process, terminal and file write/edit tools are kept ONLY when `localTools` is set:
+ * Apple Calendar (a device bridge) is never a bot tool. The shell, process, terminal, simulator and file write/edit tools are kept ONLY when `localTools` is set:
  * a local desktop/CLI gateway runs on the owner's own machine, so the owner's bot threads get the same machine tools as the main chat (every one still
  * goes through the kernel's confirm gates). Hosted multi-tenant deployments and bot-to-bot (peer) turns never set it, so they never get a shell.
  */
 export function botSessionTools(tools: Tool[], opts: { localTools?: boolean } = {}): Tool[] {
-  const drop = opts.localTools ? ["apple_calendar"] : ["bash", "process", "terminal", "write_file", "edit_file", "apple_calendar"];
+  const drop = opts.localTools ? ["apple_calendar"] : ["bash", "process", "terminal", "simulator", "write_file", "edit_file", "apple_calendar"];
   return tools
     .filter((t) => !drop.includes(t.spec.name))
     .map((t) => (t.spec.name !== "web_fetch" ? t : {
