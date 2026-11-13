@@ -39,6 +39,11 @@ try {
     runtime = createRuntime(cfg, { store: sessionStore, credits });
   }
   const gw = await startGateway({ runtime, cfg, port: 0, host: "127.0.0.1", sessionStore, tokenPath: process.env.MINDCLAW_DESKTOP_TOKEN_PATH || undefined });
+  // Screenshot harness only: the fake smoke gateway seeds a pane before it reports ready. A real gateway never has this env.
+  if (process.env.MINDCLAW_DESKTOP_FAKE === "1" && process.env.DAEBOT_DEVICES_SHOTS_PANE) {
+    const { seedDevicesShot } = await imp("src/gateway/devices-shots.ts");
+    await seedDevicesShot(gw, process.env.DAEBOT_DEVICES_SHOTS_PANE);
+  }
   say({ state: "ready", data: { url: gw.url, token: gw.token } });
   const shutdown = () => { gw.close().finally(() => process.exit(0)); setTimeout(() => process.exit(0), 2500).unref(); };
   process.on("SIGTERM", shutdown);

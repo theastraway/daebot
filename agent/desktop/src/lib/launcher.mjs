@@ -46,6 +46,7 @@ export function findBundledBinary({ resourcesPath, platform = process.platform, 
  * @param {string} [o.mindKey] MIND API key for DAEBOT_BILLING=mind; goes into the child's env only
  * @param {string} [o.dataDir] DATA_DIR for this account's sessions/bots/permissions (absent = the default directory)
  * @param {boolean} [o.fake] use the scripted fake runtime (smoke test only; node path)
+ * @param {string} [o.devicesShotsPane] smoke-only: which device pane the fake gateway should seed (ignored unless fake)
  * @param {string} [o.tokenPath] override token file (smoke test only; node path)
  * @param {string} [o.home] working directory for the binary (the user's home by default)
  */
@@ -57,6 +58,8 @@ export function buildSpawnPlan(o) {
   // Match daebot.live: Bots (Sessions | Bots toggle, bot_talk) is on in the app. An explicit value in the environment still wins.
   if (env.DAEBOT_BOTS_ENABLED === undefined) env.DAEBOT_BOTS_ENABLED = "1";
   if (o.fake) env.MINDCLAW_DESKTOP_FAKE = "1";
+  // The shots seed spawns a real shell. It stays off unless this is the fake smoke gateway.
+  if (o.devicesShotsPane && o.fake) env.DAEBOT_DEVICES_SHOTS_PANE = String(o.devicesShotsPane);
   if (o.tokenPath) env.MINDCLAW_DESKTOP_TOKEN_PATH = o.tokenPath;
   let plan;
   if (o.binaryPath && !o.fake) {

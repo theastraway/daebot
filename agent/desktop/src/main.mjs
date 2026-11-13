@@ -28,9 +28,12 @@ import { ScreenCapture } from "./lib/screen-capture.mjs";
 import { screenAccess, permissionSettingsUrl } from "./lib/screen-permission.mjs";
 import { frameQuery, redDotBitmap } from "./lib/screen-frame.mjs";
 import { CALENDAR_CHANNEL, createCalendarBridge, createCalendarHandler, findCalendarHelper } from "./lib/calendar.mjs";
+import { devicesShotsFromArgv, terminalShotProbe, shotFilesFor } from "./lib/devices-shots.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SMOKE = process.argv.includes("--mindclaw-smoke");
+// Screenshot flags are ignored unless this is the smoke process. A normal launch never sees them.
+const DEVICE_SHOTS = devicesShotsFromArgv(process.argv, SMOKE);
 const log = (...a) => process.stderr.write(`[daebot-desktop] ${a.join(" ")}\n`);
 
 // --- process-level hygiene (before ready) ---
@@ -66,6 +69,8 @@ const notifyAllowed = createRateLimiter(5, 10_000);
 
 const gateway = new ChildGateway({
   spawn,
+  // The fake gateway seeds a real shell before it prints ready. The ordinary smoke run stays on the 20s default.
+  readyTimeoutMs: DEVICE_SHOTS && !DEVICE_SHOTS.error ? DEVICE_SHOTS.readyTimeoutMs : undefined,
   plan: () => buildSpawnPlan({
     agentRoot, entry,
     binaryPath: bundledBinary,
@@ -76,6 +81,7 @@ const gateway = new ChildGateway({
     electronPath: process.execPath,
     baseEnv: process.env,
     fake: SMOKE,
+    devicesShotsPane: DEVICE_SHOTS && !DEVICE_SHOTS.error ? DEVICE_SHOTS.pane : undefined,
     tokenPath: smokeHome ? join(smokeHome, "gateway-token") : undefined,
   }),
 });
@@ -745,6 +751,53 @@ async function runSmoke() {
   app.exit(result.ok ? 0 : 1);
 }
 
+// Dev-only: open one device pane in the smoke window and write PNGs. Later panes add a branch in shotFilesFor
+// and a probe next to terminalShotProbe. Flags without --mindclaw-smoke never reach this function.
+async function runDeviceShots(spec) {
+  const hard = setTimeout(() => {
+    log("shots: hard timeout");
+    try { gateway.child?.kill("SIGKILL"); } catch { /* ignore */ }
+    app.exit(2);
+  }, 90_000);
+  hard.unref?.();
+  const finish = async (code, result) => {
+    clearTimeout(hard);
+    try { mkdirSync(spec.dir, { recursive: true }); writeFileSync(join(spec.dir, "result.json"), JSON.stringify(result, null, 2)); }
+    catch (e) { log("shots: could not write result:", String(e?.message ?? e)); }
+    quitting = true;
+    await gateway.stop();
+    app.exit(code);
+  };
+  const plan = shotFilesFor(spec.pane);
+  if (plan.error) { await finish(1, { ok: false, pane: spec.pane, error: plan.error }); return; }
+  mkdirSync(spec.dir, { recursive: true });
+  try {
+    win.webContents.setZoomLevel(0);
+    win.setContentSize(1360, 860);
+    win.show();
+    await new Promise((r) => setTimeout(r, 300));
+    const shots = [];
+    for (const file of plan.files) {
+      const phase = file.replace(/\.png$/, "");
+      const state = await Promise.race([
+        win.webContents.executeJavaScript(terminalShotProbe(phase), true).catch((e) => ({ ok: false, error: String(e?.message ?? e) })),
+        new Promise((r) => setTimeout(() => r({ ok: false, error: "probe timeout" }), phase === "live" ? 30_000 : 20_000)),
+      ]);
+      log("shots:", phase, JSON.stringify(state).slice(0, 400));
+      if (!state?.ok) { await finish(1, { ok: false, pane: spec.pane, step: phase, state }); return; }
+      await new Promise((r) => setTimeout(r, 350));
+      const img = await win.webContents.capturePage();
+      const png = img.toPNG();
+      if (png.length < 5000) throw new Error(`${file} is only ${png.length} bytes`);
+      writeFileSync(join(spec.dir, file), png);
+      shots.push({ file, bytes: png.length, tail: String(state.tail ?? "").slice(0, 180) });
+    }
+    await finish(0, { ok: true, pane: spec.pane, shots });
+  } catch (e) {
+    await finish(1, { ok: false, pane: spec.pane, error: String(e?.message ?? e).slice(0, 300) });
+  }
+}
+
 /** macOS asks the user once (then remembers); a "denied" in System Settings stays denied until they change it there. */
 async function askMicAccess() {
   if (process.platform !== "darwin") return true;
@@ -756,6 +809,7 @@ async function askMicAccess() {
 
 app.whenReady().then(async () => {
   if (!gotLock) return;
+  if (DEVICE_SHOTS?.error) { log("shots:", DEVICE_SHOTS.error); smokeFail(DEVICE_SHOTS.error); return; }
   nativeTheme.themeSource = "system";
   const ses = session.fromPartition("mindclaw");
   // Everything is denied except the microphone for our own UI (mic button, hands-free). On macOS this shows the system prompt.
@@ -770,5 +824,8 @@ app.whenReady().then(async () => {
   createWindow();
   const loading = loadUi();
   void updater.start().catch((e) => log("updater did not start:", String(e?.message ?? e)));
-  if (SMOKE) { await loading; if (gatewayInfo) await runSmoke(); }
+  if (SMOKE) {
+    await loading;
+    if (gatewayInfo) { if (DEVICE_SHOTS) await runDeviceShots(DEVICE_SHOTS); else await runSmoke(); }
+  }
 });
