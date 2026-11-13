@@ -1379,6 +1379,20 @@ button.env-head:hover { background: var(--surface-2); color: var(--ink-2); }
 .sh-role { font: 13px var(--sans); padding: 5px 8px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--bg); color: var(--ink); }
 .sh-rm { padding: 5px 10px; font-size: 13px; }
 
+/* Tablet and narrow-window width (iPad 13in is 1032pt wide, with the sidebar open the chat column is about 760pt): the top bar was wider
+   than the column, so the hands-free button sat on the edge and the board and shield buttons were off screen. The "Voice chat" word and
+   the "MIND credits" tag are dropped, the model name truncates, and the session title is the part that gives way. */
+@media (max-width: 1100px) {
+  .vchat-label, #model-badge .mb-via { display: none; }
+  #btn-vchat { width: 36px; padding: 0; }
+  .model-badge { max-width: 190px; }
+  #model-badge .mb-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .top-title { flex: 1 1 0; min-width: 0; }
+  .bot-trigger { flex: 0 1 auto; min-width: 0; max-width: none; }
+  .model-wrap { flex: 0 1 auto; min-width: 0; }
+  .model-badge { min-width: 0; }
+}
+
 /* Phone width (iPhone Pro Max is 440pt): the top bar never runs past the right edge. The bot pill shrinks and truncates its name
    (it was flex:none, so a long name pushed the mute, mic and voice buttons off screen), and the model picker collapses to its LED
    and chevron; the model name stays in the accessibility tree and the full name is in the menu it opens. Wider screens are untouched.

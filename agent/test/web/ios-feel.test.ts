@@ -223,3 +223,11 @@ test("style.css: at phone width (<= 440px) the top bar shrinks the bot pill and 
   assert.match(blk, /\.voice-btn[^{]*\{[^}]*flex:\s*none/);
   assert.match(blk, /\.top-title\s*\{\s*display:\s*none/);
 });
+
+test("style.css: at tablet width (<= 1100px) the top bar drops the 'Voice chat' word and the 'MIND credits' tag, and the model name truncates, so every button stays on screen", () => {
+  const css = read("style.css");
+  const blk = mediaBlock(css, "@media (max-width: 1100px)");
+  assert.match(blk, /\.vchat-label,\s*#model-badge \.mb-via\s*\{\s*display:\s*none/);
+  assert.match(blk, /\.bot-trigger\s*\{[^}]*flex:\s*0 1 auto/);
+  assert.match(blk, /#model-badge \.mb-name\s*\{[^}]*text-overflow:\s*ellipsis/);
+});
