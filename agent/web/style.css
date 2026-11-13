@@ -1386,7 +1386,7 @@ button.env-head:hover { background: var(--surface-2); color: var(--ink-2); }
 @media (max-width: 440px) {
   .topbar .icon-btn, .voice-btn, #btn-vchat { width: 32px; flex: none; }
   .bot-trigger { flex: 0 1 auto; min-width: 0; max-width: none; }
-  .top-title { flex: 1 1 0; min-width: 0; }
+  .top-title { display: none; } /* no room left beside the bot pill: a squeezed title showed as two clipped letters */
   #model-badge { padding: 0 6px; gap: 3px; max-width: none; }
   #model-badge .mb-name { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
   #model-badge .mb-via { display: none; }
