@@ -110,6 +110,39 @@ export class TerminalRegistry {
   list(owner: string): TermInfo[] { this.reap(); return [...this.sessions.values()].filter((s) => s.owner === owner).map((s) => this.info(s)); }
   status(owner: string, id: string): TermInfo { return this.info(this.mine(owner, id)); }
 
+  /**
+   * Buffered output for a pane. `fromTotal` is an absolute offset into everything this session has ever printed
+   * (default: the whole retained buffer). Does not move `readPos`, so the agent's next `read` still receives the text.
+   * `text` is at most READ_CAP characters (the newest part). `dropped` counts characters between `fromTotal` and `text`
+   * that the ring already discarded or this reply skipped to stay under the cap. `total` is the absolute end.
+   * A wrong owner is an unknown session, same as every other call.
+   */
+  peek(owner: string, id: string, fromTotal?: number): { info: TermInfo; text: string; total: number; dropped: number } {
+    const s = this.mine(owner, id);
+    const from = fromTotal === undefined || !Number.isFinite(fromTotal) ? 0 : Math.max(0, Math.floor(fromTotal));
+    const start = s.total - s.buf.length; // absolute offset of buf[0]
+    const lo = Math.max(from, start);
+    let text = lo >= s.total ? "" : s.buf.slice(lo - start);
+    let dropped = lo - from;
+    if (text.length > READ_CAP) {
+      const cut = text.length - READ_CAP;
+      text = text.slice(cut); // the pane shows the newest output, and the next peek(from=total) continues live
+      dropped += cut;
+    }
+    return { info: this.info(s), text, total: s.total, dropped };
+  }
+
+  /**
+   * Calls `fn` when the shell prints something or its status changes (exit, close, spawn error). Same wake set the
+   * agent's `read` waits on. The returned function detaches. A wrong owner throws unknown, and does not subscribe.
+   */
+  subscribe(owner: string, id: string, fn: () => void): () => void {
+    const s = this.mine(owner, id);
+    s.listeners.add(fn);
+    let on = true;
+    return () => { if (!on) return; on = false; s.listeners.delete(fn); };
+  }
+
   /** Write text to the shell's stdin. `enter` (default true) appends the shell's line ending. */
   send(owner: string, id: string, text: string, enter = true): TermInfo {
     const s = this.mine(owner, id);
@@ -200,7 +233,8 @@ export class TerminalRegistry {
   killAll(): void { for (const s of this.sessions.values()) this.kill(s, true); this.sessions.clear(); if (this.timer) clearInterval(this.timer); }
 
   private kill(s: Session, sync: boolean): void {
-    if (s.status === "running") s.status = "closed";
+    const becameClosed = s.status === "running";
+    if (becameClosed) s.status = "closed";
     const pid = s.child.pid;
     try { s.child.stdin?.end(); } catch { /* gone */ }
     if (this.platform === "win32") {
@@ -209,9 +243,10 @@ export class TerminalRegistry {
         else if (sync) spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
         else nodeSpawn("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }).on("error", () => { /* taskkill missing: the shell is already gone */ });
       } catch { try { s.child.kill(); } catch { /* gone */ } }
-      return;
+    } else {
+      try { if (pid) process.kill(-pid, "SIGKILL"); else s.child.kill("SIGKILL"); } catch { try { s.child.kill("SIGKILL"); } catch { /* gone */ } }
     }
-    try { if (pid) process.kill(-pid, "SIGKILL"); else s.child.kill("SIGKILL"); } catch { try { s.child.kill("SIGKILL"); } catch { /* gone */ } }
+    if (becameClosed) this.wake(s); // the pane learns the session closed; the session is still in the map until the caller deletes it
   }
 }
 
@@ -223,10 +258,15 @@ function defaultRegistry(): TerminalRegistry {
   return shared;
 }
 
+/** The process-wide registry. The `terminal` tool and the local gateway pane both use this, so a peek sees the shell the agent opened. */
+export function terminalRegistry(): TerminalRegistry {
+  return defaultRegistry();
+}
+
 const fmt = (i: TermInfo): string => `${i.id} ${i.shell} pid=${i.pid ?? "?"} ${i.status}${i.status !== "running" ? ` exit=${i.exitCode ?? "?"}` : ""} cwd=${JSON.stringify(i.cwd)}`;
 
 export function createTerminalTool(registry?: TerminalRegistry): Tool {
-  const reg = () => registry ?? defaultRegistry();
+  const reg = () => registry ?? terminalRegistry();
   return {
     class: "write",
     // read/list only show what the shell already printed; open/send/signal/close change the machine.
