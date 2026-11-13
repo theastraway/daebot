@@ -58,10 +58,12 @@ export class SessionManager {
     this.timer.unref();
   }
 
-  async open(o: { surface: string; title?: string; resumeId?: string; identity?: string; owner?: string; bot?: string; peer?: string; model?: string }): Promise<LiveSession> {
+  async open(o: { surface: string; title?: string; resumeId?: string; identity?: string; owner?: string; bot?: string; peer?: string; model?: string; fresh?: boolean }): Promise<LiveSession> {
     const owner = o.owner ?? LOCAL_OWNER;
     if (o.resumeId) {
-      const existing = this.live.get(o.resumeId);
+      let existing = this.live.get(o.resumeId);
+      // fresh: the model's memory of this thread is dropped (the saved transcript stays). A thread mid-turn is left alone.
+      if (existing && o.fresh && !existing.busy && existing.owner === owner) { await this.close(o.resumeId); existing = undefined; }
       if (existing) {
         if (existing.owner !== owner) throw new ForbiddenError("forbidden");
         if (o.bot && existing.bot !== o.bot) throw new Error("session belongs to a different bot");
@@ -74,7 +76,7 @@ export class SessionManager {
       if (stored !== undefined && stored !== owner) throw new ForbiddenError("forbidden");
     }
     const rt = this.runtimeFor ? this.runtimeFor(owner) : this.runtime;
-    const session = await rt.openSession({ surface: o.surface, title: o.title, resumeId: o.resumeId, identity: o.identity, botId: o.bot, peer: o.peer, model: o.model });
+    const session = await rt.openSession({ surface: o.surface, title: o.title, resumeId: o.resumeId, identity: o.identity, botId: o.bot, peer: o.peer, model: o.model, ...(o.fresh ? { fresh: true } : {}) });
     const info = rt.sessionInfo?.(session.id);
     const existing = this.live.get(session.id);
     if (existing) {

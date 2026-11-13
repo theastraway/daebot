@@ -25,6 +25,10 @@ import type { ScreenFeed } from "../screen/feed.ts";
 export const WEBHOOK_MAX_BODY = 64 * 1024;
 export const GITHUB_MAX_BODY = 1024 * 1024;
 const APPS_TTL_MS = 15_000;
+/** A human chat touched this recently is "active": nothing automated is typed into it. */
+export const ACTIVE_CHAT_MS = 2 * 3_600_000;
+/** The id every routine run lands in (rt_ + 32 hex): a thread machines write in. */
+export const isRoutineThreadId = (id: string): boolean => /^rt_[0-9a-f]{32}$/.test(id);
 
 export interface RoutineGatewayDeps {
   hub: RoutineHub;
@@ -80,13 +84,13 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
     return { final, failed };
   }
 
-  async function runTurn(a: { owner: string; botId: string; thread: string; text: string; signal: AbortSignal }): Promise<TurnResult> {
+  async function runTurn(a: { owner: string; botId: string; thread: string; text: string; signal: AbortSignal; fresh?: boolean }): Promise<TurnResult> {
     const p = d.principalOf(a.owner);
     const id = threadIdOf(a.owner, a.botId, a.thread);
     const bad = (error: string): TurnResult => ({ ok: false, threadId: "", finalText: "", error });
     if (!p) return bad("this account is not signed in any more");
     let ls;
-    try { ls = await manager.open({ surface: "routine", title: a.thread.slice(0, 120), resumeId: id, owner: a.owner, bot: realBot(a.botId) }); }
+    try { ls = await manager.open({ surface: "routine", title: a.thread.slice(0, 120), resumeId: id, owner: a.owner, bot: realBot(a.botId), ...(a.fresh ? { fresh: true } : {}) }); }
     catch (e) { return bad(String((e as Error)?.message ?? e).split("\n")[0].slice(0, 200)); }
     if (ls.busy) return bad("the thread is busy with another turn");
     const note = await d.enforceModel(p, id).catch(() => undefined);
@@ -155,6 +159,10 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
       const key = `${owner}:${botId}`, now = Date.now();
       const n = nudges.get(key);
       if (n && now - n.at < 10 * 60_000 && n.n >= 3) throw new Error("already resumed 3 threads in this review");
+      // A thread the user is chatting in (open right now, mid-turn, or touched in the last 2 hours) is never given a "[Check-in from your Heartbeat]" user turn:
+      // it would pull their live conversation to old board items. The note goes into the Heartbeat's own summary instead (its thread is a separate sidebar item).
+      const row = manager.runtimeOf(owner).listSessions().find((x) => x.id === tid);
+      if (manager.get(tid) || (row && now - row.updatedAt < ACTIVE_CHAT_MS)) return "not sent: the user is active in that thread, and a check-in must never land in their live chat. Put it in your one-line summary instead; it shows in your Heartbeat thread.";
       nudges.set(key, n && now - n.at < 10 * 60_000 ? { n: n.n + 1, at: n.at } : { n: 1, at: now });
       const ls = await manager.open({ surface: "web", resumeId: tid, owner, bot: botId });
       if (ls.busy) return "that thread is busy right now; leave it";

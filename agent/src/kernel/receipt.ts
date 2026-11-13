@@ -5,7 +5,15 @@ export interface Claim { kind: ClaimKind; text: string }
 export interface ReceiptCheck { line: string; id: string; kind: "mind" | "surface"; valid: boolean; why?: string }
 
 // "complete"/"operational" only count as claims in status form ("is complete", "fully operational"), not as ordinary adjectives.
-const COMPLETION = /\b(done|built|shipped|live(?!\s+(?:in|with|on|at|from)\b)|deployed|merged|working(?!\s+(?:on|with|through|towards|from)\b)|fixed|ready(?!\s+to\b)|(?<!\b(?:no|any|not|without)\s)verified|passing|completed|launched|finished|(?:is|are|was|were|now|fully|been)\s+complete|(?:is|are|now|fully|be|been)\s+operational)\b/i;
+const COMPLETION = /\b(done|built|shipped|live(?!\s+(?:in|with|on|from)\b|\s+at\s+\d)|deployed|merged|working(?!\s+(?:on|with|through|towards|from)\b)|fixed|ready(?!\s+to\b)|(?<!\b(?:no|any|not|without)\s)verified|passing|completed|launched|finished|(?:is|are|was|were|now|fully|been)\s+complete|(?:is|are|now|fully|be|been)\s+operational|(?<=\b(?:I|we|it|email|message|reply|mail|has been|have been|was|were|just|already|now)\s)sent)\b/i;
+// Status adjectives are claims only in status form ("it is live", "tests passing", "went live"), never attributive ("the live ILYVEN re-run", "passing checks").
+const ADJECTIVE_CLAIMS = new Set(["live", "working", "passing", "ready", "verified"]);
+const STATUS_LEAD = /(?:\b(?:is|are|was|were|been|be|now|just|already|fully|all|went|goes|go|still|currently|seems?|looks?|stays?|remains?)|['\u2019](?:s|re)|[:\u2014-])\s*(?:\*\*|_)?$/i;
+const STATUS_TRAIL = /^\s*(?:\*\*|_)?(?:[.,;:!)\u2014-]|$|at\b|now\b|again\b|and\b|for\b)/i;
+// Not a claim: the clause before the word talks about what the user wants, what will or might happen, or negates it.
+const NOT_A_CLAIM_LEAD = /\b(?:want(?:s|ed)?|need(?:s|ed)?|get(?:s|ting)?|if|when|once|until|unless|whether|will|won't|going to|gonna|let me|let's|can|could|should|would|might|may|must|how to|before|after|so that|in order to|to be|not|never|yet|no|isn't|aren't|wasn't|weren't|haven't|hasn't|hadn't|didn't|don't|doesn't|can't|couldn't|n't|instead of|rather than)\b[^.!?\n]*$/i;
+// A fact inside an offer, plan, question-to-user or condition ("I'll email bob@x.com") asserts nothing yet.
+const NOT_A_CLAIM_SENTENCE = /\b(?:I'll|I will|I'd|I would|I can|I could|I'm going to|I am going to|let me|let's|want me to|shall I|should I|say the word|if you|when you|once you|want to|do you want|would you like|which one|which of)\b/i;
 // A bare "I can't" is a refusal, not an existence claim: only "I can't find/see/access..." counts.
 const NEGATIVE = /\b(doesn't exist|does not exist|no such|isn't supported|is not supported|not supported|there is no|there's no|I (?:can't|cannot|couldn't|could not) (?:find|locate|see|access|retrieve|recover|reset|read|open)|not stored|not available|isn't available|is not available|has no|have no|doesn't have|does not have|no support for)\b/i;
 // Attribution makes echoing a figure from the user's own latest message legitimate.
@@ -45,7 +53,24 @@ function squash(s: string): string {
 
 // opts.userMessage: a fact that appears in the latest user message is exempt only when the same sentence
 // carries attribution ("you said", "per your message", ...). An unattributed echo is still a claim.
-export function findClaims(draft: string, opts: { userMessage?: string } = {}): Claim[] {
+// First completion word in `sent` that really asserts finished work; undefined for plans, wishes, negations and adjective uses.
+function completionClaim(sent: string): string | undefined {
+  for (const m of sent.matchAll(new RegExp(COMPLETION.source, "gi"))) {
+    const word = m[1];
+    const before = sent.slice(0, m.index);
+    if (NOT_A_CLAIM_LEAD.test(before)) continue;
+    if (/\b(?:the|a|an|this|that|these|those|your|my|our|its|their|any|each|every|of|last|latest|previous)\s+$/i.test(before)) continue; // "the deployed build": attributive, not a claim
+    if (ADJECTIVE_CLAIMS.has(word.toLowerCase())) {
+      const after = sent.slice(m.index! + word.length);
+      if (!STATUS_LEAD.test(before) && !(before.trim() === "" && STATUS_TRAIL.test(after))) continue;
+    }
+    return word;
+  }
+  return undefined;
+}
+
+// opts.grounded: squashed outputs of this turn's tool calls; a fact that appears verbatim in one is sourced, not guessed.
+export function findClaims(draft: string, opts: { userMessage?: string; grounded?: string[] } = {}): Claim[] {
   const claims: Claim[] = [];
   const text = claimText(draft);
   const userText = squash(normApos(opts.userMessage ?? ""));
@@ -55,11 +80,14 @@ export function findClaims(draft: string, opts: { userMessage?: string } = {}): 
       if (!sent || sent.endsWith("?")) continue;
       const neg = NEGATIVE.exec(sent);
       if (neg) claims.push({ kind: "negative", text: neg[1] });
-      const comp = COMPLETION.exec(sent);
-      if (comp) claims.push({ kind: "completion", text: comp[1].toLowerCase() });
+      const comp = completionClaim(sent);
+      if (comp) claims.push({ kind: "completion", text: comp.toLowerCase() });
+      const planned = NOT_A_CLAIM_SENTENCE.test(sent);
       for (const re of FACT_PATTERNS) {
         const m = re.exec(sent);
         if (!m) continue;
+        if (planned) continue;
+        if (opts.grounded?.some((g) => g.includes(squash(m[0])))) continue;
         if (userText && ATTRIBUTION.test(sent) && userText.includes(squash(m[0]))) continue;
         claims.push({ kind: "fact", text: m[0] });
       }
@@ -118,7 +146,7 @@ export function negativeEvidenceOk(calls: CallRecord[]): boolean {
 export const receiptGate: Gate = {
   name: "receipt",
   preAnswer(s, draft) {
-    const claims = findClaims(draft, { userMessage: s.userMessage });
+    const claims = findClaims(draft, { userMessage: s.userMessage, grounded: s.calls.filter((c) => c.result.ok).map((c) => squash(c.result.output)) });
     if (claims.length === 0) return undefined;
     const receipts = validReceipts(draft, s.calls);
     const good = receipts.filter((r) => r.valid);

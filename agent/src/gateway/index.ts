@@ -13,6 +13,7 @@ import { RunRegistry } from "./runs.ts";
 import { DeviceRelay, parseCapabilities } from "./device-relay.ts";
 import type { Run } from "./runs.ts";
 import { BusyError, ForbiddenError, NotFoundError, SessionManager } from "./sessions.ts";
+import type { LiveSession } from "./sessions.ts";
 import { OWNER } from "../auth/users.ts";
 import { caelumToBot } from "./caelum.ts";
 import type { Principal } from "../auth/users.ts";
@@ -27,7 +28,7 @@ import { userIdFor } from "../auth/users.ts";
 import { FREE_TIER, usageLeftPct, usesOwnKey } from "../provider/mind.ts";
 import { createBotBus } from "../bots/bus.ts";
 import { ExchangeHub, MAIN as EX_MAIN } from "../bots/exchanges.ts";
-import { createRoutineGateway } from "./routines.ts";
+import { createRoutineGateway, isRoutineThreadId } from "./routines.ts";
 import { RoutineHub } from "../routines/store.ts";
 import { BotError, safeUpgradeUrl } from "../bots/types.ts";
 import type { BotRecord, BotsContext } from "../bots/types.ts";
@@ -1626,6 +1627,19 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     res.on("close", () => cleanup(false)); // the client left: the run does not
   }
 
+  /** A person typing into a routine thread (Heartbeat, a timer's thread) never joins the routine's context: their message goes to an ordinary chat of the same bot, one per routine thread, with its own memory. */
+  async function humanChatFor(me: Principal, routineId: string, live?: LiveSession): Promise<LiveSession | undefined> {
+    const rt = manager.runtimeOf(me.id);
+    const info = rt.sessionInfo?.(routineId);
+    if (!info && !live) return undefined;                       // unknown, or not this person's thread
+    const bot = live?.bot ?? info?.bot;
+    const hid = "hc_" + createHash("sha256").update(`${me.id}|${routineId}`).digest("hex").slice(0, 32);
+    const fresh = !rt.history?.(hid);
+    const ls = await manager.open({ surface: "web", resumeId: hid, owner: me.id, ...(bot ? { bot } : {}) });
+    if (fresh) await rt.renameSession?.(hid, `Chat from ${(live?.title || "a routine thread").slice(0, 40)}`);
+    return ls;
+  }
+
   async function streamTurn(res: ServerResponse, id: string, text: string, extraHeaders: Record<string, string> = {}, first?: Record<string, unknown>, me?: Principal, interactive = false, photos?: PhotoRef[], capabilities: string[] = [], quote?: MessageQuote): Promise<void> {
     res.writeHead(200, sseHeaders(extraHeaders));
     const run = runs.start(id, text, photos);
@@ -2729,6 +2743,12 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       subscribers.delete(id);
       return sendJson(res, 200, { ok: true });
     }
+    // A person's message to a routine thread is moved to an ordinary chat (see humanChatFor); this also answers a routine thread that is not live, instead of "no such session".
+    let movedFrom: string | undefined;
+    if (action === "send" && !viewer && isRoutineThreadId(id)) {
+      const moved = await humanChatFor(me, id, ls);
+      if (moved) { movedFrom = id; ls = moved; id = moved.id; }
+    }
     if (!ls) return sendJson(res, 404, { error: "no such session" });
 
     if (action === "device-result") {
@@ -2813,7 +2833,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       }
       if (remoteHub && (await routeRemote(res, me, id, homePlanOf(me.id, id, ls.bot), ls.surface, ls.title, text, quote, refs, { interactive: !viewer }))) return;
       // The web/desktop/mobile UI can answer a permission card. A guest's turn runs on the owner's account: no card goes to the guest's screen and no device of theirs is lent to it.
-      return streamTurn(res, id, text, {}, refs ? { type: "photos", photos: refs } : undefined, me, !viewer, refs, viewer ? [] : parseCapabilities(b.capabilities), quote);
+      return streamTurn(res, id, text, movedFrom ? { "x-daebot-session": id } : {}, movedFrom ? { type: "session", sessionId: id, movedFrom } : refs ? { type: "photos", photos: refs } : undefined, me, !viewer, refs, viewer ? [] : parseCapabilities(b.capabilities), quote);
     } finally {
       if (big) photoBodies--;
     }
@@ -3135,6 +3155,11 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
           }
           let ls = manager.access(f.sessionId, me.id);
           if (ls === "forbidden") return sendFrame(c, { t: "error", message: "forbidden" });
+          // A person's message to a routine thread goes to an ordinary chat of the same bot (humanChatFor), never into the routine's context.
+          if (isRoutineThreadId(f.sessionId)) {
+            const moved = await humanChatFor(me, f.sessionId, ls);
+            if (moved) { ls = moved; sendFrame(c, { t: "opened", sessionId: moved.id }); }
+          }
           // A saved chat whose live session was dropped (idle, restart) is brought back, not refused.
           if (!ls && manager.runtimeOf(me.id).history?.(f.sessionId)) ls = await manager.open({ surface: "web", resumeId: f.sessionId, owner: me.id });
           if (!ls) return sendFrame(c, { t: "error", message: "no such session" });

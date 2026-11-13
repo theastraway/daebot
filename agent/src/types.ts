@@ -270,7 +270,7 @@ export interface SessionState { messages: Message[]; receiptCounter: number; tot
 export interface Runtime {
   // boot: runs mind_context before returning; throws only if tools are unreachable.
   // botId: open a session of that bot (home MIND = the bot's); peer: the other end of a bot-to-bot DM thread; model: per-session model.
-  openSession(opts: { surface: string; title?: string; resumeId?: string; identity?: string; botId?: string; peer?: string; model?: string }): Promise<AgentSession>;
+  openSession(opts: { surface: string; title?: string; resumeId?: string; identity?: string; botId?: string; peer?: string; model?: string; /** Resume the saved thread (transcript, title, board) but start the MODEL with an empty memory. Routine runs. */ fresh?: boolean }): Promise<AgentSession>;
   listSessions(): { id: string; surface: string; title: string; updatedAt: number; bot?: string; peer?: string; model?: string; permMode?: string; unread?: boolean; archived?: boolean; env?: import("./env.ts").EnvTag; pinnedAt?: number }[];
   /** Bots of this runtime's owner (absent on runtimes built without a bots context). */
   bots?: BotsApi;

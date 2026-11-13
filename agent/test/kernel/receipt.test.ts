@@ -122,3 +122,38 @@ test("receipt: a bulleted, numbered or bold receipt line counts", () => {
 test("receipt: a receipt in the middle of a sentence still does not count", () => {
   assert.equal(pre("The page is deployed, see SURFACE✓ #c1 fetched it")?.action, "block");
 });
+
+// ---- narrowed gate (2026-11-13): only done/live/fixed/sent/working claims and number/name/id facts need a receipt ----
+test("receipt: greetings, questions, plans and short acknowledgments pass without receipts", () => {
+  for (const d of ["hello", "Hey Anthony. What do you need?", "ok", "Got it.", "Sure, on it.", "connected? which app", "Which app do you want connected: Dropbox or Linear?",
+    "I'll connect Dropbox next and tell you when it's ready.", "Plan: first read the repo, then fix the test, then open a PR.", "Want me to deploy it?"]) {
+    assert.equal(pre(d, []), undefined, d);
+  }
+});
+test("receipt: 'what you want done' and other irrealis uses are not done-claims", () => {
+  assert.equal(pre("Already connected. Nothing to add. Say what you want done in Dropbox and I will do it.", []), undefined);
+  assert.equal(pre("I will get it done tonight.", []), undefined);
+  assert.equal(pre("It is not merged yet.", []), undefined);
+  assert.equal(pre("Once it is deployed I will tell you.", []), undefined);
+});
+test("receipt: attributive adjectives are not claims, status form is", () => {
+  assert.equal(pre("Waiting on a yes for the live ILYVEN re-run.", []), undefined);
+  assert.equal(pre("Both PRs have passing checks.", []), undefined);
+  assert.equal(pre("The deployed build reads the flag.", []), undefined);
+  assert.equal(pre("It's live at https://daebot.live/x")?.action, "block");
+  assert.equal(pre("The fix is live.")?.action, "block");
+  assert.equal(pre("Dropbox is working.")?.action, "block");
+});
+test("receipt: it's live / sent / fixed still need a receipt, and one line is enough", () => {
+  for (const d of ["It's live at https://daebot.live/x", "I fixed the crash.", "The email was sent.", "I sent it to Carla."]) {
+    assert.equal(pre(d)?.action, "block", d);
+  }
+  assert.equal(pre("It's live at https://daebot.live/x\nSURFACE✓ #c1 opened the page and saw it"), undefined);
+  assert.equal(pre("I fixed the crash.\nSURFACE✓ #c1 ran the test, it passes"), undefined);
+});
+test("receipt: a fact in an offer or plan is not a claim; a fact the turn's tool returned is sourced", () => {
+  assert.equal(pre("Say which and I'll email anthony@theastraway.com.", []), undefined);
+  const grounded = { ...rec("c1", "mind_tasks", {}, { receipt: "mind" }), result: { ok: true, output: "task: regression re-run ($1.50) blocked" } };
+  assert.equal(pre("The regression re-run costs $1.50.", [grounded]), undefined);
+  assert.equal(pre("The regression re-run costs $1.50.", [])?.action, "block");
+});
