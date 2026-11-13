@@ -14,6 +14,8 @@ export interface Probe {
   threads: number;
   /** Items that wait on the user (a stopped thread with its question). `hash` changes when the item changed: same hash = already surfaced, stay quiet. */
   waiting: WaitingItem[];
+  /** Every human thread's last-activity time and title: what the next look compares against to name only the threads that moved. */
+  stamps: Record<string, { t: number; title: string }>;
 }
 export interface WaitingItem { key: string; hash: string; line: string }
 
@@ -25,6 +27,9 @@ export function freshAttention(p: Probe, surfaced: Record<string, string> | unde
   const stale = new Set(p.waiting.filter((w) => surfaced?.[w.key] === w.hash).map((w) => w.line));
   return p.attention.filter((a) => !waitingLines.has(a) || !stale.has(a));
 }
+/** Titles of the threads whose activity time differs from the last look (`seen`: thread id -> time). */
+export const movedThreads = (p: Probe, seen: Record<string, number> | undefined): string[] => Object.entries(p.stamps).filter(([id, v]) => seen?.[id] !== v.t).map(([, v]) => v.title);
+export const stampsNow = (p: Probe): Record<string, number> => Object.fromEntries(Object.entries(p.stamps).map(([id, v]) => [id, v.t]));
 /** The surfaced map to remember after a look: every waiting item as it is now (items that left the board are forgotten, so a re-stop surfaces again). */
 export const surfacedNow = (p: Probe): Record<string, string> => Object.fromEntries(p.waiting.map((w) => [w.key, w.hash]));
 
@@ -63,5 +68,5 @@ export function probeBot(a: { threads: ThreadLite[]; board: BoardLite[]; routine
   // Items that need the manager (not ones that only wait on the user) get looked at again every 6 hours even when nothing else moved.
   const waitingLines = new Set(waiting.map((w) => w.line));
   if (attention.some((x) => !waitingLines.has(x))) parts.push(`bucket:${Math.floor(a.now / BUCKET_MS)}`);
-  return { fp: createHash("sha256").update(parts.sort().join("\n")).digest("hex").slice(0, 24), attention, threads: human.length, waiting };
+  return { fp: createHash("sha256").update(parts.sort().join("\n")).digest("hex").slice(0, 24), attention, threads: human.length, waiting, stamps: Object.fromEntries(human.map((t) => [t.id, { t: t.updatedAt, title: t.title || "Untitled" }])) };
 }

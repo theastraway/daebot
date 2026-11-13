@@ -78,6 +78,35 @@ test("heartbeat saved before this change: what is waiting right now counts as al
   assert.equal(r.turns.length, 0, "the 59-times-repeated question is not repeated one more time");
 });
 
+test("heartbeat: an activity-only review names just the threads that moved; a stopped thread is never in it", async () => {
+  const r = rig();
+  const bk = r.hub.book(OWNER, BOT);
+  const hb = bk.heartbeat();
+  const tick = async () => { const f = r.runner.runNow(OWNER, BOT, hb.id); await (f as any).done; };
+  r.world.threads = [{ id: "t1", title: "Good morning", updatedAt: 1000 }, { id: "t2", title: "Openrouter Connection", updatedAt: 1000 }];
+  await tick();                                   // first look
+  assert.equal(r.turns.length, 1);
+  await tick();                                   // nothing moved
+  assert.equal(r.turns.length, 1);
+  r.world.threads = [{ id: "t1", title: "Good morning", updatedAt: 1000 }, { id: "t2", title: "Openrouter Connection", updatedAt: 7000 }];
+  await tick();
+  assert.equal(r.turns.length, 2);
+  const digest = r.turns[1].text.split("Nothing is stalled.")[1];
+  assert.match(digest, /"Openrouter Connection"/);
+  assert.doesNotMatch(digest, /Good morning/);
+  assert.match(r.turns[1].text, /empty reply/);
+});
+
+test("heartbeat saved before thread stamps existed: the first look after the upgrade is quiet, not a review of every thread", async () => {
+  const r = rig();
+  const bk = r.hub.book(OWNER, BOT);
+  const hb = bk.heartbeat();
+  r.world.threads = [{ id: "t1", title: "Good morning", updatedAt: 1000 }];
+  bk.setHeartbeat(hb.id, { fp: "old", reviewed: true, surfaced: {} });
+  await (r.runner.runNow(OWNER, BOT, hb.id) as any).done;
+  assert.equal(r.turns.length, 0);
+});
+
 // ---------------------------------------------------------------- real gateway
 async function gwRig() {
   const key = "mind_" + randomBytes(16).toString("hex");
