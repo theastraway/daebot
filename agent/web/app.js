@@ -123,6 +123,7 @@ const termPane = initTerminalPane({
   list: $("term-list"),
   out: $("term-out"),
   exitEl: $("term-exit"),
+  emptyEl: $("term-empty"),
   closeBtn: $("btn-term-close"),
 });
 
