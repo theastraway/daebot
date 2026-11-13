@@ -211,3 +211,14 @@ test("shell.js: no visualViewport (old WebView) means no keyboard handling and n
 test("app.js re-pins a reader to the bottom when the keyboard comes or goes", () => {
   assert.match(read("app.js"), /window\.addEventListener\("daebot:viewport", \(\) => toBottom\(\)\)/);
 });
+
+test("style.css: at phone width (<= 440px) the top bar shrinks the bot pill and collapses the model picker so the voice buttons stay on screen", () => {
+  const css = read("style.css");
+  const at = css.lastIndexOf("@media (max-width: 440px)");
+  assert.ok(at > css.lastIndexOf(".bot-trigger { flex: none"), "the 440px block comes after the base .bot-trigger rule so it wins the cascade");
+  const blk = mediaBlock(css.slice(at), "@media (max-width: 440px)");
+  assert.match(blk, /\.bot-trigger\s*\{[^}]*flex:\s*0 1 auto;[^}]*min-width:\s*0;[^}]*max-width:\s*none/);
+  assert.match(blk, /#model-badge \.mb-name\s*\{[^}]*clip:/, "the model name is visually hidden, not display:none, so the button keeps its accessible name");
+  assert.doesNotMatch(blk, /#model-badge \.mb-name\s*\{[^}]*display:\s*none/);
+  assert.match(blk, /\.voice-btn[^{]*\{[^}]*flex:\s*none/);
+});

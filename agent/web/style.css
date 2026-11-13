@@ -1378,3 +1378,16 @@ button.env-head:hover { background: var(--surface-2); color: var(--ink-2); }
 .sh-msg.bad { color: var(--accent); }
 .sh-role { font: 13px var(--sans); padding: 5px 8px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--bg); color: var(--ink); }
 .sh-rm { padding: 5px 10px; font-size: 13px; }
+
+/* Phone width (iPhone Pro Max is 440pt): the top bar never runs past the right edge. The bot pill shrinks and truncates its name
+   (it was flex:none, so a long name pushed the mute, mic and voice buttons off screen), and the model picker collapses to its LED
+   and chevron; the model name stays in the accessibility tree and the full name is in the menu it opens. Wider screens are untouched.
+   Last in the file on purpose: the base .bot-trigger and #model-badge rules above would otherwise win the cascade. */
+@media (max-width: 440px) {
+  .topbar .icon-btn, .voice-btn, #btn-vchat { width: 32px; flex: none; }
+  .bot-trigger { flex: 0 1 auto; min-width: 0; max-width: none; }
+  .top-title { flex: 1 1 0; min-width: 0; }
+  #model-badge { padding: 0 6px; gap: 3px; max-width: none; }
+  #model-badge .mb-name { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+  #model-badge .mb-via { display: none; }
+}
