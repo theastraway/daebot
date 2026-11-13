@@ -147,7 +147,7 @@ test("tools in a bot session: same set as a session (+ bot_talk, mind_tenants); 
     // The task board is the user's own: only their plain sessions have task_board (bot threads are not on the board).
     const mainNames = w.provider.requests.at(-1)!.tools.map((t) => t.name);
     assert.ok(mainNames.includes("task_board") && !names.includes("task_board"));
-    // bot_manage (Daebot makes bots): every session has it; a bot's own copy edits only itself (slug "self") and cannot create or delete bots.
+    // bot_manage (Daebot makes bots): every session has it, and every bot has the full skill (create, change, delete other bots; slug "self" is itself).
     assert.ok(mainNames.includes("bot_manage") && names.includes("bot_manage"));
     // bot_self (see my threads, push work along, record lessons for the Heartbeat) is the bot's own: a main session never gets it.
     assert.ok(names.includes("bot_self") && !mainNames.includes("bot_self"));
