@@ -1,7 +1,32 @@
 // electron-builder configuration for Daebot (Mac universal, Windows x64 + arm64, Linux x64).
-// Unsigned by default, so local and CI builds never touch the keychain. DAEBOT_SIGN=1 turns on Developer ID signing,
-// hardened runtime and the MINDNotarize notarization hook (see scripts/notarize.cjs); run it only on the signing Mac.
+// Unsigned by default, so local and CI builds never touch the keychain. The same DAEBOT_SIGN=1 switch turns on
+// Developer ID signing, hardened runtime and the MINDNotarize notarization hook (see scripts/notarize.cjs) on the
+// signing Mac, and Azure Artifact Signing for --win builds (see azureSignOptions below).
 const sign = process.env.DAEBOT_SIGN === "1";
+
+// Windows signing: Azure Artifact Signing (formerly Trusted Signing), on with the same DAEBOT_SIGN=1 switch, run on the Windows signing host.
+// electron-builder signs the app, its exes and the NSIS installer through the TrustedSigning PowerShell module (it installs it itself).
+// Azure sign-in comes only from the environment, never from this file: AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET
+// (an Entra ID app registration with the "Artifact Signing Certificate Profile Signer" role on the signing account).
+// The account details are environment variables too:
+//   DAEBOT_AZURE_ENDPOINT   regional endpoint of the signing account, e.g. https://eus.codesigning.azure.net/
+//   DAEBOT_AZURE_ACCOUNT    Artifact Signing account name
+//   DAEBOT_AZURE_PROFILE    certificate profile name (Public Trust)
+//   DAEBOT_WIN_PUBLISHER    publisher name exactly as on the certificate (the validated legal name)
+const winSignEnv = ["AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "DAEBOT_AZURE_ENDPOINT", "DAEBOT_AZURE_ACCOUNT", "DAEBOT_AZURE_PROFILE", "DAEBOT_WIN_PUBLISHER"];
+const buildingWin = process.argv.includes("--win") || process.argv.includes("-w");
+if (sign && buildingWin) {
+  const missing = winSignEnv.filter((name) => !process.env[name]);
+  if (missing.length) throw new Error(`DAEBOT_SIGN=1 Windows build is missing: ${missing.join(", ")}`);
+}
+const azureSignOptions = sign && buildingWin
+  ? {
+      publisherName: process.env.DAEBOT_WIN_PUBLISHER,
+      endpoint: process.env.DAEBOT_AZURE_ENDPOINT,
+      codeSigningAccountName: process.env.DAEBOT_AZURE_ACCOUNT,
+      certificateProfileName: process.env.DAEBOT_AZURE_PROFILE,
+    }
+  : null;
 
 export default {
   appId: "ai.daebot.desktop",
@@ -48,6 +73,8 @@ export default {
     target: [{ target: "nsis", arch: ["x64", "arm64"] }],
     artifactName: "Daebot-Setup-${version}-${arch}.${ext}",
     extraResources: [{ from: "build/bin", to: "bin", filter: ["daebot-windows-${arch}.exe"] }],
+    // Unsigned unless DAEBOT_SIGN=1 (see azureSignOptions above).
+    azureSignOptions,
   },
   nsis: {
     oneClick: false,

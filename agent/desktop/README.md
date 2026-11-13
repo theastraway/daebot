@@ -92,9 +92,33 @@ build is signed but not notarized; say so in the release notes. Check with `spct
 `xcrun stapler validate`. An unsigned Mac build needs right-click, Open on first launch.
 
 ### Windows and Linux
-CI (`.github/workflows/daebot-desktop.yml`, manual run or a `daebot-v*` tag) builds both with no secrets. Windows installers are
-unsigned (no code-signing certificate yet), so SmartScreen asks to confirm the first launch. The Mac CI job is skipped unless the
+CI (`.github/workflows/daebot-desktop.yml`, manual run or a `daebot-v*` tag) builds both with no secrets. Those CI Windows installers
+are unsigned, so SmartScreen asks to confirm the first launch. The Mac CI job is skipped unless the
 `CSC_LINK` secret exists; it cannot notarize (no `MINDNotarize` profile on runners).
+
+A signed Windows installer uses Azure Artifact Signing (formerly Trusted Signing) with the same `DAEBOT_SIGN=1` switch. There is
+no separate npm script. From `agent/desktop`, on a Windows host or a Windows CI runner:
+
+```
+DAEBOT_SIGN=1 npm run dist:win
+```
+
+The config reads seven environment variables and throws `DAEBOT_SIGN=1 Windows build is missing: ...` if any is unset. Values stay
+in the environment, never in this repo:
+
+- `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` — an Entra app with the Artifact Signing Certificate Profile Signer role
+- `DAEBOT_AZURE_ENDPOINT` — regional endpoint of the signing account, for example `https://eus.codesigning.azure.net/`
+- `DAEBOT_AZURE_ACCOUNT` — Artifact Signing account name
+- `DAEBOT_AZURE_PROFILE` — certificate profile name
+- `DAEBOT_WIN_PUBLISHER` — publisher name, the exact certificate subject
+
+electron-builder installs the TrustedSigning PowerShell module itself and signs the app, the NSIS installer, and the bundled
+`resources/bin/daebot-windows-<arch>.exe` (an `.exe` extra resource; no `signExts` and no extra sign step). Signing runs
+`Invoke-TrustedSigning` through Windows PowerShell: native `pwsh.exe`, or `powershell.exe` if that is missing. A Mac-only `pwsh`
+install is not a supported way to ship. The reliable path is a Windows host or Windows CI runner. A Mac works only when
+electron-builder can drive a Parallels Desktop Windows 10 or 11 VM. `DAEBOT_SIGN=1` on a Mac build (no `--win` / `-w`) does not
+set `azureSignOptions`. The notarize `afterSign` hook is registered for any signed build, and `scripts/notarize.cjs` returns
+immediately unless the platform is `darwin`, so a Windows pack never touches the keychain or `xcrun`.
 
 ### Publishing a release
 1. Bump `version` in `agent/package.json` and `agent/desktop/package.json`; build on each platform (or run the workflow).
