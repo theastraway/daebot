@@ -115,7 +115,7 @@ async function json(path, opts) {
 }
 // Apple Calendar on the user's own device (the iPhone and Mac apps): the agent's device_call events are answered here, natively, and POSTed back.
 const deviceCalls = createDeviceCalls({ post: (sid, body) => api(`/sessions/${encodeURIComponent(sid)}/device-result`, { method: "POST", body: JSON.stringify(body) }) });
-// The read-only terminal pane. It asks for sessions after a `terminal` tool event and whenever the open chat changes.
+// The terminal pane and the iOS Simulator pane. A desktop PTY is typeable. A pipe session stays read-only and says so.
 let simPane = { close() {}, noteTool() {}, sync() {} };
 const termPane = initTerminalPane({
   json,
@@ -125,6 +125,8 @@ const termPane = initTerminalPane({
   pane: $("term-pane"),
   list: $("term-list"),
   out: $("term-out"),
+  screenEl: $("term-screen"),
+  noteEl: $("term-note"),
   exitEl: $("term-exit"),
   emptyEl: $("term-empty"),
   closeBtn: $("btn-term-close"),
