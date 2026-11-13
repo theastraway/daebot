@@ -190,7 +190,9 @@ test("feedback: thumbs + comment are saved with the message; a report is negativ
   } finally { await g.close(); }
 });
 
-test("learning: 👍/👎 and a report on an admin session are written to the learning store as lessons", async () => {
+test("learning (DAEBOT_FOCUSED_CONTEXT=0): 👍/👎 and a report on an admin session are written to the learning store as lessons", async () => {
+  const prev = process.env.DAEBOT_FOCUSED_CONTEXT; process.env.DAEBOT_FOCUSED_CONTEXT = "0";
+  try {
   const keys = { owner: "mind_" + rnd() };
   const fake = await startFakeMind({ [keys.owner]: "owner" });
   const dir = mkdtempSync(join(tmpdir(), "daebot-learn-fb-"));
@@ -212,6 +214,28 @@ test("learning: 👍/👎 and a report on an admin session are written to the le
     assert.match(written, /Lesson - Failure - Reply reported wrong/);
     assert.match(written, /keep it short/);
     assert.match(written, /Lesson - Win - Reply rated up/);
+  } finally { await fake.close(); }
+} finally { if (prev === undefined) delete process.env.DAEBOT_FOCUSED_CONTEXT; else process.env.DAEBOT_FOCUSED_CONTEXT = prev; }
+});
+
+test("learning (focused context): a bare thumb is not a lesson; a rating with a comment or a report is", async () => {
+  const keys = { owner: "mind_" + rnd() };
+  const fake = await startFakeMind({ [keys.owner]: "owner" });
+  const dir = mkdtempSync(join(tmpdir(), "daebot-learn-fb2-"));
+  try {
+    const provider = new FakeProvider([{ text: "Here is a long meandering answer." }]);
+    const rt = createRuntime(baseCfg({ mindBaseUrl: fake.base, mindApiKey: keys.owner }), { provider, store: createFileStore(dir), bootCache: new BootCache(), env: { MINDCLAW_LEARNING: "1" } as any } as any);
+    const s = await rt.openSession({ surface: "web" });
+    for await (const _ of s.send("explain it")) { /* drain */ }
+    const mid = (rt.history!(s.id)!.filter((e: any) => e.type === "text").pop() as any).id as string;
+    const down = await rt.reactMessage!(s.id, mid, "👎");
+    assert.ok(!(typeof down === "object" && down.learned), "a bare thumbs down is not stored");
+    const rep = await rt.feedbackMessage!(s.id, mid, { rating: "down", reason: "Too long or unclear", comment: "keep it short", report: true });
+    assert.ok(typeof rep === "object" && rep.learned);
+    await new Promise((res) => setTimeout(res, 200));
+    const written = JSON.stringify(fake.seen.filter((x) => x.method === "POST").map((x) => x.body));
+    assert.doesNotMatch(written, /Reply rated down/);
+    assert.match(written, /keep it short/);
   } finally { await fake.close(); }
 });
 

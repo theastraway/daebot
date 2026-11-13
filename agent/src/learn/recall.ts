@@ -2,6 +2,7 @@
 import type { LearnConfig } from "./config.ts";
 import { contentProblem } from "./guard.ts";
 import { citeId } from "./records.ts";
+import { focusedContextOn } from "../focus.ts";
 import { clip, coverage, jaccard, oneLine, tokenSet } from "./text.ts";
 import type { Item, UserModel } from "./types.ts";
 
@@ -29,8 +30,9 @@ export function rank(message: string, items: Item[], cfg: LearnConfig, now: Date
     let overlap = 0;
     for (const x of q) if (d.has(x)) overlap++;
     const relevance = 0.6 * coverage(q, d) + 0.4 * jaccard(q, d);
-    // Need real topical overlap: two shared content words, or one when the message is a short command.
-    if (overlap < (q.size <= 3 ? 1 : 2) || relevance < 0.12) continue;
+    // Need real topical overlap: two shared content words. (Before focused context a short command needed only one, which is how an
+    // unrelated "agent sessions first" lesson fired on greetings.)
+    if (overlap < (focusedContextOn() ? 2 : q.size <= 3 ? 1 : 2) || relevance < 0.12) continue;
     const judged = it.helped + it.hurt;
     const utility = (it.helped + 1) / (judged + 2);                 // Laplace-smoothed helped rate, 0.5 when unknown
     const decay = Math.pow(0.5, ageDays(it.updated, now) / cfg.halfLifeDays);
@@ -47,12 +49,15 @@ function renderItem(i: Item): string {
   return `- ${citeId(i)} [skill ${i.name}, worked ${i.successes}x] ${clip(i.description, 110)}.${pre} Steps: ${steps}`;
 }
 
-export function renderUserModel(m: UserModel | undefined, budget: number): string {
+export function renderUserModel(m: UserModel | undefined, budget: number, message?: string): string {
   if (!m || !m.prefs.length || budget < 80) return "";
   let s = `User model (${m.user}): `;
   const parts: string[] = [];
+  const q = message !== undefined && focusedContextOn() ? tokenSet(message) : undefined;
   for (const p of m.prefs.slice().reverse()) {
     const part = `${p.area}: ${p.statement}`;
+    // Focused context: a preference rides along only when it shares a term with the message.
+    if (q) { const d = tokenSet(part); let hit = 0; for (const x of q) if (d.has(x)) hit++; if (!hit) continue; }
     if (contentProblem(part)) continue;
     if ((s + [...parts, part].join("; ")).length > budget) break;
     parts.push(part);
@@ -67,7 +72,7 @@ export function buildNote(opts: {
   const { cfg } = opts;
   const lines: string[] = [];
   let used = NOTE_HEADER.length + 2;
-  const um = renderUserModel(opts.userModel, Math.min(600, cfg.maxInjectChars - used - 200));
+  const um = renderUserModel(opts.userModel, Math.min(600, cfg.maxInjectChars - used - 200), opts.message);
   if (um) { lines.push(um); used += um.length + 1; }
   const cited: Item[] = [];
   for (const r of rank(opts.message, opts.items, cfg, opts.now)) {

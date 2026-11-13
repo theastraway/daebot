@@ -1,4 +1,5 @@
 import { test } from "node:test";
+process.env.DAEBOT_FOCUSED_CONTEXT = "0"; // these assertions are about the full (pre-focus) prompt and tool set; test/core/focused-context.test.ts covers the focused path
 import assert from "node:assert/strict";
 import { shellCommand } from "../../src/tools/bash.ts";
 import { composeSystemPrompt, DOCUMENTS_SECTION } from "../../src/runtime.ts";

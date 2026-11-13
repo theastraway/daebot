@@ -2,6 +2,7 @@
 // printed or written by this module.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { focusedContextOn } from "./focus.ts";
 import { daebotHome } from "./home.ts";
 import type { Config } from "./types.ts";
 
@@ -123,6 +124,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(Number.isFinite(rounds) && rounds >= 1 ? { maxToolRoundsPerTurn: Math.floor(rounds) } : {}),
     checkInMs: posMs(env.DAEBOT_CHECKIN_MS) ?? DEFAULTS.checkInMs,
     contextWindow: posInt(env.MINDCLAW_CONTEXT_WINDOW) ?? DEFAULTS.contextWindow,
-    compactAt: fraction(env.MINDCLAW_COMPACT_AT) ?? DEFAULTS.compactAt,
+    // Focused context (DAEBOT_FOCUSED_CONTEXT, default on): compact at 40% of the window instead of 60%.
+    compactAt: fraction(env.MINDCLAW_COMPACT_AT) ?? (focusedContextOn(env) ? 0.4 : DEFAULTS.compactAt),
   };
 }

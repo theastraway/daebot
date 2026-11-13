@@ -1,4 +1,5 @@
 // Security review fixes F-1 .. F-12 (PR 17). One test (or more) per finding.
+process.env.DAEBOT_FOCUSED_CONTEXT = "0"; // these assertions are about the full (pre-focus) prompt and tool set; test/core/focused-context.test.ts covers the focused path
 process.env.DAEBOT_BOTS_ENABLED = "1";
 import { test } from "node:test";
 import assert from "node:assert/strict";

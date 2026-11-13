@@ -1,4 +1,5 @@
 // MCP client (Streamable HTTP) against a local fake MCP server.
+process.env.DAEBOT_FOCUSED_CONTEXT = "0"; // these assertions are about the full (pre-focus) prompt and tool set; test/core/focused-context.test.ts covers the focused path
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";

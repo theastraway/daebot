@@ -1,4 +1,5 @@
 // The bot toolkit: Daebot (and each bot, for itself) runs bots through bot_manage: one test per new action, self mode, the threads
+process.env.DAEBOT_FOCUSED_CONTEXT = "0"; // these assertions are about the full (pre-focus) prompt and tool set; test/core/focused-context.test.ts covers the focused path
 // plumbing through the real runtime and gateway, the bot_self threads defect, and the system-prompt section.
 process.env.DAEBOT_BOTS_ENABLED = "1";
 import { test } from "node:test";

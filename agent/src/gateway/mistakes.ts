@@ -10,6 +10,8 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { isAutomatedMessage, isTrivialMessage } from "../focus.ts";
+import { tokenSet } from "../learn/text.ts";
 
 export const TASK_STATUSES = ["open", "done-verified", "failed", "abandoned"] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
@@ -333,4 +335,23 @@ export function mistakeBrief(dir: string, n = 10): string {
   if (!top.length) return "";
   const lines = top.map((t, i) => `${i + 1}. ${t.name} (${t.count}x${t.last_seen ? `, last ${t.last_seen.slice(0, 10)}` : ""})${t.prevention ? ` - RULE: ${t.prevention.replace(/\s+/g, " ").slice(0, 220)}` : ""}`);
   return `## My own repeat failures (Daebot Mistake log, top ${top.length} by count)\nThese are mistakes I have already made many times. Check each before I act and before I say done.\n${lines.join("\n")}`;
+}
+
+/**
+ * Focused context: at most `n` (default 3) of Daebot's own repeat failures, only those that lexically match the message
+ * (the failure's name shares a meaningful term, or its prevention rule shares two), and none for a trivial message.
+ */
+export function mistakeBriefFor(dir: string, message: string, n = 3): string {
+  if (isTrivialMessage(message) || isAutomatedMessage(message)) return "";
+  const q = tokenSet(message);
+  if (!q.size) return "";
+  const hit = readTopMistakes(dir, 200).filter((t) => {
+    const name = tokenSet(t.name), body = tokenSet(t.prevention);
+    let a = 0, b = 0;
+    for (const x of q) { if (name.has(x)) a++; if (body.has(x)) b++; }
+    return a >= 1 || b >= 2;
+  }).slice(0, Math.max(0, n));
+  if (!hit.length) return "";
+  const lines = hit.map((t, i) => `${i + 1}. ${t.name} (${t.count}x${t.last_seen ? `, last ${t.last_seen.slice(0, 10)}` : ""})${t.prevention ? ` - RULE: ${t.prevention.replace(/\s+/g, " ").slice(0, 220)}` : ""}`);
+  return `## My own repeat failures that match this message (Daebot Mistake log)\n${lines.join("\n")}`;
 }

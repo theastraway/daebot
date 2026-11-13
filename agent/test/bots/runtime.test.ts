@@ -1,4 +1,5 @@
 import { test } from "node:test";
+process.env.DAEBOT_FOCUSED_CONTEXT = "0"; // these assertions are about the full (pre-focus) prompt and tool set; test/core/focused-context.test.ts covers the focused path
 process.env.DAEBOT_BOTS_ENABLED = "1"; // the Bots feature flag (default off)
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
