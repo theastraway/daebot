@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildSpawnPlan } from "../src/lib/launcher.mjs";
-import { TERMINAL_SHOT, IOS_SIM_SHOT, parseDevicesShots, devicesShotsFromArgv, shotFilesFor, shotProbeFor, terminalShotProbe, iosSimShotProbe } from "../src/lib/devices-shots.mjs";
+import { PTY_SHOT, TERMINAL_SHOT, IOS_SIM_SHOT, parseDevicesShots, devicesShotsFromArgv, shotFilesFor, shotProbeFor, terminalShotProbe, iosSimShotProbe, ptyShotProbe } from "../src/lib/devices-shots.mjs";
 
 const argv = (...flags) => ["electron", ".", ...flags];
 
@@ -56,6 +56,12 @@ test("the spawn plan tells only the fake gateway which pane to seed", () => {
   assert.equal(mac.env.DAEBOT_SIMULATOR_FAKE, undefined);
   assert.equal(mac.env.DAEBOT_DEV_SHOTS, undefined);
   assert.equal(mac.env.MINDCLAW_DESKTOP_FAKE, "1");
+  const pty = buildSpawnPlan({ ...base, fake: true, devicesShotsPane: "pty", ptyPort: 43123 });
+  assert.equal(pty.env.DAEBOT_PTY_PORT, "43123");
+  assert.equal(pty.env.DAEBOT_DEVICES_SHOTS_PANE, "pty");
+  const notFake = buildSpawnPlan({ ...base, devicesShotsPane: "pty", ptyPort: 43123 });
+  assert.equal(notFake.env.DAEBOT_PTY_PORT, undefined);
+  assert.equal(notFake.env.DAEBOT_DEVICES_SHOTS_PANE, undefined);
 });
 
 test("the terminal probe reads text and does not build HTML", () => {
@@ -66,6 +72,19 @@ test("the terminal probe reads text and does not build HTML", () => {
   assert.doesNotMatch(live, /innerHTML/);
   assert.match(terminalShotProbe("closed"), /closed-work/);
   assert.match(terminalShotProbe("empty"), /No output yet/);
+  assert.deepEqual(shotFilesFor("pty").files, ["color.png", "tui.png", "typed.png", "closed.png"]);
+  const color = ptyShotProbe("color");
+  assert.match(color, /pty-shot/);
+  assert.match(color, new RegExp(PTY_SHOT.colorMarker));
+  assert.match(color, /xterm-rows/);
+  assert.match(color, /rowsLit/);
+  assert.match(color, /\/\\b\(README\|notes\)\\b\//);
+  assert.match(ptyShotProbe("typed"), /cols=\\d\+/);
+  assert.match(ptyShotProbe("tui"), /PID\|%CPU\|Tasks/);
+  assert.match(ptyShotProbe("arm"), /xterm-helper-textarea/);
+  assert.match(ptyShotProbe("closed"), /pty-session-closed/);
+  assert.match(ptyShotProbe("closed"), /Exited/);
+  assert.doesNotMatch(color, /innerHTML/);
 });
 
 test("ios-sim shots name the window and the pane, and the probe checks they do not overlap", () => {
