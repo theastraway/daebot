@@ -58,8 +58,20 @@ export function buildSpawnPlan(o) {
   // Match daebot.live: Bots (Sessions | Bots toggle, bot_talk) is on in the app. An explicit value in the environment still wins.
   if (env.DAEBOT_BOTS_ENABLED === undefined) env.DAEBOT_BOTS_ENABLED = "1";
   if (o.fake) env.MINDCLAW_DESKTOP_FAKE = "1";
-  // The shots seed spawns a real shell. It stays off unless this is the fake smoke gateway.
-  if (o.devicesShotsPane && o.fake) env.DAEBOT_DEVICES_SHOTS_PANE = String(o.devicesShotsPane);
+  // The shots seed stays off unless this is the fake smoke gateway.
+  if (o.devicesShotsPane && o.fake) {
+    env.DAEBOT_DEVICES_SHOTS_PANE = String(o.devicesShotsPane);
+    // The fixture phone exists only for the ios-sim shot. needs-mac must see the real Linux gateway.
+    if (o.devicesShotsPane === "ios-sim") {
+      if (env.DAEBOT_IOS_SIM_SHOT_MODE === "needs-mac") {
+        delete env.DAEBOT_SIMULATOR_FAKE;
+        delete env.DAEBOT_DEV_SHOTS;
+      } else {
+        env.DAEBOT_SIMULATOR_FAKE = "1";
+        env.DAEBOT_DEV_SHOTS = "1";
+      }
+    }
+  }
   if (o.tokenPath) env.MINDCLAW_DESKTOP_TOKEN_PATH = o.tokenPath;
   let plan;
   if (o.binaryPath && !o.fake) {
