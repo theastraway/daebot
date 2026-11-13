@@ -10,7 +10,7 @@ import type { MindClient, Tool, ToolClass, ToolResult } from "../types.ts";
 
 const MAX_OUT = 20_000;
 const MAX_REPLY = 6_000;
-const READ_ACTIONS = ["list", "get", "inbox", "wake_target_get"] as const;
+const READ_ACTIONS = ["list", "get", "inbox", "wake_target_get", "sources", "activity"] as const;
 const ACTIONS = [...READ_ACTIONS, "reply"] as const;
 
 type Row = Record<string, unknown>;
@@ -70,6 +70,8 @@ export function createMindSessionsTool(o: MindSessionsOptions): Tool {
       description:
         `Your Grok bots, Claude Code and other agents sync their work into ${user}'s MIND as Agent Sessions. Use this to read them and to direct them. ` +
         "list: recent sessions (optional source_key, status, q, limit). get: one session with its messages (session_id, optional limit). " +
+        "sources: every agent source that syncs into your MIND, with session counts and a stale flag (a source flagged stale has not heartbeated recently). " +
+        "activity: the activity map over a time window — which agents worked, on which projects, how many turns and tool calls (days, default 7). " +
         "inbox: replies the user already sent that no agent has picked up yet (optional session_id to filter); reading it changes nothing. " +
         "wake_target_get: which bots have a wake webhook set (names only, never the url or secret). " +
         "reply: send content into one of the user's OWN sessions; MIND stores it and wakes that bot. It reaches another agent, so it asks the user first. " +
@@ -84,6 +86,7 @@ export function createMindSessionsTool(o: MindSessionsOptions): Tool {
           status: { type: "string", description: "list: active or ended" },
           q: { type: "string", description: "list: words to search for" },
           limit: { type: "integer", description: "list: how many sessions (default 20, max 50). get: how many messages (default 30, max 100)." },
+          days: { type: "number", description: "activity: the window in days (default 7, max 30)" },
         },
         required: ["action"],
         additionalProperties: false,
@@ -127,6 +130,46 @@ export function createMindSessionsTool(o: MindSessionsOptions): Tool {
           const t = Array.isArray(j.wake_targets) ? (j.wake_targets as Row[]) : [];
           if (!t.length) return { ok: true, output: "No bot has a wake webhook set. A reply is stored in MIND and the bot reads it the next time it checks its inbox." };
           return { ok: true, output: t.map((x) => `- ${str(x.agent ?? x.agent_key ?? x.label, 60)} (${str(x.runtime, 20) || "grok"}) wake ${str(x.status ?? x.last_wake_state ?? "set", 30)}`).join("\n") };
+        }
+        if (action === "sources") {
+          const j = parse(await c.call("agent_sessions", { action: "sources" }));
+          const rows = Array.isArray(j.sources) ? (j.sources as Row[]) : [];
+          if (!rows.length) return { ok: true, output: "No agent sources in your MIND." };
+          const lines = rows.map((x) => {
+            const stale = x.sync_stale ? " STALE" : "";
+            const last = str(x.last_seen_at, 16) || "-";
+            return `- ${str(x.runtime, 18)} ${str(x.session_count)} sessions ${stale ? "STALE" : "live"} ${str(x.key, 50)} last ${last} — ${str(x.label, 60)}`;
+          });
+          return { ok: true, output: cap([UNTRUSTED, `${rows.length} agent source${rows.length === 1 ? "" : "s"}:`, ...lines].join("\n")) };
+        }
+        if (action === "activity") {
+          const days = clampInt(args.days, 1, 30, 7);
+          const j = parse(await c.call("agent_sessions", { action: "activity", days })) as Record<string, unknown>;
+          const agents: Row[] = Array.isArray(j.agents) ? (j.agents as Row[]) : [];
+          const projects: Row[] = Array.isArray(j.projects) ? (j.projects as Row[]) : [];
+          const opts: Row[] = Array.isArray(j.project_options) ? (j.project_options as Row[]) : [];
+          const names: Record<string, string> = {};
+          for (const o of opts) if (o.project_id) names[String(o.project_id)] = str(o.title, 80);
+          const tot = (j.totals ?? {}) as Record<string, unknown>;
+          const win = (j.window ?? {}) as Record<string, unknown>;
+          const head = [
+            `window: ${str(win.days ?? days, 4)} days, since ${str(win.since ?? "-", 16)}`,
+            `sessions ${str(tot.sessions ?? 0)}  turns ${str(tot.turns ?? 0)}  tool_calls ${str(tot.tool_calls ?? 0)}  messages ${str(tot.messages ?? 0)}  agents ${str(tot.agents ?? 0)}  projects ${str(tot.projects ?? 0)}`,
+            "",
+            "AGENTS (by turns)",
+          ];
+          const aLines = agents
+            .slice()
+            .sort((a, b) => (num(b.turns) ?? 0) - (num(a.turns) ?? 0))
+            .map((a) => `- ${str(a.agent_label ?? a.agent_key, 28)} ${str(a.sessions ?? 0)} sessions  ${str(a.turns ?? 0)} turns  ${str(a.tool_calls ?? 0)} tools`)
+            .slice(0, 20);
+          const pLines = projects
+            .slice()
+            .sort((a, b) => (num(b.turns) ?? 0) - (num(a.turns) ?? 0))
+            .map((p) => `- ${names[String(p.project_id)] ?? str(p.project_id ?? "unassigned", 50)}  ${str(p.sessions ?? 0)} sessions  ${str(p.turns ?? 0)} turns  ${str(p.tool_calls ?? 0)} tools`)
+            .slice(0, 20);
+          const unassigned = Array.isArray(j.unassigned) ? j.unassigned : [];
+          return { ok: true, output: cap([UNTRUSTED, ...head, ...aLines, "", "PROJECTS WITH AGENT WORK (by turns)", ...pLines, "", `sessions not yet assigned to a project: ${str(unassigned.length ?? tot.unassigned ?? 0)}`].join("\n")) };
         }
         // reply
         if (ctx?.origin === "bot" && !isOwnerRoutine(ctx)) return fail("blocked: a message from another bot cannot send replies into your sessions. Only you can ask for that.");

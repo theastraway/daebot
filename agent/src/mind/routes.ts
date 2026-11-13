@@ -156,6 +156,10 @@ export function routeFor(toolIn: string, args: Record<string, unknown>): Route {
       if (action === "open") return { method: "POST", path: "/agent-sessions/open", body: clean(args), timeoutMs: 15_000 };
       if (action === "append") return { method: "POST", path: `/agent-sessions/${sid}/append`, body: clean(args, ["session_id"]), timeoutMs: 15_000 };
       if (action === "close") return { method: "POST", path: `/agent-sessions/${sid}/close`, body: clean(args, ["session_id"]), timeoutMs: 15_000 };
+      // Every agent source that syncs into the user's MIND, with session counts and stale flags (read-only).
+      if (action === "sources") return { method: "GET", path: "/agent-sessions/sources" };
+      // The activity map: agents, projects, cells, totals over a time window (read-only). days defaults to 7.
+      if (action === "activity") return { method: "GET", path: "/agent-sessions/activity", query: toQuery(pick(args, ["days"])) };
       // Sharing one session with another MIND account (viewer = read, editor = read + post). Used by Daebot's shared threads; owner-only on MIND's side.
       if (action === "shares") return { method: "GET", path: `/agent-sessions/${need(args, "session_id", tool, action)}/shares` };
       if (action === "share_add") return { method: "POST", path: `/agent-sessions/${need(args, "session_id", tool, action)}/shares`, body: pick(args, ["grantee_username", "role"]), timeoutMs: 15_000, noRetry: true };
