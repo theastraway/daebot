@@ -3,7 +3,8 @@
 import { app, BrowserWindow, WebContentsView, Tray, Menu, powerSaveBlocker, globalShortcut, Notification, ipcMain, shell, nativeImage, nativeTheme, screen, session, dialog, systemPreferences, desktopCapturer } from "electron";
 import { createRequire } from "node:module";
 import { spawn, execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,7 +29,7 @@ import { ScreenCapture } from "./lib/screen-capture.mjs";
 import { screenAccess, permissionSettingsUrl } from "./lib/screen-permission.mjs";
 import { frameQuery, redDotBitmap } from "./lib/screen-frame.mjs";
 import { CALENDAR_CHANNEL, createCalendarBridge, createCalendarHandler, findCalendarHelper } from "./lib/calendar.mjs";
-import { devicesShotsFromArgv, shotFilesFor, shotProbeFor } from "./lib/devices-shots.mjs";
+import { devicesShotsFromArgv, ptyShotProbe, shotFilesFor, shotProbeFor } from "./lib/devices-shots.mjs";
 import { createBrowserPane } from "./lib/browser-pane.mjs";
 import { startBrowserChannel } from "./lib/browser-channel.mjs";
 
@@ -80,6 +81,8 @@ let quitting = false;
 let gatewayInfo = null; // { url, token, origin }
 let browserPane = null;
 let browserChannel = null;
+let ptyHost = null;
+let shotPtyPort = 0;
 let watcher = null;
 const notifyAllowed = createRateLimiter(5, 10_000);
 
@@ -99,6 +102,7 @@ const gateway = new ChildGateway({
     fake: SMOKE,
     devicesShotsPane: DEVICE_SHOTS && !DEVICE_SHOTS.error ? DEVICE_SHOTS.pane : undefined,
     tokenPath: smokeHome ? join(smokeHome, "gateway-token") : undefined,
+    ptyPort: shotPtyPort || undefined,
   }),
 });
 gateway.on("log", (s) => log("gateway:", s.trim().slice(0, 300)));
@@ -243,13 +247,59 @@ function errorPage(message) {
   return "data:text/html;charset=utf-8," + encodeURIComponent(html);
 }
 
+function ensureSmokeToken(path) {
+  if (existsSync(path)) {
+    const t = readFileSync(path, "utf8").trim();
+    if (/^[0-9a-f]{64}$/.test(t)) return t;
+  }
+  const token = randomBytes(32).toString("hex");
+  writeFileSync(path, token + "\n", { mode: 0o600 });
+  try { chmodSync(path, 0o600); } catch { /* the write already used mode 0600 */ }
+  return token;
+}
+
+async function ensurePtyHost(token) {
+  if (ptyHost) return ptyHost;
+  const { startPtyHost } = await import("./lib/pty-host.mjs");
+  ptyHost = await startPtyHost({ token });
+  return ptyHost;
+}
+
+function closePtyHost() {
+  const host = ptyHost;
+  ptyHost = null;
+  shotPtyPort = 0;
+  if (host) void host.close().catch(() => { /* already closed */ });
+}
+
+async function attachDesktopPty(info) {
+  try {
+    const host = await ensurePtyHost(info.token);
+    const res = await fetch(new URL("/devices/pty", info.url), {
+      method: "POST",
+      headers: { authorization: `Bearer ${info.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ port: host.port }),
+    });
+    if (!res.ok) log("pty announce", res.status);
+  } catch (e) {
+    log("pty host did not attach:", String(e?.message ?? e).replace(/[0-9a-f]{32,}/gi, "[redacted]").slice(0, 180));
+  }
+}
+
 async function startGateway() {
+  // The pty shot seeds inside the gateway before it prints ready, so the host has to be up first.
+  if (SMOKE && DEVICE_SHOTS && !DEVICE_SHOTS.error && DEVICE_SHOTS.pane === "pty" && smokeHome) {
+    const token = ensureSmokeToken(join(smokeHome, "gateway-token"));
+    const host = await ensurePtyHost(token);
+    shotPtyPort = host.port;
+  }
   const info = await gateway.start();
   await waitForHealth(info.url);
   gatewayInfo = { ...info, origin: originOf(info.url) };
   startWatcher();
   void resumeScreenAfterGateway();
   startBrowserChannelIfNeeded();
+  if (!(DEVICE_SHOTS && !DEVICE_SHOTS.error && DEVICE_SHOTS.pane === "pty")) void attachDesktopPty(gatewayInfo);
   return gatewayInfo;
 }
 
@@ -725,6 +775,7 @@ function registerShortcut() {
 gateway.on("crashed", async ({ code, signal }) => {
   if (quitting) return;
   log(`gateway exited unexpectedly (${code ?? signal}); restarting`);
+  closePtyHost();
   stopWatcher();
   screenCapture.stop(); // no gateway to feed: stop capturing (the saved switch is kept; it resumes when the next gateway is up)
   stopBrowserChannel();
@@ -740,6 +791,7 @@ app.on("before-quit", (e) => {
   if (quitting) return;
   quitting = true;
   e.preventDefault();
+  closePtyHost();
   screenCapture.stop();
   stopBrowserChannel();
   stopWatcher();
@@ -809,6 +861,21 @@ async function runSmoke() {
   app.exit(result.ok ? 0 : 1);
 }
 
+async function typeIntoPty(wc, text) {
+  try { win?.focus(); } catch { /* the smoke window is already up */ }
+  try { wc.focus(); } catch { /* focus is best-effort; the textarea focus below is what xterm reads */ }
+  const focused = await wc.executeJavaScript(`(() => { const el = document.querySelector(".xterm-helper-textarea"); if (!el) return false; el.focus(); return document.activeElement === el; })()`, true);
+  if (!focused) throw new Error("xterm is not focused");
+  // A char event inserts the glyph into the focused helper textarea. xterm's input handler
+  // sends that to the pty, including uppercase and symbols keyDown will not accept.
+  for (const ch of text) {
+    wc.sendInputEvent({ type: "char", keyCode: ch });
+    await new Promise((r) => setTimeout(r, 28));
+  }
+  wc.sendInputEvent({ type: "keyDown", keyCode: "Return" });
+  wc.sendInputEvent({ type: "keyUp", keyCode: "Return" });
+}
+
 // Dev-only: open one device pane in the smoke window and write PNGs. A pane adds a branch in shotFilesFor
 // and a probe in shotProbeFor. Flags without --mindclaw-smoke never reach this function.
 // The browser pane composites the child view itself (capturePage misses it): shots-browser.mjs.
@@ -825,6 +892,7 @@ async function runDeviceShots(spec) {
     try { mkdirSync(spec.dir, { recursive: true }); writeFileSync(join(spec.dir, "result.json"), JSON.stringify(result, null, 2)); }
     catch (e) { log("shots: could not write result:", String(e?.message ?? e)); }
     quitting = true;
+    closePtyHost();
     await gateway.stop();
     app.exit(code);
   };
@@ -857,14 +925,24 @@ async function runDeviceShots(spec) {
   try {
     win.webContents.setZoomLevel(0);
     // The simulator shot has to show the chat column beside a 420px pane, on the Xvfb screen the script uses.
+    // The PTY pane is wider than the read-only one so a full-screen program fits; the window grows with it.
     if (spec.pane === "ios-sim") win.setSize(1440, 900);
-    else win.setContentSize(1360, 860);
+    else win.setContentSize(spec.pane === "pty" ? 1440 : 1360, spec.pane === "pty" ? 880 : 860);
     win.show();
     await new Promise((r) => setTimeout(r, 300));
     const shots = [];
     for (const file of plan.files) {
       const probe = shotProbeFor(spec.pane, file);
       if (probe.error) { await finish(1, { ok: false, pane: spec.pane, file, error: probe.error }); return; }
+      if (spec.pane === "pty" && file === "typed.png") {
+        const ready = await Promise.race([
+          win.webContents.executeJavaScript(ptyShotProbe("arm"), true).catch((e) => ({ ok: false, error: String(e?.message ?? e) })),
+          new Promise((r) => setTimeout(() => r({ ok: false, error: "probe timeout" }), 25_000)),
+        ]);
+        log("shots:", "arm", JSON.stringify(ready).slice(0, 400));
+        if (!ready?.ok) { await finish(1, { ok: false, pane: spec.pane, step: "arm", state: ready }); return; }
+        await typeIntoPty(win.webContents, "echo USER-TYPED-OK cols=$(tput cols)");
+      }
       const state = await Promise.race([
         win.webContents.executeJavaScript(probe.script, true).catch((e) => ({ ok: false, error: String(e?.message ?? e) })),
         new Promise((r) => setTimeout(() => r({ ok: false, error: "probe timeout" }), probe.timeoutMs)),
