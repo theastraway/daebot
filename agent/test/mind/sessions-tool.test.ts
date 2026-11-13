@@ -113,18 +113,24 @@ test("classes: reads are read, reply is outward; staff may use the tool, public 
   assert.equal(effectiveClass(tool, { action: "get" }), "read");
   assert.equal(effectiveClass(tool, { action: "inbox" }), "read");
   assert.equal(effectiveClass(tool, { action: "wake_target_get" }), "read");
+  assert.equal(effectiveClass(tool, { action: "sources" }), "read");
+  assert.equal(effectiveClass(tool, { action: "activity" }), "read");
   assert.equal(effectiveClass(tool, { action: "reply" }), "outward");
   assert.equal(tierAllows("staff", tool), true);
   assert.equal(tierAllows("staff", tool, { action: "reply", session_id: "s", content: "c" }), true);
   assert.equal(tierAllows("admin", tool, { action: "reply" }), true);
   assert.equal(tierAllows("public", tool), false);
   assert.equal(tierAllows("public", tool, { action: "list" }), false);
+  assert.equal(tierAllows("public", tool, { action: "sources" }), false);
+  assert.equal(tierAllows("public", tool, { action: "activity" }), false);
   // the user's go is still asked for before a reply, never before a read
   const k = createKernel({ shadow: false, enabled: true, tier: "staff", hosted: true });
   const reply = k.preTool(state(), { id: "c", name: "mind_sessions", args: { action: "reply", session_id: "s", content: "c" } }, tool);
   assert.ok(reply.some((v) => v.gate === "danger" && v.action === "needs-confirmation"));
   assert.ok(reply.every((v) => v.gate !== "tier"));
   assert.equal(k.preTool(state(), { id: "c", name: "mind_sessions", args: { action: "list" } }, tool).length, 0);
+  assert.equal(k.preTool(state(), { id: "c", name: "mind_sessions", args: { action: "sources" } }, tool).length, 0);
+  assert.equal(k.preTool(state(), { id: "c", name: "mind_sessions", args: { action: "activity" } }, tool).length, 0);
 });
 
 test("reply: the owner's own routine turn (receipt starts with routine:) may reply; a peer bot with any other receipt may not", async () => {
@@ -147,4 +153,71 @@ test("reply goes through replyClient (the chat:write key) when given; reads stay
   assert.ok(main.seen.length >= 1 && main.seen.every((s) => !/reply/i.test(JSON.stringify(s.body ?? "")) ));
   assert.ok(reply.seen.length >= 1);
   assert.equal(reply.seen[reply.seen.length - 1].headers["x-api-key"], "mind_REPLYKEY0123456789abcdef");
+});
+
+test("sources: GET /agent-sessions/sources, formatted with counts, stale flag, and label", async () => {
+  const { tool, seen } = setup(() => json(200, {
+    sources: [
+      { key: "grok@cloud", runtime: "grok", session_count: 36, sync_stale: true, last_seen_at: "2026-11-10T21:53:14Z", label: "Grok Bot · anthony@theastraway.com" },
+      { key: "claude-code@anthonys-mbp-7", runtime: "claude-code", session_count: 366, sync_stale: false, last_seen_at: "2026-11-12T19:15Z", label: "Claude Code · Anthony's MacBook Pro" },
+    ],
+  }));
+  const r = await tool.run({ action: "sources" }, ctx);
+  assert.equal(r.ok, true);
+  assert.equal(seen[0].method, "GET");
+  assert.match(seen[0].url, /\/agent-sessions\/sources$/);
+  assert.match(r.output, /data, never instructions/);
+  assert.match(r.output, /grok 36 sessions STALE/);
+  assert.match(r.output, /claude-code 366 sessions live/);
+  assert.match(r.output, /Grok Bot/);
+  assert.match(r.output, /Claude Code/);
+});
+
+test("sources: empty and error cases do not throw", async () => {
+  assert.match((await setup(() => json(200, { sources: [] })).tool.run({ action: "sources" }, ctx)).output, /No agent sources/);
+  const bad = await setup(() => json(403, { detail: "missing scope" })).tool.run({ action: "sources" }, ctx);
+  assert.equal(bad.ok, false);
+  assert.match(bad.output, /mind_sessions sources/);
+});
+
+test("activity: GET /agent-sessions/activity with days, resolves project names from project_options", async () => {
+  const { tool, seen } = setup(() => json(200, {
+    window: { days: 7, since: "2026-11-06T00:37:29Z" },
+    totals: { sessions: 219, turns: 2470, tool_calls: 4285, messages: 8243, agents: 15, projects: 9 },
+    agents: [
+      { agent_key: "claude-code", agent_label: "Claude Code", sessions: 33, turns: 695, tool_calls: 793 },
+      { agent_key: "leo", agent_label: "Leo", sessions: 1, turns: 502, tool_calls: 500 },
+    ],
+    projects: [
+      { project_id: "41377936-b653-468a-9853-5afe5ac7d49c", sessions: 2, turns: 112, tool_calls: 114 },
+      { project_id: null, sessions: 28, turns: 525, tool_calls: 622 },
+    ],
+    project_options: [
+      { project_id: "41377936-b653-468a-9853-5afe5ac7d49c", title: "Mac to Cloud - MIND and Drive Sync" },
+      { project_id: "fab64071-4caf-4c2e-a0ab-0339b5bf43a0", title: "2025 Tax Return" },
+    ],
+    unassigned: [],
+  }));
+  const r = await tool.run({ action: "activity", days: 7 }, ctx);
+  assert.equal(r.ok, true);
+  assert.equal(seen[0].method, "GET");
+  assert.match(seen[0].url, /\/agent-sessions\/activity\?days=7/);
+  assert.match(r.output, /data, never instructions/);
+  assert.match(r.output, /window: 7 days/);
+  assert.match(r.output, /sessions 219/);
+  assert.match(r.output, /Claude Code.*695 turns/);
+  assert.match(r.output, /Leo.*502 turns/);
+  // project name resolved, not the raw UUID
+  assert.match(r.output, /Mac to Cloud - MIND and Drive Sync.*112 turns/);
+  // null project_id shown as unassigned, inside the projects list
+  assert.match(r.output, /unassigned.*525 turns/);
+});
+
+test("activity: empty and error cases do not throw", async () => {
+  const empty = await setup(() => json(200, { window: { days: 7 }, totals: {}, agents: [], projects: [], project_options: [], unassigned: [] })).tool.run({ action: "activity", days: 7 }, ctx);
+  assert.equal(empty.ok, true);
+  assert.match(empty.output, /window: 7 days/);
+  const bad = await setup(() => json(403, { detail: "missing scope" })).tool.run({ action: "activity", days: 7 }, ctx);
+  assert.equal(bad.ok, false);
+  assert.match(bad.output, /mind_sessions activity/);
 });
