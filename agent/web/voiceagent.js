@@ -1,6 +1,15 @@
 // Voice chat (web): a live ElevenLabs Conversational AI agent per bot. The gateway asks MIND for a session (MIND holds the ElevenLabs key, checks the spend caps and bills
 // the call) and hands back a SIGNED wss URL; the browser talks to ElevenLabs directly over it (microphone as 16 kHz PCM up, the agent's voice as 16 kHz PCM down).
 // When it ends the gateway saves the transcript into the bot's thread. No third-party code, no innerHTML; the key never reaches the browser.
+//
+// TODO(live-chat): forward new messages of the bound chat into the open socket. There is no session-wide event hook.
+// Live events exist only inside a turn: web/app.js sendMessage (~the local user item, before the SSE read) and attachRun's
+// handle() when ev.type === "user". Idle updates arrive as a whole-transcript replace in reconcile/syncCurrent (web/sync.js),
+// which has no per-message callback. When one of those runs for voiceChat.chatId(), call voiceChat.onChatEvent(ev) with
+// { type: "user", text, interrupt } for a person typing, and do not call it for this agent's own posts (type "text" / assistant):
+// onChatEvent sends contextual_update or user_message and stops playback on an interrupt. See web/voicechat-bridge.js.
+
+import { forwardChatEvent } from "./voicechat-bridge.js";
 
 export const RATE = 16000;
 
@@ -33,7 +42,7 @@ export function parseEvent(raw) {
   }
 }
 
-/** opts: { api(path, init), els: { dock, status, stop, bars }, notify(text), botSlug(), onSaved(sessionId) } */
+/** opts: { api(path, init), els: { dock, status, stop, bars }, notify(text), botSlug(), chatId()? , onSaved(sessionId) } */
 export function initVoiceAgent(o) {
   const { els } = o;
   let live = null;     // { ws, ctx, stream, node, play, sources:Set, conversationId, slug, startedAt, ended }
@@ -58,10 +67,11 @@ export function initVoiceAgent(o) {
     if (live) return { ok: false, reason: "busy" };
     if (!supported) { o.notify("Voice chat needs a browser with microphone access."); return { ok: false, reason: "unsupported" }; }
     const slug = o.botSlug();
+    const chat = typeof o.chatId === "function" ? o.chatId() : undefined;
     show(true); say("Starting voice chat…");
     let sess;
     try {
-      const res = await o.api("/voice/agent/session", { method: "POST", body: JSON.stringify({ bot: slug, ...(prompt ? { prompt } : {}) }) });
+      const res = await o.api("/voice/agent/session", { method: "POST", body: JSON.stringify({ bot: slug, ...(prompt ? { prompt } : {}), ...(chat ? { chat } : {}) }) });
       sess = await res.json().catch(() => ({}));
       if (!res.ok) { show(false); o.notify(sess.message || "Voice chat could not start."); return { ok: false, reason: sess.error || "failed" }; }
     } catch (e) { show(false); if (e.message !== "unauthorized") o.notify("Voice chat could not start."); return { ok: false, reason: "failed" }; }
@@ -78,7 +88,7 @@ export function initVoiceAgent(o) {
       return { ok: false, reason: "mic" };
     }
     const ws = new WebSocket(sess.signedUrl);
-    const l = { ws, ctx, play, stream, sources: new Set(), playAt: 0, conversationId: "", slug, startedAt: Date.now(), ended: false, node: null, botName: sess.botName || "" };
+    const l = { ws, ctx, play, stream, sources: new Set(), playAt: 0, conversationId: "", slug, startedAt: Date.now(), ended: false, node: null, botName: sess.botName || "", chatId: typeof sess.chatId === "string" ? sess.chatId : (chat || "") };
     live = l;
     const src = ctx.createMediaStreamSource(stream);
     l.node = new AudioWorkletNode(ctx, "daebot-capture");
@@ -127,7 +137,18 @@ export function initVoiceAgent(o) {
     else if (!silent && saved && !saved.lines) o.notify("Voice chat ended. Nothing was said.");
   }
 
+  // A chat event for the bound session. Not called yet: see the TODO at the top of this file.
+  function onChatEvent(ev) {
+    const l = live;
+    if (!l || l.ended || !l.ws || l.ws.readyState !== 1) return false;
+    return forwardChatEvent(ev, {
+      speaking: l.sources.size > 0,
+      send: (m) => l.ws.send(JSON.stringify(m)),
+      stopPlayback: () => { stopPlayback(l); say("Listening…"); },
+    });
+  }
+
   els.stop && els.stop.addEventListener("click", () => { if (live) void finish(live, false); });
   addEventListener("pagehide", () => { if (live) { try { live.ws.close(); } catch { /* closed */ } } });
-  return { start, stop: () => { if (live) void finish(live, false); }, active: () => !!live, supported };
+  return { start, stop: () => { if (live) void finish(live, false); }, active: () => !!live, supported, onChatEvent, chatId: () => (live && live.chatId) || "" };
 }

@@ -470,6 +470,7 @@ function itemsFromHistory(events) {
       case "notice": items.push({ kind: "notice", level: ev.level, text: ev.text, ...(ev.action ? { action: ev.action } : {}) }); break;
       case "exchange": asst = null; items.push({ kind: "exchange", exchangeId: ev.exchangeId, from: ev.from, to: ev.to, message: ev.message, reply: ev.reply, at: ev.at }); break;
       case "usage": usage.in += ev.usage.promptTokens; usage.out += ev.usage.completionTokens; usage.cost = ev.totalCostUsd; if (ev.model) model = ev.model; break;
+      case "done": asst = null; break; // a later assistant post (the voice agent writing into this chat) is its own message
       default: break;
     }
   }
@@ -531,8 +532,9 @@ function reconcile(id, e) {
   const empty = !tr.items.length;
   applyMeta(tr, e.meta); // reactions made on another device (or before a reload) show up even when no new message did
   const localUsers = tr.items.filter((x) => x.kind === "user").length;
-  const { behind, dones } = transcriptBehind({ events: e.events, localUsers, lastDones: tr.syncDones });
+  const { behind, dones, text } = transcriptBehind({ events: e.events, localUsers, lastDones: tr.syncDones, lastText: tr.syncText });
   tr.syncDones = dones;
+  tr.syncText = text;
   tr.appliedEtag = e.etag || undefined;
   if (!empty && !behind) return false;
   if (empty && !e.events.length) { if (id === tkey()) renderThread(); return false; }
@@ -1186,6 +1188,7 @@ async function attachRun(id, baseEvents) {
     renderQueue();
     drainQueue(id);
     transcript(id).syncDones = undefined;
+    transcript(id).syncText = undefined;
     saveTranscript(id); refreshSessions();
   }
 }
@@ -1269,6 +1272,7 @@ async function sendMessage(text, attached = [], quote) {
     renderQueue();
     if (ctx.lost) await resyncFromServer(id); // the run is gone from the server (restart): show what it saved, including the interrupted note
     transcript(id).syncDones = undefined; // this tab just ran the turn itself: re-baseline instead of re-rendering it
+    transcript(id).syncText = undefined;
     saveTranscript(id);
     void resolveIds(id); // so the message menu works on this turn without a wait
     refreshSessions();
@@ -1664,6 +1668,7 @@ const voiceChat = initVoiceAgent({
   api, els: { dock: $("vc-dock"), status: $("vc-status"), stop: $("vc-stop") },
   notify: (t) => notify(t),
   botSlug: () => { const b = state.curBot ? bots.bot(state.curBot) : null; return b && b.slug ? b.slug : "main"; },
+  chatId: () => state.currentId || undefined, // the open chat, when this tab already has one; a draft lets the server open the call's chat
   onSaved: () => { refreshSessions(); if (state.curBot) bots.refresh(); },
 });
 $("btn-vchat").addEventListener("click", () => { if (voiceChat.active()) voiceChat.stop(); else void voiceChat.start(); });
