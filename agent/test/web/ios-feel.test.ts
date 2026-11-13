@@ -221,4 +221,5 @@ test("style.css: at phone width (<= 440px) the top bar shrinks the bot pill and 
   assert.match(blk, /#model-badge \.mb-name\s*\{[^}]*clip:/, "the model name is visually hidden, not display:none, so the button keeps its accessible name");
   assert.doesNotMatch(blk, /#model-badge \.mb-name\s*\{[^}]*display:\s*none/);
   assert.match(blk, /\.voice-btn[^{]*\{[^}]*flex:\s*none/);
+  assert.match(blk, /\.top-title\s*\{\s*display:\s*none/);
 });
