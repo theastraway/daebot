@@ -50,10 +50,17 @@ Output is `agent/desktop/dist/`. Bump `version` in `agent/package.json` and `age
 Check a Mac build before publishing: `spctl -a -vv dist/mac-universal/Daebot.app` must say `accepted`, `source=Notarized Developer ID`;
 `xcrun stapler validate dist/mac-universal/Daebot.app` must pass. An `adhoc` signature means signing did not run: do not publish it.
 
+**If the build dies at the DMG step after notarization succeeded** (for example `codesign: no identity found`), do not re-notarize. The app in `dist/mac-universal/Daebot.app` is already notarized and stapled, so re-package from it (point at the `.app`, not the folder):
+```
+DAEBOT_SIGN=1 DAEBOT_SIGN_HASH=<sha1 of the cert> npx electron-builder --config electron-builder.config.mjs --mac --universal --prepackaged dist/mac-universal/Daebot.app --publish never
+```
+This writes the zip, DMG, blockmaps and `latest-mac.yml` without touching the app. Re-check `spctl` / `stapler validate` on the app inside both the zip and the DMG before uploading.
+
 ## 5. Upload, feed files, registry
 ```
 agent/desktop/scripts/publish-release.sh agent/desktop/dist <version> --notes "..." --dry-run   # then again without --dry-run
 ```
+Windows feeds (`latest.yml`, `latest-arm64.yml`) also reference the combined installer, and the script does not upload it, so copy these by hand (scp to `<name>.tmp`, then `mv`) BEFORE the feeds flip: `Daebot-Setup-<v>.exe`, `Daebot-Setup-<v>-x64.exe`, `Daebot-Setup-<v>-arm64.exe` and their `.blockmap` files. Re-running the script with `--force` is needed to overwrite the previous version's feeds.
 It uploads to `root@45.55.204.209:/var/www/evie/download/daebot` (public `https://download.m-i-n-d.ai/download/daebot/`), including the
 four electron-updater feeds `latest-mac.yml`, `latest.yml`, `latest-arm64.yml`, `latest-linux.yml` and the `.blockmap` files (a feed that
 is not flipped never reaches an installed app), and registers each platform and arch in the MIND registry.
