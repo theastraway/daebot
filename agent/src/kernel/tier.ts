@@ -29,7 +29,7 @@ export function tierAllows(tier: Tier, tool: Pick<Tool, "spec" | "class" | "clas
   // mind_sessions: the user's own Agent Sessions (their Grok bots). Reads are plain reads; a reply is outward but stays inside the user's own MIND,
   // and the tool itself refuses any session the user does not own. The confirmation gate still asks before every reply.
   if (tool.spec.name === "mind_sessions") return tier === "staff"; // a public identity never reads the owner's agent sessions
-  if (tier === "public" && (tool.spec.name === "bash" || tool.spec.name === "process" || tool.spec.name === "terminal" || tool.spec.name === "simulator" || tool.spec.name === "decide")) return false; // decide spends the server's money; simulator is the owner's Mac
+  if (tier === "public" && (tool.spec.name === "bash" || tool.spec.name === "process" || tool.spec.name === "terminal" || tool.spec.name === "simulator" || tool.spec.name === "browser" || tool.spec.name === "decide")) return false; // decide spends the server's money; simulator is the owner's Mac
   // bot_manage deletes only the user's OWN bot (local, their own data) and always asks first (irreversible class), so staff may reach it.
   if (tier === "staff" && tool.spec.name === "bot_manage") return true;
   // With no args (listing) judge by the loosest class the tool can take: static class, then classFor({}) is not trusted.

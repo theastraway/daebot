@@ -67,7 +67,7 @@ import { dataDir, cleanTitle } from "../persist.ts";
 import { screenApi } from "./screen.ts";
 import { isTerminalPath, terminalsApi } from "./terminals.ts";
 import { isSimulatorPath, simulatorApi } from "./simulator.ts";
-import { deviceSupport } from "../devices/index.ts";
+import { browserSupport, deviceSupport } from "../devices/index.ts";
 import { MSG_UNAVAILABLE } from "../devices/simulator-mac.ts";
 import { pairedMac, routeSimulatorRequest, withPairedMac } from "../devices/simulator-remote.ts";
 import { createFakeSimulatorService, simulatorFakeEnabled } from "../devices/simulator-fake.ts";
@@ -75,6 +75,9 @@ import { simulatorService, useSimulatorService } from "../devices/simulator-serv
 import type { SimulatorService } from "../devices/simulator-service.ts";
 import { createSimulatorTool, runSimulatorJob } from "../tools/simulator.ts";
 import { terminalRegistry } from "../tools/terminal.ts";
+import { browserApi, isBrowserPath } from "./browser.ts";
+import { createBrowserBridge, installBrowserBridge } from "../browser/bridge.ts";
+import type { BrowserBridge } from "../browser/bridge.ts";
 import type { TerminalRegistry } from "../tools/terminal.ts";
 import { screenFeed } from "../screen/feed.ts";
 import type { ScreenFeed } from "../screen/feed.ts";
@@ -152,6 +155,12 @@ export interface GatewayOptions {
   simulatorFrameMs?: number;
   /** Hub used to hand a simulator action to a paired Mac. Tests inject one. The hosted gateway uses its own remote hub. */
   simulatorHub?: RemoteHub;
+  /** Desktop browser bridge. Default: a bridge installed as the one the `browser` tool calls. Tests inject one. */
+  browser?: BrowserBridge;
+  /** SSE comment interval for the browser pane. Default 15s. Tests. */
+  browserHeartbeatMs?: number;
+  /** Dev-only. POST /browser/shots runs the browser tool. The Xvfb harness sets this, or DAEBOT_BROWSER_SHOTS=1. */
+  browserShots?: boolean;
   /** Public deployment: login screen, Host allowlist, secure cookies, security headers. */
   hosted?: HostedOptions;
   /** Hosted multi-user sign-in (MIND OAuth / API key) and the per-user runtimes. Owner access-code login keeps working without it. */
@@ -240,10 +249,10 @@ function readBody(req: IncomingMessage, limit = MAX_BODY): Promise<Buffer> {
 
 const jsonBodies = new WeakMap<IncomingMessage, Record<string, unknown>>();
 /** The request's JSON body. Read once: a second call (a route that looks at the body, then hands the request on) gets the same object. */
-async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJson(req: IncomingMessage, limit = MAX_BODY): Promise<Record<string, unknown>> {
   const have = jsonBodies.get(req);
   if (have) return have;
-  const b = parseJsonObject(await readBody(req));
+  const b = parseJsonObject(await readBody(req, limit));
   jsonBodies.set(req, b);
   return b;
 }
@@ -321,6 +330,10 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   const limiter = new LoginLimiter({ maxFails: hosted?.loginMaxFails, windowMs: hosted?.loginWindowMs });
   const host = opts.host ?? (hosted ? "0.0.0.0" : "127.0.0.1");
   const token = hosted ? hosted.token : loadOrCreateToken(opts.tokenPath);
+  // One bridge per gateway. The `browser` tool calls whichever bridge was installed last; tests that drive
+  // the tool through HTTP pass the same object as opts.browser, and this install makes a direct tool call match.
+  const browserBus = opts.browser ?? createBrowserBridge();
+  installBrowserBridge(browserBus);
   // Static source order: an explicit staticDir, then the site embedded in a compiled binary, then web/ beside it, then the source tree.
   const embeddedFiles = opts.embeddedFiles ?? EMBEDDED_FILES;
   const useEmbedded = !opts.staticDir && hasEmbeddedSite(embeddedFiles);
@@ -1887,7 +1900,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/board" || path.startsWith("/board/") || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/devices" || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
+    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/board" || path.startsWith("/board/") || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/devices" || path.startsWith("/browser/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -2608,7 +2621,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       let body = deviceSupport(process.platform);
       const hub = opts.simulatorHub ?? remoteHub;
       if (hub) body = withPairedMac(body, pairedMac(hub.devices(me.id)));
-      return sendJson(res, 200, body);
+      return sendJson(res, 200, { ...body, browser: browserSupport(browserBus.connected()) });
     }
     if (isSimulatorPath(path)) {
       const known = (id: string): "ok" | "forbidden" | "missing" => {
@@ -2622,6 +2635,20 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         hosted: !!hosted, viewer: !!viewer, access: known, service: simSvc(), sendJson, readJson,
         frameMs: opts.simulatorFrameMs,
         forward: (sessionId, action, args) => forwardSimulator(me.id, sessionId, action, args),
+      })) return;
+      return sendJson(res, 404, { error: "not found" });
+    }
+    if (isBrowserPath(path)) {
+      const known = (id: string): "ok" | "forbidden" | "missing" => {
+        const acc = manager.access(id, me.id);
+        if (acc === "forbidden") return "forbidden";
+        if (acc) return "ok";
+        const rt = manager.runtimeOf(me.id);
+        return rt.history?.(id) || rt.sessionInfo?.(id) ? "ok" : "missing";
+      };
+      const readBrowserJson = (r: IncomingMessage) => readJson(r, path === "/browser/result" ? 4 << 20 : MAX_BODY);
+      if (await browserApi(req, res, path, _query, method, {
+        hosted: !!hosted, viewer: !!viewer, bridge: browserBus, access: known, sendJson, readJson: readBrowserJson, heartbeatMs: opts.browserHeartbeatMs, shots: opts.browserShots === true,
       })) return;
       return sendJson(res, 404, { error: "not found" });
     }
@@ -3127,6 +3154,18 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     // The terminal pane is never a guest route. Scrollback can contain secrets, so a person who was invited (viewer or editor) is refused here,
     // before the ordinary route could run as the owner. The owner's own request falls through.
     const termGuest = /^\/sessions\/([^/]+)\/terminals(?:\/|$)/.exec(path);
+    const browserGuest = /^\/sessions\/([^/]+)\/browser(?:\/|$)/.exec(path);
+    if (browserGuest) {
+      const bid = decodeSeg(browserGuest[1]);
+      if (!bid) { sendJson(res, 400, { error: "bad session id" }); return "handled"; }
+      const own = manager.access(bid, me.id);
+      if (own && own !== "forbidden") return undefined;
+      if (!own && manager.runtimeOf(me.id).history?.(bid)) return undefined;
+      try {
+        const g = await st.grantFor(me, bid);
+        if (g) { sendJson(res, 403, { error: "forbidden", message: "The browser pane is only visible to the owner of this chat." }); return "handled"; }
+      } catch (e) { return shareFail(res, e); }
+    }
     if (termGuest) {
       const tid = decodeSeg(termGuest[1]);
       if (!tid) { sendJson(res, 400, { error: "bad session id" }); return "handled"; }

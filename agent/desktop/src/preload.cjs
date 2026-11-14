@@ -58,6 +58,13 @@ contextBridge.exposeInMainWorld("mindclawDesktop", Object.freeze({
   folder: Object.freeze({      // the OS folder picker for the routines "A file changes in a folder" trigger -> { path } or null
     choose: () => ipcRenderer.invoke("desktop:choose-folder"),
   }),
+  browser: Object.freeze({    // where the browser pane's empty viewport sits, so main can place the page view over it
+    setViewport: (rect) => {
+      const r = rect && typeof rect === "object" ? rect : null;
+      const n = (v) => (typeof v === "number" && Number.isFinite(v) ? Math.round(v) : null);
+      ipcRenderer.send("desktop:browser-viewport", r ? { x: n(r.x), y: n(r.y), width: n(r.width), height: n(r.height) } : null);
+    },
+  }),
   ...(process.platform === "darwin" ? {
     calendar: Object.freeze({
       call: (op, args) => ipcRenderer.invoke("desktop:calendar", typeof op === "string" && CALENDAR_OPS.includes(op) ? op : "", args && typeof args === "object" && !Array.isArray(args) ? args : {}),

@@ -2,6 +2,7 @@ import type { Tool } from "../types.ts";
 import { bashTool } from "./bash.ts";
 import { processTool } from "./process.ts";
 import { terminalTool } from "./terminal.ts";
+import { browserTool } from "./browser.ts";
 import { editFileTool, globTool, grepTool, readFileTool, writeFileTool } from "./fs.ts";
 import { createDecideTool } from "./decide.ts";
 import { createWebFetchTool } from "./web.ts";
@@ -16,7 +17,7 @@ import { createSimulatorTool, simulatorToolSupported } from "./simulator.ts";
  *  app: background UI Automation, same rule. */
 export function createBuiltinTools(opts: { fetchImpl?: typeof fetch; decisionKey?: string; computer?: boolean; app?: boolean; screen?: boolean; simulator?: boolean } = {}): Tool[] {
   // appleCalendarTool: offered per turn, only to a client that listed the apple_calendar capability (the loop filters it). It runs nothing on this host.
-  const tools = [readFileTool, writeFileTool, editFileTool, globTool, grepTool, bashTool, processTool, terminalTool, createWebFetchTool(opts.fetchImpl), appleCalendarTool];
+  const tools = [readFileTool, writeFileTool, editFileTool, globTool, grepTool, bashTool, processTool, terminalTool, browserTool, createWebFetchTool(opts.fetchImpl), appleCalendarTool];
   // simulator: iOS Simulator via xcrun simctl. Mac only. Windows and Linux reach it through a paired Mac, not this tool list.
   if (opts.simulator ?? simulatorToolSupported()) tools.push(createSimulatorTool());
   // app (background UI Automation) is offered with, and listed before, the screen tool: Windows desktop app only.
@@ -30,6 +31,7 @@ export function createBuiltinTools(opts: { fetchImpl?: typeof fetch; decisionKey
 
 export { createProcessTool, ProcessRegistry } from "./process.ts";
 export { createTerminalTool, TerminalRegistry } from "./terminal.ts";
+export { createBrowserTool, browserTool } from "./browser.ts";
 export { readFileTool, writeFileTool, editFileTool, globTool, grepTool, bashTool };
 export { createWebFetchTool, htmlToText } from "./web.ts";
 export { createComputerTool, computerToolSupported } from "./computer.ts";

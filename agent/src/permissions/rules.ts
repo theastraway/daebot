@@ -3,6 +3,7 @@
 // real call, on the server; a client only ever picks one by id, so neither the model nor a forged request can invent a rule.
 import { isAbsolute, resolve as resolvePath, dirname, posix } from "node:path";
 import { callSignature } from "../kernel/util.ts";
+import { browserLive } from "../browser/live.ts";
 import type { ToolClass } from "../types.ts";
 
 export type Effect = "allow" | "deny";
@@ -108,6 +109,18 @@ export function factsOf(tool: string, cls: ToolClass, args: Record<string, unkno
     const u = normUrl(a.url);
     if (u) { f.url = u; f.host = new URL(u).hostname.toLowerCase(); }
   }
+  // The browser card's domain is the page actually open, except open/navigate, which name the URL they will load.
+  // A click must not pick up a URL the model stuffed into the arguments.
+  if (tool === "browser") {
+    const action = typeof a.action === "string" ? a.action : "";
+    const liveUrl = browserLive().url;
+    let raw = "";
+    if ((action === "open" || action === "navigate") && typeof a.url === "string") raw = a.url;
+    else if (action === "navigate" && typeof a.to === "string" && /^https?:\/\//i.test(a.to)) raw = a.to;
+    else if (typeof liveUrl === "string") raw = liveUrl;
+    const u = raw ? normUrl(raw) : undefined;
+    if (u) { f.url = u; f.host = new URL(u).hostname.toLowerCase(); }
+  }
   if (typeof a.action === "string" && a.action.length <= 40) f.action = a.action;
   const i = tool.indexOf("__");
   if (i > 0) f.connector = tool.slice(0, i);
@@ -176,7 +189,8 @@ function allowKindsForBase(cls: ToolClass, tool: string): MatcherKind[] {
     case "write": return ["any", "exact", "prefix", "glob", "domain", "recipient", "recipients", "cwd"];
     // Apple Calendar: "any" covers adding and changing events only. A delete is irreversible and so is only ever allowed call by call.
     case "outward": return tool === "apple_calendar" || tool === "mind_calendar" ? ["exact", "any"] : tool.includes("__") ? ["exact", "any", "recipient", "recipients", "domain"] : ["exact", "recipient", "recipients", "domain"];
-    default: return ["exact"]; // irreversible, public
+    // A purchase or delete in the browser pane can be allowed for one site. Every other irreversible or public call stays exact.
+    default: return tool === "browser" ? ["exact", "domain"] : ["exact"];
   }
 }
 
@@ -273,6 +287,9 @@ export function scopeOptions(f: CallFacts, effect: Effect): ScopeOption[] {
     add(isDirCall ? `Only this folder: ${clip(p, 70)}` : `Only this file: ${clip(p, 70)}`, f.tool, { kind: "exact", value: exactValue(f) });
     add(`Anything in this folder and below: ${clip(dir, 60)}/**`, f.tool, { kind: "glob", value: `${dir === "/" ? "" : dir}/**` }, true);
     if (f.cls === "read") add("Read-only: reading, listing and searching any file", "group:fs-read", { kind: "readonly" }, true);
+  } else if (f.tool === "browser") {
+    add("Only this exact browser action", f.tool, { kind: "exact", value: exactValue(f) });
+    if (f.host) add(`This site (${f.host}) in Daebot's browser`, f.tool, { kind: "domain", value: f.host }, true);
   } else if (f.url) {
     add(`Only this page: ${clip(f.url, 80)}`, f.tool, { kind: "exact", value: exactValue(f) });
     if (f.host) add(`Any page on ${f.host} (and its subdomains)`, f.tool, { kind: "domain", value: f.host }, true);
@@ -371,6 +388,13 @@ export function describeCall(f: CallFacts, args: Record<string, unknown>): { tit
   else if (f.tool === "write_file") { title = "Write a file"; rows.push({ label: "File", value: f.paths[0] ?? "" }); }
   else if (f.tool === "edit_file") { title = "Change a file"; rows.push({ label: "File", value: f.paths[0] ?? "" }); }
   else if (FS_PATH_TOOLS.has(f.tool)) { title = f.tool === "read_file" ? "Read a file" : "Look through a folder"; rows.push({ label: f.tool === "read_file" ? "File" : "Folder", value: f.paths[0] ?? "" }); }
+  else if (f.tool === "browser") {
+    const op = typeof args.action === "string" ? args.action : "use";
+    title = op === "click" ? "Click in Daebot's browser" : op === "open" || op === "navigate" ? "Open a page in Daebot's browser" : "Use Daebot's browser";
+    if (f.url) rows.push({ label: "Page", value: clip(f.url, 300) });
+    if (typeof args.ref === "string") rows.push({ label: "Element", value: clip(args.ref, 40) });
+    if (typeof args.url === "string" && (op === "open" || op === "navigate")) rows.push({ label: "URL", value: clip(args.url, 300) });
+  }
   else if (f.url) { title = "Open a web page"; rows.push({ label: "URL", value: clip(f.url, 300) }); }
   else if (f.tool === "apple_calendar") {
     // What the user is really being asked: the event, in plain words (the model passes title/start on update and delete so the card names it).

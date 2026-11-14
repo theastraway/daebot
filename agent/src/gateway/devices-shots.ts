@@ -61,6 +61,8 @@ export async function seedDevicesShot(gw: ShotHost, pane: string, deps: ShotDeps
     await seedIosSimPane(gw);
     return;
   }
+  // The browser page is a local shop server the shots harness opens. Nothing to seed in the fake gateway.
+  if (pane === "browser") return;
   throw new Error(`devices shots: no seed for pane ${JSON.stringify(pane)}`);
 }
 

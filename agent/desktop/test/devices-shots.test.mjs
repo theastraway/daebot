@@ -28,7 +28,9 @@ test("the flags do nothing unless this is the smoke process", () => {
   assert.equal(on.pane, "terminal");
   assert.equal(on.readyTimeoutMs, 60_000);
   assert.deepEqual(shotFilesFor("terminal").files, ["live.png", "closed.png", "empty.png"]);
-  assert.match(shotFilesFor("browser").error, /browser/);
+  assert.deepEqual(shotFilesFor("browser").files, ["pane-loaded.png", "after-typing.png", "refusal.png", "approval.png", "takeover.png"]);
+  assert.deepEqual(shotFilesFor("ios-sim").files, ["fixture-window.png", "fixture-pane.png"]);
+  assert.match(shotFilesFor("nope").error, /nope/);
 });
 
 test("the spawn plan tells only the fake gateway which pane to seed", () => {
