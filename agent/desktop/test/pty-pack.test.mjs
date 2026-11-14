@@ -25,8 +25,11 @@ test("electron-builder keeps node-pty out of a merged asar and signs the helpers
   assert.deepEqual(builderConfig.mac.binaries, macPtyBinaries(false));
   assert.ok(builderConfig.mac.binaries[0].endsWith("Contents/Resources/app/node_modules/node-pty/build/Release/spawn-helper"));
   assert.deepEqual(macPtyBinaries(true), ["Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/spawn-helper"]);
-  assert.deepEqual(builderConfig.win.signExts, PTY_WIN_SIGN_EXTS);
-  assert.deepEqual(builderConfig.win.signExts, [".exe", ".dll", ".node"]);
+  // Windows signing is opt-in (DAEBOT_WIN_SIGN=azure): by default nothing is signed and signExts is not set.
+  assert.equal(process.env.DAEBOT_WIN_SIGN, undefined);
+  assert.equal(builderConfig.win.signExts, undefined);
+  assert.equal(builderConfig.win.azureSignOptions, null);
+  assert.deepEqual(PTY_WIN_SIGN_EXTS, [".exe", ".dll", ".node"]);
   assert.equal(typeof builderConfig.afterPack, "function");
   assert.ok(builderConfig.mac.hardenedRuntime);
   const winArches = builderConfig.win.target.map((t) => t.arch);
@@ -76,10 +79,10 @@ test("the pack check script exits 2 without args and 1 when a helper is missing"
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("Windows signing runs only when DAEBOT_SIGN=1 and only for files that exist", async () => {
+test("Windows signing runs only when DAEBOT_WIN_SIGN=azure and only for files that exist", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pty-sign-"));
   const signed = [];
-  const prev = process.env.DAEBOT_SIGN;
+  const prev = process.env.DAEBOT_WIN_SIGN;
   try {
     const nodePty = join(dir, "resources", "app", "node_modules", "node-pty");
     const rel = "build/Release/conpty/OpenConsole.exe";
@@ -90,10 +93,10 @@ test("Windows signing runs only when DAEBOT_SIGN=1 and only for files that exist
       appOutDir: dir,
       packager: { signIf: async (file) => { signed.push(file); } },
     };
-    delete process.env.DAEBOT_SIGN;
+    delete process.env.DAEBOT_WIN_SIGN;
     await signPtyWindows(context);
     assert.deepEqual(signed, []);
-    process.env.DAEBOT_SIGN = "1";
+    process.env.DAEBOT_WIN_SIGN = "azure";
     await signPtyWindows({ ...context, electronPlatformName: "darwin" });
     assert.deepEqual(signed, []);
     await signPtyWindows(context);
@@ -103,8 +106,8 @@ test("Windows signing runs only when DAEBOT_SIGN=1 and only for files that exist
     assert.ok(PTY_WIN_SIGN_REL.some((p) => p.includes("prebuilds/win32-arm64/conpty/conpty.dll")));
     assert.ok(PTY_WIN_SIGN_REL.some((p) => p.endsWith("winpty-agent.exe")));
   } finally {
-    if (prev === undefined) delete process.env.DAEBOT_SIGN;
-    else process.env.DAEBOT_SIGN = prev;
+    if (prev === undefined) delete process.env.DAEBOT_WIN_SIGN;
+    else process.env.DAEBOT_WIN_SIGN = prev;
     rmSync(dir, { recursive: true, force: true });
   }
 });

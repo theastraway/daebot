@@ -2627,9 +2627,10 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       }
       if (hosted) return sendJson(res, 404, { error: "not found" });
       if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-      let body = withTerminalBackend(deviceSupport(process.platform), opts.terminals ?? terminalRegistry());
+      let support = deviceSupport(process.platform);
       const hub = opts.simulatorHub ?? remoteHub;
-      if (hub) body = withPairedMac(body, pairedMac(hub.devices(me.id)));
+      if (hub) support = withPairedMac(support, pairedMac(hub.devices(me.id)));
+      const body = withTerminalBackend(support, opts.terminals ?? terminalRegistry());
       return sendJson(res, 200, { ...body, browser: browserSupport(browserBus.connected()) });
     }
     if (isSimulatorPath(path)) {
