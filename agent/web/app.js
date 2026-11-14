@@ -14,7 +14,7 @@ import { initMcp } from "/mcp.js";
 import { buildAppCard } from "/appcard.js";
 import { initConnectors } from "/connectors.js";
 import { openConnectorDetail } from "/connector-detail.js";
-import { transcriptBehind } from "/sync.js";
+import { newUserTexts, transcriptBehind } from "/sync.js";
 import { lruPut, raceAbort, windowPlan, scrollMemory } from "/switchcache.js";
 import { confirmDialog, editInline, isRenaming, sessionDeleteText } from "/manage.js";
 import { createSharedThreads, parseSender, roleHint } from "/sharedthreads.js";
@@ -484,6 +484,7 @@ function itemsFromHistory(events) {
       case "notice": items.push({ kind: "notice", level: ev.level, text: ev.text, ...(ev.action ? { action: ev.action } : {}) }); break;
       case "exchange": asst = null; items.push({ kind: "exchange", exchangeId: ev.exchangeId, from: ev.from, to: ev.to, message: ev.message, reply: ev.reply, at: ev.at }); break;
       case "usage": usage.in += ev.usage.promptTokens; usage.out += ev.usage.completionTokens; usage.cost = ev.totalCostUsd; if (ev.model) model = ev.model; break;
+      case "done": asst = null; break; // a later assistant post (the voice agent writing into this chat) is its own message
       default: break;
     }
   }
@@ -545,11 +546,15 @@ function reconcile(id, e) {
   const empty = !tr.items.length;
   applyMeta(tr, e.meta); // reactions made on another device (or before a reload) show up even when no new message did
   const localUsers = tr.items.filter((x) => x.kind === "user").length;
-  const { behind, dones } = transcriptBehind({ events: e.events, localUsers, lastDones: tr.syncDones });
+  const { behind, dones, text } = transcriptBehind({ events: e.events, localUsers, lastDones: tr.syncDones, lastText: tr.syncText });
   tr.syncDones = dones;
+  tr.syncText = text;
   tr.appliedEtag = e.etag || undefined;
   if (!empty && !behind) return false;
   if (empty && !e.events.length) { if (id === tkey()) renderThread(); return false; }
+  // A user message that landed while this tab was idle (another device, MINDbots). Not the agent's chat_post.
+  // First paint has no previous user lines, so newUserTexts returns [] and the old thread is not replayed into the call.
+  for (const text of newUserTexts(tr.items.filter((x) => x.kind === "user").map((x) => x.text), e.events)) tellCall(id, { type: "user", text });
   const top = els.scroll.scrollTop, pinned = stick;
   fillTranscript(tr, e);
   if (id === tkey()) {
@@ -1187,7 +1192,7 @@ async function attachRun(id, baseEvents) {
   const ctx = {
     seq: 0, sawDone: false, lost: false, asst: null, tools: new Map(),
     handle(ev) {
-      if (ev.type === "user") { addItem(id, { kind: "user", text: ev.text, ...(ev.photos?.length ? { photos: ev.photos } : {}) }); return; }
+      if (ev.type === "user") { addItem(id, { kind: "user", text: ev.text, ...(ev.photos?.length ? { photos: ev.photos } : {}) }); if (ev.text) tellCall(id, { type: "user", text: ev.text }); return; }
       if (ev.type === "device_call") { void deviceCalls.handle(id, ev); return; } // the device runs it; the turn keeps streaming
       ctx.asst = onEvent(id, ev, ctx.asst, ctx.tools);
     },
@@ -1203,9 +1208,14 @@ async function attachRun(id, baseEvents) {
     renderQueue();
     drainQueue(id);
     transcript(id).syncDones = undefined;
+    transcript(id).syncText = undefined;
     saveTranscript(id); refreshSessions();
   }
 }
+
+// A message the person typed into the call's chat, forwarded to the open ElevenLabs socket.
+// No-op until voiceChat exists (boot runs after that). Never called with the agent's own posts.
+let tellCall = (_sessionId, _ev) => {};
 
 async function sendMessage(text, attached = [], quote) {
   text = text.trim();
@@ -1231,6 +1241,8 @@ async function sendMessage(text, attached = [], quote) {
     return notify(`Could not start a session: ${e.message}`);
   }
   if (startKey !== id) { state.busy.delete(startKey); state.busy.add(id); }
+  // Before the SSE read: the send button. interrupt barges in only while the agent is speaking; "!" always does.
+  if (text) tellCall(id, { type: "user", text, interrupt: true });
   markInflight(id, true); // a reload or reopen mid-reply lands back on this chat and picks the reply up
   refreshSessions();
   const tr = transcript(id);
@@ -1286,6 +1298,7 @@ async function sendMessage(text, attached = [], quote) {
     renderQueue();
     if (ctx.lost) await resyncFromServer(id); // the run is gone from the server (restart): show what it saved, including the interrupted note
     transcript(id).syncDones = undefined; // this tab just ran the turn itself: re-baseline instead of re-rendering it
+    transcript(id).syncText = undefined;
     saveTranscript(id);
     void resolveIds(id); // so the message menu works on this turn without a wait
     refreshSessions();
@@ -1463,6 +1476,7 @@ async function replyInto(id, text) {
   const row = state.sessions.find((x) => x.id === id);
   const opened = await json("/sessions", { method: "POST", body: JSON.stringify({ surface: "web", title: row ? row.title : "", resumeId: id }) });
   const sid = opened.sessionId || id;
+  if (text) tellCall(sid, { type: "user", text, interrupt: true });
   const res = await api(`/sessions/${encodeURIComponent(sid)}/send`, { method: "POST", body: JSON.stringify({ text, ...(calendarCapabilities().length ? { capabilities: calendarCapabilities() } : {}) }) });
   if (!res.ok) throw new Error(res.status === 409 ? "That session is busy right now. Try again in a moment." : (await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
   try { await res.body?.cancel(); } catch { /* the run continues on the server */ }
@@ -1683,9 +1697,11 @@ const voiceChat = initVoiceAgent({
   api, els: { dock: $("vc-dock"), status: $("vc-status"), stop: $("vc-stop") },
   notify: (t) => notify(t),
   botSlug: () => { const b = state.curBot ? bots.bot(state.curBot) : null; return b && b.slug ? b.slug : "main"; },
+  chatId: () => state.currentId || undefined, // the open chat, when this tab already has one; a draft lets the server open the call's chat
   onSaved: () => { refreshSessions(); if (state.curBot) bots.refresh(); },
 });
 $("btn-vchat").addEventListener("click", () => { if (voiceChat.active()) voiceChat.stop(); else void voiceChat.start(); });
+tellCall = (sessionId, ev) => { if (sessionId && sessionId === voiceChat.chatId()) voiceChat.onChatEvent(ev); };
 
 // Hold-to-talk hotkeys (Right Option = dictation, Right Command = voice by default) + the Keyboard shortcuts card.
 const hotkeys = initHotkeys({
