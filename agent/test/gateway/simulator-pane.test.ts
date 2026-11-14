@@ -106,7 +106,7 @@ test("local pane: state, boot, a jpeg frame, and an SSE snapshot; no auth is 401
   } finally { await gw.close(); }
 });
 
-test("linux with no paired Mac: the pane says it needs a Mac and does not pretend to boot", async () => {
+test("linux with no paired Mac: the pane says it needs a Mac and does not pretend to boot", { skip: process.platform === "darwin" && "these assert a gateway host that is not a Mac" }, async () => {
   const home = mkdtempSync(join(tmpdir(), "sim-linux-"));
   const gw = await startGateway({ runtime: fakeRuntime(), port: 0, staticDir: tmpStatic().dir, tokenPath: join(home, "tok") });
   try {
@@ -124,7 +124,7 @@ test("linux with no paired Mac: the pane says it needs a Mac and does not preten
   } finally { await gw.close(); }
 });
 
-test("a paired Mac on the hub receives the pane's boot, and GET /devices says so", async () => {
+test("a paired Mac on the hub receives the pane's boot, and GET /devices says so", { skip: process.platform === "darwin" && "these assert a gateway host that is not a Mac" }, async () => {
   const home = mkdtempSync(join(tmpdir(), "sim-route-"));
   const hub = new RemoteHub({ dir: home });
   hub.heartbeat("owner", { id: "d_" + "b".repeat(16), name: "Kitchen Mac", slugs: [], os: "mac", kind: "machine" });

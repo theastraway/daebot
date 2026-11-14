@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -118,7 +118,7 @@ test("each missing-Xcode case returns its exact fix, and a tap does not touch th
 
 test("argv is an array for every action, and a udid that is not a simulator is refused", async () => {
   const h = harness({ idb: true });
-  const home = mkdtempSync(join(tmpdir(), "sim-app-"));
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "sim-app-"))); // macOS tmpdir is a symlink (/var -> /private/var)
   writeFileSync(join(home, "note"), "x");
   const app = join(home, "Demo.app");
   const { mkdirSync } = await import("node:fs");
@@ -246,7 +246,7 @@ test("the tool is not offered on win32 or linux, and the public tier and hosted 
   assert.equal(simulatorToolSupported("darwin"), true);
   assert.equal(simulatorToolSupported("linux"), false);
   assert.equal(simulatorToolSupported("win32"), false);
-  assert.equal(createBuiltinTools().some((t) => t.spec.name === "simulator"), false);
+  assert.equal(createBuiltinTools().some((t) => t.spec.name === "simulator"), simulatorToolSupported()); // default follows the host: on only on a Mac
   assert.equal(createBuiltinTools({ simulator: true }).some((t) => t.spec.name === "simulator"), true);
   const linux = createSimulatorTool({ platform: "linux" });
   const missed = await linux.run({ action: "list" }, ctx);
@@ -278,7 +278,9 @@ test("runSimExec and spawnSim pass argv with no shell", async () => {
   const child = spawnSim(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
   assert.ok(child.pid);
   await new Promise((res) => setTimeout(res, 80));
-  const cmd = readFileSync(`/proc/${child.pid}/cmdline`, "utf8");
+  const cmd = process.platform === "linux"
+    ? readFileSync(`/proc/${child.pid}/cmdline`, "utf8")
+    : (await runSimExec("ps", ["-o", "command=", "-p", String(child.pid)])).stdout;
   assert.match(cmd, /node|ARGV|setInterval/);
   assert.doesNotMatch(cmd, /^sh\0|-c\0/);
   child.kill("SIGINT");
@@ -323,7 +325,7 @@ test("the fixture simulator is off unless every smoke flag is set", async () => 
   if (shot.ok) assert.ok(shot.jpeg.length > 10);
 });
 
-test("runSimulatorJob on a non-Mac throws instead of calling simctl", async () => {
+test("runSimulatorJob on a non-Mac throws instead of calling simctl", { skip: process.platform === "darwin" && "this host is a Mac" }, async () => {
   const events: string[] = [];
   await assert.rejects(() => runSimulatorJob({ sessionId: "s", simulator: { action: "list", args: {} } }, (e) => events.push(e.type), new AbortController().signal));
   assert.deepEqual(events, []);
