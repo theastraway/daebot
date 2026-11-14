@@ -96,14 +96,14 @@ CI (`.github/workflows/daebot-desktop.yml`, manual run or a `daebot-v*` tag) bui
 are unsigned, so SmartScreen asks to confirm the first launch. The Mac CI job is skipped unless the
 `CSC_LINK` secret exists; it cannot notarize (no `MINDNotarize` profile on runners).
 
-A signed Windows installer uses Azure Artifact Signing (formerly Trusted Signing) with the same `DAEBOT_SIGN=1` switch. There is
-no separate npm script. From `agent/desktop`, on a Windows host or a Windows CI runner:
+A signed Windows installer is opt-in: Azure Artifact Signing (formerly Trusted Signing), switched on only by `DAEBOT_WIN_SIGN=azure`.
+Without it Windows builds unsigned on any machine, including cross-built from a Mac, and nothing blocks. From `agent/desktop`, on a Windows host:
 
 ```
-DAEBOT_SIGN=1 npm run dist:win
+DAEBOT_WIN_SIGN=azure npm run dist:win
 ```
 
-The config reads seven environment variables and throws `DAEBOT_SIGN=1 Windows build is missing: ...` if any is unset. Values stay
+With `DAEBOT_WIN_SIGN=azure` the config reads seven environment variables and throws `DAEBOT_WIN_SIGN=azure Windows build is missing: ...` if any is unset. Values stay
 in the environment, never in this repo:
 
 - `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` — an Entra app with the Artifact Signing Certificate Profile Signer role
@@ -116,9 +116,8 @@ electron-builder installs the TrustedSigning PowerShell module itself and signs 
 `resources/bin/daebot-windows-<arch>.exe` (an `.exe` extra resource; no `signExts` and no extra sign step). Signing runs
 `Invoke-TrustedSigning` through Windows PowerShell: native `pwsh.exe`, or `powershell.exe` if that is missing. A Mac-only `pwsh`
 install is not a supported way to ship. The reliable path is a Windows host or Windows CI runner. A Mac works only when
-electron-builder can drive a Parallels Desktop Windows 10 or 11 VM. `DAEBOT_SIGN=1` on a Mac build (no `--win` / `-w`) does not
-set `azureSignOptions`. The notarize `afterSign` hook is registered for any signed build, and `scripts/notarize.cjs` returns
-immediately unless the platform is `darwin`, so a Windows pack never touches the keychain or `xcrun`.
+electron-builder can drive a Parallels Desktop Windows 10 or 11 VM. `DAEBOT_SIGN=1` is the Mac Developer ID switch only and never
+affects Windows; a Mac `CSC_LINK` is cleared for Windows packs that are not Azure-signed.
 
 ### Publishing a release
 1. Bump `version` in `agent/package.json` and `agent/desktop/package.json`; build on each platform (or run the workflow).

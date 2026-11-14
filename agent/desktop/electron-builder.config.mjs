@@ -1,10 +1,12 @@
 // electron-builder configuration for Daebot (Mac universal, Windows x64 + arm64, Linux x64).
 // Unsigned by default, so local and CI builds never touch the keychain. The same DAEBOT_SIGN=1 switch turns on
 // Developer ID signing, hardened runtime and the MINDNotarize notarization hook (see scripts/notarize.cjs) on the
-// signing Mac, and Azure Artifact Signing for --win builds (see azureSignOptions below).
+// signing Mac. Windows is unsigned unless DAEBOT_WIN_SIGN=azure (see azureSignOptions below).
 const sign = process.env.DAEBOT_SIGN === "1";
 
-// Windows signing: Azure Artifact Signing (formerly Trusted Signing), on with the same DAEBOT_SIGN=1 switch, run on the Windows signing host.
+// Windows signing is OPT-IN: unsigned Windows installers are the default and build on any machine (including cross-built from a Mac).
+// Set DAEBOT_WIN_SIGN=azure on a Windows signing host to sign through Azure Artifact Signing (formerly Trusted Signing).
+// Nothing else turns it on (DAEBOT_SIGN=1 is the Mac Developer ID switch only), and an unset DAEBOT_WIN_SIGN never blocks a build.
 // electron-builder signs the app, its exes and the NSIS installer through the TrustedSigning PowerShell module (it installs it itself).
 // Azure sign-in comes only from the environment, never from this file: AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET
 // (an Entra ID app registration with the "Artifact Signing Certificate Profile Signer" role on the signing account).
@@ -15,11 +17,16 @@ const sign = process.env.DAEBOT_SIGN === "1";
 //   DAEBOT_WIN_PUBLISHER    publisher name exactly as on the certificate (the validated legal name)
 const winSignEnv = ["AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "DAEBOT_AZURE_ENDPOINT", "DAEBOT_AZURE_ACCOUNT", "DAEBOT_AZURE_PROFILE", "DAEBOT_WIN_PUBLISHER"];
 const buildingWin = process.argv.includes("--win") || process.argv.includes("-w");
-if (sign && buildingWin) {
+const winSign = process.env.DAEBOT_WIN_SIGN === "azure";
+if (winSign && buildingWin) {
   const missing = winSignEnv.filter((name) => !process.env[name]);
-  if (missing.length) throw new Error(`DAEBOT_SIGN=1 Windows build is missing: ${missing.join(", ")}`);
+  if (missing.length) throw new Error(`DAEBOT_WIN_SIGN=azure Windows build is missing: ${missing.join(", ")} (unset DAEBOT_WIN_SIGN for an unsigned Windows build)`);
 }
-const azureSignOptions = sign && buildingWin
+if (buildingWin && !winSign) {
+  // A Mac Developer ID .p12 in CSC_LINK must never be applied to Windows binaries: electron-builder would try to sign them with it and fail.
+  for (const name of ["CSC_LINK", "CSC_KEY_PASSWORD", "CSC_NAME", "WIN_CSC_LINK", "WIN_CSC_KEY_PASSWORD"]) delete process.env[name];
+}
+const azureSignOptions = winSign && buildingWin
   ? {
       publisherName: process.env.DAEBOT_WIN_PUBLISHER,
       endpoint: process.env.DAEBOT_AZURE_ENDPOINT,
@@ -73,7 +80,7 @@ export default {
     target: [{ target: "nsis", arch: ["x64", "arm64"] }],
     artifactName: "Daebot-Setup-${version}-${arch}.${ext}",
     extraResources: [{ from: "build/bin", to: "bin", filter: ["daebot-windows-${arch}.exe"] }],
-    // Unsigned unless DAEBOT_SIGN=1 (see azureSignOptions above).
+    // Unsigned unless DAEBOT_WIN_SIGN=azure (see azureSignOptions above).
     azureSignOptions,
   },
   nsis: {
