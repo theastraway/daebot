@@ -12,11 +12,23 @@ The values live in the MIND document titled **"Daebot release signing kit"** (qu
 ## 2. Environment variables (set the ones for the platform you build)
 | Platform | Names | Notes |
 |---|---|---|
-| Mac code signing | `DAEBOT_SIGN=1`, `CSC_LINK` (path or base64 of the Developer ID `.p12`), `CSC_KEY_PASSWORD` | Skip `CSC_LINK` only on a Mac whose keychain already holds "Developer ID Application: ANTHONY JOSEPH CONTI (VJ44THJ238)". |
+| Mac code signing | `DAEBOT_SIGN=1`, `CSC_LINK` (path or base64 of the Developer ID `.p12`), `CSC_KEY_PASSWORD`, `CSC_IDENTITY_AUTO_DISCOVERY=false` (use only the `.p12`, never a keychain cert) | Skip `CSC_LINK` only on a Mac whose keychain already holds "Developer ID Application: ANTHONY JOSEPH CONTI (VJ44THJ238)". |
 | Mac notarization (first that is complete wins) | `APPLE_API_KEY` (path to `AuthKey_XXXX.p8`) or `APPLE_API_KEY_BASE64`, plus `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` | then `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD` + `APPLE_TEAM_ID`, then the `MINDNotarize` keychain profile. Add `DAEBOT_NOTARIZE_STRICT=1` for a release so a failed notarization fails the build. |
 | Windows | none | Unsigned by default, builds everywhere (also cross-built from a Mac). `DAEBOT_WIN_SIGN=azure` + 7 Azure vars is opt-in only (`agent/DEPLOY.md`). |
 | Linux | none | AppImage + deb, unsigned. |
 | Publish | `DAEBOT_SSH_KEY` (optional), `MIND_API_KEY` (or `~/.daebot/mind-key`) | MIND registry needs an admin `mind_` key. |
+
+### Fresh machine from the kit
+The MIND document **"Daebot release signing kit"** holds the Developer ID `.p12` (base64), its password, the App Store Connect `.p8` (base64), its key id and issuer, and the droplet SSH key (base64). Decode on a Mac with `base64 -D`:
+```
+mkdir -p ~/.daebot-kit ~/.appstoreconnect/private_keys && chmod 700 ~/.daebot-kit
+base64 -D > ~/.daebot-kit/devid.p12 <<< "<p12 base64 line from the kit>"
+base64 -D > ~/.appstoreconnect/private_keys/AuthKey_<KEYID>.p8 <<< "<p8 base64 line from the kit>"
+base64 -D > ~/.ssh/droplet_170_key <<< "<ssh key base64 line from the kit>" && chmod 600 ~/.ssh/droplet_170_key
+export CSC_LINK=~/.daebot-kit/devid.p12 CSC_KEY_PASSWORD=<password from the kit> CSC_IDENTITY_AUTO_DISCOVERY=false
+export APPLE_API_KEY=~/.appstoreconnect/private_keys/AuthKey_<KEYID>.p8 APPLE_API_KEY_ID=<KEYID> APPLE_API_ISSUER=<issuer from the kit>
+```
+Never commit these files or paste the values into a PR, chat or log.
 
 ## 3. Preflight (always run it first)
 ```

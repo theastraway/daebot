@@ -77,9 +77,12 @@ export default {
     gatekeeperAssess: false,
     entitlements: "build-resources/entitlements.mac.plist",
     entitlementsInherit: "build-resources/entitlements.mac.plist",
-    // Signing identity: with CSC_LINK (path or base64 of the Developer ID .p12) + CSC_KEY_PASSWORD, electron-builder imports it into a
-    // throwaway keychain and picks it itself, so any Mac can sign. Without CSC_LINK it uses the login keychain identity by name.
-    identity: sign ? (process.env.CSC_LINK ? undefined : "ANTHONY JOSEPH CONTI (VJ44THJ238)") : null,
+    // Signing identity by name. With CSC_LINK + CSC_KEY_PASSWORD (the Developer ID .p12, path or base64) electron-builder imports the .p12 into a
+    // throwaway keychain and looks the name up only there, so any Mac can sign; CSC_IDENTITY_AUTO_DISCOVERY=false keeps the machine's own keychain out.
+    // Without CSC_LINK it uses the login keychain identity.
+    identity: sign ? "ANTHONY JOSEPH CONTI (VJ44THJ238)" : null,
+    // Signs by certificate hash out of the CSC_LINK keychain, so a same-named older cert in the machine's own keychain cannot make codesign ambiguous.
+    sign: sign ? "scripts/mac-sign.cjs" : undefined,
     // daebot-calendar is the universal EventKit helper for Apple Calendar (scripts/build-calendar-helper.mjs); it is signed with the app.
     extraResources: [{ from: "build/bin", to: "bin", filter: ["daebot-darwin-*", "daebot-calendar"] }],
     // Both thin gateway binaries (and the already-universal Calendar helper) are identical in the arm64 and x64 halves of the universal app.

@@ -95,6 +95,7 @@ if (platforms.includes("mac")) {
       add("mac notarization", "any notarization credentials", "missing", "no API key, no Apple ID credentials, no working MINDNotarize profile",
         "Set APPLE_API_KEY=<path to .p8> APPLE_API_KEY_ID=<id> APPLE_API_ISSUER=<issuer uuid> (kit: MIND doc \"Daebot release signing kit\"). scripts/notarize.cjs uses them in preference to the keychain profile.");
     }
+    if (isSet("CSC_LINK") && env.CSC_IDENTITY_AUTO_DISCOVERY !== "false") add("mac code signing", "CSC_IDENTITY_AUTO_DISCOVERY=false", "warn", "not set: electron-builder may also look at keychain certs on this machine", "export CSC_IDENTITY_AUTO_DISCOVERY=false so only the CSC_LINK .p12 signs the build.");
     const signSwitch = env.DAEBOT_SIGN === "1";
     add("mac", "DAEBOT_SIGN=1 for the build", signSwitch ? "ok" : "warn", signSwitch ? "set" : "not set: the Mac build will be UNSIGNED (adhoc) and must not be published", "export DAEBOT_SIGN=1 (and DAEBOT_NOTARIZE_STRICT=1 for a release) before `npm run dist:mac`.");
   }
