@@ -18,6 +18,7 @@
   --led-deep: #e8a900;
   --led-ink: #8a5a00;
   --plate: #0c0b0a;
+  --term-fg: #f6ead8;
   --ok: #3f7a52;
   --warn: #9a6a14;
   --warn-soft: #f6ecd6;
@@ -1402,9 +1403,10 @@ button.env-head:hover { background: var(--surface-2); color: var(--ink-2); }
   .model-badge { min-width: 0; }
 }
 
-/* Daebot's terminal, read-only. Side panel under the top bar on a wide window (so it does not cover the window
-   controls or the chip that opened it), bottom sheet on a phone. Colours come from the theme variables.
-   z-index sits under the top bar (10) so a menu that drops out of the bar paints over the pane. */
+/* Daebot's terminal. Side panel under the top bar on a wide window (so it does not cover the window
+   controls or the chip that opened it), bottom sheet on a phone. A PTY session is typeable; a pipe session
+   stays read-only. Colours come from the theme variables. z-index sits under the top bar (10) so a menu
+   that drops out of the bar paints over the pane. */
 .term-chip { flex: none; height: 28px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--surface-2); color: var(--ink); font: 600 12px var(--sans); white-space: nowrap; }
 .term-chip[aria-expanded="true"] { background: var(--ink); color: var(--bg); }
 .term-pane { position: fixed; z-index: 8; top: calc(56px + env(safe-area-inset-top)); right: 0; bottom: 0; width: min(440px, 42vw); display: flex; flex-direction: column; background: var(--surface); color: var(--ink); border-left: 1px solid var(--line); box-shadow: var(--shadow); }
@@ -1419,10 +1421,18 @@ html.term-open .scroll, html.term-open .composer-wrap { margin-right: min(440px,
 .term-sess[aria-selected="true"] { border-color: var(--ink); color: var(--ink); background: var(--surface); }
 .term-id { font: 600 12px var(--mono); }
 .term-meta, .term-cwd { font: 11px var(--sans); color: var(--ink-3); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.term-note { margin: 0; padding: 8px 14px; font: 12px/1.4 var(--sans); color: var(--ink-2); background: var(--surface-2); border-bottom: 1px solid var(--line); flex: none; }
 .term-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
-.term-empty { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; padding: 16px; color: var(--ink-3); font: 13px var(--sans); text-align: center; pointer-events: none; }
+.term-empty { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; padding: 16px; color: var(--ink-3); font: 13px var(--sans); text-align: center; pointer-events: none; z-index: 1; }
 .term-out { flex: 1; min-height: 0; margin: 0; padding: 12px 14px; overflow: auto; white-space: pre-wrap; word-break: break-word; font: 12.5px/1.45 var(--mono); background: var(--bg); color: var(--ink); }
+.term-screen { flex: 1; min-height: 0; background: var(--plate); overflow: hidden; }
+.term-screen .xterm { height: 100%; padding: 8px 10px; }
+/* Default glyph colour. xterm's own theme <style> is blocked by the page CSP (style-src 'self');
+   the pane re-applies that sheet from script, and this keeps uncoloured text cream if it has not yet. */
+.term-screen .xterm-rows { color: var(--term-fg); }
 .term-exit { margin: 0; padding: 8px 14px calc(8px + env(safe-area-inset-bottom)); font: 600 12.5px var(--sans); color: var(--ink); background: var(--surface-2); border-top: 1px solid var(--line); flex: none; }
+html.pty-shot .term-pane { width: min(720px, 50vw); }
+html.pty-shot.term-open .scroll, html.pty-shot.term-open .composer-wrap { margin-right: min(720px, 50vw); }
 @media (max-width: 760px) {
   .term-pane { top: auto; left: 0; width: auto; height: min(52dvh, 440px); border-left: 0; border-top: 1px solid var(--line); border-radius: 16px 16px 0 0; }
   html.term-open .scroll, html.term-open .composer-wrap { margin-right: 0; }

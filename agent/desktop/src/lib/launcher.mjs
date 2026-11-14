@@ -48,6 +48,7 @@ export function findBundledBinary({ resourcesPath, platform = process.platform, 
  * @param {boolean} [o.fake] use the scripted fake runtime (smoke test only; node path)
  * @param {string} [o.devicesShotsPane] smoke-only: which device pane the fake gateway should seed (ignored unless fake)
  * @param {string} [o.tokenPath] override token file (smoke test only; node path)
+ * @param {number} [o.ptyPort] smoke-only: loopback port of the desktop PTY host (ignored unless fake)
  * @param {string} [o.home] working directory for the binary (the user's home by default)
  */
 export function buildSpawnPlan(o) {
@@ -72,6 +73,7 @@ export function buildSpawnPlan(o) {
       }
     }
   }
+  if (o.fake && o.ptyPort) env.DAEBOT_PTY_PORT = String(o.ptyPort);
   if (o.tokenPath) env.MINDCLAW_DESKTOP_TOKEN_PATH = o.tokenPath;
   let plan;
   if (o.binaryPath && !o.fake) {

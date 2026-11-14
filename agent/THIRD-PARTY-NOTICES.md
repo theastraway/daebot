@@ -5,5 +5,6 @@ Rule (SPEC section 7): code from a permissively licensed project may be used ver
 | Source | Path | Commit / version | License | How used |
 |---|---|---|---|---|
 | NousResearch/hermes-agent | (none copied) | v0.17.0 local; upstream main acc3cada (v0.22.2) read for newer file names | MIT, Copyright (c) 2025 Nous Research | Concepts only, re-implemented in TypeScript for `agent/src/learn/`: background post-turn review off the reply path, correction-as-signal, a "do not capture" list, bounded curated memory with a user model, fenced recall, usage counters with a lifecycle. No Hermes source or prompt text is reproduced; see `agent/LEARNING.md` section 1 for the file:line references. Because nothing was copied, no license header is carried in any file. |
+| xtermjs/xterm.js (`@xterm/xterm`, `@xterm/addon-fit`) | `agent/web/vendor/xterm/` (`xterm.mjs`, `xterm.css`, `addon-fit.mjs`, `LICENSE`) | `@xterm/xterm` 6.0.0 and `@xterm/addon-fit` 0.11.0 | MIT, Copyright (c) 2019, The xterm.js authors | Vendored ESM build and the fit addon, no bundler. The terminal pane imports them when a desktop PTY session is shown. |
 
 Papers (Reflexion, Voyager, ExpeL, Generative Agents, MemGPT, A-MEM, AWM, ReasoningBank, SkillWeaver and others listed in `agent/LEARNING.md`) are cited as ideas; no code from them is used.

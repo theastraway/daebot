@@ -4,7 +4,7 @@
 // a real user's window: main.mjs only calls it when --mindclaw-smoke is also set.
 //
 //   --daebot-devices-shots=<dir>   where PNGs are written
-//   --daebot-devices-pane=<name>   which pane to open (terminal, ios-sim)
+//   --daebot-devices-pane=<name>   which pane to open (terminal, ios-sim, pty)
 //
 // ios-sim reads DAEBOT_IOS_SIM_SHOT_MODE (fixture, or needs-mac). That variable does nothing
 // unless the smoke flags above are also set. The fixture picture is DAEBOT_SIMULATOR_FIXTURE_JPEG.
@@ -16,6 +16,17 @@ export const IOS_SIM_SHOT = Object.freeze({
   needsMac: "needs a Mac with Xcode",
   device: "iPhone 16",
   emptyDevice: "No simulator",
+});
+
+/** Must match agent/src/gateway/devices-shots.ts PTY_SHOT. */
+export const PTY_SHOT = Object.freeze({
+  title: "Show the PTY",
+  colorMarker: "daebot-pty-color",
+  typedMarker: "USER-TYPED-OK",
+  closedMarker: "pty-session-closed",
+  colorDir: "pty-color",
+  tuiDir: "pty-tui",
+  closedDir: "pty-closed",
 });
 
 /** Must match agent/src/gateway/devices-shots.ts TERMINAL_SHOT. */
@@ -70,6 +81,7 @@ export function iosSimShotMode(env = {}) {
  */
 export function shotFilesFor(pane, env = {}) {
   if (pane === "terminal") return { files: ["live.png", "closed.png", "empty.png"] };
+  if (pane === "pty") return { files: ["color.png", "tui.png", "typed.png", "closed.png"] };
   // Browser shots are written by shots-browser.mjs: capturePage of the window misses the child WebContentsView, so they are composited.
   // persist.png is the second process and is not part of this list.
   if (pane === "browser") return { files: ["pane-loaded.png", "after-typing.png", "refusal.png", "approval.png", "takeover.png"] };
@@ -94,6 +106,7 @@ export function shotProbeFor(pane, file) {
     const phase = name.replace(/\.png$/, "");
     return { script: terminalShotProbe(phase), timeoutMs: phase === "live" ? 30_000 : 20_000 };
   }
+  if (pane === "pty") return { script: ptyShotProbe(name.replace(/\.png$/, "")), timeoutMs: 30_000 };
   if (pane === "ios-sim") {
     const mode = name.startsWith("needs-mac") ? "needs-mac" : "fixture";
     const clip = name.endsWith("-pane.png");
@@ -275,5 +288,96 @@ export function iosSimShotProbe(mode, shot = IOS_SIM_SHOT) {
     }
     const pane = document.getElementById("sim-pane");
     return { ok: false, error: layoutError || ("timed out waiting for " + spec.mode), tail: pane ? (pane.textContent || "").slice(0, 240) : "" };
+  })()`;
+}
+
+/**
+ * A script the smoke window runs for the PTY pane. Output is read with textContent. It never assigns innerHTML.
+ * `arm` only selects the color session and focuses xterm so the harness can type. The other phases wait for pixels.
+ * @param {"color"|"tui"|"typed"|"closed"|"arm"} phase
+ * @param {typeof PTY_SHOT} [shot]
+ */
+export function ptyShotProbe(phase, shot = PTY_SHOT) {
+  const spec = { phase, ...shot };
+  return `(async () => {
+    const spec = ${JSON.stringify(spec)};
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    document.documentElement.classList.add("pty-shot");
+    const textOf = (sel) => { const n = document.querySelector(sel); return n ? (n.textContent || "") : ""; };
+    const screenText = () => textOf("#term-screen") || textOf(".xterm");
+    // Visible rows only. #term-screen textContent also holds xterm's <style> tags and the
+    // transparent accessibility tree, which match the markers while the pane is still black.
+    const rowText = () => textOf(".xterm-rows");
+    const rowsLit = () => {
+      const rows = document.querySelector(".xterm-rows");
+      if (!rows) return false;
+      const box = rows.getBoundingClientRect();
+      if (box.height < 40 || box.width < 80) return false;
+      const m = /rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/.exec(getComputedStyle(rows).color || "");
+      if (!m) return false;
+      return (Number(m[1]) + Number(m[2]) + Number(m[3])) / 3 > 140;
+    };
+    const hasColor = () => [...document.querySelectorAll(".xterm-rows [class*='xterm-fg-']")].some((el) => {
+      const m = /rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/.exec(getComputedStyle(el).color || "");
+      if (!m) return false;
+      const r = Number(m[1]), g = Number(m[2]), b = Number(m[3]);
+      return Math.abs(r - g) > 30 || Math.abs(g - b) > 30 || Math.abs(r - b) > 30;
+    });
+    const clickIncludes = (sel, needle) => {
+      const el = [...document.querySelectorAll(sel)].find((n) => (n.textContent || "").includes(needle));
+      if (!el) return false;
+      el.scrollIntoView({ block: "nearest", inline: "nearest" });
+      el.click();
+      return true;
+    };
+    const openPane = () => {
+      const current = textOf(".sess[aria-current]");
+      if (!current.includes(spec.title)) clickIncludes(".sess", spec.title);
+      const chip = document.getElementById("btn-terminal");
+      if (!current.includes(spec.title) || !chip || chip.hidden) return false;
+      if (chip.getAttribute("aria-expanded") !== "true") chip.click();
+      return chip.getAttribute("aria-expanded") === "true" && document.documentElement.classList.contains("term-open");
+    };
+    const deadline = Date.now() + 25000;
+    while (Date.now() < deadline) {
+      if (!openPane()) { await sleep(200); continue; }
+      if (spec.phase === "color" || spec.phase === "arm" || spec.phase === "typed") {
+        const selected = document.querySelector(".term-sess[aria-selected='true']");
+        if (!selected || !(selected.textContent || "").includes(spec.colorDir)) clickIncludes(".term-sess", spec.colorDir);
+      } else if (spec.phase === "tui") {
+        const selected = document.querySelector(".term-sess[aria-selected='true']");
+        if (!selected || !(selected.textContent || "").includes(spec.tuiDir)) clickIncludes(".term-sess", spec.tuiDir);
+      } else if (spec.phase === "closed") {
+        const selected = document.querySelector(".term-sess[aria-selected='true']");
+        if (!selected || !(selected.textContent || "").includes(spec.closedDir)) clickIncludes(".term-sess", spec.closedDir);
+      }
+      const screen = rowText();
+      const xterm = document.querySelector(".xterm");
+      if (!rowsLit()) { await sleep(200); continue; }
+      if (spec.phase === "arm") {
+        if (xterm && screen.includes(spec.colorMarker)) {
+          const area = document.querySelector(".xterm-helper-textarea");
+          if (area) area.focus();
+          return { ok: true, tail: screen.slice(0, 120) };
+        }
+      } else if (spec.phase === "color") {
+        if (screen.includes(spec.colorMarker) && /\\b(README|notes)\\b/.test(screen) && hasColor()) return { ok: true, tail: screen.slice(0, 200) };
+      } else if (spec.phase === "tui") {
+        if (/PID|%CPU|Tasks/.test(screen)) return { ok: true, tail: screen.slice(0, 200) };
+      } else if (spec.phase === "typed") {
+        if (screen.includes(spec.typedMarker) && /cols=\\d+/.test(screen)) return { ok: true, tail: screen.slice(-240) };
+      } else if (spec.phase === "closed") {
+        const exitEl = document.getElementById("term-exit");
+        const exit = exitEl ? (exitEl.textContent || "") : "";
+        if (screen.includes(spec.closedMarker) && exit.startsWith("Exited") && exitEl && !exitEl.hidden) return { ok: true, tail: screen.slice(0, 200), exit };
+      }
+      await sleep(200);
+    }
+    const rows = document.querySelector(".xterm-rows");
+    const box = rows ? rows.getBoundingClientRect() : null;
+    const span = rows ? rows.querySelector("[class*='xterm-fg-']") : null;
+    const acc = textOf(".xterm-accessibility");
+    const kids = rows ? [...rows.children].slice(0, 8).map((el) => (el.textContent || "").slice(0, 50)) : [];
+    return { ok: false, error: "timed out waiting for " + spec.phase, tail: screenText().slice(0, 120), rows: { h: box ? box.height : 0, w: box ? box.width : 0, color: rows ? getComputedStyle(rows).color : "", text: rowText().slice(0, 80), kids, span: span ? getComputedStyle(span).color : "", acc: acc.slice(0, 160), marker: acc.includes(spec.colorMarker) } };
   })()`;
 }

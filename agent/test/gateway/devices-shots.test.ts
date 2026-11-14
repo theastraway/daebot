@@ -4,7 +4,8 @@ import { EventEmitter } from "node:events";
 import { execFileSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { TerminalRegistry } from "../../src/tools/terminal.ts";
-import { seedDevicesShot, TERMINAL_SHOT, IOS_SIM_SHOT } from "../../src/gateway/devices-shots.ts";
+import type { TermBackend, TermHandle, TermSpawnSpec } from "../../src/tools/terminal.ts";
+import { seedDevicesShot, PTY_SHOT, TERMINAL_SHOT, IOS_SIM_SHOT } from "../../src/gateway/devices-shots.ts";
 
 function restoreFake(prev: string | undefined): void {
   if (prev === undefined) delete process.env.MINDCLAW_DESKTOP_FAKE;
@@ -144,6 +145,58 @@ test("a real bash seed prints stripped colour text, then an exited shell and an 
   } finally {
     try { for (const s of reg.list(id)) reg.close(id, s.id); } catch { /* already gone */ }
     reg.killAll();
+    restoreFake(prev);
+  }
+});
+
+test("the pty seed refuses a pipe registry and, with a pty backend, opens three interactive shells", async () => {
+  const prev = process.env.MINDCLAW_DESKTOP_FAKE;
+  process.env.MINDCLAW_DESKTOP_FAKE = "1";
+  const opened: string[] = [];
+  const host = { async open(_surface: string, title?: string) { opened.push(title ?? ""); return { id: "s-pty", async *send() { yield { type: "done" }; } }; } };
+  const pipe = new TerminalRegistry({ reapEveryMs: false, platform: "linux", env: () => ({ PATH: "/bin" }) });
+  const specs: TermSpawnSpec[] = [];
+  const backend: TermBackend = {
+    kind: "pty",
+    typeable: true,
+    async openAsync(spec) {
+      specs.push(spec);
+      const handle: TermHandle = {
+        pid: 80 + specs.length,
+        write() {},
+        resize() {},
+        onStdout() {},
+        onStderr() {},
+        onError() {},
+        onExit() {},
+        interrupt() { return { sent: true, note: "sent Ctrl-C" }; },
+        kill() {},
+      };
+      return handle;
+    },
+  };
+  const reg = new TerminalRegistry({ backend, reapEveryMs: false, platform: "linux", env: () => ({ PATH: "/usr/bin" }) });
+  try {
+    await assert.rejects(seedDevicesShot(host, "pty", { registry: pipe }), /PTY host/);
+    assert.deepEqual(opened, []);
+    await seedDevicesShot(host, "pty", { registry: reg, commandWaitMs: 0 });
+    assert.deepEqual(opened, [PTY_SHOT.title]);
+    assert.equal(specs.length, 3);
+    const dirs = specs.map((s) => s.cwd);
+    assert.ok(dirs.some((d) => d.endsWith(PTY_SHOT.colorDir)));
+    assert.ok(dirs.some((d) => d.endsWith(PTY_SHOT.tuiDir)));
+    assert.ok(dirs.some((d) => d.endsWith(PTY_SHOT.closedDir)));
+    for (const s of specs) {
+      assert.equal(s.file, "bash");
+      assert.deepEqual(s.args, ["--noprofile", "--norc", "-i"]);
+      assert.equal(s.env.TERM, "xterm-256color");
+    }
+    const listed = reg.list("s-pty");
+    assert.equal(listed.length, 3);
+    assert.ok(listed.every((s) => s.backend === "pty" && s.typeable));
+  } finally {
+    reg.killAll();
+    pipe.killAll();
     restoreFake(prev);
   }
 });

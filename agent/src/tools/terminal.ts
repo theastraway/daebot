@@ -5,11 +5,9 @@ import { cap, fail, ok } from "./util.ts";
 import { shellCommand, shellEnv } from "./bash.ts";
 
 // Interactive shell sessions for the owner's own machine (desktop / CLI only: hostedToolAllowed never lets `terminal` through).
-// A session is a long-lived hidden shell child of the gateway. It has NO window and never touches the screen: Daebot types into it
-// with `send` and reads what came back with `read`. Pipes, not a PTY (a PTY needs a native module per Electron ABI and the 4-platform
-// release has none), so full-screen programs (vim, top, less, htop) do not work; line-oriented programs do: prompts that print their
-// own text, Python / node REPLs (python3 -iu), ssh with keys (ssh -tt host for a remote tty), dev servers, installers that ask y/n.
-// Isolation: a session belongs to the chat session that opened it (ctx.sessionId); no other session can see, read, type into or close it.
+// Default backend is pipes: a hidden shell child of the gateway, no window. When the desktop app attaches, the backend is a real
+// PTY hosted in Electron's main process (node-pty never loads in this process). The model still reads ANSI-stripped text.
+// Isolation: a session belongs to the chat that opened it (ctx.sessionId); no other chat can see, read, type into or close it.
 const BUF_CAP = 256 * 1024;       // per-session output kept; older bytes are dropped (and counted)
 const READ_CAP = 30_000;          // chars returned by one read
 const MAX_PER_OWNER = 8;
@@ -21,11 +19,12 @@ const SETTLE_MS = 300;            // output counts as settled after this much si
 const MAX_TEXT = 20_000;
 
 export type TermStatus = "running" | "exited" | "closed";
-export interface TermInfo { id: string; shell: string; cwd: string; pid: number | undefined; status: TermStatus; exitCode: number | null; startedAt: number; lastActiveAt: number }
+export interface TermInfo { id: string; shell: string; cwd: string; pid: number | undefined; status: TermStatus; exitCode: number | null; startedAt: number; lastActiveAt: number; backend: "pipe" | "pty"; typeable: boolean }
+export interface UserActivity { at: number; bytes: number }
 type SpawnFn = (file: string, args: string[], opts: SpawnOptions) => ChildProcess;
-export interface TerminalOpts { spawn?: SpawnFn; platform?: string; now?: () => number; env?: () => NodeJS.ProcessEnv; idleMs?: number; reapEveryMs?: number | false }
+export interface TerminalOpts { spawn?: SpawnFn; platform?: string; now?: () => number; env?: () => NodeJS.ProcessEnv; idleMs?: number; reapEveryMs?: number | false; backend?: TermBackend }
 
-interface Session extends TermInfo { owner: string; child: ChildProcess; buf: string; dropped: number; total: number; readPos: number; lastDataAt: number; listeners: Set<() => void> }
+interface Session extends TermInfo { owner: string; handle: TermHandle; buf: string; dropped: number; total: number; readPos: number; screen: string; screenTotal: number; screenDropped: number; lastDataAt: number; listeners: Set<() => void>; activity: UserActivity[]; cols: number; rows: number }
 
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\x1b[=>]/g;
 export const stripAnsi = (s: string): string => s.replace(ANSI, "").replace(/\r\n/g, "\n").replace(/\r(?!\n)/g, "\n");
@@ -53,54 +52,229 @@ export function splitAnsiHold(s: string): { done: string; held: string } {
 
 export type ShellName = "bash" | "pwsh" | "powershell" | "cmd";
 /** The shell to run for a name. Default: bash everywhere but a Windows machine without bash (then Windows PowerShell). */
-export function shellSpec(shell: string | undefined, platform: string = process.platform): { name: ShellName; file: string; args: string[]; eol: string } | { error: string } {
+export function shellSpec(shell: string | undefined, platform: string = process.platform, mode?: { pty?: boolean }): { name: ShellName; file: string; args: string[]; eol: string } | { error: string } {
   const win = platform === "win32";
+  const pty = mode?.pty === true;
   let name = shell;
   if (!name) name = win ? (shellCommand("exit 0", platform).label === "bash" ? "bash" : "powershell") : "bash";
   switch (name) {
-    case "bash": return { name, file: "bash", args: ["--noprofile", "--norc"], eol: "\n" };
-    case "pwsh": return { name, file: "pwsh", args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-"], eol: "\n" };
+    // A PTY bash is interactive (-i) so it owns the tty. Pipes stay non-interactive: the existing args are what tests pin.
+    case "bash": return { name, file: "bash", args: pty ? ["--noprofile", "--norc", "-i"] : ["--noprofile", "--norc"], eol: "\n" };
+    case "pwsh": return { name, file: "pwsh", args: pty ? ["-NoLogo", "-NoProfile"] : ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "-"], eol: "\n" };
     case "powershell":
-      return win ? { name, file: "powershell.exe", args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "-"], eol: "\r\n" } : { error: "terminal: shell powershell exists on Windows only; use bash or pwsh here" };
+      return win
+        ? { name, file: "powershell.exe", args: pty ? ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass"] : ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "-"], eol: "\r\n" }
+        : { error: "terminal: shell powershell exists on Windows only; use bash or pwsh here" };
     case "cmd":
       return win ? { name, file: "cmd.exe", args: ["/Q", "/D"], eol: "\r\n" } : { error: "terminal: shell cmd exists on Windows only; use bash or pwsh here" };
     default: return { error: `terminal: unknown shell ${JSON.stringify(name)}; use bash, pwsh${win ? ", powershell or cmd" : ""}` };
   }
 }
 
+const WRAPPERS = new Set(["sudo", "command", "time", "nice", "nohup", "exec"]);
+const DEPLOYERS = new Set(["npm", "npx", "yarn", "pnpm", "bun", "fly", "flyctl", "vercel", "heroku"]);
+
+function shellWords(seg: string): string[] {
+  const out: string[] = [];
+  for (const m of seg.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)) out.push(m[1] ?? m[2] ?? m[3] ?? "");
+  return out.filter((w) => w !== "");
+}
+
+function hasShort(args: string[], letter: string): boolean {
+  for (const a of args) {
+    if (a.startsWith("-") && !a.startsWith("--") && a.slice(1).includes(letter)) return true;
+  }
+  return false;
+}
+
+function hasLong(args: string[], name: string): boolean {
+  return args.some((a) => a === name || a.startsWith(name + "="));
+}
+
+/**
+ * Destructive shell text the danger gate must ask about: rm with both recursive and force,
+ * a forced git push, a deploy command, or terraform destroy. A plain `rm file` or `git push` is not.
+ */
+export function isIrreversibleShell(text: string): boolean {
+  const parts = text.split(/&&|\|\||[;\n|]/);
+  for (const seg of parts) {
+    const words = shellWords(seg);
+    let i = 0;
+    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]!)) i++;
+    while (i < words.length && WRAPPERS.has(words[i]!.replace(/^.*\//, ""))) i++;
+    const cmd = (words[i] ?? "").replace(/^.*\//, "");
+    const args = words.slice(i + 1);
+    if (!cmd) continue;
+    if (cmd === "rm") {
+      const recursive = hasShort(args, "r") || hasShort(args, "R") || hasLong(args, "--recursive");
+      const force = hasShort(args, "f") || hasLong(args, "--force");
+      if (recursive && force) return true;
+    } else if (cmd === "git" && args[0] === "push") {
+      const rest = args.slice(1);
+      if (hasShort(rest, "f") || hasLong(rest, "--force") || hasLong(rest, "--force-with-lease")) return true;
+    } else if (cmd === "terraform" && args[0] === "destroy") {
+      return true;
+    } else if (cmd === "deploy" || (DEPLOYERS.has(cmd) && args.includes("deploy"))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** A live shell the registry owns. Pipe and PTY backends both speak this. Tests inject a fake. */
+export interface TermHandle {
+  pid: number | undefined;
+  write(data: string): void;
+  resize(cols: number, rows: number): void;
+  onStdout(fn: (chunk: string) => void): void;
+  onStderr(fn: (chunk: string) => void): void;
+  onError(fn: (message: string) => void): void;
+  onExit(fn: (code: number | null) => void): void;
+  interrupt(): { sent: boolean; note: string };
+  kill(sync: boolean): void;
+}
+
+export interface TermSpawnSpec {
+  id: string;
+  file: string;
+  args: string[];
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  cols: number;
+  rows: number;
+  name: ShellName;
+  eol: string;
+  platform: string;
+}
+
+export interface TermBackend {
+  kind: "pipe" | "pty";
+  typeable: boolean;
+  /** Synchronous spawn. The pipe backend and unit-test fakes use this. */
+  spawn?(spec: TermSpawnSpec): TermHandle;
+  /** The desktop PTY host is reached over HTTP, so opening it waits. */
+  openAsync?(spec: TermSpawnSpec): Promise<TermHandle>;
+}
+
+const DEFAULT_COLS = 80;
+const DEFAULT_ROWS = 24;
+
+function createPipeBackend(spawnFn: SpawnFn, platform: string): TermBackend {
+  return {
+    kind: "pipe",
+    typeable: false,
+    spawn(spec) {
+      const child = spawnFn(spec.file, spec.args, { cwd: spec.cwd, stdio: ["pipe", "pipe", "pipe"], detached: platform !== "win32", windowsHide: true, env: spec.env });
+      child.stdin?.on("error", () => { /* shell already gone: the close handler records it */ });
+      return {
+        pid: child.pid,
+        write(data) { child.stdin?.write(data); },
+        resize() { /* a pipe has no tty size */ },
+        onStdout(fn) { child.stdout?.on("data", (d: Buffer | string) => fn(d.toString())); },
+        onStderr(fn) { child.stderr?.on("data", (d: Buffer | string) => fn(d.toString())); },
+        onError(fn) { child.on("error", (err: Error) => fn(err.message)); },
+        onExit(fn) { child.on("close", (code: number | null) => fn(code)); },
+        interrupt() {
+          const pid = child.pid;
+          if (!pid) return { sent: false, note: "no pid" };
+          if (platform === "win32") {
+            const r = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `$k=0; Get-CimInstance Win32_Process -Filter 'ParentProcessId=${Number(pid)}' | ForEach-Object { Stop-Process -Id $_.ProcessId -Force; $k++ }; exit ($(if($k){0}else{1}))`], { stdio: "ignore", windowsHide: true, timeout: 10_000 });
+            return r.status === 0 ? { sent: true, note: "stopped the shell's running program" } : { sent: false, note: "nothing is running in the shell" };
+          }
+          const r = spawnSync("pkill", ["-INT", "-P", String(pid)], { stdio: "ignore", timeout: 5000 });
+          return r.status === 0 ? { sent: true, note: "sent Ctrl-C (SIGINT) to what the shell is running" } : { sent: false, note: "nothing is running in the shell" };
+        },
+        kill(sync) {
+          const pid = child.pid;
+          try { child.stdin?.end(); } catch { /* gone */ }
+          if (platform === "win32") {
+            try {
+              if (!pid) child.kill();
+              else if (sync) spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+              else nodeSpawn("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }).on("error", () => { /* taskkill missing: the shell is already gone */ });
+            } catch { try { child.kill(); } catch { /* gone */ } }
+          } else {
+            try { if (pid) process.kill(-pid, "SIGKILL"); else child.kill("SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch { /* gone */ } }
+          }
+        },
+      };
+    },
+  };
+}
+
 export class TerminalRegistry {
   private sessions = new Map<string, Session>();
   private seq = 0;
-  private spawnFn: SpawnFn;
   private platform: string;
   private now: () => number;
   private envFn: () => NodeJS.ProcessEnv;
   private idleMs: number;
   private timer: NodeJS.Timeout | undefined;
+  private backend: TermBackend;
   constructor(o: TerminalOpts = {}) {
-    this.spawnFn = o.spawn ?? ((f, a, op) => nodeSpawn(f, a, op));
     this.platform = o.platform ?? process.platform;
     this.now = o.now ?? Date.now;
     this.envFn = o.env ?? (() => shellEnv(process.env, this.platform));
     this.idleMs = o.idleMs ?? IDLE_MS;
+    const spawnFn = o.spawn ?? ((f, a, op) => nodeSpawn(f, a, op));
+    this.backend = o.backend ?? createPipeBackend(spawnFn, this.platform);
     if (o.reapEveryMs !== false) {
       this.timer = setInterval(() => this.reap(), o.reapEveryMs ?? 60_000);
       this.timer.unref();
     }
   }
 
+  /** Swap the backend used for sessions opened after this call. Already-open sessions keep the handle they started with. */
+  setBackend(backend: TermBackend): void { this.backend = backend; }
+  backendKind(): "pipe" | "pty" { return this.backend.kind; }
+  typeable(): boolean { return this.backend.typeable; }
+
   open(owner: string, cwd: string, shell?: string): TermInfo {
+    const prep = this.prepare(owner, cwd, shell);
+    if (!this.backend.spawn) throw new Error("terminal: this PTY opens through the desktop host");
+    return this.finish(prep, this.spawnOrThrow(prep, this.backend.spawn(prep.spec)));
+  }
+
+  /** Same as open, but waits when the backend is the desktop PTY host. */
+  async openSession(owner: string, cwd: string, shell?: string): Promise<TermInfo> {
+    const prep = this.prepare(owner, cwd, shell);
+    const handle = this.backend.kind === "pty" && this.backend.openAsync
+      ? await this.backend.openAsync(prep.spec)
+      : this.backend.spawn?.(prep.spec);
+    if (!handle) throw new Error("terminal: this PTY opens through the desktop host");
+    return this.finish(prep, this.spawnOrThrow(prep, handle));
+  }
+
+  private prepare(owner: string, cwd: string, shell?: string): { owner: string; cwd: string; sp: { name: ShellName; eol: string }; spec: TermSpawnSpec } {
     this.reap();
     const mine = [...this.sessions.values()].filter((s) => s.owner === owner && s.status === "running").length;
     if (mine >= MAX_PER_OWNER) throw new Error(`terminal: ${MAX_PER_OWNER} sessions already open in this chat; close one first`);
     if ([...this.sessions.values()].filter((s) => s.status === "running").length >= MAX_TOTAL) throw new Error(`terminal: ${MAX_TOTAL} sessions already open on this machine; close one first`);
-    const sp = shellSpec(shell, this.platform);
+    const pty = this.backend.kind === "pty";
+    const sp = shellSpec(shell, this.platform, { pty });
     if ("error" in sp) throw new Error(sp.error);
-    // detached: its own process group on POSIX (so close takes the tree). windowsHide: no console window on Windows. stdin is a pipe we write to.
-    const child = this.spawnFn(sp.file, sp.args, { cwd, stdio: ["pipe", "pipe", "pipe"], detached: this.platform !== "win32", windowsHide: true, env: this.envFn() });
-    if (child.pid === undefined) { child.on?.("error", () => { /* spawn failed: reported below */ }); throw new Error(`terminal: could not start ${sp.name} (is it installed?)`); }
+    const env = { ...this.envFn() };
+    if (pty) env.TERM = env.TERM || "xterm-256color";
+    const id = `t${++this.seq}`;
+    return { owner, cwd, sp, spec: { id, file: sp.file, args: sp.args, cwd, env, cols: DEFAULT_COLS, rows: DEFAULT_ROWS, name: sp.name, eol: sp.eol, platform: this.platform } };
+  }
+
+  private spawnOrThrow(prep: { sp: { name: string } }, handle: TermHandle): TermHandle {
+    if (handle.pid === undefined) {
+      try { handle.kill(true); } catch { /* the spawn already failed */ }
+      throw new Error(`terminal: could not start ${prep.sp.name} (is it installed?)`);
+    }
+    return handle;
+  }
+
+  private finish(prep: { owner: string; cwd: string; sp: { name: ShellName }; spec: TermSpawnSpec }, handle: TermHandle): TermInfo {
     const t = this.now();
-    const s: Session = { id: `t${++this.seq}`, owner, shell: sp.name, cwd, pid: child.pid, status: "running", exitCode: null, startedAt: t, lastActiveAt: t, child, buf: "", dropped: 0, total: 0, readPos: 0, lastDataAt: t, listeners: new Set() };
+    const typeable = this.backend.typeable;
+    const s: Session = {
+      id: prep.spec.id, owner: prep.owner, shell: prep.sp.name, cwd: prep.cwd, pid: handle.pid, status: "running", exitCode: null,
+      startedAt: t, lastActiveAt: t, backend: this.backend.kind, typeable, handle, buf: "", dropped: 0, total: 0, readPos: 0,
+      screen: "", screenTotal: 0, screenDropped: 0, lastDataAt: t, listeners: new Set(), activity: [], cols: prep.spec.cols, rows: prep.spec.rows,
+    };
     this.sessions.set(s.id, s);
     let holdOut = "";
     let holdErr = "";
@@ -113,6 +287,14 @@ export class TerminalRegistry {
       s.lastDataAt = Date.now();
       this.wake(s);
     };
+    const commitScreen = (chunk: string): void => {
+      if (!typeable || !chunk) return;
+      s.screen += chunk;
+      s.screenTotal += chunk.length;
+      if (s.screen.length > BUF_CAP) { const cut = s.screen.length - BUF_CAP; s.screen = s.screen.slice(cut); s.screenDropped += cut; }
+      s.lastDataAt = Date.now();
+      this.wake(s);
+    };
     // stdout and stderr each keep their own unfinished escape, so a split colour code is not glued to the other stream.
     const push = (which: "out" | "err", chunk: string, final: boolean): void => {
       const prev = which === "out" ? holdOut : holdErr;
@@ -122,16 +304,15 @@ export class TerminalRegistry {
       if (split.done) commit(split.done);
     };
     const flushHold = (): void => { push("out", "", true); push("err", "", true); };
-    child.stdout?.on("data", (d: Buffer | string) => push("out", d.toString(), false));
-    child.stderr?.on("data", (d: Buffer | string) => push("err", d.toString(), false));
-    child.stdin?.on("error", () => { /* shell already gone: the close handler records it */ });
-    child.on("error", (err) => { flushHold(); commit(`[spawn error: ${err.message}]\n`); if (s.status === "running") s.status = "exited"; this.wake(s); });
-    child.on("close", (code) => { flushHold(); if (s.status === "running") s.status = "exited"; s.exitCode = code; this.wake(s); });
+    handle.onStdout((chunk) => { commitScreen(chunk); push("out", chunk, false); });
+    handle.onStderr((chunk) => { commitScreen(chunk); push("err", chunk, false); });
+    handle.onError((message) => { flushHold(); commit(`[spawn error: ${message}]\n`); if (s.status === "running") s.status = "exited"; this.wake(s); });
+    handle.onExit((code) => { flushHold(); if (s.status === "running") s.status = "exited"; s.exitCode = code; this.wake(s); });
     return this.info(s);
   }
 
   private info(s: Session): TermInfo {
-    return { id: s.id, shell: s.shell, cwd: s.cwd, pid: s.pid, status: s.status, exitCode: s.exitCode, startedAt: s.startedAt, lastActiveAt: s.lastActiveAt };
+    return { id: s.id, shell: s.shell, cwd: s.cwd, pid: s.pid, status: s.status, exitCode: s.exitCode, startedAt: s.startedAt, lastActiveAt: s.lastActiveAt, backend: s.backend, typeable: s.typeable };
   }
   private wake(s: Session): void {
     // Copy first: a listener may unsubscribe itself. A throw stays inside that listener so the agent's read still wakes.
@@ -153,7 +334,7 @@ export class TerminalRegistry {
    * that the ring already discarded or this reply skipped to stay under the cap. `total` is the absolute end.
    * A wrong owner is an unknown session, same as every other call.
    */
-  peek(owner: string, id: string, fromTotal?: number): { info: TermInfo; text: string; total: number; dropped: number } {
+  peek(owner: string, id: string, fromTotal?: number): { info: TermInfo; text: string; total: number; dropped: number; screen?: string; screenTotal?: number; screenDropped?: number } {
     const s = this.mine(owner, id);
     const from = fromTotal === undefined || !Number.isFinite(fromTotal) ? 0 : Math.max(0, Math.floor(fromTotal));
     const start = s.total - s.buf.length; // absolute offset of buf[0]
@@ -165,7 +346,9 @@ export class TerminalRegistry {
       text = text.slice(cut); // the pane shows the newest output, and the next peek(from=total) continues live
       dropped += cut;
     }
-    return { info: this.info(s), text, total: s.total, dropped };
+    // A PTY pane needs the raw bytes (colour and cursor motion). A pipe pane keeps using the stripped text.
+    if (!s.typeable) return { info: this.info(s), text, total: s.total, dropped };
+    return { info: this.info(s), text, total: s.total, dropped, screen: s.screen, screenTotal: s.screenTotal, screenDropped: s.screenDropped };
   }
 
   /**
@@ -185,9 +368,48 @@ export class TerminalRegistry {
     if (s.status !== "running") throw new Error(`terminal: session ${id} has ${s.status}${s.exitCode !== null ? ` (exit ${s.exitCode})` : ""}; open a new one`);
     const eol = s.shell === "cmd" || s.shell === "powershell" ? "\r\n" : "\n";
     const body = enter ? (text.endsWith("\n") ? text : text + eol) : text;
-    s.child.stdin?.write(body);
+    s.handle.write(body);
     s.lastActiveAt = this.now();
     return this.info(s);
+  }
+
+  /**
+   * Keystrokes from the person at the pane. Not an agent send: no permission check here.
+   * The text is not stored. The activity log keeps only when and how many bytes.
+   */
+  input(owner: string, id: string, data: string): { bytes: number } {
+    const s = this.mine(owner, id);
+    if (!s.typeable) throw new Error("terminal: this session is a pipe, not a PTY, so the pane cannot send keystrokes");
+    if (s.status !== "running") throw new Error(`terminal: session ${id} has ${s.status}; open a new one`);
+    if (typeof data !== "string" || data.length === 0) return { bytes: 0 };
+    if (data.length > 8000) throw new Error("terminal: input is too long");
+    s.handle.write(data);
+    this.noteUser(s, data.length);
+    return { bytes: data.length };
+  }
+
+  /** Pane resize. A pipe has no tty, so this refuses. */
+  resize(owner: string, id: string, cols: number, rows: number): TermInfo {
+    const s = this.mine(owner, id);
+    if (!s.typeable) throw new Error("terminal: this session is a pipe, not a PTY, so it cannot be resized");
+    if (!Number.isInteger(cols) || cols < 2 || cols > 500) throw new Error("terminal: cols out of range");
+    if (!Number.isInteger(rows) || rows < 1 || rows > 200) throw new Error("terminal: rows out of range");
+    s.cols = cols;
+    s.rows = rows;
+    s.handle.resize(cols, rows);
+    s.lastActiveAt = this.now();
+    return this.info(s);
+  }
+
+  /** Byte counts of pane keystrokes. The characters themselves are not kept. A look (peek) is not activity. */
+  userActivity(owner: string, id: string): UserActivity[] {
+    return this.mine(owner, id).activity.map((a) => ({ at: a.at, bytes: a.bytes }));
+  }
+
+  private noteUser(s: Session, bytes: number): void {
+    s.lastActiveAt = this.now();
+    s.activity.push({ at: s.lastActiveAt, bytes });
+    if (s.activity.length > 32) s.activity.splice(0, s.activity.length - 32);
   }
 
   /**
@@ -237,15 +459,7 @@ export class TerminalRegistry {
     const s = this.mine(owner, id);
     if (s.status !== "running") throw new Error(`terminal: session ${id} has ${s.status}`);
     s.lastActiveAt = this.now();
-    const pid = s.child.pid;
-    if (!pid) return { sent: false, note: "no pid" };
-    if (this.platform === "win32") {
-      // Windows has no console to deliver Ctrl-C to for a hidden pipe session: stop the shell's child processes instead.
-      const r = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `$k=0; Get-CimInstance Win32_Process -Filter 'ParentProcessId=${Number(pid)}' | ForEach-Object { Stop-Process -Id $_.ProcessId -Force; $k++ }; exit ($(if($k){0}else{1}))`], { stdio: "ignore", windowsHide: true, timeout: 10_000 });
-      return r.status === 0 ? { sent: true, note: "stopped the shell's running program" } : { sent: false, note: "nothing is running in the shell" };
-    }
-    const r = spawnSync("pkill", ["-INT", "-P", String(pid)], { stdio: "ignore", timeout: 5000 });
-    return r.status === 0 ? { sent: true, note: "sent Ctrl-C (SIGINT) to what the shell is running" } : { sent: false, note: "nothing is running in the shell" };
+    return s.handle.interrupt();
   }
 
   close(owner: string, id: string): TermInfo {
@@ -271,17 +485,7 @@ export class TerminalRegistry {
   private kill(s: Session, sync: boolean): void {
     const becameClosed = s.status === "running";
     if (becameClosed) s.status = "closed";
-    const pid = s.child.pid;
-    try { s.child.stdin?.end(); } catch { /* gone */ }
-    if (this.platform === "win32") {
-      try {
-        if (!pid) s.child.kill();
-        else if (sync) spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
-        else nodeSpawn("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }).on("error", () => { /* taskkill missing: the shell is already gone */ });
-      } catch { try { s.child.kill(); } catch { /* gone */ } }
-    } else {
-      try { if (pid) process.kill(-pid, "SIGKILL"); else s.child.kill("SIGKILL"); } catch { try { s.child.kill("SIGKILL"); } catch { /* gone */ } }
-    }
+    try { s.handle.kill(sync); } catch { /* already gone */ }
     if (becameClosed) this.wake(s); // the pane learns the session closed; the session is still in the map until the caller deletes it
   }
 }
@@ -305,15 +509,19 @@ export function createTerminalTool(registry?: TerminalRegistry): Tool {
   const reg = () => registry ?? terminalRegistry();
   return {
     class: "write",
-    // read/list only show what the shell already printed; open/send/signal/close change the machine.
-    classFor: (a): ToolClass => (a.action === "read" || a.action === "list" ? "read" : "write"),
+    // read/list only show what the shell already printed. A destructive send is irreversible and needs the user's go.
+    classFor: (a): ToolClass => {
+      if (a.action === "read" || a.action === "list") return "read";
+      if (a.action === "send" && typeof a.text === "string" && isIrreversibleShell(a.text)) return "irreversible";
+      return "write";
+    },
     receipt: "surface",
     spec: {
       name: "terminal",
-      description: "An interactive shell session on this machine that you type into and read back, with no window and never on the screen. Use it when a job needs a back-and-forth: answering a y/n or password-style prompt, an ssh session, a Python or node REPL, a dev server whose output you tail, a shell where cd and exported variables must persist. " +
+      description: "An interactive shell session on this machine that you type into and read back. On the desktop app this is a real PTY: the user can type in the pane, and full-screen programs (vim, top, less) work. On a gateway-only install it is pipes with no window, and those full-screen programs do not work; use python3 -iu for a Python REPL and ssh -tt for a remote tty. Use it when a job needs a back-and-forth: answering a y/n or password-style prompt, an ssh session, a Python or node REPL, a dev server whose output you tail, a shell where cd and exported variables must persist. " +
         "Actions: open {shell?, cwd?} returns a session id; send {session, text, enter?, wait_ms?, until?} types text (enter defaults to true) and, with wait_ms, returns the new output; read {session, wait_ms?, until?} returns only the output since the last read; signal {session} sends Ctrl-C to what is running; close {session}; list. " +
-        `read waits up to wait_ms (max ${MAX_WAIT_MS / 1000}s) for output to arrive and settle, or for the regex in until to match. Every command you send goes through the same permission rules as bash. ` +
-        "Sessions are hidden, belong to this chat, are closed after 30 minutes idle and when Daebot quits. Pipes, not a real PTY: vim, top, less and other full-screen programs do not work; use python3 -iu for a Python REPL and ssh -tt for a remote tty. " +
+        `read waits up to wait_ms (max ${MAX_WAIT_MS / 1000}s) for output to arrive and settle, or for the regex in until to match. Every command you send goes through the same permission rules as bash. Destructive commands (rm -rf, a forced git push, deploy, terraform destroy) need the user's explicit go. ` +
+        "Sessions belong to this chat, are closed after 30 minutes idle and when Daebot quits. Output you read is ANSI-stripped. " +
         "One-shot commands go to bash; a long background job you only poll goes to process; terminal is for interactive sessions.",
       parameters: {
         type: "object",
@@ -337,7 +545,7 @@ export function createTerminalTool(registry?: TerminalRegistry): Tool {
       try {
         if (action === "open") {
           const cwd = typeof args.cwd === "string" && args.cwd ? args.cwd : ctx.cwd;
-          const info = reg().open(owner, cwd, typeof args.shell === "string" ? args.shell : undefined);
+          const info = await reg().openSession(owner, cwd, typeof args.shell === "string" ? args.shell : undefined);
           return ok(`opened ${fmt(info)}`, { session: info.id, pid: info.pid, shell: info.shell });
         }
         if (!["list", "send", "read", "signal", "close"].includes(String(action))) return fail("terminal: action must be open, send, read, signal, close or list");
