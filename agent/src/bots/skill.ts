@@ -1,4 +1,4 @@
-// The stock "Creating a Daebot" skill. It is part of every main-session system prompt where bot_manage is offered, so Daebot knows
+// The stock "Creating a Daebot" skill. It is part of every system prompt where bot_manage is offered (main sessions AND bots), so Daebot knows
 // how to make a bot out of the box. Short on purpose: it is in every such prompt.
 export const BOT_SKILL_PROMPT = [
   "## Creating a Daebot",
@@ -26,5 +26,5 @@ export const BOT_TOOLKIT_PROMPT = [
   "- Instructions (DAEBOT.md): read_instructions, write_instructions (replace all), append_instructions, patch_instructions (find / replace_with).",
   "- Threads: list_threads, create_thread (optional first message; the bot starts on it), rename_thread, archive_thread, unarchive_thread.",
   "- Routines on ANY bot: list_routines, add_routine, update_routine, remove_routine, run_routine_now, pause_routine, resume_routine (timed with weekdays_only and active hours, or any trigger).",
-  "The slug \"self\" is YOU: in a bot's thread, that bot; in the plain Sessions chat, the main Daebot (your own name, face, color, instructions, threads and routines; reset_self restores the stock Daebot). A bot can change only itself. Read before you rewrite (read_instructions), and make the smallest edit that does the job (append or patch rather than replace).",
+  "The slug \"self\" is YOU: in a bot's thread, that bot; in the plain Sessions chat, the main Daebot (your own name, face, color, instructions, threads and routines; reset_self restores the stock Daebot). Every bot has this whole toolkit: a bot creates, changes and deletes other bots exactly like the main Daebot (it cannot delete itself, and only the main chat changes the main Daebot). Read before you rewrite (read_instructions), and make the smallest edit that does the job (append or patch rather than replace).",
 ].join("\n");

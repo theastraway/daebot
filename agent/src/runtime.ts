@@ -275,7 +275,7 @@ export function composeSystemPrompt(o: {
   if (o.astraBoard) { if (on("astra")) lines.push("", ...ASTRA_BOARD_PROMPT); else index.push("Astra AI projects board: astra_board (loads when you ask about it)."); }
   if (o.board) { if (on("board")) lines.push("", BOARD_PROMPT); else index.push("Task board: task_board keeps multi-step work visible (the rules load when you ask about tasks or the board)."); }
   if (o.decision) { if (on("decision")) lines.push("", DECISION_PROMPT); else index.push("Decisions: task_decision and the Decision Protocol (loads when a choice is on the table)."); }
-  if (o.botManage) { if (on("bot")) lines.push("", ...(o.bot ? [] : [BOT_SKILL_PROMPT, ""]), BOT_TOOLKIT_PROMPT); else index.push("Bots: bot_manage creates, edits, schedules and talks through Daebots (the guide loads when you ask about bots or routines)."); }
+  if (o.botManage) { if (on("bot")) lines.push("", BOT_SKILL_PROMPT, "", BOT_TOOLKIT_PROMPT); else index.push("Bots: bot_manage creates, edits, schedules and talks through Daebots (the guide loads when you ask about bots or routines)."); }
   if (F && index.length) lines.push("", "## Skills (index; the full text loads only when the message is about it)", ...index.map((l) => `- ${l}`));
   if (o.appleCalendar === true && on("mail")) {
     lines.push(
@@ -574,8 +574,9 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
   const toolsFor = (home: string, selfBot: string | undefined, peerMain = false, localTools = false): Tool[] => {
     const on = botsOn();
     const talk = on && botStore && botsCtx ? [createBotTalkTool({ bus: botsCtx.bus, owner: ownerKey, selfBot })] : [];
-    // bot_manage: the user's own session creates and configures bots internally (never through the screen). A bot gets it too, but only for
-    // ITSELF (selfBot: slug "self"; it can neither create nor delete bots). A peer-driven main turn gets none.
+    // bot_manage: the user's own session creates and configures bots internally (never through the screen). Every bot gets the same full
+    // skill (create, change, delete any bot; selfBot makes slug "self" mean that bot). A peer-driven main turn gets none, and the tool
+    // refuses every change on a peer-originated turn.
     const botRows = (botId: string, all: boolean) => (self.rt?.listSessions() ?? []).filter((s) => (botId === MAIN_BOT_ID ? !s.bot : s.bot === botId) && !s.peer && (all || !s.archived));
     const manage = on && botStore && botsCtx && !peerMain
       ? [createBotManageTool({

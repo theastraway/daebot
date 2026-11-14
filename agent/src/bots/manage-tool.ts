@@ -1,6 +1,7 @@
 // bot_manage: Daebot creates and configures its own bots straight through the BotsApi (never the screen/computer tool).
 // Class: reads are "read", create/update are "write", delete is "irreversible" (the kernel's danger gate / the permission card asks the
-// user first, every time). Offered only to the user's own sessions (a bot never gets it) and refused again here on a peer-originated turn.
+// user first, every time). Offered to the user's own sessions AND to every bot's session (every bot has the full bot skill: it creates,
+// changes and deletes bots like the main Daebot). Every change is refused on a peer-originated turn: only the human can make a bot build bots.
 import type { Tool, ToolClass, ToolResult } from "../types.ts";
 import { validModelId } from "../settings.ts";
 import { cleanTitle } from "../persist.ts";
@@ -239,15 +240,16 @@ export function createBotManageTool(d: BotManageDeps): Tool {
       if (!action || !(ACTIONS as readonly string[]).includes(action)) return fail(`action must be one of ${ACTIONS.join(", ")}`);
       const bots = !d.selfBot && d.main ? withMain(d.bots, d.main) : d.bots;
       try {
-        // ---- who the call is about. A bot's own session may touch only itself ("self"); the main Daebot names any bot by slug.
+        // ---- who the call is about. Every bot has the full bot skill: it names any bot by slug, creates and deletes bots, and "self" (or no
+        // slug) means itself. Two limits stay: the main Daebot's own settings are changed only from the main chat (a bot's store has no
+        // "main"), and a bot cannot delete itself mid-thread (the main Daebot or another bot can).
         if (d.selfBot) {
-          if (action === "create" || action === "delete") return fail("a bot cannot create or delete bots. Ask the user to ask the main Daebot.");
-          if (action !== "list" && action !== "faces" && action !== "models") {
+          if (action !== "list" && action !== "faces" && action !== "models" && action !== "create") {
             const own = bots.get(d.selfBot);
             if (!own) return fail("this bot no longer exists");
             const given = (str(args.slug) ?? "").trim();
-            if (given && given !== "self" && given !== own.slug) return fail(`a bot can only change itself. Use slug "self" (you are "${own.slug}"), or ask the main Daebot to change "${given.slice(0, 40)}".`);
-            args = { ...args, slug: own.slug };
+            if (!given || given === "self") args = { ...args, slug: own.slug };
+            if (action === "delete" && str(args.slug)?.trim() === own.slug) return fail(`a bot cannot delete itself ("${own.slug}"). Ask the main Daebot or another bot to delete it.`);
           }
         } else if (str(args.slug)?.trim() === "self" && !d.main) {
           return fail('"self" is not available here. Name the bot by its slug (call list).');
