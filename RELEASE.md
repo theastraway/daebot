@@ -29,6 +29,8 @@ export CSC_LINK=~/.daebot-kit/devid.p12 CSC_KEY_PASSWORD=<password from the kit>
 export APPLE_API_KEY=~/.appstoreconnect/private_keys/AuthKey_<KEYID>.p8 APPLE_API_KEY_ID=<KEYID> APPLE_API_ISSUER=<issuer from the kit>
 ```
 Never commit these files or paste the values into a PR, chat or log.
+If a machine holds several certificates with the same name (stale ones, or leftover throwaway keychains from an interrupted build: `security list-keychains -d user`), set `DAEBOT_SIGN_HASH=<sha1 of the one to use>` (`security find-identity -v -p codesigning`).
+Apple's notary service can take 10 to 60+ minutes; the build waits for it. A first submission with a brand-new certificate can be slower.
 
 ## 3. Preflight (always run it first)
 ```

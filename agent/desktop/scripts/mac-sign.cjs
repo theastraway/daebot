@@ -19,7 +19,9 @@ async function macSign(opts) {
   const { signAsync } = await import('@electron/osx-sign')
   let identity = opts.identity
   const name = typeof identity === 'string' ? identity : identity && identity.name
-  if (opts.keychain) {
+  // DAEBOT_SIGN_HASH=<sha1> pins one certificate when a machine holds several with the same name.
+  if (process.env.DAEBOT_SIGN_HASH) identity = process.env.DAEBOT_SIGN_HASH
+  else if (opts.keychain) {
     const hash = hashFor(opts.keychain, name)
     if (hash) identity = hash
   }
