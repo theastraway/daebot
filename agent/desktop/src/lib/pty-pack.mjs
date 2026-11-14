@@ -32,7 +32,13 @@ export function checkPtyPack(appDir, target, exists = existsSync) {
   const rels = PTY_PACK_FILES[target];
   if (!rels) return { ok: false, missing: [`unknown target ${target}`] };
   const missing = [];
-  for (const rel of rels) if (!exists(join(appDir, rel))) missing.push(rel);
+  for (const rel of rels) {
+    if (exists(join(appDir, rel))) continue;
+    // A Windows pack cross-built from a Mac or Linux cannot compile node-pty, so it ships the package's own prebuilds/<target>/ files;
+    // node-pty's loader falls back to them when build/Release is absent.
+    if (target.startsWith("win32-") && exists(join(appDir, rel.replace("build/Release", `prebuilds/${target}`)))) continue;
+    missing.push(rel);
+  }
   return { ok: missing.length === 0, missing };
 }
 
