@@ -55,6 +55,7 @@
   <symbol id="i-refresh" viewBox="0 0 20 20"><path d="M16 9a6 6 0 10-1.6 4.5M16 4.5V9h-4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-users" viewBox="0 0 20 20"><circle cx="8" cy="7" r="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2.8 16c.4-2.7 2.5-4.2 5.2-4.2s4.8 1.5 5.2 4.2M13.5 4.4a2.7 2.7 0 010 5.2M14.6 11.9c1.6.4 2.4 1.7 2.6 3.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
   <symbol id="i-logout" viewBox="0 0 20 20"><path d="M8 3.5H5.5A1.5 1.5 0 004 5v10a1.5 1.5 0 001.5 1.5H8M12.5 6.5L16 10l-3.5 3.5M16 10H8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 20 20"><path d="M5.5 2.5h5.2L15 6.8v10.7H5.5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10.5 2.6v4.4H15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M7.8 10.6h4.4M7.8 13.2h4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
   <symbol id="i-image" viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="12" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="7.6" cy="8.4" r="1.4" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M4 14.4l3.8-3.6 3 2.5 2.3-2 3.6 3.3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-reply" viewBox="0 0 20 20"><path d="M8.5 4.5L3.5 9.5l5 5M3.5 9.5H11a5.5 5.5 0 015.5 5.5v.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-unread" viewBox="0 0 20 20"><path d="M4.5 4h11A1.5 1.5 0 0117 5.5v7a1.5 1.5 0 01-1.5 1.5H9.5L6 17v-3H4.5A1.5 1.5 0 013 12.5v-7A1.5 1.5 0 014.5 4z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><circle cx="10" cy="9" r="1.7" fill="currentColor"/></symbol>
@@ -185,8 +186,8 @@
       </div>
       <form class="composer" id="composer" autocomplete="off">
         <textarea id="input" rows="1" placeholder="Message Daebot" aria-label="Message"></textarea>
-        <button class="attach" id="btn-attach" type="button" aria-label="Attach photos" title="Attach photos (or drop or paste them here)"><svg class="ic"><use href="#i-image"/></svg></button>
-        <input type="file" id="photo-input" accept="image/*" multiple hidden>
+        <button class="attach" id="btn-attach" type="button" aria-label="Attach photos or files" title="Attach photos or a PDF (or drop or paste them here)"><svg class="ic"><use href="#i-image"/></svg></button>
+        <input type="file" id="photo-input" accept="image/*,application/pdf,.pdf" multiple hidden>
         <button class="mic" id="btn-mic" type="button" aria-label="Dictate (hold Right Option)" aria-pressed="false" title="Dictate: hold, speak, release. Your words are typed here; nothing is sent."><svg class="ic"><use href="#i-mic"/></svg></button>
         <button class="mic voice" id="btn-voice" type="button" aria-label="Voice (hold Right Command)" aria-pressed="false" title="Voice: hold, speak, release. Your words are sent and Daebot answers aloud."><svg class="ic"><use href="#i-voice"/></svg></button>
         <button class="send" id="btn-send" type="submit" aria-label="Send"><svg class="ic"><use href="#i-send"/></svg></button>
@@ -196,7 +197,7 @@
     </div>
   </main>
 
-  <div class="drop-overlay" id="drop-overlay" hidden aria-hidden="true"><div class="drop-card"><svg class="ic"><use href="#i-image"/></svg><span>Drop photos to attach</span></div></div>
+  <div class="drop-overlay" id="drop-overlay" hidden aria-hidden="true"><div class="drop-card"><svg class="ic"><use href="#i-image"/></svg><span>Drop photos or a PDF to attach</span></div></div>
 
   <aside class="term-pane" id="term-pane" aria-label="Daebot's terminal — read-only" hidden>
     <div class="term-head">

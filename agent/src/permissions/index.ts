@@ -49,7 +49,7 @@ const sameScope = (a: ScopeOption, b: { tool: string; matcher: { kind: string; v
 
 /** Tools that never ask in "everything" mode: reading the user's own MIND and local files, and the photos they attached to this chat. */
 function quietRead(f: CallFacts): boolean {
-  return f.cls === "read" && (/^mind_[a-z0-9_]+$/.test(f.tool) || f.tool === "read_file" || f.tool === "glob" || f.tool === "grep" || f.tool === "decide" || f.tool === "view_photo");
+  return f.cls === "read" && (/^mind_[a-z0-9_]+$/.test(f.tool) || f.tool === "read_file" || f.tool === "glob" || f.tool === "grep" || f.tool === "decide" || f.tool === "view_photo" || f.tool === "read_document");
 }
 
 export class PermissionService {

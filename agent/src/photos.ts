@@ -13,13 +13,23 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { PhotoRef } from "./types.ts";
 import { fileNameFor } from "./persist.ts";
+import { isPdf, pdfText } from "./pdf.ts";
 
 export const PHOTO_MIMES = ["image/jpeg", "image/png", "image/webp", "image/gif"] as const;
 export type PhotoMime = (typeof PHOTO_MIMES)[number];
+/** A PDF attached to a message. It is read as TEXT (src/pdf.ts), never sent to a vision model. */
+export const DOC_MIMES = ["application/pdf"] as const;
+export type DocMime = (typeof DOC_MIMES)[number];
+export type AttachmentMime = PhotoMime | DocMime;
+export const ACCEPTED_MIMES = [...PHOTO_MIMES, ...DOC_MIMES] as const;
+export const isDocMime = (m: string): m is DocMime => (DOC_MIMES as readonly string[]).includes(m);
+export type AttachmentKind = "photo" | "document";
 
 export const MAX_PHOTOS_PER_MESSAGE = 5;
 /** Decoded bytes per photo. The web client shrinks to 1568px JPEG first, which is a few hundred KB; this is the hard ceiling. */
 export const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
+/** Decoded bytes per attached document (a PDF is not shrunk, so it gets its own, larger cap). */
+export const MAX_DOC_BYTES = 16 * 1024 * 1024;
 /** Decoded bytes per request (all photos of one message). */
 export const MAX_REQUEST_PHOTO_BYTES = 24 * 1024 * 1024;
 /** Request body ceiling on the routes that take photos: base64 of the cap above plus the JSON around it and the message text. */
@@ -31,7 +41,7 @@ const MAX_SIDE = 12_000;
 
 // ---------------------------------------------------------------- validation
 
-export interface UploadedPhoto { name: string; mime: PhotoMime; data: Buffer; width: number; height: number }
+export interface UploadedPhoto { name: string; mime: AttachmentMime; /** "photo" (default) or "document"; checkPhotos always sets it */ kind?: AttachmentKind; data: Buffer; width: number; height: number; pages?: number }
 export type PhotoCheck = { ok: true; photos: UploadedPhoto[] } | { ok: false; status: number; error: string };
 
 const fail = (status: number, error: string): PhotoCheck => ({ ok: false, status, error });
@@ -94,59 +104,79 @@ export function imageSize(buf: Buffer, mime: PhotoMime): { width: number; height
 
 /**
  * Validates the `photos` array of a send request: [{ name, dataUrl }]. Checks the mime prefix, that the payload is real base64,
- * that the bytes really are an image of the declared type, and the per-photo, per-request and count caps. Never throws.
+ * that the bytes really are an image (or a PDF) of the declared type, and the per-file, per-request and count caps. Never throws.
  */
 export function checkPhotos(raw: unknown): PhotoCheck {
   if (raw === undefined || raw === null) return { ok: true, photos: [] };
   if (!Array.isArray(raw)) return fail(400, "photos must be an array");
-  if (raw.length > MAX_PHOTOS_PER_MESSAGE) return fail(400, `at most ${MAX_PHOTOS_PER_MESSAGE} photos per message`);
+  if (raw.length > MAX_PHOTOS_PER_MESSAGE) return fail(400, `at most ${MAX_PHOTOS_PER_MESSAGE} attachments per message`);
   const out: UploadedPhoto[] = [];
   let total = 0;
   for (let i = 0; i < raw.length; i++) {
     const p = raw[i] as { name?: unknown; dataUrl?: unknown } | null;
-    const label = `photo ${i + 1}`;
+    const label = `attachment ${i + 1}`;
     if (!p || typeof p !== "object" || typeof p.dataUrl !== "string") return fail(400, `${label}: expected { name, dataUrl }`);
     const url = p.dataUrl;
     const comma = url.indexOf(",");
     const head = comma > 0 ? url.slice(0, comma).toLowerCase() : "";
     const m = /^data:([a-z]+\/[a-z0-9.+-]+);base64$/.exec(head);
     if (!m) return fail(400, `${label}: not a base64 data URL`);
-    const mime = m[1] as PhotoMime;
-    if (!(PHOTO_MIMES as readonly string[]).includes(mime)) {
-      return fail(415, /^image\/hei[cf]/.test(mime) ? `${label}: HEIC photos are not supported; convert it to JPEG` : `${label}: ${mime} is not supported (use JPEG, PNG, WebP or GIF)`);
+    const mime = m[1];
+    if (!(ACCEPTED_MIMES as readonly string[]).includes(mime)) {
+      return fail(415, /^image\/hei[cf]/.test(mime) ? `${label}: HEIC photos are not supported; convert it to JPEG` : `${label}: ${mime} is not supported (use JPEG, PNG, WebP, GIF or PDF)`);
     }
+    const doc = isDocMime(mime);
+    const cap = doc ? MAX_DOC_BYTES : MAX_PHOTO_BYTES;
     const b64 = url.slice(comma + 1);
-    if (b64.length === 0 || b64.length % 4 !== 0 || !BASE64.test(b64)) return fail(400, `${label}: the image data is not valid base64`);
+    if (b64.length === 0 || b64.length % 4 !== 0 || !BASE64.test(b64)) return fail(400, `${label}: the file data is not valid base64`);
     const pad = b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0;
     const bytes = (b64.length / 4) * 3 - pad;
-    if (bytes > MAX_PHOTO_BYTES) return fail(413, `${label} is ${(bytes / 1048576).toFixed(1)} MB; the limit is ${MAX_PHOTO_BYTES / 1048576} MB per photo`);
+    if (bytes > cap) return fail(413, `${label} is ${(bytes / 1048576).toFixed(1)} MB; the limit is ${cap / 1048576} MB per ${doc ? "document" : "photo"}`);
     total += bytes;
-    if (total > MAX_REQUEST_PHOTO_BYTES) return fail(413, `these photos total over ${MAX_REQUEST_PHOTO_BYTES / 1048576} MB; send fewer or smaller ones`);
+    if (total > MAX_REQUEST_PHOTO_BYTES) return fail(413, `these attachments total over ${MAX_REQUEST_PHOTO_BYTES / 1048576} MB; send fewer or smaller ones`);
     const data = Buffer.from(b64, "base64");
-    if (data.length !== bytes) return fail(400, `${label}: the image data is not valid base64`);
-    const size = imageSize(data, mime);
-    if (!size || size.width < 1 || size.height < 1) return fail(400, `${label}: this is not a valid ${mime.slice(6).toUpperCase()} image`);
+    if (data.length !== bytes) return fail(400, `${label}: the file data is not valid base64`);
+    if (doc) {
+      if (!isPdf(data)) return fail(400, `${label}: this is not a PDF file (no %PDF header)`);
+      const read = pdfText(data);
+      out.push({ name: cleanName(p.name, `document-${i + 1}`), mime, kind: "document", data, width: 0, height: 0, pages: read.pageCount });
+      continue;
+    }
+    const photoMime = mime as PhotoMime;
+    const size = imageSize(data, photoMime);
+    if (!size || size.width < 1 || size.height < 1) return fail(400, `${label}: this is not a valid ${photoMime.slice(6).toUpperCase()} image`);
     if (size.width > MAX_SIDE || size.height > MAX_SIDE) return fail(413, `${label} is ${size.width}x${size.height}; the longest side may be ${MAX_SIDE}px`);
-    out.push({ name: cleanName(p.name, `photo-${i + 1}`), mime, data, width: size.width, height: size.height });
+    out.push({ name: cleanName(p.name, `photo-${i + 1}`), mime: photoMime, kind: "photo", data, width: size.width, height: size.height });
   }
   return { ok: true, photos: out };
 }
 
-/** The lines appended to the user's message so the model knows a photo exists and what to ask for. */
+/** The lines appended to the user's message so the model knows an attachment exists and what to ask for. */
 export function photoLines(photos: PhotoRef[] | undefined): string {
-  return (photos ?? []).map((p) => `[photo ${p.id}: ${p.name}, ${p.width}x${p.height}]`).join("\n");
+  return (photos ?? []).map((p) => (p.kind === "document"
+    ? `[document ${p.id}: ${p.name}${p.pages ? `, ${p.pages} page${p.pages === 1 ? "" : "s"}` : ""}]`
+    : `[photo ${p.id}: ${p.name}, ${p.width}x${p.height}]`)).join("\n");
 }
 
-/** What the model reads for a message: the user's words, then one line per photo. */
+/** What the model reads for a message: the user's words, then one line per attachment. */
 export function messageWithPhotos(text: string, photos: PhotoRef[] | undefined): string {
   if (!photos?.length) return text;
   const lines = photoLines(photos);
-  return text.trim() ? `${text}\n\n${lines}` : `(The user attached ${photos.length === 1 ? "a photo" : `${photos.length} photos`} without a message.)\n${lines}`;
+  const n = photos.length;
+  const what = photos.every((p) => p.kind === "document") ? (n === 1 ? "a document" : `${n} documents`) : n === 1 ? "a photo" : `${n} attachments`;
+  return text.trim() ? `${text}\n\n${lines}` : `(The user attached ${what} without a message.)\n${lines}`;
 }
 
 // ---------------------------------------------------------------- store
 
-export interface PhotoMeta extends PhotoRef { mime: PhotoMime; bytes: number; at: number }
+export interface PhotoMeta extends PhotoRef { mime: AttachmentMime; bytes: number; at: number }
+
+/** The client-facing reference for a stored attachment. A document says so (`kind: "document"` + its page count); a photo's shape is unchanged from before documents existed. */
+export function photoRef(m: PhotoMeta): PhotoRef {
+  return m.kind === "document"
+    ? { id: m.id, name: m.name, width: 0, height: 0, kind: "document", ...(m.pages ? { pages: m.pages } : {}) }
+    : { id: m.id, name: m.name, width: m.width, height: m.height };
+}
 interface Index { v: 1; next: number; photos: PhotoMeta[] }
 export type AddResult = { ok: true; photos: PhotoMeta[] } | { ok: false; status: number; error: string };
 
@@ -210,13 +240,13 @@ export class PhotoStore {
     return next.finally(() => { if (this.queues.get(sessionId) === next) this.queues.delete(sessionId); });
   }
 
-  /** Stores photos that already passed checkPhotos. Ids are p1, p2, ... per session and never reused. */
+  /** Stores attachments (photos and documents) that already passed checkPhotos. Ids are p1, p2, ... per session and never reused. */
   add(sessionId: string, photos: UploadedPhoto[]): Promise<AddResult> {
     return this.serial(sessionId, async (): Promise<AddResult> => {
       const idx = this.readIndex(sessionId);
-      if (idx.photos.length + photos.length > MAX_SESSION_PHOTOS) return { ok: false, status: 413, error: `this chat already holds ${idx.photos.length} photos (limit ${MAX_SESSION_PHOTOS}); start a new chat` };
+      if (idx.photos.length + photos.length > MAX_SESSION_PHOTOS) return { ok: false, status: 413, error: `this chat already holds ${idx.photos.length} attachments (limit ${MAX_SESSION_PHOTOS}); start a new chat` };
       const add = photos.reduce((n, p) => n + p.data.length, 0);
-      if (this.ownerBytes() + add > MAX_OWNER_BYTES) return { ok: false, status: 413, error: `photo storage is full (${MAX_OWNER_BYTES / 1048576} MB); delete old chats to free space` };
+      if (this.ownerBytes() + add > MAX_OWNER_BYTES) return { ok: false, status: 413, error: `attachment storage is full (${MAX_OWNER_BYTES / 1048576} MB); delete old chats to free space` };
       const dir = this.sdir(sessionId);
       const metas: PhotoMeta[] = [];
       try {
@@ -224,36 +254,45 @@ export class PhotoStore {
         for (const p of photos) {
           const id = `p${idx.next++}`;
           await writeFile(join(dir, `${id}.bin`), p.data, { mode: 0o600 });
-          metas.push({ id, name: p.name, width: p.width, height: p.height, mime: p.mime, bytes: p.data.length, at: Date.now() });
+          metas.push({ id, name: p.name, width: p.width, height: p.height, mime: p.mime, kind: p.kind ?? "photo", ...(p.pages ? { pages: p.pages } : {}), bytes: p.data.length, at: Date.now() });
         }
         idx.photos.push(...metas);
         const tmp = join(dir, `index.json.${process.pid}.tmp`);
         await writeFile(tmp, JSON.stringify(idx), { mode: 0o600 });
         await rename(tmp, join(dir, "index.json"));
       } catch {
-        return { ok: false, status: 500, error: "could not save the photos" };
+        return { ok: false, status: 500, error: "could not save the attachments" };
       }
       if (this.used !== undefined) this.used += add;
       return { ok: true, photos: metas };
     });
   }
 
-  /** Device sync: stores a photo that was made on another device, under the SAME id (the transcript names photos by id). Idempotent. */
+  /** Device sync: stores an attachment made on another device, under the SAME id (the transcript names attachments by id). Idempotent. */
   importPhoto(sessionId: string, meta: PhotoMeta, data: Buffer): Promise<AddResult> {
     return this.serial(sessionId, async (): Promise<AddResult> => {
-      if (!isPhotoId(meta.id)) return { ok: false, status: 400, error: "bad photo id" };
-      if (!(PHOTO_MIMES as readonly string[]).includes(meta.mime)) return { ok: false, status: 415, error: "unsupported image type" };
-      if (data.length === 0 || data.length > MAX_PHOTO_BYTES) return { ok: false, status: 413, error: "photo too large" };
-      const size = imageSize(data, meta.mime);
-      if (!size || size.width < 1 || size.height < 1) return { ok: false, status: 400, error: "not a valid image" };
+      if (!isPhotoId(meta.id)) return { ok: false, status: 400, error: "bad id" };
+      if (!(ACCEPTED_MIMES as readonly string[]).includes(meta.mime ?? "")) return { ok: false, status: 415, error: "unsupported attachment type" };
+      const doc = isDocMime(meta.mime);
+      const cap = doc ? MAX_DOC_BYTES : MAX_PHOTO_BYTES;
+      if (data.length === 0 || data.length > cap) return { ok: false, status: 413, error: doc ? "document too large" : "photo too large" };
+      let width = 0, height = 0, pages: number | undefined;
+      if (doc) {
+        if (!isPdf(data)) return { ok: false, status: 400, error: "not a valid PDF" };
+        pages = pdfText(data).pageCount;
+      } else {
+        const size = imageSize(data, meta.mime as PhotoMime);
+        if (!size || size.width < 1 || size.height < 1) return { ok: false, status: 400, error: "not a valid image" };
+        width = size.width; height = size.height;
+      }
       const idx = this.readIndex(sessionId);
       const have = idx.photos.find((p) => p.id === meta.id);
       if (have) return { ok: true, photos: [have] };
-      if (idx.photos.length + 1 > MAX_SESSION_PHOTOS) return { ok: false, status: 413, error: "this chat already holds too many photos" };
-      if (this.ownerBytes() + data.length > MAX_OWNER_BYTES) return { ok: false, status: 413, error: "photo storage is full" };
+      if (idx.photos.length + 1 > MAX_SESSION_PHOTOS) return { ok: false, status: 413, error: "this chat already holds too many attachments" };
+      if (this.ownerBytes() + data.length > MAX_OWNER_BYTES) return { ok: false, status: 413, error: "attachment storage is full" };
       const dir = this.sdir(sessionId);
       const n = Number(/^p(\d+)$/.exec(meta.id)?.[1] ?? 0);
-      const kept: PhotoMeta = { id: meta.id, name: cleanName(meta.name, meta.id), width: size.width, height: size.height, mime: meta.mime, bytes: data.length, at: Number(meta.at) || Date.now() };
+      const kept: PhotoMeta = { id: meta.id, name: cleanName(meta.name, meta.id), width, height, mime: meta.mime, kind: doc ? "document" : "photo", ...(pages ? { pages } : {}), bytes: data.length, at: Number(meta.at) || Date.now() };
       try {
         await mkdir(dir, { recursive: true, mode: 0o700 });
         await writeFile(join(dir, `${meta.id}.bin`), data, { mode: 0o600 });
@@ -262,7 +301,7 @@ export class PhotoStore {
         const tmp = join(dir, `index.json.${process.pid}.tmp`);
         await writeFile(tmp, JSON.stringify(idx), { mode: 0o600 });
         await rename(tmp, join(dir, "index.json"));
-      } catch { return { ok: false, status: 500, error: "could not save the photo" }; }
+      } catch { return { ok: false, status: 500, error: "could not save the attachment" }; }
       if (this.used !== undefined) this.used += data.length;
       return { ok: true, photos: [kept] };
     });

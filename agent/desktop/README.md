@@ -92,15 +92,88 @@ build is signed but not notarized; say so in the release notes. Check with `spct
 `xcrun stapler validate`. An unsigned Mac build needs right-click, Open on first launch.
 
 ### Windows and Linux
-CI (`.github/workflows/daebot-desktop.yml`, manual run or a `daebot-v*` tag) builds both with no secrets. Windows installers are
-unsigned (no code-signing certificate yet), so SmartScreen asks to confirm the first launch. The Mac CI job is skipped unless the
+CI (`.github/workflows/daebot-desktop.yml`, manual run or a `daebot-v*` tag) builds both with no secrets. Those CI Windows installers
+are unsigned, so SmartScreen asks to confirm the first launch. The Mac CI job is skipped unless the
 `CSC_LINK` secret exists; it cannot notarize (no `MINDNotarize` profile on runners).
+
+A signed Windows installer is opt-in: Azure Artifact Signing (formerly Trusted Signing), switched on only by `DAEBOT_WIN_SIGN=azure`.
+Without it Windows builds unsigned on any machine, including cross-built from a Mac, and nothing blocks. From `agent/desktop`, on a Windows host:
+
+```
+DAEBOT_WIN_SIGN=azure npm run dist:win
+```
+
+With `DAEBOT_WIN_SIGN=azure` the config reads seven environment variables and throws `DAEBOT_WIN_SIGN=azure Windows build is missing: ...` if any is unset. Values stay
+in the environment, never in this repo:
+
+- `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` — an Entra app with the Artifact Signing Certificate Profile Signer role
+- `DAEBOT_AZURE_ENDPOINT` — regional endpoint of the signing account, for example `https://eus.codesigning.azure.net/`
+- `DAEBOT_AZURE_ACCOUNT` — Artifact Signing account name
+- `DAEBOT_AZURE_PROFILE` — certificate profile name
+- `DAEBOT_WIN_PUBLISHER` — publisher name, the exact certificate subject
+
+electron-builder installs the TrustedSigning PowerShell module itself and signs the app, the NSIS installer, and the bundled
+`resources/bin/daebot-windows-<arch>.exe` (an `.exe` extra resource; no `signExts` and no extra sign step). Signing runs
+`Invoke-TrustedSigning` through Windows PowerShell: native `pwsh.exe`, or `powershell.exe` if that is missing. A Mac-only `pwsh`
+install is not a supported way to ship. The reliable path is a Windows host or Windows CI runner. A Mac works only when
+electron-builder can drive a Parallels Desktop Windows 10 or 11 VM. `DAEBOT_SIGN=1` is the Mac Developer ID switch only and never
+affects Windows; a Mac `CSC_LINK` is cleared for Windows packs that are not Azure-signed.
 
 ### Publishing a release
 1. Bump `version` in `agent/package.json` and `agent/desktop/package.json`; build on each platform (or run the workflow).
 2. Upload the files to `https://download.m-i-n-d.ai/daebot/<version>/`.
 3. `node agent/scripts/release-manifest.mjs <folder-with-the-files> <version>` fills `agent/web/download/releases.json` (size, sha256,
    URL; a missing file stays "Coming soon"). Merge it and deploy; `daebot.live/download` updates.
+
+#### The script does all of it: `agent/desktop/scripts/publish-release.sh`
+```
+agent/desktop/scripts/publish-release.sh <artifactsDir> <version> --notes "..." \
+    [--platforms mac,windows,linux] [--dry-run] [--force] [--skip-registry]
+```
+`<artifactsDir>` is what electron-builder wrote (`agent/desktop/dist`). It uploads atomically (`scp` to
+`.tmp`, then `mv`), skips a file already present with the same sha256, refuses to overwrite a different one
+without `--force`, verifies every file over HTTPS (200 + matching `content-length`), writes the download
+manifest, registers each `(platform, arch)` with MIND, and prints a receipt with the sha256s. Always run
+`--dry-run` first. Modeled on the proven MIND publisher (`mindapp-sandbox/.../publish-dmg.sh`).
+
+#### A release is THREE things — all three, or it is not shipped
+1. **The installers** on the droplet (`/var/www/evie/download/daebot/`, Caddy, public at
+   `https://download.m-i-n-d.ai/download/daebot/`).
+2. **The electron-updater feed files** (`latest-mac.yml`, `latest.yml`, `latest-arm64.yml`,
+   `latest-linux.yml`) plus the `.blockmap` files. This is what an ALREADY-INSTALLED app checks. An installer
+   uploaded without its feed file never reaches anyone already running Daebot.
+3. **The records**: the MIND registry (`POST /developer/v1/mac-releases`, admin key, keyed on
+   version+build+platform+arch) and `agent/web/download/releases.json` (the website's download buttons).
+
+#### Credentials each step needs
+| Step | Needs | Where it lives |
+|---|---|---|
+| Upload to the droplet | the SSH private key | `~/.ssh/droplet_170_key` (or `DAEBOT_SSH_KEY`) |
+| Mac sign + notarize | Developer ID `ANTHONY JOSEPH CONTI (VJ44THJ238)`, `MINDNotarize` profile, `DAEBOT_SIGN=1` | only the signing Mac |
+| MIND registry | an admin `mind_` key | `~/.daebot/mind-key`, or `MIND_API_KEY` |
+
+Build commands: Mac `DAEBOT_SIGN=1 npm run dist:mac` (signing Mac only); Windows/Linux need no secrets —
+CI builds them on a `daebot-v*` tag or `workflow_dispatch`. `bun` is required to compile the gateway binary
+(`curl -fsSL https://bun.sh/install | bash`).
+
+#### Traps that cost real time
+- **The desktop app bundles its own gateway** (`Contents/Resources/bin/daebot-darwin-*` embeds the web UI), so
+  a web-only change does not reach an installed app until a desktop build ships. Check an installed app with
+  `.../bin/daebot-darwin-arm64 --version`.
+- **A build with no signing identity SUCCEEDS but is adhoc-signed** (`codesign -dv` -> `Signature=adhoc`,
+  `TeamIdentifier=not set`; `spctl -a` -> "rejected"). Do not publish it: it would replace a notarized app
+  with an untrusted one and break the update chain.
+- **CI's `verify` job already fails on `main`** (run 39975530745, 2026-10-23, before this work). Reproduce
+  locally at the tag before blaming a change, and compare failing test NAMES against a `main` run: the flaky
+  set is the device-relay / connected-apps / apple_calendar group.
+- In a fresh `git worktree`, `npx tsc` fails with "This is not the tsc command you are looking for" until you
+  run `npm install` there. `timeout` is not installed on macOS.
+
+#### Done means (do not claim it earlier)
+`curl -sIL https://download.m-i-n-d.ai/download/daebot/<file>` is 200 with the right `content-length`;
+the server's `latest-mac.yml` names the new version; the registry `GET /latest` confirms version+build;
+`releases.json` on main has the URL; and `scripts/verify-feed.cjs` shows the update offered to an app on the
+previous version.
 
 ## Memory
 Measured by `npm run smoke` (sum of Electron per-process working sets + the gateway child RSS; this over-counts shared pages,

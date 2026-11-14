@@ -125,7 +125,7 @@ test("delete is irreversible-class: through the kernel it needs the user's expli
   assert.deepEqual(purged, [id]);
 });
 
-test("end to end in a runtime: the main session offers bot_manage and the skill; Daebot's bot_manage create lands in the store; a bot session has the tool for itself, not the create-a-bot skill", async () => {
+test("end to end in a runtime: the main session offers bot_manage and the skill; Daebot's bot_manage create lands in the store; a bot session has the same tool AND the create-a-bot skill", async () => {
   const key = "mind_" + rnd();
   const fake = await startFakeMind({ [key]: "pat" });
   const dir = mkdtempSync(join(tmpdir(), "bots-manage-rt-"));
@@ -152,8 +152,8 @@ test("end to end in a runtime: the main session offers bot_manage and the skill;
     const bs = await rt.openSession({ surface: "web", botId: b.id, identity: "admin" });
     await collect(bs.send("hi"));
     const last = provider.requests.at(-1)!;
-    assert.ok(last.tools.some((t) => t.name === "bot_manage"), "a bot has bot_manage, for itself only");
-    assert.ok(!last.messages[0].content.includes("## Creating a Daebot"), "but it is not taught to create bots");
+    assert.ok(last.tools.some((t) => t.name === "bot_manage"), "a bot has bot_manage, with the full skill");
+    assert.ok(last.messages[0].content.includes("## Creating a Daebot"), "and it is taught to create bots");
   } finally { await fake.close(); }
 });
 

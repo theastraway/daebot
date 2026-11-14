@@ -23,7 +23,10 @@ test("classifyFile: jpeg, png, webp and gif are ok; HEIC and HEIF are named; the
   assert.equal(classifyFile({ type: "", name: "IMG_0002.heic" }), "heic");
   assert.equal(classifyFile({ type: "", name: "scan.JPG" }), "ok");
   assert.equal(classifyFile({ type: "", name: "pic.PNG" }), "ok");
-  for (const f of [{ type: "image/svg+xml", name: "a.svg" }, { type: "application/pdf", name: "a.pdf" }, { type: "image/tiff", name: "a.tif" }, { type: "", name: "noext" }, { type: "video/mp4", name: "a.mp4" }]) assert.equal(classifyFile(f), "other", f.name);
+  for (const f of [{ type: "image/svg+xml", name: "a.svg" }, { type: "image/tiff", name: "a.tif" }, { type: "", name: "noext" }, { type: "video/mp4", name: "a.mp4" }]) assert.equal(classifyFile(f), "other", f.name);
+  // a PDF is its own kind: it is attached as it is and the server reads its text
+  assert.equal(classifyFile({ type: "application/pdf", name: "a.pdf" }), "document");
+  assert.equal(classifyFile({ type: "", name: "contract.PDF" }), "document");
   assert.match(SAYS.heic, /convert it to JPEG/i);
 });
 
@@ -82,7 +85,7 @@ test("queueLabel: the text, or what the message holds when it is only photos", (
 
 test("the served files are wired: markup, document-level drop handling, paste, picker, queue, transcript, and no innerHTML", () => {
   const html = read("index.html");
-  for (const needle of ['id="attach-strip"', 'id="attach-note"', 'id="drop-overlay"', 'id="btn-attach"', 'id="photo-input"', 'accept="image/*"', "multiple", 'aria-label="Attach photos"', 'id="i-image"', "Drop photos to attach"]) assert.ok(html.includes(needle), needle);
+  for (const needle of ['id="attach-strip"', 'id="attach-note"', 'id="drop-overlay"', 'id="btn-attach"', 'id="photo-input"', 'accept="image/*,application/pdf,.pdf"', "multiple", 'aria-label="Attach photos or files"', 'id="i-image"', 'id="i-doc"', "Drop photos or a PDF to attach"]) assert.ok(html.includes(needle), needle);
   const js = read("photos.js");
   // a missed drop must never navigate the app away: dragover and drop are cancelled on the DOCUMENT
   assert.match(js, /document\.addEventListener\("dragover", \(e\) => \{\s*e\.preventDefault\(\)/);

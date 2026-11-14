@@ -2,7 +2,7 @@
 // PhotoStore. After a session syncs, the two sides trade the photos the other one is missing, under the same ids.
 import type { HistoryEvent } from "../types.ts";
 import type { PhotoMeta, PhotoStore } from "../photos.ts";
-import { MAX_PHOTO_BYTES } from "../photos.ts";
+import { MAX_DOC_BYTES, MAX_PHOTO_BYTES } from "../photos.ts";
 import type { SyncHttp } from "./http.ts";
 
 /** Photo ids a transcript refers to, in order, without repeats. */
@@ -32,7 +32,7 @@ export async function reconcilePhotos(o: { http: SyncHttp; photos: PhotoStore; s
     if (added.ok) down++; else refused.push(m.id);
   }
   for (const m of local) {
-    if (rids.has(m.id) || m.bytes > MAX_PHOTO_BYTES) continue;
+    if (rids.has(m.id) || m.bytes > (m.kind === "document" ? MAX_DOC_BYTES : MAX_PHOTO_BYTES)) continue;
     const hit = await photos.read(sessionId, m.id);
     if (!hit) continue;
     try {

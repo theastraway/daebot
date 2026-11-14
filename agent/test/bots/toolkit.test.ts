@@ -208,14 +208,24 @@ test("self: a bot's session edits ITSELF through slug self (or its own slug) and
   assert.equal(rt.ok, true, rt.output);
   assert.equal((await run({ action: "pause_routine", slug: "self", routine: "Morning" })).j.updated.enabled, false);
   assert.equal((await run({ action: "create_thread", slug: "self", title: "Plan" })).j.thread.title, "Plan");
-  // not anyone else, and no creating or deleting
-  const other = await run({ action: "rename", slug: "other", name: "Hijacked" });
-  assert.equal(other.ok, false);
-  assert.match(other.output, /only change itself/);
-  assert.equal(main.store.bySlug("other")!.name, "Other");
-  assert.match((await run({ action: "create", slug: "kid", name: "Kid" })).output, /cannot create or delete/);
-  assert.match((await run({ action: "delete", slug: "self" })).output, /cannot create or delete/);
+  // every bot has the full bot skill: it changes other bots, creates bots and deletes bots
+  assert.equal((await run({ action: "rename", slug: "other", name: "Renamed by Scout" })).ok, true);
+  assert.equal(main.store.bySlug("other")!.name, "Renamed by Scout");
+  const kid = await run({ action: "create", slug: "kid", name: "Kid", instructions: INSTR });
+  assert.equal(kid.ok, true, kid.output);
+  assert.ok(main.store.bySlug("kid"), "a bot creates a bot");
+  assert.equal((await run({ action: "add_routine", slug: "kid", name: "Daily", prompt: "Check in.", kind: "timed", expression: "0 9 * * *", tz: "America/New_York" })).ok, true, "and schedules it");
+  assert.equal((await run({ action: "delete", slug: "kid" })).ok, true, "and deletes another bot");
+  assert.ok(!main.store.bySlug("kid"));
+  // but never itself
+  assert.match((await run({ action: "delete", slug: "self" })).output, /cannot delete itself/);
+  assert.match((await run({ action: "delete", slug: "scout" })).output, /cannot delete itself/);
   assert.ok(main.store.bySlug("scout"));
+  // and a message from another bot still changes nothing
+  const peer = await self.run({ action: "create", slug: "spawn", name: "Spawn" }, { cwd: "/", sessionId: "s", origin: "bot" });
+  assert.equal(peer.ok, false);
+  assert.match(peer.output, /another bot cannot create, change or delete bots/);
+  assert.ok(!main.store.bySlug("spawn"));
   assert.equal((await run({ action: "list" })).ok, true, "reads of the roster still work");
   // the main Daebot is not a bot: self means nothing there
   await main.bad({ action: "rename", slug: "self", name: "x" }, /"self" is not available here/);
@@ -244,7 +254,8 @@ test("the system prompt lists the toolkit (main session and bot session), and th
   for (const w of ["create_thread", "patch_instructions", "pause_routine", "set_color", "archive_thread", "unpin", "Never tell the user you cannot"]) assert.ok(main.includes(w), w);
   const bot = composeSystemPrompt({ tier: "admin", bootContext: "", surface: "web", cwd: "/", model: "m", toolNames: names, botManage: true, bot: { slug: "scout", instructions: INSTR, base: "", face: undefined } });
   assert.ok(bot.includes(BOT_TOOLKIT_PROMPT) && bot.includes('slug "self"'));
-  assert.ok(!bot.includes("## Creating a Daebot"), "a bot does not create bots");
+  assert.match(bot, /## Creating a Daebot/, "every bot is built with the bot-creating skill");
+  assert.ok(!bot.includes("A bot can change only itself"));
   const none = composeSystemPrompt({ tier: "admin", bootContext: "", surface: "web", cwd: "/", model: "m", toolNames: [], botManage: false });
   assert.ok(!none.includes("Managing bots"));
   const { HEARTBEAT_PROMPT } = await import("../../src/routines/store.ts");

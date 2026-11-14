@@ -1213,7 +1213,7 @@ async function sendMessage(text, attached = [], quote) {
   suggest.onSend(text); // tells Dae whether the suggested replies were taken, edited or ignored, and clears them
   // Show the message immediately; opening a session can take several seconds while MIND boots.
   const startKey = tkey();
-  const userItem = addItem(startKey, { kind: "user", text, ...(currentMeta()?.shared ? { mine: true } : {}), ...(quote ? { quote: { id: quote.mid, text: quote.text } } : {}), ...(attached.length ? { photos: attached.map((p) => ({ name: p.name, dataUrl: p.dataUrl, width: p.width, height: p.height })) } : {}) });
+  const userItem = addItem(startKey, { kind: "user", text, ...(currentMeta()?.shared ? { mine: true } : {}), ...(quote ? { quote: { id: quote.mid, text: quote.text } } : {}), ...(attached.length ? { photos: attached.map((p) => ({ name: p.name, dataUrl: p.dataUrl, width: p.width, height: p.height, ...(p.kind === "document" ? { kind: "document" } : {}) })) } : {}) });
   voice.turnStart();
   const waiting = addItem(startKey, { kind: "notice", level: "info", text: "Thinking…" });
   state.busy.add(startKey); setBusyUi(); stick = true; toBottom(true);

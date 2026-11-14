@@ -115,12 +115,12 @@ test("validation: bad mime, bad base64, a mismatched image, too many, and oversi
     const cases: [string, unknown, number, RegExp][] = [
       ["svg", [{ name: "a.svg", dataUrl: dataUrl("image/svg+xml", Buffer.from("<svg onload=alert(1)/>")) }], 415, /not supported/],
       ["heic", [{ name: "a.heic", dataUrl: dataUrl("image/heic", Buffer.alloc(64)) }], 415, /convert it to JPEG/],
-      ["pdf", [{ name: "a.pdf", dataUrl: dataUrl("application/pdf", Buffer.from("%PDF")) }], 415, /not supported/],
+      ["pdf that is not a pdf", [{ name: "a.pdf", dataUrl: dataUrl("application/pdf", Buffer.from("%PDF")) }], 400, /not a PDF file/],
       ["not base64", [{ name: "a.jpg", dataUrl: "data:image/jpeg;base64,!!!!" }], 400, /not valid base64/],
       ["png labelled jpeg", [{ name: "a.jpg", dataUrl: dataUrl("image/jpeg", png(8, 8)) }], 400, /not a valid JPEG/],
       ["a url", [{ name: "a.jpg", dataUrl: "https://evil.example/a.jpg" }], 400, /base64 data URL/],
       ["not an array", "x", 400, /array/],
-      ["six", Array.from({ length: 6 }, (_, i) => sample(`${i}.jpg`)), 400, /at most 5/],
+      ["six", Array.from({ length: 6 }, (_, i) => sample(`${i}.jpg`)), 400, /at most 5 attachments/],
       ["one over 8 MB", [{ name: "big.jpg", dataUrl: jpegUrl(4000, 3000, 8 * 1024 * 1024 + 1000) }], 413, /8 MB per photo/],
     ];
     for (const [name, photos, status, msg] of cases) {
@@ -328,4 +328,29 @@ test("hosted: after a restart the owner of a stored chat still reads its photos 
     const hist = JSON.parse((await http(r2.gw.url, "GET", `/sessions/${sidA}/history`, { headers: A2 })).body).events as any[];
     assert.deepEqual(hist.find((e) => e.type === "user").photos.map((p: any) => p.id), ["p1"], "the transcript still shows the photo");
   } finally { await r2.close(); }
+});
+
+test("a PDF attaches like a photo: stored, named as a document in the SSE event and the transcript line, readable back as a file", async () => {
+  const w = await boot();
+  try {
+    const sid = await w.open();
+    const pdf = Buffer.from("%PDF-1.4\n1 0 obj\n<</Type/Catalog/Pages 2 0 R>>\nendobj\n2 0 obj\n<</Type/Pages/Kids[3 0 R]/Count 1>>\nendobj\n3 0 obj\n<</Type/Page/Parent 2 0 R/Contents 4 0 R>>\nendobj\n4 0 obj\n<</Length 43>>\nstream\nBT /F1 12 Tf 20 100 Td (AGREEMENT 77) Tj ET\nendstream\nendobj\ntrailer<</Root 1 0 R>>\n", "latin1");
+    const r = await w.send(sid, { text: "What is the agreement number?", photos: [{ name: "agreement.pdf", dataUrl: dataUrl("application/pdf", pdf) }] });
+    assert.equal(r.status, 200, r.body);
+    const ev = parseSse(r.body) as any[];
+    // the client is told it is a document (so it draws a file chip, not a broken image)
+    assert.deepEqual(ev[0], { type: "photos", photos: [{ id: "p1", name: "agreement.pdf", width: 0, height: 0, kind: "document", pages: 1 }] });
+    assert.equal(w.sent.length, 1);
+    assert.deepEqual(w.sent[0].photos, [{ id: "p1", name: "agreement.pdf", width: 0, height: 0, kind: "document", pages: 1 }]);
+    // GET it back: the real bytes, the right type, and a name a browser can save
+    const g = await fetch(`${w.gw.url}/sessions/${sid}/photos/p1`, { headers: w.A });
+    assert.equal(g.status, 200);
+    assert.equal(g.headers.get("content-type"), "application/pdf");
+    assert.match(g.headers.get("content-disposition") ?? "", /^inline; filename="agreement\.pdf"$/);
+    assert.deepEqual(Buffer.from(await g.arrayBuffer()), pdf);
+    // and a PDF in the same message as a photo keeps its own kind while the photo keeps its shape
+    const r2 = await w.send(sid, { text: "both", photos: [sample("shot.jpg", 50, 40), { name: "two.pdf", dataUrl: dataUrl("application/pdf", pdf) }] });
+    const ev2 = parseSse(r2.body) as any[];
+    assert.deepEqual(ev2[0].photos, [{ id: "p2", name: "shot.jpg", width: 50, height: 40 }, { id: "p3", name: "two.pdf", width: 0, height: 0, kind: "document", pages: 1 }]);
+  } finally { await w.gw.close(); }
 });

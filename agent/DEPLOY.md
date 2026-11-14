@@ -128,3 +128,27 @@ A separate Render web service built from this same repo serves "Daebot for Astra
 | `PORT` | auto | set by Render |
 
 Limits: 2,000 characters per message, 12 turns of history per session, sessions expire after 30 minutes idle. Tools are an in-code allowlist (`WIDGET_TOOL_ALLOWLIST` in `src/widget/index.ts`): only `mind_query`.
+
+## Desktop Windows signing (opt-in, `DAEBOT_WIN_SIGN=azure`)
+
+This section is the Electron desktop installer. It is not the hosted Render service above, and it does not use the Render environment.
+
+Windows installers are unsigned by default and build on any machine. Signing is opt-in only. From `agent/desktop`, on a Windows host:
+
+```
+DAEBOT_WIN_SIGN=azure npm run dist:win
+```
+
+`npm run dist:win` already passes `--win`. `DAEBOT_WIN_SIGN=azure` then turns on Azure Artifact Signing (formerly Trusted Signing). electron-builder installs the TrustedSigning PowerShell module itself and calls `Invoke-TrustedSigning`. Credentials come only from the environment. With `DAEBOT_WIN_SIGN=azure`, if any of these seven is unset the config throws `DAEBOT_WIN_SIGN=azure Windows build is missing: ...`; with `DAEBOT_WIN_SIGN` unset none are read and the build is never blocked:
+
+| Variable | Meaning |
+|---|---|
+| `AZURE_TENANT_ID` | Entra tenant of the signing app |
+| `AZURE_CLIENT_ID` | Entra app with the Artifact Signing Certificate Profile Signer role |
+| `AZURE_CLIENT_SECRET` | client secret for that app |
+| `DAEBOT_AZURE_ENDPOINT` | regional endpoint, for example `https://eus.codesigning.azure.net/` |
+| `DAEBOT_AZURE_ACCOUNT` | Artifact Signing account name |
+| `DAEBOT_AZURE_PROFILE` | certificate profile name |
+| `DAEBOT_WIN_PUBLISHER` | publisher name, the exact certificate subject |
+
+Do not commit the values. A signed Windows build must run where electron-builder can drive Windows: a Windows host or Windows CI runner (`pwsh.exe`, else `powershell.exe`). A Mac works only with a Parallels Desktop Windows 10 or 11 VM that electron-builder can list. Host `pwsh` on macOS is not a supported way to ship, even when Wine is installed: the TrustedSigning module is an Authenticode signer. Unsigned `npm run dist:win` (no `DAEBOT_WIN_SIGN`) needs none of these variables and also works cross-built from a Mac. `DAEBOT_SIGN=1` is the Mac Developer ID switch only and never affects Windows.
