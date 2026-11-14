@@ -1,3 +1,5 @@
+> Building and signing from any machine is now documented in [RELEASE.md](RELEASE.md) (environment variables, `agent/desktop/scripts/release-preflight.mjs`). The notes below are the one-time droplet and Mac key setup.
+
 # ONE-TIME SETUP — so Dae never asks for release credentials again
 
 Run these ONCE. After this, "publish Daebot 0.3.x" is one command I run alone.

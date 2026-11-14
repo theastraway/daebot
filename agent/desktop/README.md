@@ -79,7 +79,7 @@ npm run pack         # host-arch unpacked app only (--dir), for a quick packagin
 App id `ai.daebot.desktop`, product name `Daebot`; config in `electron-builder.config.mjs`. Icons (`build-resources/icon.{png,icns,ico}`)
 are the approved mascot (`agent/web/brand/icon-512.png`), packaged by `npm run icons` (macOS: sips + iconutil); nothing is redrawn.
 
-### Mac signing and notarization (owner, on the signing Mac)
+### Mac signing and notarization (any Mac with the env; full steps in `../../RELEASE.md`)
 Default builds are UNSIGNED so they can be made and checked anywhere without touching the keychain. To ship:
 ```
 cd agent/desktop && npm install
@@ -87,7 +87,7 @@ DAEBOT_SIGN=1 npm run dist:mac
 ```
 `DAEBOT_SIGN=1` turns on identity `ANTHONY JOSEPH CONTI (VJ44THJ238)`, hardened runtime with `build-resources/entitlements.mac.plist`
 (JIT entitlements for Electron and for the bun-compiled gateway), and the `afterSign` hook `scripts/notarize.cjs` (copied from MINDbots:
-notarizes through the `MINDNotarize` keychain profile, then staples). If notarization fails the hook logs the exact error and the
+notarizes with the App Store Connect API key from env, else Apple ID env, else the `MINDNotarize` keychain profile, then staples). If notarization fails the hook logs the exact error and the
 build is signed but not notarized; say so in the release notes. Check with `spctl -a -vv dist/mac-universal/Daebot.app` and
 `xcrun stapler validate`. An unsigned Mac build needs right-click, Open on first launch.
 
@@ -149,11 +149,10 @@ manifest, registers each `(platform, arch)` with MIND, and prints a receipt with
 | Step | Needs | Where it lives |
 |---|---|---|
 | Upload to the droplet | the SSH private key | `~/.ssh/droplet_170_key` (or `DAEBOT_SSH_KEY`) |
-| Mac sign + notarize | Developer ID `ANTHONY JOSEPH CONTI (VJ44THJ238)`, `MINDNotarize` profile, `DAEBOT_SIGN=1` | only the signing Mac |
+| Mac sign + notarize | `DAEBOT_SIGN=1` + `CSC_LINK`/`CSC_KEY_PASSWORD` (or the Developer ID in the keychain) + `APPLE_API_KEY`/`APPLE_API_KEY_ID`/`APPLE_API_ISSUER` (or the `MINDNotarize` profile) | any Mac; run `node scripts/release-preflight.mjs`; see `../../RELEASE.md` |
 | MIND registry | an admin `mind_` key | `~/.daebot/mind-key`, or `MIND_API_KEY` |
 
-Build commands: Mac `DAEBOT_SIGN=1 npm run dist:mac` (signing Mac only); Windows/Linux need no secrets —
-CI builds them on a `daebot-v*` tag or `workflow_dispatch`. `bun` is required to compile the gateway binary
+Build commands: Mac `DAEBOT_SIGN=1 npm run dist:mac` (any Mac with the signing env, see `../../RELEASE.md`); Windows/Linux need no secrets and build on any machine. `bun` is required to compile the gateway binary
 (`curl -fsSL https://bun.sh/install | bash`).
 
 #### Traps that cost real time

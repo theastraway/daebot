@@ -55,6 +55,9 @@ export default {
     target: [{ target: "dmg", arch: ["universal"] }, { target: "zip", arch: ["universal"] }],
     artifactName: "Daebot-${version}-mac-${arch}.${ext}",
     hardenedRuntime: true,
+    // electron-builder would notarize on its own whenever APPLE_API_KEY* / APPLE_ID* are in the environment; scripts/notarize.cjs (afterSign) is the one
+    // notarize-and-staple path, so the built-in one is off to avoid submitting the same app to Apple twice.
+    notarize: false,
     // The text macOS shows in its microphone and Calendar prompts. The Calendar helper runs inside the app, so the prompt is Daebot's own.
     extendInfo: {
       NSScreenCaptureUsageDescription: "Daebot looks at your screen while you have Let Daebot watch my screen turned on, or when you ask it to take a screenshot or operate your screen, so it can see what you see.",
@@ -66,7 +69,9 @@ export default {
     gatekeeperAssess: false,
     entitlements: "build-resources/entitlements.mac.plist",
     entitlementsInherit: "build-resources/entitlements.mac.plist",
-    identity: sign ? "ANTHONY JOSEPH CONTI (VJ44THJ238)" : null,
+    // Signing identity: with CSC_LINK (path or base64 of the Developer ID .p12) + CSC_KEY_PASSWORD, electron-builder imports it into a
+    // throwaway keychain and picks it itself, so any Mac can sign. Without CSC_LINK it uses the login keychain identity by name.
+    identity: sign ? (process.env.CSC_LINK ? undefined : "ANTHONY JOSEPH CONTI (VJ44THJ238)") : null,
     // daebot-calendar is the universal EventKit helper for Apple Calendar (scripts/build-calendar-helper.mjs); it is signed with the app.
     extraResources: [{ from: "build/bin", to: "bin", filter: ["daebot-darwin-*", "daebot-calendar"] }],
     // Both thin gateway binaries (and the already-universal Calendar helper) are identical in the arm64 and x64 halves of the universal app.
