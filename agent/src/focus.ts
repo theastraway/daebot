@@ -49,7 +49,7 @@ export type Group =
   | "people" | "mind" | "env" | "docs";
 
 export const GROUP_TRIGGERS: Record<Group, RegExp> = {
-  bot: /\b(?:bots?|daebots?|routines?|schedul\w*|heartbeats?|cron|persona|personas|dae ?bot\.md|every (?:day|morning|evening|night|hour|week|weekday|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|(?:daily|weekly|hourly|monthly|nightly))\b/i,
+  bot: /\b(?:bots?|daebots?|workforce|work ?force|teams?|org ?chart|hire[ds]?|hiring|staff(?:ed|ing)?|departments?|agents?|employees?|sales ?reps?|assistants?|routines?|schedul\w*|heartbeats?|cron|persona|personas|dae ?bot\.md|every (?:day|morning|evening|night|hour|week|weekday|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|(?:daily|weekly|hourly|monthly|nightly))\b/i,
   board: /\b(?:tasks?|task ?board|board|to-?dos?|checklists?|kanon|projects?|priorit\w+|what'?s next|backlog|punch list|life board|outcome)\b/i,
   decision: /\b(?:decide|decision|decisions|options?|should (?:we|i)|recommend\w*|pros and cons|trade-?offs?|which (?:one|option|should)|choose|ooc|emr|worth it)\b/i,
   photos: /\[photo |\b(?:photos?|pictures?|images?|screenshots?|jpe?g|png|logo|attached|attachment|diagram|illustration)\b/i,

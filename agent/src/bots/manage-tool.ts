@@ -1,7 +1,8 @@
 // bot_manage: Daebot creates and configures its own bots straight through the BotsApi (never the screen/computer tool).
 // Class: reads are "read", create/update are "write", delete is "irreversible" (the kernel's danger gate / the permission card asks the
 // user first, every time). Offered to the user's own sessions AND to every bot's session (every bot has the full bot skill: it creates,
-// changes and deletes bots like the main Daebot). Every change is refused on a peer-originated turn: only the human can make a bot build bots.
+// changes and deletes bots like the main Daebot; create_many builds a whole team in one call, delete_many removes a listed set under ONE
+// confirmation). Every change is refused on a peer-originated turn: only the human can make a bot build bots.
 import type { Tool, ToolClass, ToolResult } from "../types.ts";
 import { validModelId } from "../settings.ts";
 import { cleanTitle } from "../persist.ts";
@@ -96,7 +97,7 @@ function withMain(bots: BotsApi, main: NonNullable<BotManageDeps["main"]>): Bots
 
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 const ACTIONS = [
-  "list", "get", "create", "update", "delete", "faces", "models", "reset_self",
+  "list", "get", "create", "update", "delete", "create_many", "delete_many", "faces", "models", "reset_self",
   "rename", "set_face", "set_color", "set_purpose", "set_model", "pin", "unpin",
   "read_instructions", "write_instructions", "append_instructions", "patch_instructions",
   "list_threads", "create_thread", "rename_thread", "archive_thread", "unarchive_thread",
@@ -104,6 +105,23 @@ const ACTIONS = [
 ] as const;
 /** The one-field edits: action -> the argument it needs. */
 const FIELD_ACTIONS: Record<string, string> = { rename: "name", set_face: "face", set_color: "color", set_purpose: "purpose", set_model: "model" };
+/** Team-building caps: one call can make or remove this many bots (the plan's own bot limit still applies). */
+export const MAX_TEAM_BOTS = 20;
+/** Credentials never belong in a DAEBOT.md (it is shown, synced and sent to a model on every turn). Returns what looks like one, or undefined. */
+const SECRET_RES: [string, RegExp][] = [
+  ["a private key block", /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
+  ["an API key (sk-...)", /\bsk-[A-Za-z0-9_-]{16,}/],
+  ["a MIND key (mind_...)", /\bmind_[A-Za-z0-9]{16,}/],
+  ["an AWS access key", /\bAKIA[0-9A-Z]{16}\b/],
+  ["a GitHub token", /\bgh[pousr]_[A-Za-z0-9]{20,}/],
+  ["a Slack token", /\bxox[abprs]-[A-Za-z0-9-]{10,}/],
+  ["a Bearer token", /\bBearer\s+[A-Za-z0-9._~+\/-]{20,}/],
+  ["a password or key assignment", /\b(?:api[_-]?key|secret|password|passwd|token)\s*[:=]\s*["']?[A-Za-z0-9._~+\/-]{12,}/i],
+];
+export function findSecret(text: string): string | undefined {
+  for (const [what, re] of SECRET_RES) if (re.test(text)) return what;
+  return undefined;
+}
 const READ_ACTIONS = new Set(["list", "get", "faces", "models", "read_instructions", "list_threads", "list_routines"]);
 
 /** The house shape every new bot starts from (kept in step with starterTemplate in web/bots.js). */
@@ -168,7 +186,7 @@ export function routineView(r: Routine, base: string, setup?: SetupReport): Reco
 }
 
 export function createBotManageTool(d: BotManageDeps): Tool {
-  return {
+  const tool: Tool = {
     spec: {
       name: "bot_manage",
       description:
@@ -176,10 +194,11 @@ export function createBotManageTool(d: BotManageDeps): Tool {
         "list: every bot (slug, name, purpose, face, model, thread count). faces: the personalities you can pick. models: the models the user's plan allows. " +
         "create {slug, name, purpose, face?, color?, model?, instructions?}: makes the bot AND writes its DAEBOT.md in ONE call. update {slug, name?, purpose?, face?, color?, model? (\"\" clears), instructions? (replaces the whole DAEBOT.md)}: edit a bot, never recreate it. " +
         "delete {slug}: permanent (its threads go too); the user is asked to confirm first. " +
+        "WORKFORCE (a whole team in one go): create_many {bots:[{slug, name, purpose, face?, color?, model?, instructions?, routines?:[{name, prompt, kind, expression, tz, trigger, weekdays_only, active_from, active_to, ...}]}]} makes up to 20 bots in ONE call (a slug that already exists is updated, never duplicated; a bot without instructions gets the house shape from its name and purpose) and returns a table of created / updated / failed. delete_many {slugs:[...]} deletes a listed set of bots under ONE confirmation (never yourself or the main Daebot). Plan the team first (names, purposes, who hands work to whom with bot_talk), then call create_many once. " +
         "ONE-FIELD EDITS (same as update): rename {slug, name}, set_face {slug, face}, set_color {slug, color}, set_purpose {slug, purpose}, set_model {slug, model (\"\" clears)}, pin {slug}, unpin {slug}. get {slug}: the bot's settings plus its instructions. " +
         "INSTRUCTIONS (its DAEBOT.md): read_instructions {slug}; write_instructions {slug, instructions} replaces all; append_instructions {slug, text} adds to the end; patch_instructions {slug, find, replace_with, all?} swaps one exact piece of text (find must match exactly once unless all:true). " +
         "THREADS: list_threads {slug, archived?}; create_thread {slug, title?, message?} opens a NEW thread in that bot and, when message is given, the bot starts working on it; rename_thread {slug, thread, title}; archive_thread / unarchive_thread {slug, thread} hide or restore a thread in the sidebar (nothing is deleted). " +
-        "SELF: slug \"self\" means YOU. In a bot's thread it is that bot; in the plain Sessions chat it is the main Daebot (your own name, face, color, instructions, threads and routines: edit them like any bot's; purpose, model and pin do not apply; reset_self returns you to the stock Daebot). A bot may edit only itself and cannot create or delete bots. " +
+        "SELF: slug \"self\" means YOU. In a bot's thread it is that bot; in the plain Sessions chat it is the main Daebot (your own name, face, color, instructions, threads and routines: edit them like any bot's; purpose, model and pin do not apply; reset_self returns you to the stock Daebot). Any bot (not only the main Daebot) can create, change and delete OTHER bots in the user's account: the same toolkit, no extra permission. Only the main chat changes the main Daebot, and no bot can delete itself or the main Daebot. " +
         "ROUTINES (work a bot does on its own, inside Daebot, nothing to install): list_routines {slug}. add_routine {slug, name, prompt, kind:\"timed\"|\"trigger\", expression + tz (timed: 5 fields minute hour day-of-month month day-of-week, e.g. \"0 9 * * 1-5\", tz an IANA name, default America/New_York) or trigger: one of webhook, thread_message, bot_message (+ from: a bot slug), keyword (+ phrase: words separated by commas, where: user|bot|either), turn_done (+ on: done|failed|any), mind_document, mind_task, mind_task_due, mind_contact, mail_new (+ every: 5|15|30|60 minutes), gh_issue / gh_pr / gh_push / gh_comment (GitHub pushes to Daebot; + repo: owner/name optional, + branch for gh_push), and on the desktop app only app_opened, wake, file_changed (+ path: a folder), screen_change (+ sensitivity: low|medium|high)). " +
         "ANY routine can be limited with weekdays_only:true (Monday to Friday) and active_from + active_to (\"09:00\" to \"17:00\", both ends included), in tz: \"every hour, weekdays only, 9 to 5\" is expression \"0 * * * *\" with weekdays_only, active_from \"09:00\", active_to \"17:00\". Several times a day: join 5-field parts with \";\" (\"0 9 * * *;30 13 * * *\"). " +
         "update_routine {slug, routine (id or name), name?, prompt?, enabled?, expression?, tz?, weekdays_only?, active_from?, active_to?, trigger? (+ its fields)}. remove_routine {slug, routine}. run_routine_now {slug, routine}. pause_routine / resume_routine {slug, routine}. Routines work on ANY bot, not only the current one. " +
@@ -223,6 +242,8 @@ export function createBotManageTool(d: BotManageDeps): Tool {
           title: { type: "string", description: "create_thread / rename_thread: the thread's name (up to 80 characters)" },
           message: { type: "string", description: "create_thread: the first message; the bot starts working on it" },
           archived: { type: "boolean", description: "list_threads: include archived threads" },
+          bots: { type: "array", maxItems: MAX_TEAM_BOTS, description: "create_many: the team. Each item is {slug, name, purpose, face?, color?, model?, instructions?, routines?: [routine specs with the same fields as add_routine]}", items: { type: "object" } },
+          slugs: { type: "array", maxItems: MAX_TEAM_BOTS, description: "delete_many: the slugs to delete, confirmed once", items: { type: "string" } },
         },
         required: ["action"],
         additionalProperties: false,
@@ -231,7 +252,7 @@ export function createBotManageTool(d: BotManageDeps): Tool {
     class: "write",
     classFor(args) {
       const a = args.action;
-      if (a === "delete" || a === "remove_routine") return "irreversible" as ToolClass;
+      if (a === "delete" || a === "delete_many" || a === "remove_routine") return "irreversible" as ToolClass;
       return typeof a === "string" && READ_ACTIONS.has(a) ? "read" : "write";
     },
     async run(args0, ctx) {
@@ -244,7 +265,7 @@ export function createBotManageTool(d: BotManageDeps): Tool {
         // slug) means itself. Two limits stay: the main Daebot's own settings are changed only from the main chat (a bot's store has no
         // "main"), and a bot cannot delete itself mid-thread (the main Daebot or another bot can).
         if (d.selfBot) {
-          if (action !== "list" && action !== "faces" && action !== "models" && action !== "create") {
+          if (action !== "list" && action !== "faces" && action !== "models" && action !== "create" && action !== "create_many" && action !== "delete_many") {
             const own = bots.get(d.selfBot);
             if (!own) return fail("this bot no longer exists");
             const given = (str(args.slug) ?? "").trim();
@@ -307,6 +328,60 @@ export function createBotManageTool(d: BotManageDeps): Tool {
         // ---- everything below changes something: only the human may ask for it
         if (ctx.origin === "bot") return fail("a message from another bot cannot create, change or delete bots. Only the user can.");
 
+        // ---- workforce: many bots in one call. Each item goes through the same create / update / add_routine code as the single actions, so every
+        // check (slug, size, secrets, face, model, plan limit) applies per bot; one bad item never stops the rest.
+        if (action === "create_many") {
+          const specs = Array.isArray(args.bots) ? args.bots : undefined;
+          if (!specs || !specs.length) return fail("create_many needs bots: a list of {slug, name, purpose, face?, model?, instructions?, routines?}");
+          if (specs.length > MAX_TEAM_BOTS) return fail(`create_many takes at most ${MAX_TEAM_BOTS} bots per call (you sent ${specs.length}); send the rest in a second call`);
+          const seen = new Set<string>();
+          const rows: { slug: string; name?: string; status: "created" | "updated" | "failed"; routines?: number; error?: string }[] = [];
+          for (const raw of specs) {
+            const sp = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+            const slug = (str(sp.slug) ?? "").trim();
+            const name = str(sp.name)?.trim();
+            if (!slug || slug === "self") { rows.push({ slug: slug || "(none)", name, status: "failed", error: "each bot needs its own slug (not \"self\")" }); continue; }
+            if (seen.has(slug)) { rows.push({ slug, name, status: "failed", error: "slug listed twice in this call" }); continue; }
+            seen.add(slug);
+            const existed = !!d.bots.bySlug(slug);
+            const fields: Record<string, unknown> = {};
+            for (const k of ["name", "purpose", "face", "color", "model", "instructions"]) if (sp[k] !== undefined) fields[k] = sp[k];
+            const r = await tool.run(existed ? { action: "update", slug, ...fields } : { action: "create", slug, ...fields }, ctx);
+            if (!r.ok) { rows.push({ slug, name, status: "failed", error: r.output.replace(/^bot_manage: /, "") }); continue; }
+            let made = 0;
+            let routineErr: string | undefined;
+            for (const rt of Array.isArray(sp.routines) ? sp.routines : []) {
+              const spec = (rt && typeof rt === "object" ? rt : {}) as Record<string, unknown>;
+              const rname = (str(spec.name) ?? "").trim();
+              const have = rname && d.routines ? d.routines.book(d.owner, d.bots.bySlug(slug)!.id).list().find((x) => x.name.toLowerCase() === rname.toLowerCase()) : undefined;
+              const rr = await tool.run(have ? { ...spec, action: "update_routine", slug, routine: have.id } : { ...spec, action: "add_routine", slug }, ctx);
+              if (rr.ok) made++; else { routineErr = rr.output.replace(/^bot_manage: /, ""); break; }
+            }
+            rows.push({ slug, name: name ?? d.bots.bySlug(slug)?.name, status: existed ? "updated" : "created", routines: made, ...(routineErr ? { error: `bot saved; a routine failed: ${routineErr}` } : {}) });
+          }
+          const table = ["| slug | name | result |", "| --- | --- | --- |", ...rows.map((x) => `| ${x.slug} | ${x.name ?? ""} | ${x.status}${x.routines ? ` (+${x.routines} routine${x.routines === 1 ? "" : "s"})` : ""}${x.error ? `: ${x.error}` : ""} |`)].join("\n");
+          return { ok: rows.some((x) => x.status !== "failed"), output: JSON.stringify({ created: rows.filter((x) => x.status === "created").length, updated: rows.filter((x) => x.status === "updated").length, failed: rows.filter((x) => x.status === "failed").length, rows, table, note: "Show the user the table. Offer to hand each bot a first task with bot_talk or open a thread." }) };
+        }
+        if (action === "delete_many") {
+          const list = Array.isArray(args.slugs) ? args.slugs.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean) : [];
+          if (!list.length) return fail("delete_many needs slugs: the list of bots to delete");
+          if (list.length > MAX_TEAM_BOTS) return fail(`delete_many takes at most ${MAX_TEAM_BOTS} bots per call; send the rest in a second call`);
+          const own = d.selfBot ? d.bots.get(d.selfBot)?.slug : undefined;
+          const rows: { slug: string; status: "deleted" | "skipped"; reason?: string }[] = [];
+          for (const slug of [...new Set(list)]) {
+            if (slug === "main" || slug === "self") { rows.push({ slug, status: "skipped", reason: "the main Daebot cannot be deleted" }); continue; }
+            if (own && slug === own) { rows.push({ slug, status: "skipped", reason: "a bot cannot delete itself" }); continue; }
+            const rec = d.bots.bySlug(slug);
+            if (!rec) { rows.push({ slug, status: "skipped", reason: "no such bot" }); continue; }
+            await d.bots.remove(rec.id);
+            d.routines?.drop(d.owner, rec.id);
+            await d.hooks()?.removed?.(d.owner, rec.id);
+            await d.purge?.(rec.id);
+            rows.push({ slug, status: "deleted" });
+          }
+          return { ok: rows.some((x) => x.status === "deleted"), output: JSON.stringify({ deleted: rows.filter((x) => x.status === "deleted").map((x) => x.slug), skipped: rows.filter((x) => x.status === "skipped"), note: "Tell the user which were deleted and which were skipped and why." }) };
+        }
+
         const checkModel = async (v: unknown): Promise<{ ok: true; model: string | null | undefined } | { ok: false; error: string }> => {
           if (v === undefined) return { ok: true, model: undefined };
           if (v === null || v === "") return { ok: true, model: null };
@@ -327,6 +402,8 @@ export function createBotManageTool(d: BotManageDeps): Tool {
         const checkInstr = (v: unknown): string | undefined => {
           if (v === undefined) return undefined;
           if (typeof v !== "string" || !v.trim()) return "instructions must be non-empty text";
+          const secret = findSecret(v);
+          if (secret) return `the instructions contain ${secret}. Never put a secret in DAEBOT.md: leave it out (the bot reads credentials from MIND or a connector when it needs them).`;
           const n = Buffer.byteLength(v, "utf8");
           return n > MAX_INSTRUCTIONS_BYTES ? `instructions are ${(n / 1024).toFixed(1)} KB; DAEBOT.md is capped at ${MAX_INSTRUCTIONS_BYTES / 1024} KB. Shorten them.` : undefined;
         };
@@ -504,4 +581,5 @@ export function createBotManageTool(d: BotManageDeps): Tool {
       }
     },
   };
+  return tool;
 }
