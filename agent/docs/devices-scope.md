@@ -4,10 +4,10 @@ Daebot devices scope for theastraway/daebot, written Nov 13 2026 on request from
 
 Per-slice branches (each slice lands on its own branch; none of these are merged):
 
-- Terminal pane, read-only: `feat/daebot-devices-terminal` (this branch).
+- Terminal pane, read-only: `feat/daebot-devices-terminal`.
 - Browser: `feat/daebot-devices-browser`.
 - Terminal PTY (typeable): `feat/daebot-devices-pty`.
-- iOS simulator: `feat/daebot-devices-ios-sim`.
+- iOS simulator: `feat/daebot-devices-ios-sim` (this branch).
 
 ## 1. What already exists in daebot (paths under agent/)
 
@@ -91,7 +91,7 @@ flowchart LR
 1. Terminal pane, read-only (highest value, lowest risk: tool already exists, no new deps). PR: registry peek/subscribe, local SSE routes, terminal-pane.js, GET /devices status seam, tests. Effort: about 1 day. Tests: peek never steals the agent's output, ring overflow counts, subscribe/unsubscribe, owner scoping, guest 403, hosted 404, SSE snapshot then data, devices status per platform. Status: polished on feat/daebot-devices-terminal (read-only pane, edge-case tests, dev-only screenshot harness). Not merged.
 2. Browser pane MVP. PR: WebContentsView in persist:daebot-browser, CDP via webContents.debugger, `browser` tool with open/navigate/read/screenshot/click/type/close, submit and purchase clicks classed irreversible, password/payment fields refused. Effort: 3-4 days. Tests: tool contract with a fake CDP; classifier for submit buttons; partition isolation; untrusted wrapping; an Electron smoke test (desktop npm run smoke) on Mac and Windows.
 3. Terminal PTY upgrade. PR: node-pty in Electron main, gateway-to-desktop channel, xterm.js pane with user typing, electron-builder native rebuild per arch and Mac universal handling, signing of spawn-helper and conpty. Effort: 3-5 days, mostly packaging and CI per platform. Tests: PTY open/resize/write/read with a fake pty; packaging check that the .node for each arch is present; Windows ConPTY smoke.
-4. iOS simulator MVP (Mac only). PR: `simulator` tool with list/boot/install/launch/openurl/screenshot/shutdown via simctl, tap/type via idb if installed, deviceSupport detection, pane with a screenshot stream. Effort: 2-3 days. Tests: fake xcrun exec with recorded simctl list -j output, argv never through a shell, unavailable on win32/linux, missing-Xcode error text. Needs a Mac with Xcode to verify for real.
+4. iOS simulator MVP (Mac only). PR: `simulator` tool with list/boot/install/launch/openurl/screenshot/shutdown via simctl, tap/type via idb if installed, deviceSupport detection, pane with a screenshot stream. Effort: 2-3 days. Tests: fake xcrun exec with recorded simctl list -j output, argv never through a shell, unavailable on win32/linux, missing-Xcode error text. Needs a Mac with Xcode to verify for real. Status: built on feat/daebot-devices-ios-sim (tool, pane, and shots through the shared dev-only harness with pane name ios-sim).
 
 ## 4. Decisions (Anthony, Nov 13 2026)
 

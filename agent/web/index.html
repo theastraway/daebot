@@ -149,6 +149,7 @@
       <button class="icon-btn voice-btn" id="btn-vchat" type="button" aria-label="Voice chat with this bot" aria-pressed="false" title="Voice chat: talk live with this bot (uses MIND credits)"><svg class="ic"><use href="#i-mic"/></svg><span class="vchat-label">Voice chat</span></button>
       <button class="icon-btn voice-btn" id="btn-convo" type="button" aria-label="Voice conversation, hands-free" aria-pressed="false" title="Voice conversation, hands-free (uses MIND credits)"><svg class="ic"><use href="#i-wave"/></svg></button>
       <button class="term-chip" id="btn-terminal" type="button" hidden aria-expanded="false" aria-controls="term-pane">Terminal</button>
+      <button class="term-chip" id="btn-simulator" type="button" hidden aria-expanded="false" aria-controls="sim-pane">Simulator</button>
       <button class="icon-btn" id="btn-board" type="button" aria-label="Task board" aria-expanded="false" aria-controls="board-drawer"><svg class="ic"><use href="#i-board"/></svg><span class="badge" id="board-count" hidden>0</span></button>
       <button class="icon-btn" id="btn-violations" type="button" aria-label="Kernel violations" aria-expanded="false"><svg class="ic"><use href="#i-shield"/></svg><span class="badge" id="viol-count" hidden>0</span></button>
       <button class="icon-btn" id="btn-theme" type="button" aria-label="Toggle theme"><svg class="ic" id="theme-ic"><use href="#i-moon"/></svg></button>
@@ -198,6 +199,21 @@
   </main>
 
   <div class="drop-overlay" id="drop-overlay" hidden aria-hidden="true"><div class="drop-card"><svg class="ic"><use href="#i-image"/></svg><span>Drop photos or a PDF to attach</span></div></div>
+
+  <aside class="sim-pane" id="sim-pane" aria-label="iOS Simulator" hidden>
+    <div class="sim-head">
+      <h2>iOS Simulator</h2>
+      <button class="icon-btn" id="btn-sim-close" type="button" aria-label="Close simulator"><svg class="ic"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="sim-tools" id="sim-tools">
+      <label class="sim-pick"><span class="sim-pick-label">Device</span><select id="sim-device" aria-label="Simulator device"></select></label>
+      <button type="button" id="sim-boot">Boot</button>
+      <button type="button" id="sim-shutdown">Shut down</button>
+      <button type="button" id="sim-record">Record a clip</button>
+    </div>
+    <p class="sim-status" id="sim-status"></p>
+    <div class="sim-stage" id="sim-stage"></div>
+  </aside>
 
   <aside class="term-pane" id="term-pane" aria-label="Daebot's terminal — read-only" hidden>
     <div class="term-head">

@@ -28,7 +28,7 @@ import { ScreenCapture } from "./lib/screen-capture.mjs";
 import { screenAccess, permissionSettingsUrl } from "./lib/screen-permission.mjs";
 import { frameQuery, redDotBitmap } from "./lib/screen-frame.mjs";
 import { CALENDAR_CHANNEL, createCalendarBridge, createCalendarHandler, findCalendarHelper } from "./lib/calendar.mjs";
-import { devicesShotsFromArgv, terminalShotProbe, shotFilesFor } from "./lib/devices-shots.mjs";
+import { devicesShotsFromArgv, shotFilesFor, shotProbeFor } from "./lib/devices-shots.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SMOKE = process.argv.includes("--mindclaw-smoke");
@@ -751,8 +751,8 @@ async function runSmoke() {
   app.exit(result.ok ? 0 : 1);
 }
 
-// Dev-only: open one device pane in the smoke window and write PNGs. Later panes add a branch in shotFilesFor
-// and a probe next to terminalShotProbe. Flags without --mindclaw-smoke never reach this function.
+// Dev-only: open one device pane in the smoke window and write PNGs. A pane adds a branch in shotFilesFor
+// and a probe in shotProbeFor. Flags without --mindclaw-smoke never reach this function.
 async function runDeviceShots(spec) {
   const hard = setTimeout(() => {
     log("shots: hard timeout");
@@ -768,25 +768,28 @@ async function runDeviceShots(spec) {
     await gateway.stop();
     app.exit(code);
   };
-  const plan = shotFilesFor(spec.pane);
+  const plan = shotFilesFor(spec.pane, process.env);
   if (plan.error) { await finish(1, { ok: false, pane: spec.pane, error: plan.error }); return; }
   mkdirSync(spec.dir, { recursive: true });
   try {
     win.webContents.setZoomLevel(0);
-    win.setContentSize(1360, 860);
+    // The simulator shot has to show the chat column beside a 420px pane, on the Xvfb screen the script uses.
+    if (spec.pane === "ios-sim") win.setSize(1440, 900);
+    else win.setContentSize(1360, 860);
     win.show();
     await new Promise((r) => setTimeout(r, 300));
     const shots = [];
     for (const file of plan.files) {
-      const phase = file.replace(/\.png$/, "");
+      const probe = shotProbeFor(spec.pane, file);
+      if (probe.error) { await finish(1, { ok: false, pane: spec.pane, file, error: probe.error }); return; }
       const state = await Promise.race([
-        win.webContents.executeJavaScript(terminalShotProbe(phase), true).catch((e) => ({ ok: false, error: String(e?.message ?? e) })),
-        new Promise((r) => setTimeout(() => r({ ok: false, error: "probe timeout" }), phase === "live" ? 30_000 : 20_000)),
+        win.webContents.executeJavaScript(probe.script, true).catch((e) => ({ ok: false, error: String(e?.message ?? e) })),
+        new Promise((r) => setTimeout(() => r({ ok: false, error: "probe timeout" }), probe.timeoutMs)),
       ]);
-      log("shots:", phase, JSON.stringify(state).slice(0, 400));
-      if (!state?.ok) { await finish(1, { ok: false, pane: spec.pane, step: phase, state }); return; }
+      log("shots:", file, JSON.stringify(state).slice(0, 400));
+      if (!state?.ok) { await finish(1, { ok: false, pane: spec.pane, step: file, state }); return; }
       await new Promise((r) => setTimeout(r, 350));
-      const img = await win.webContents.capturePage();
+      const img = await captureShot(probe);
       const png = img.toPNG();
       if (png.length < 5000) throw new Error(`${file} is only ${png.length} bytes`);
       writeFileSync(join(spec.dir, file), png);
@@ -796,6 +799,28 @@ async function runDeviceShots(spec) {
   } catch (e) {
     await finish(1, { ok: false, pane: spec.pane, error: String(e?.message ?? e).slice(0, 300) });
   }
+}
+
+// A rect copies the current page. capturePage() with no rect can return a stale frame when the
+// smoke window was hidden while the pane opened. Terminal shots show the window first and keep the no-rect call.
+async function captureShot(probe) {
+  if (probe.clip) {
+    const rect = await win.webContents.executeJavaScript(
+      `(() => { const n = document.getElementById(${JSON.stringify(probe.clip)}); const r = n.getBoundingClientRect(); return { x: Math.max(0, Math.round(r.x)), y: Math.max(0, Math.round(r.y)), width: Math.max(1, Math.round(r.width)), height: Math.max(1, Math.round(r.height)) }; })()`,
+      true,
+    );
+    await win.webContents.capturePage(rect);
+    return win.webContents.capturePage(rect);
+  }
+  if (probe.fullRect) {
+    const box = await win.webContents.executeJavaScript(
+      "({ x: 0, y: 0, width: document.documentElement.clientWidth, height: document.documentElement.clientHeight })",
+      true,
+    );
+    await win.webContents.capturePage(box);
+    return win.webContents.capturePage(box);
+  }
+  return win.webContents.capturePage();
 }
 
 /** macOS asks the user once (then remembers); a "denied" in System Settings stays denied until they change it there. */

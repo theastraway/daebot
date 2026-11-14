@@ -66,7 +66,14 @@ import type { AppRow } from "../mind/integrations.ts";
 import { dataDir, cleanTitle } from "../persist.ts";
 import { screenApi } from "./screen.ts";
 import { isTerminalPath, terminalsApi } from "./terminals.ts";
+import { isSimulatorPath, simulatorApi } from "./simulator.ts";
 import { deviceSupport } from "../devices/index.ts";
+import { MSG_UNAVAILABLE } from "../devices/simulator-mac.ts";
+import { pairedMac, routeSimulatorRequest, withPairedMac } from "../devices/simulator-remote.ts";
+import { createFakeSimulatorService, simulatorFakeEnabled } from "../devices/simulator-fake.ts";
+import { simulatorService, useSimulatorService } from "../devices/simulator-service.ts";
+import type { SimulatorService } from "../devices/simulator-service.ts";
+import { createSimulatorTool, runSimulatorJob } from "../tools/simulator.ts";
 import { terminalRegistry } from "../tools/terminal.ts";
 import type { TerminalRegistry } from "../tools/terminal.ts";
 import { screenFeed } from "../screen/feed.ts";
@@ -139,6 +146,12 @@ export interface GatewayOptions {
   terminals?: TerminalRegistry;
   /** SSE comment interval for the terminal pane. Default 15s. Tests. */
   terminalHeartbeatMs?: number;
+  /** The iOS Simulator the pane and the tool share. Tests inject one. Default: the process-wide service (a Mac), or the dev fixture when the smoke flags are set. */
+  simulator?: SimulatorService;
+  /** Milliseconds between simulator pane screenshots. Default 1000. Tests. */
+  simulatorFrameMs?: number;
+  /** Hub used to hand a simulator action to a paired Mac. Tests inject one. The hosted gateway uses its own remote hub. */
+  simulatorHub?: RemoteHub;
   /** Public deployment: login screen, Host allowlist, secure cookies, security headers. */
   hosted?: HostedOptions;
   /** Hosted multi-user sign-in (MIND OAuth / API key) and the per-user runtimes. Owner access-code login keeps working without it. */
@@ -297,6 +310,9 @@ export interface GatewayHandle {
 
 export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle> {
   const hosted = opts.hosted;
+  // Shots only: a fixture simulator, and only together with the desktop smoke fake. A real user never sets these.
+  if (!hosted && !opts.simulator && simulatorFakeEnabled()) useSimulatorService(createFakeSimulatorService());
+  const simSvc = (): SimulatorService => opts.simulator ?? simulatorService();
   if (hosted) {
     if ((hosted.token ?? "").length < MIN_TOKEN_LEN) throw new HostedConfigError(`hosted mode needs a login secret of at least ${MIN_TOKEN_LEN} characters`);
     if (!hosted.allowedHosts?.length) throw new HostedConfigError("hosted mode needs a non-empty host allowlist");
@@ -633,8 +649,38 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     return out;
   } : undefined;
 
+  /** A Windows or Linux desktop asked this Mac to drive the Simulator. Erase is not queued. */
+  async function forwardSimulator(owner: string, sessionId: string, action: string, args: Record<string, unknown>): Promise<{ ok: true; deviceName: string } | { ok: false; status: number; error: string }> {
+    const hub = opts.simulatorHub ?? remoteHub;
+    if (hub) {
+      const r = routeSimulatorRequest(hub, owner, { sessionId, action, args, surface: "web" });
+      return r.ok ? { ok: true, deviceName: r.deviceName } : { ok: false, status: r.status, error: r.error };
+    }
+    const sync = opts.sync;
+    if (sync?.enabled && sync.key && sync.url) {
+      try {
+        const res = await (sync.fetchImpl ?? fetch)(`${sync.url.replace(/\/$/, "")}/api/sync/simulator`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-mind-key": sync.key, host: "daebot.live", "x-forwarded-proto": "https" },
+          body: JSON.stringify({ sessionId, action, args }),
+        });
+        const body = await res.json().catch(() => ({})) as { error?: string; deviceName?: string };
+        if (!res.ok) return { ok: false, status: res.status, error: body.error || "could not reach the paired Mac" };
+        return { ok: true, deviceName: body.deviceName || "paired Mac" };
+      } catch (e) {
+        return { ok: false, status: 502, error: String((e as Error)?.message ?? e).slice(0, 200) };
+      }
+    }
+    return { ok: false, status: 409, error: MSG_UNAVAILABLE };
+  }
+
   /** Desktop: runs one message of a remote bot thread on this machine. */
   async function runRemoteJob(job: RemoteJob, emit: (ev: AgentEvent) => void, signal: AbortSignal): Promise<void> {
+    if (job.simulator) {
+      const tool = opts.simulator ? createSimulatorTool({ service: opts.simulator, platform: "darwin" }) : undefined;
+      await runSimulatorJob(job, emit, signal, tool);
+      return;
+    }
     // A job with a bot slug is a thread of that bot; one with none is a plain session whose home the person set to this computer.
     let botId: string | undefined;
     if (job.botSlug) {
@@ -1464,6 +1510,14 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       return sendJson(res, 200, { aborted: manager.abort(id) });
     }
     if (path === "/api/sync/device/poll" && method === "POST") return devicePoll(req, res, me);
+    // POST /api/sync/simulator {sessionId, action, args}: a Windows or Linux desktop asks the paired Mac to drive the Simulator.
+    if (path === "/api/sync/simulator" && method === "POST") {
+      if (!remoteHub) return sendJson(res, 404, { error: "remote hub is not available" });
+      const b = parseJsonObject(await readBody(req, 64 * 1024));
+      const args = b.args && typeof b.args === "object" ? b.args as Record<string, unknown> : {};
+      const r = routeSimulatorRequest(remoteHub, me.id, { sessionId: typeof b.sessionId === "string" ? b.sessionId : "", action: typeof b.action === "string" ? b.action : "", args, surface: "web" });
+      return r.ok ? sendJson(res, 200, { ok: true, jobId: r.job.id, deviceId: r.job.deviceId, deviceName: r.deviceName }) : sendJson(res, r.status, { error: r.error });
+    }
     const jm = /^\/api\/sync\/device\/jobs\/(rj_[0-9a-f]{16})\/events$/.exec(path);
     if (jm && method === "POST") return deviceJobEvents(req, res, me, jm[1]);
     const pl = /^\/api\/sync\/photos\/([^/]+)$/.exec(path);
@@ -2551,7 +2605,25 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (path === "/devices") {
       if (hosted) return sendJson(res, 404, { error: "not found" });
       if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-      return sendJson(res, 200, deviceSupport(process.platform));
+      let body = deviceSupport(process.platform);
+      const hub = opts.simulatorHub ?? remoteHub;
+      if (hub) body = withPairedMac(body, pairedMac(hub.devices(me.id)));
+      return sendJson(res, 200, body);
+    }
+    if (isSimulatorPath(path)) {
+      const known = (id: string): "ok" | "forbidden" | "missing" => {
+        const acc = manager.access(id, me.id);
+        if (acc === "forbidden") return "forbidden";
+        if (acc) return "ok";
+        const rt = manager.runtimeOf(me.id);
+        return rt.history?.(id) || rt.sessionInfo?.(id) ? "ok" : "missing";
+      };
+      if (await simulatorApi(req, res, path, method, {
+        hosted: !!hosted, viewer: !!viewer, access: known, service: simSvc(), sendJson, readJson,
+        frameMs: opts.simulatorFrameMs,
+        forward: (sessionId, action, args) => forwardSimulator(me.id, sessionId, action, args),
+      })) return;
+      return sendJson(res, 404, { error: "not found" });
     }
     if (isTerminalPath(path)) {
       const terms = opts.terminals ?? terminalRegistry();

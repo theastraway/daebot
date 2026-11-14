@@ -4,7 +4,19 @@
 // a real user's window: main.mjs only calls it when --mindclaw-smoke is also set.
 //
 //   --daebot-devices-shots=<dir>   where PNGs are written
-//   --daebot-devices-pane=<name>   which pane to open (terminal today; browser, ios-sim, … later)
+//   --daebot-devices-pane=<name>   which pane to open (terminal, ios-sim)
+//
+// ios-sim reads DAEBOT_IOS_SIM_SHOT_MODE (fixture, or needs-mac). That variable does nothing
+// unless the smoke flags above are also set. The fixture picture is DAEBOT_SIMULATOR_FIXTURE_JPEG.
+
+/** Must match agent/src/gateway/devices-shots.ts IOS_SIM_SHOT. */
+export const IOS_SIM_SHOT = Object.freeze({
+  title: "iOS Simulator",
+  fixtureBanner: "Fixture. This picture is not a live simulator.",
+  needsMac: "needs a Mac with Xcode",
+  device: "iPhone 16",
+  emptyDevice: "No simulator",
+});
 
 /** Must match agent/src/gateway/devices-shots.ts TERMINAL_SHOT. */
 export const TERMINAL_SHOT = Object.freeze({
@@ -44,19 +56,47 @@ export function parseDevicesShots(argv) {
   return { dir: shots, pane };
 }
 
-/** PNG names for a pane. A later slice adds its own key; an unknown name fails the smoke run. */
-const PANE_SHOTS = {
-  terminal: ["live.png", "closed.png", "empty.png"],
-};
+/** fixture paints the fake phone. needs-mac is the real Linux gateway, which has no Xcode. */
+export function iosSimShotMode(env = {}) {
+  return env.DAEBOT_IOS_SIM_SHOT_MODE === "needs-mac" ? "needs-mac" : "fixture";
+}
 
 /**
+ * PNG names for a pane. An unknown name fails the smoke run.
+ * ios-sim writes a full window (chat beside the pane) and a crop of the pane.
  * @param {string} pane
+ * @param {NodeJS.ProcessEnv} [env]
  * @returns {{ files: string[] } | { error: string }}
  */
-export function shotFilesFor(pane) {
-  const files = PANE_SHOTS[pane];
-  if (!files) return { error: `no shots handler for pane ${pane} yet` };
-  return { files };
+export function shotFilesFor(pane, env = {}) {
+  if (pane === "terminal") return { files: ["live.png", "closed.png", "empty.png"] };
+  if (pane === "ios-sim") {
+    const mode = iosSimShotMode(env);
+    return { files: [`${mode}-window.png`, `${mode}-pane.png`] };
+  }
+  return { error: `no shots handler for pane ${pane} yet` };
+}
+
+/**
+ * The script main.mjs runs for one PNG, plus how to capture it.
+ * Terminal shots use capturePage() with no rect. ios-sim passes a rect: a hidden smoke window
+ * otherwise returns a frame from before the pane opened.
+ * @param {string} pane
+ * @param {string} file
+ * @returns {{ error: string } | { script: string, timeoutMs: number, clip?: string, fullRect?: boolean }}
+ */
+export function shotProbeFor(pane, file) {
+  const name = String(file);
+  if (pane === "terminal") {
+    const phase = name.replace(/\.png$/, "");
+    return { script: terminalShotProbe(phase), timeoutMs: phase === "live" ? 30_000 : 20_000 };
+  }
+  if (pane === "ios-sim") {
+    const mode = name.startsWith("needs-mac") ? "needs-mac" : "fixture";
+    const clip = name.endsWith("-pane.png");
+    return { script: iosSimShotProbe(mode), timeoutMs: 20_000, clip: clip ? "sim-pane" : "", fullRect: !clip };
+  }
+  return { error: `no shots handler for pane ${pane} yet` };
 }
 
 /**
@@ -153,5 +193,84 @@ export function terminalShotProbe(phase, shot = TERMINAL_SHOT) {
       await sleep(200);
     }
     return { ok: false, error: "timed out waiting for " + spec.phase, tail: textOf("#term-out").slice(0, 200), thread: textOf("#thread").slice(0, 120) };
+  })()`;
+}
+
+/**
+ * Opens the iOS Simulator pane and checks the chat column, the composer and Send sit fully
+ * beside it. Output is read with textContent. The script never assigns innerHTML.
+ * @param {"fixture"|"needs-mac"} mode
+ * @param {typeof IOS_SIM_SHOT} [shot]
+ */
+export function iosSimShotProbe(mode, shot = IOS_SIM_SHOT) {
+  const spec = {
+    mode: mode === "needs-mac" ? "needs-mac" : "fixture",
+    title: shot.title,
+    fixtureBanner: shot.fixtureBanner,
+    needsMac: shot.needsMac,
+    device: shot.device,
+    emptyDevice: shot.emptyDevice,
+  };
+  return `(async () => {
+    const spec = ${JSON.stringify(spec)};
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const textOf = (sel) => { const n = document.querySelector(sel); return n ? (n.textContent || "") : ""; };
+    const clickIncludes = (sel, needle) => {
+      const el = [...document.querySelectorAll(sel)].find((n) => (n.textContent || "").includes(needle));
+      if (!el) return false;
+      el.scrollIntoView({ block: "nearest", inline: "nearest" });
+      el.click();
+      return true;
+    };
+    const box = (id) => {
+      const el = document.getElementById(id);
+      if (!el || el.hidden) return null;
+      const r = el.getBoundingClientRect();
+      return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
+    };
+    const layoutOf = () => {
+      const view = { w: document.documentElement.clientWidth, h: document.documentElement.clientHeight };
+      const boxes = { scroll: box("scroll"), composer: box("composer"), send: box("btn-send"), pane: box("sim-pane") };
+      const problems = [];
+      for (const name of ["scroll", "composer", "send", "pane"]) {
+        const r = boxes[name];
+        if (!r || r.w < 8 || r.h < 8) { problems.push(name + " missing"); continue; }
+        if (r.x < -1 || r.y < -1 || r.x + r.w > view.w + 1 || r.y + r.h > view.h + 1) problems.push(name + " clipped");
+      }
+      const pane = boxes.pane;
+      for (const name of ["scroll", "composer", "send"]) {
+        const r = boxes[name];
+        if (!r || !pane) continue;
+        const overlaps = r.x < pane.x + pane.w - 2 && r.x + r.w > pane.x + 2 && r.y < pane.y + pane.h - 2 && r.y + r.h > pane.y + 2;
+        if (overlaps) problems.push(name + " overlaps pane");
+      }
+      return { ok: problems.length === 0, error: problems.join(", "), boxes, view };
+    };
+    const deadline = Date.now() + 15000;
+    let layoutError = "";
+    while (Date.now() < deadline) {
+      document.documentElement.dataset.theme = "light";
+      const current = textOf(".sess[aria-current]");
+      if (!current.includes(spec.title)) clickIncludes(".sess", spec.title);
+      const chip = document.getElementById("btn-simulator");
+      const pane = document.getElementById("sim-pane");
+      if (current.includes(spec.title) && chip && !chip.hidden) {
+        if (chip.getAttribute("aria-expanded") !== "true") chip.click();
+      }
+      const text = pane ? (pane.textContent || "") : "";
+      const open = !!(pane && !pane.hidden && chip && chip.getAttribute("aria-expanded") === "true");
+      const img = document.querySelector("#sim-pane img");
+      const contentOk = spec.mode === "needs-mac"
+        ? text.includes(spec.needsMac) && text.includes(spec.emptyDevice)
+        : text.includes(spec.device) && text.includes(spec.fixtureBanner) && !!(img && img.src && img.src.startsWith("data:"));
+      if (open && contentOk) {
+        const layout = layoutOf();
+        if (layout.ok) return { ok: true, tail: text.slice(0, 240), layout: layout.boxes };
+        layoutError = layout.error;
+      }
+      await sleep(200);
+    }
+    const pane = document.getElementById("sim-pane");
+    return { ok: false, error: layoutError || ("timed out waiting for " + spec.mode), tail: pane ? (pane.textContent || "").slice(0, 240) : "" };
   })()`;
 }

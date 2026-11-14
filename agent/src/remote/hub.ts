@@ -33,6 +33,8 @@ export interface RemoteJob {
   photos?: { id: string; name: string; width: number; height: number }[];
   /** The sender's device can answer a permission card: the desktop turn may ask (the card is relayed to the sender, the answer comes back). */
   interactive?: boolean;
+  /** A simulator action for the paired Mac. Present only on jobs that route the iOS Simulator; a chat turn has no field. */
+  simulator?: { action: string; args: Record<string, unknown> };
   createdAt: number;
   state: JobState;
   deliveredAt?: number;

@@ -1,0 +1,58 @@
+{
+  "devices": {
+    "com.apple.CoreSimulator.SimRuntime.iOS-18-5": [
+      {
+        "udid": "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+        "name": "iPhone 16",
+        "state": "Booted",
+        "isAvailable": true,
+        "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-16"
+      },
+      {
+        "udid": "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB",
+        "name": "iPhone SE (3rd generation)",
+        "state": "Shutdown",
+        "isAvailable": true,
+        "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-SE-3rd-generation"
+      },
+      {
+        "udid": "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD",
+        "name": "iPhone 16",
+        "state": "Shutdown",
+        "isAvailable": true,
+        "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-16"
+      }
+    ],
+    "com.apple.CoreSimulator.SimRuntime.iOS-17-0": [
+      {
+        "udid": "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC",
+        "name": "iPhone 14",
+        "state": "Shutdown",
+        "isAvailable": false
+      }
+    ]
+  },
+  "runtimes": [
+    {
+      "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-18-5",
+      "name": "iOS 18.5",
+      "platform": "iOS",
+      "version": "18.5",
+      "isAvailable": true
+    },
+    {
+      "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-17-0",
+      "name": "iOS 17.0",
+      "platform": "iOS",
+      "version": "17.0",
+      "isAvailable": false
+    },
+    {
+      "identifier": "com.apple.CoreSimulator.SimRuntime.watchOS-10-5",
+      "name": "watchOS 10.5",
+      "platform": "watchOS",
+      "version": "10.5",
+      "isAvailable": true
+    }
+  ]
+}

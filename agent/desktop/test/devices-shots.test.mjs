@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildSpawnPlan } from "../src/lib/launcher.mjs";
-import { TERMINAL_SHOT, parseDevicesShots, devicesShotsFromArgv, shotFilesFor, terminalShotProbe } from "../src/lib/devices-shots.mjs";
+import { TERMINAL_SHOT, IOS_SIM_SHOT, parseDevicesShots, devicesShotsFromArgv, shotFilesFor, shotProbeFor, terminalShotProbe, iosSimShotProbe } from "../src/lib/devices-shots.mjs";
 
 const argv = (...flags) => ["electron", ".", ...flags];
 
@@ -45,6 +45,15 @@ test("the spawn plan tells only the fake gateway which pane to seed", () => {
   const ignored = buildSpawnPlan({ ...base, devicesShotsPane: "terminal" });
   assert.equal(ignored.env.DAEBOT_DEVICES_SHOTS_PANE, undefined);
   assert.equal(ignored.env.MINDCLAW_DESKTOP_FAKE, undefined);
+  const sim = buildSpawnPlan({ ...base, fake: true, devicesShotsPane: "ios-sim" });
+  assert.equal(sim.env.DAEBOT_DEVICES_SHOTS_PANE, "ios-sim");
+  assert.equal(sim.env.DAEBOT_SIMULATOR_FAKE, "1");
+  assert.equal(sim.env.DAEBOT_DEV_SHOTS, "1");
+  const mac = buildSpawnPlan({ ...base, fake: true, devicesShotsPane: "ios-sim", baseEnv: { DAEBOT_IOS_SIM_SHOT_MODE: "needs-mac", DAEBOT_SIMULATOR_FAKE: "1", DAEBOT_DEV_SHOTS: "1" } });
+  assert.equal(mac.env.DAEBOT_DEVICES_SHOTS_PANE, "ios-sim");
+  assert.equal(mac.env.DAEBOT_SIMULATOR_FAKE, undefined);
+  assert.equal(mac.env.DAEBOT_DEV_SHOTS, undefined);
+  assert.equal(mac.env.MINDCLAW_DESKTOP_FAKE, "1");
 });
 
 test("the terminal probe reads text and does not build HTML", () => {
@@ -55,4 +64,28 @@ test("the terminal probe reads text and does not build HTML", () => {
   assert.doesNotMatch(live, /innerHTML/);
   assert.match(terminalShotProbe("closed"), /closed-work/);
   assert.match(terminalShotProbe("empty"), /No output yet/);
+});
+
+test("ios-sim shots name the window and the pane, and the probe checks they do not overlap", () => {
+  assert.equal(IOS_SIM_SHOT.device, "iPhone 16");
+  assert.deepEqual(shotFilesFor("ios-sim").files, ["fixture-window.png", "fixture-pane.png"]);
+  assert.deepEqual(shotFilesFor("ios-sim", { DAEBOT_IOS_SIM_SHOT_MODE: "needs-mac" }).files, ["needs-mac-window.png", "needs-mac-pane.png"]);
+  const named = parseDevicesShots(argv("--daebot-devices-shots=/tmp/shots", "--daebot-devices-pane=ios-sim"));
+  assert.deepEqual(named, { dir: "/tmp/shots", pane: "ios-sim" });
+  const windowShot = shotProbeFor("ios-sim", "fixture-window.png");
+  assert.equal(windowShot.fullRect, true);
+  assert.equal(windowShot.clip, "");
+  const paneShot = shotProbeFor("ios-sim", "needs-mac-pane.png");
+  assert.equal(paneShot.clip, "sim-pane");
+  assert.equal(paneShot.fullRect, false);
+  const probe = iosSimShotProbe("fixture");
+  assert.match(probe, /iPhone 16/);
+  assert.match(probe, /Fixture\. This picture is not a live simulator\./);
+  assert.match(probe, /btn-send/);
+  assert.match(probe, /textContent/);
+  assert.match(probe, /getBoundingClientRect/);
+  assert.doesNotMatch(probe, /innerHTML/);
+  assert.match(iosSimShotProbe("needs-mac"), /needs a Mac with Xcode/);
+  assert.match(shotProbeFor("terminal", "live.png").script, new RegExp(TERMINAL_SHOT.liveMarker));
+  assert.equal(shotProbeFor("terminal", "live.png").timeoutMs, 30_000);
 });

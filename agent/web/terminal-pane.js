@@ -90,10 +90,10 @@ function parseSseBlock(block) {
 /**
  * @param {{ json: Function, authHeaders: () => Record<string, string>, currentId: () => string | null,
  *   chip: HTMLElement, pane: HTMLElement, list: HTMLElement, out: HTMLElement, exitEl?: HTMLElement,
- *   emptyEl?: HTMLElement, closeBtn?: HTMLElement }} opts
+ *   emptyEl?: HTMLElement, closeBtn?: HTMLElement, onOpen?: (open: boolean) => void }} opts
  */
 export function initTerminalPane(opts) {
-  const nop = { noteTool() {}, sync() {} };
+  const nop = { noteTool() {}, sync() {}, close() {} };
   if (!opts || !opts.chip || !opts.pane || !opts.list || !opts.out) return nop;
   const { chip, pane, list, out } = opts;
   const exitEl = opts.exitEl;
@@ -120,11 +120,13 @@ export function initTerminalPane(opts) {
     if (!on && poll) { clearInterval(poll); poll = null; }
   }
   function setOpen(open) {
+    const was = !pane.hidden;
     pane.hidden = !open;
     chip.setAttribute("aria-expanded", String(open));
     document.documentElement.classList.toggle("term-open", open);
     if (!open) stopStream();
     else void followSelected();
+    if (open !== was && opts.onOpen) opts.onOpen(open);
   }
   function showExit(info) {
     if (!exitEl) return;
@@ -272,5 +274,6 @@ export function initTerminalPane(opts) {
   return {
     noteTool() { void refresh(); },
     sync() { void refresh(); },
+    close() { setOpen(false); },
   };
 }
