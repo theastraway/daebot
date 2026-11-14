@@ -47,7 +47,7 @@ test("an unknown pane is rejected and the browser seed does not open a chat", as
   let opened = 0;
   const host = { async open() { opened++; return { id: "s", async *send() {} }; } };
   try {
-    await assert.rejects(seedDevicesShot(host, "ios-sim"), /ios-sim/);
+    await assert.rejects(seedDevicesShot(host, "nope-pane"), /nope-pane/);
     assert.equal(opened, 0);
     await seedDevicesShot(host, "browser");
     assert.equal(opened, 0);
