@@ -36,6 +36,7 @@ import { initPhotos, normQueue, packQueue, queueLabel, SAYS as PHOTO_SAYS } from
 import { calendarCapabilities, createDeviceCalls } from "/device-calendar.js";
 import { initMessageMenu, copyText } from "/msgmenu.js";
 import { initToolRoll } from "/toolroll.js";
+import { initTerminalPane } from "/terminal-pane.js";
 import { argSummary } from "/toolargs.js";
 initScrollbars(); // scrollbars stay hidden until the user scrolls
 
@@ -112,6 +113,19 @@ async function json(path, opts) {
 }
 // Apple Calendar on the user's own device (the iPhone and Mac apps): the agent's device_call events are answered here, natively, and POSTed back.
 const deviceCalls = createDeviceCalls({ post: (sid, body) => api(`/sessions/${encodeURIComponent(sid)}/device-result`, { method: "POST", body: JSON.stringify(body) }) });
+// The read-only terminal pane. It asks for sessions after a `terminal` tool event and whenever the open chat changes.
+const termPane = initTerminalPane({
+  json,
+  authHeaders: () => (token ? { authorization: `Bearer ${token}` } : {}),
+  currentId: () => state.currentId,
+  chip: $("btn-terminal"),
+  pane: $("term-pane"),
+  list: $("term-list"),
+  out: $("term-out"),
+  exitEl: $("term-exit"),
+  emptyEl: $("term-empty"),
+  closeBtn: $("btn-term-close"),
+});
 
 // ---------- markdown-lite (DOM-built; escapes everything by construction) ----------
 const INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\[[^\]\n]+\]\((https?:\/\/[^\s)]+)\))|(https?:\/\/[^\s<>)\]]+)|(\*[^*\n]+\*)/g;
@@ -1036,6 +1050,7 @@ async function selectSession(s, opts = {}) {
   }
   if (opts.userClick) await clearUnread(s); // opening the thread yourself reads it; a reload that lands back on it does not
   if (gone()) return;
+  termPane.sync();
   if (!els.drawer.hidden) loadViolations();
   whenIdle(() => { if (!gone()) { saveTranscriptSoon(state.currentId); prefetchNeighbors(); } });
 }
@@ -1068,6 +1083,7 @@ function newSession() {
   state.curBot = "";
   state.transcripts.delete(DRAFT);
   renderSessions(); renderThread();
+  termPane.sync();
   els.input.focus();
 }
 // A new thread with one of the user's bots: a draft until the first message, like a new session.
@@ -1081,6 +1097,7 @@ function newBotThread(botId) {
   state.transcripts.delete(DRAFT);
   renderSessions(); renderThread();
   bots.renderList();
+  termPane.sync();
   els.input.focus();
 }
 function notify(text) { addItem(tkey(), { kind: "notice", level: "warn", text }); }
@@ -1369,6 +1386,7 @@ function onEvent(id, ev, asst, toolByReceipt) {
       if (asst) { asst.streaming = false; paintAssistant(asst); }
       const it = addItem(id, { kind: "tool", receiptId: ev.receiptId, tool: ev.tool, args: ev.args, status: "run" });
       toolByReceipt.set(ev.receiptId, it);
+      if (ev.tool === "terminal" && id === state.currentId) termPane.noteTool();
       // A bot asked for a voice chat: open it on this screen (only the window showing this very thread, never a replay of a finished turn).
       if (ev.tool === "start_voice_agent" && id === state.currentId && state.busy.has(id) && !voiceChat.active()) void voiceChat.start(typeof (ev.args || {}).prompt === "string" ? ev.args.prompt : undefined);
       return null; // text after a tool starts a new block
@@ -1377,6 +1395,7 @@ function onEvent(id, ev, asst, toolByReceipt) {
       const it = toolByReceipt.get(ev.receiptId);
       if (it) { it.status = ev.ok ? "ok" : "fail"; it.preview = ev.preview; if (it.parts) refreshTool(it); }
       // Daebot proposed an MCP server: put the consent card in the thread (only the card's Connect button can connect it).
+      if (ev.tool === "terminal" && id === state.currentId) termPane.noteTool();
       if (ev.tool === "task_board") board.poke(); // the board changed: refresh it if it is open
       if (ev.tool === "bot_manage") bots.refresh(); // Daebot just made, changed or deleted a bot: the Bots tab shows it without a reload
       // Daebot put an Authorize card for a MIND app in the chat (the click on it is the only thing that connects anything).
@@ -1825,6 +1844,7 @@ async function boot() {
   if (known && known.live && restoreTranscript(last)) { state.currentId = last; state.curBot = known.bot || ""; await bots.ensureLoaded(); renderSessions(); renderThread(); }
   else if (known) { await selectSession(known); } // resumes and replays the saved transcript
   else if (!state.currentId) { ensureSession().then(() => { renderSessions(); renderHeader(); }).catch(() => { /* first send retries */ }); }
+  termPane.sync();
   syncCurrent(); // a reply still running on the server is picked up and keeps streaming
 }
 boot();

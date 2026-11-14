@@ -84,10 +84,10 @@ test("the Mac app menu is unchanged and still has Edit with copy and paste", () 
   assert.ok(edit.submenu.some((i) => i.role === "copy") && edit.submenu.some((i) => i.role === "paste"));
 });
 
-test("web: the drag strip, no-drag controls, and right padding for the window buttons exist behind html.win-overlay only", () => {
+test("web: the drag strip, no-drag controls, and right padding for the window buttons exist behind html.win-overlay (or html.mac-inset) only", () => {
   assert.match(css, /\.win-overlay \.topbar \{[^}]*-webkit-app-region: drag;[^}]*padding-right: max\(16px, var\(--wco-right\)\)/);
   assert.match(css, /\.win-overlay \.topbar :is\(button[^)]*\),[^{]*\{ -webkit-app-region: no-drag; \}/);
-  assert.equal([...css.matchAll(/-webkit-app-region/g)].filter((m) => !css.slice(Math.max(0, m.index - 400), m.index).includes(".win-overlay")).length, 0);
+  assert.equal([...css.matchAll(/-webkit-app-region/g)].filter((m) => !/\.(win-overlay|mac-inset)/.test(css.slice(Math.max(0, m.index - 400), m.index))).length, 0);
   const shell = readFileSync(new URL("../../web/shell.js", import.meta.url), "utf8");
   assert.match(shell, /desk\.platform === "win32" \|\| desk\.platform === "linux"/);
 });

@@ -4,7 +4,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { TerminalRegistry, createTerminalTool, shellSpec, stripAnsi } from "../../src/tools/terminal.ts";
+import { TerminalRegistry, createTerminalTool, shellSpec, splitAnsiHold, stripAnsi } from "../../src/tools/terminal.ts";
 import { createBuiltinTools } from "../../src/tools/index.ts";
 import { hostedToolAllowed, filterHostedTools } from "../../src/hosted.ts";
 import { tierAllows } from "../../src/kernel/tier.ts";
@@ -269,6 +269,17 @@ test("terminal (Windows shape, mocked spawn): hidden window, piped stdin, no det
 
 test("stripAnsi removes colour and cursor codes and normalises CRLF", () => {
   assert.equal(stripAnsi("\x1b[31mred\x1b[0m\r\nline\x1b]0;title\x07!"), "red\nline!");
+});
+
+test("splitAnsiHold keeps only a short unfinished escape", () => {
+  assert.deepEqual(splitAnsiHold("hello"), { done: "hello", held: "" });
+  assert.deepEqual(splitAnsiHold("hi\x1b[31"), { done: "hi", held: "\x1b[31" });
+  assert.deepEqual(splitAnsiHold("\x1b[31mred"), { done: "\x1b[31mred", held: "" });
+  assert.deepEqual(splitAnsiHold("go\x1b"), { done: "go", held: "\x1b" });
+  assert.deepEqual(splitAnsiHold("\x1b]0;title"), { done: "", held: "\x1b]0;title" });
+  assert.deepEqual(splitAnsiHold("\x1b]0;title\x07ok"), { done: "\x1b]0;title\x07ok", held: "" });
+  const long = "\x1b]" + "x".repeat(80);
+  assert.equal(splitAnsiHold(long).held, "", "a long unfinished tail is not held, or one stray ESC would stall the pane");
 });
 
 // ---- same safety classes and gates as bash; never hosted ----

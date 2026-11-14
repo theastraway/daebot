@@ -65,6 +65,10 @@ import { addonWords, fetchIntegrations, providerFor } from "../mind/integrations
 import type { AppRow } from "../mind/integrations.ts";
 import { dataDir, cleanTitle } from "../persist.ts";
 import { screenApi } from "./screen.ts";
+import { isTerminalPath, terminalsApi } from "./terminals.ts";
+import { deviceSupport } from "../devices/index.ts";
+import { terminalRegistry } from "../tools/terminal.ts";
+import type { TerminalRegistry } from "../tools/terminal.ts";
 import { screenFeed } from "../screen/feed.ts";
 import type { ScreenFeed } from "../screen/feed.ts";
 import { MAX_PHOTO_BODY, checkPhotos, cleanName, isPhotoId, photoRef } from "../photos.ts";
@@ -131,6 +135,10 @@ export interface GatewayOptions {
   idleMs?: number; // tests
   /** The screen feed the desktop shell fills (tests inject one; the default is the process-wide feed). Local gateways only. */
   screenFeed?: ScreenFeed;
+  /** Shell sessions the terminal pane reads. Default: the same registry the `terminal` tool uses. Tests inject one. */
+  terminals?: TerminalRegistry;
+  /** SSE comment interval for the terminal pane. Default 15s. Tests. */
+  terminalHeartbeatMs?: number;
   /** Public deployment: login screen, Host allowlist, secure cookies, security headers. */
   hosted?: HostedOptions;
   /** Hosted multi-user sign-in (MIND OAuth / API key) and the per-user runtimes. Owner access-code login keeps working without it. */
@@ -1800,7 +1808,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/board" || path.startsWith("/board/") || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
+    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/board" || path.startsWith("/board/") || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/devices" || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -2514,6 +2522,24 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       if (sp === "handled") return;
       if (sp) { me = sp.me; viewer = sp.viewer; }
     }
+    // Shell sessions the pane watches, and the device-support seam. Local gateways only: a hosted server has no shell and must not stream one.
+    if (path === "/devices") {
+      if (hosted) return sendJson(res, 404, { error: "not found" });
+      if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+      return sendJson(res, 200, deviceSupport(process.platform));
+    }
+    if (isTerminalPath(path)) {
+      const terms = opts.terminals ?? terminalRegistry();
+      const known = (id: string): "ok" | "forbidden" | "missing" => {
+        const acc = manager.access(id, me.id);
+        if (acc === "forbidden") return "forbidden";
+        if (acc) return "ok";
+        const rt = manager.runtimeOf(me.id);
+        return rt.history?.(id) || rt.sessionInfo?.(id) ? "ok" : "missing";
+      };
+      if (terminalsApi(req, res, path, _query, method, { hosted: !!hosted, viewer: !!viewer, access: known, registry: terms, sendJson, heartbeatMs: opts.terminalHeartbeatMs })) return;
+      return sendJson(res, 404, { error: "not found" });
+    }
     if (path === "/sync/status") return method === "GET" ? sendJson(res, 200, syncAgent ? { ...syncAgent.status, ...(syncAgent.routineStats ? { routines: syncAgent.routineStats } : {}) } : { enabled: false }) : sendJson(res, 405, { error: "method not allowed" });
     if (path === "/sync/now") {
       if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
@@ -3000,6 +3026,20 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         else sendJson(res, 405, { error: "method not allowed" });
       } catch (e) { return shareFail(res, e); }
       return "handled";
+    }
+    // The terminal pane is never a guest route. Scrollback can contain secrets, so a person who was invited (viewer or editor) is refused here,
+    // before the ordinary route could run as the owner. The owner's own request falls through.
+    const termGuest = /^\/sessions\/([^/]+)\/terminals(?:\/|$)/.exec(path);
+    if (termGuest) {
+      const tid = decodeSeg(termGuest[1]);
+      if (!tid) { sendJson(res, 400, { error: "bad session id" }); return "handled"; }
+      const own = manager.access(tid, me.id);
+      if (own && own !== "forbidden") return undefined;
+      if (!own && manager.runtimeOf(me.id).history?.(tid)) return undefined;
+      try {
+        const g = await st.grantFor(me, tid);
+        if (g) { sendJson(res, 403, { error: "forbidden", message: "Terminal output is only visible to the owner of this chat." }); return "handled"; }
+      } catch (e) { return shareFail(res, e); }
     }
     // Guest side: the thread-scoped routes.
     let id: string | undefined;

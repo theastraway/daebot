@@ -59,7 +59,7 @@ test("every bot lists a Heartbeat that cannot be deleted; routines are added, ed
     assert.equal(pv.json.next.length, 3);
     assert.equal((await r.j("POST", "/routines/preview", { expression: "99 * * * *" })).json.ok, false);
     // unknown bot / unknown routine
-    assert.equal((await r.j("GET", `/bots/b_000000000000/routines`)).status, 404);
+    assert.equal((await r.j("GET", `/bots/b_999999999999/routines`)).status, 404);
     assert.equal((await r.j("PATCH", `/bots/${r.bot.id}/routines/r_000000000000`, { enabled: true })).status, 404);
   } finally { await r.close(); }
 });
