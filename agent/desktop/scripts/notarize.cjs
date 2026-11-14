@@ -50,6 +50,20 @@ function resolveNotarizeAuth(env = process.env) {
   return { mode: 'keychain-profile', options: { keychainProfile: NOTARIZE_PROFILE }, cleanup: () => {} }
 }
 
+// The ticket can take a moment to reach Apple's CDN and CloudKit drops connections now and then, so staple is retried.
+async function stapleWithRetry(appPath, tries = 6, waitMs = 20000) {
+  for (let i = 1; ; i++) {
+    try {
+      execFileSync('xcrun', ['stapler', 'staple', appPath], { stdio: 'inherit' })
+      return
+    } catch (err) {
+      if (i >= tries) throw err
+      console.log(`[notarize] staple attempt ${i}/${tries} failed, retrying in ${waitMs / 1000}s...`)
+      await new Promise((r) => setTimeout(r, waitMs))
+    }
+  }
+}
+
 async function notarizeApp(context) {
   const { electronPlatformName, appOutDir } = context
   if (electronPlatformName !== 'darwin') return
@@ -67,7 +81,7 @@ async function notarizeApp(context) {
   try {
     await notarize({ appPath, ...auth.options })
     console.log('[notarize] submission accepted - stapling...')
-    execFileSync('xcrun', ['stapler', 'staple', appPath], { stdio: 'inherit' })
+    await stapleWithRetry(appPath)
     console.log('[notarize] SUCCESS - app is notarized and stapled.')
   } catch (err) {
     console.error(`[notarize] FAILED via ${label} - exact error below:`)
