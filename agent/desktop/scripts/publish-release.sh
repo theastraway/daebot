@@ -226,10 +226,13 @@ else
             [ -f "$DIR/$file" ] || continue
             size=$(stat -f%z "$DIR/$file" 2>/dev/null || stat -c%s "$DIR/$file")
             sha=$(shasum -a 256 "$DIR/$file" | awk '{print $1}')
+            # product=daebot keeps these records out of MIND's own download slots. Without it
+            # (Nov 14 2026, 0.3.48) MIND's /download/windows and /download/mac?arch=arm64 served
+            # the Daebot installer to people asking for the MIND app.
             body="$(jq -n --arg version "$VERSION" --arg build "$VERSION" --arg url "$PUBLIC_BASE/$file" \
                 --arg sha256 "$sha" --argjson size_bytes "$size" --arg notes "$NOTES" \
-                --arg platform "$p" --arg arch "$arch" \
-                '{version:$version,build:$build,url:$url,sha256:$sha256,size_bytes:$size_bytes,notes:$notes,platform:$platform,arch:$arch}')"
+                --arg platform "$p" --arg arch "$arch" --arg product "daebot" \
+                '{product:$product,version:$version,build:$build,url:$url,sha256:$sha256,size_bytes:$size_bytes,notes:$notes,platform:$platform,arch:$arch}')"
             echo "    POST $p/$arch"
             if [ "$DRY_RUN" != 1 ]; then
                 resp="$(curl -sS -X POST "$REGISTRY_BASE" -H "X-API-Key: $API_KEY" -H 'Content-Type: application/json' -d "$body")"
