@@ -2734,7 +2734,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       const rt = manager.runtimeOf(me.id);
       if (!rt.studio) return sendJson(res, 404, { error: "the studio is not available on this deployment" });
       try { await Promise.race([rt.boardSync?.(), new Promise((r) => setTimeout(r, 4000))]); } catch { /* the floor shows what it has */ }
-      const exchanges = botsOn() && exchangeHub ? exchangeHub.list(me.id).map((x) => ({ a: x.a, b: x.b, updatedAt: x.updatedAt, count: x.count })) : [];
+      const exchanges = botsOn() && exchangeHub ? exchangeHub.list(me.id).map((x) => ({ id: x.id, a: x.a, b: x.b, updatedAt: x.updatedAt, count: x.count, ...(x.last ? { last: { from: x.last.from, text: x.last.text, at: x.last.at, kind: x.last.kind } } : {}) })) : [];
       return sendJson(res, 200, await rt.studio({ exchanges }));
     }
     if (path === "/board") {

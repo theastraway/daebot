@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { assembleStudio, cleanDepartment, departmentSlug, needsOfRows, GENERAL_DEPT, MANAGER_DEPT, MAIN_ID, WORKING_WINDOW_MS } from "../../src/studio/index.ts";
+import { assembleStudio, cleanDepartment, departmentSlug, needsOfRows, DAY_MS, GENERAL_DEPT, MANAGER_DEPT, MAIN_ID, WORKING_WINDOW_MS } from "../../src/studio/index.ts";
 import type { StudioInput } from "../../src/studio/index.ts";
 
 const NOW = 1_800_000_000_000;
@@ -130,4 +130,27 @@ test("the chip is the router mode and the model; model text is one line", () => 
 test("needsOfRows reads only stopped rows", () => {
   const who = () => ({ bot: "x", botName: "X", department: "d" });
   assert.equal(needsOfRows([row({ status: "in_progress" }), row({ status: "stopped" }), null as any], who).length, 1);
+});
+
+test("Studio 2: projects roll up the board, meetings list the exchanges with names and the last line, today counts the last day, bots carry their last proof", () => {
+  const i = base();
+  const proof = { at: NOW - 100, calls: 3, failed: 0, blocked: 0, unverified: false, verified: true, model: "x/m" };
+  i.rows = [
+    ...i.rows.map((r) => (r.sessionId === "s1" ? { ...r, proof, project: { id: "P1", name: "Widget" } } : r)),
+    row({ sessionId: "s2", id: "t5", title: "Old done", status: "ready_to_test", bot: "b_1", updatedAt: NOW - DAY_MS - 1, project: { id: "P1", name: "Widget" } }),
+    row({ sessionId: "s2", id: "t6", title: "Fresh done", status: "ready_to_test", bot: "b_1", updatedAt: NOW - 10, project: { id: "P2", name: "Hiring" } }),
+    row({ sessionId: "s2", id: "t7", title: "Cancelled", status: "cancelled", bot: "b_1", project: { id: "P2", name: "Hiring" } }),
+  ];
+  i.exchanges = [
+    { id: "x1", a: "b_1", b: "b_2", updatedAt: NOW - 10, count: 4, last: { from: "b_2", text: "Done,\nhere is the list", at: NOW - 10, kind: "reply" } },
+    { id: "x2", a: "main", b: "b_1", updatedAt: NOW - 20, count: 2 },
+    { a: "b_3", b: "main", updatedAt: NOW - 30, count: 1 }, // no id: a link, never a meeting
+  ];
+  const v = assembleStudio(i);
+  assert.deepEqual(v.projects.map((p) => [p.name, p.total, p.done, p.working, p.waiting, p.next]), [["Widget", 3, 2, 0, 1, 0], ["Hiring", 1, 1, 0, 0, 0]]);
+  assert.deepEqual(v.meetings.map((m) => [m.id, m.aName, m.bName, m.count, m.last && m.last.text]), [["x1", "Olivia", "Leo", 4, "Done, here is the list"], ["x2", "Dae", "Olivia", 2, undefined]]);
+  assert.equal(v.meetings[0].last!.fromName, "Leo");
+  assert.deepEqual(v.today, { completed: 2, moved: 3 }); // Tests (s1) and Fresh done; sessions s1, s2, s3 moved within the day
+  assert.deepEqual(v.bots[0].proof, proof);
+  assert.equal(v.bots.find((b) => b.id === "b_1")!.proof, undefined);
 });

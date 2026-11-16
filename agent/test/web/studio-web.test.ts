@@ -67,3 +67,34 @@ test("the sidebar remembers three views and the arrow keys cycle through them, s
   assert.equal(nextView("bots", 1, false), "sessions");
   assert.equal(nextView("garbage", 1, false), "bots");
 });
+
+// @ts-expect-error plain browser module
+import { EXAMPLES, LOUNGE_LINES, ROOMS, loungeLine, mergeLog, progressPct, walks } from "../../web/studio.js";
+
+test("Studio 2: five rooms, example prompts, and a lounge line that is stable within the hour and varies across bots", () => {
+  assert.deepEqual(ROOMS.map((r: any) => r[0]), ["overview", "office", "meeting", "lounge", "workspaces"]);
+  assert.ok(EXAMPLES.length >= 3);
+  assert.equal(loungeLine("b_1", 9), loungeLine("b_1", 9));
+  assert.ok(LOUNGE_LINES.includes(loungeLine("b_1", 9)));
+  const lines = new Set(["b_1", "b_2", "b_3", "b_4", "b_5", "b_6"].map((id) => loungeLine(id, 9)));
+  assert.ok(lines.size >= 3, "different bots get different lines");
+});
+
+test("walks: an island pair gets a walking dot only when its link moved since the previous view", () => {
+  const prev = { links: [{ a: "x", b: "y", at: 10 }, { a: "x", b: "z", at: 10 }] };
+  const next = { links: [{ a: "x", b: "y", at: 20 }, { a: "x", b: "z", at: 10 }, { a: "q", b: "r", at: 5 }, { a: "s", b: "s", at: 99 }] };
+  assert.deepEqual(walks(prev, next), [{ a: "x", b: "y" }]);
+  assert.deepEqual(walks(null, next), []);
+});
+
+test("the communication log merges exchanges newest first with who spoke to whom; project progress is done over total", () => {
+  const exs = [
+    { id: "x1", a: { id: "main", name: "Dae", color: "#ffd25a" }, b: { id: "b_1", name: "Olivia", color: "#1a2b3c" }, messages: [{ id: "m1", from: "main", text: "Do it", at: 1, kind: "message" }, { id: "m2", from: "b_1", text: "Done", at: 3, kind: "reply" }] },
+    { id: "x2", a: { id: "b_1", name: "Olivia" }, b: { id: "b_2", name: "Leo" }, messages: [{ id: "m1", from: "b_2", text: "Hi", at: 2, kind: "message" }, { bad: true }] },
+    null,
+  ];
+  assert.deepEqual(mergeLog(exs).map((m: any) => [m.from, m.to, m.text, m.kind]), [["Olivia", "Dae", "Done", "reply"], ["Leo", "Olivia", "Hi", "message"], ["Dae", "Olivia", "Do it", "message"]]);
+  assert.equal(mergeLog(exs, 1).length, 1);
+  assert.equal(progressPct({ total: 4, done: 1 }), 25);
+  assert.equal(progressPct({ total: 0, done: 0 }), 0);
+});
