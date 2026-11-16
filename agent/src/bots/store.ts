@@ -11,6 +11,7 @@ import { isFaceId } from "./faces.ts";
 import { canonVoice, cleanVoice } from "./voice.ts";
 import { validModelId } from "../settings.ts";
 import { BotError, MAX_INSTRUCTIONS_BYTES, MAX_REMOTE_LOG, SLUG_RE, cleanDevice, safeUpgradeUrl } from "./types.ts";
+import { cleanDepartment } from "../studio/index.ts";
 import type { BotRecord, BotsApi, RemoteDevice, RosterEntry } from "./types.ts";
 import { canonBot, mergeWireBot as mergeWire, sigOf } from "../sync/bots.ts";
 import type { WireBot } from "../sync/bots.ts";
@@ -249,7 +250,7 @@ export class BotStore implements BotsApi {
     return { ...rec };
   }
 
-  update(id: string, patch: { name?: string; purpose?: string; color?: string; face?: unknown; model?: string | null; voice?: unknown; pinned?: boolean; remote?: boolean }): BotRecord {
+  update(id: string, patch: { name?: string; purpose?: string; color?: string; face?: unknown; model?: string | null; voice?: unknown; pinned?: boolean; remote?: boolean; department?: string | null }): BotRecord {
     const b = ID_RE.test(id) ? this.bots[id] : undefined;
     if (!b) throw new BotError(404, "not_found", "no such bot");
     if (patch.name !== undefined) {
@@ -258,6 +259,12 @@ export class BotStore implements BotsApi {
       b.name = n;
     }
     if (patch.purpose !== undefined) b.purpose = clip(patch.purpose, 500);
+    if (patch.department !== undefined) {
+      // The Studio island: a one-line name; null or blank moves the bot back to General.
+      if (patch.department !== null && typeof patch.department !== "string") throw new BotError(400, "bad_department", "department must be a short name, or null to clear it");
+      const d = patch.department === null ? "" : cleanDepartment(patch.department);
+      if (d) b.department = d; else delete b.department;
+    }
     if (patch.face !== undefined) {
       const face = parseFace(patch.face);
       if (face) b.face = face; else delete b.face;
@@ -374,7 +381,7 @@ export class BotStore implements BotsApi {
     const text = this.instructions(b.id);
     const edited = b.updatedAt > b.createdAt ? b.updatedAt : 0;
     return canonBot({
-      slug: b.slug, name: b.name, purpose: b.purpose, color: b.color, face: b.face, model: b.model, voice: canonVoice(b.voice),
+      slug: b.slug, name: b.name, purpose: b.purpose, color: b.color, face: b.face, model: b.model, voice: canonVoice(b.voice), department: b.department,
       profileAt: b.profileAt ?? edited, pinnedAt: b.pinnedAt, pinAt: b.pinAt ?? b.pinnedAt ?? 0,
       instructions: text || undefined, instructionsAt: b.instructionsAt ?? (text ? edited || 1 : 0), createdAt: b.createdAt,
     });
@@ -390,6 +397,7 @@ export class BotStore implements BotsApi {
     b.createdAt = merged.createdAt;
     b.name = merged.name; b.purpose = merged.purpose; b.color = merged.color;
     if (merged.face) b.face = merged.face; else delete b.face;
+    if (merged.department) b.department = cleanDepartment(merged.department); else delete b.department;
     if (merged.model && validModelId(merged.model)) b.model = merged.model; else delete b.model;
     if (merged.voice) b.voice = merged.voice; else delete b.voice;
     b.profileAt = merged.profileAt;

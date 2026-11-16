@@ -17,6 +17,14 @@ import { initBotVoice } from "./botvoice.js";
 import { currentMain, mainLook } from "./mainbot.js";
 
 export const VIEW_KEY = "mc_view";
+/** The remembered sidebar view: "sessions", "bots" or "studio" (anything else is Sessions). */
+export const viewOf = (v) => (v === "bots" || v === "studio" ? v : "sessions");
+/** The next view when the arrow keys move across the segmented control (wraps; the Studio only when the tab exists). */
+export function nextView(cur, dir, hasStudio) {
+  const views = hasStudio ? ["sessions", "bots", "studio"] : ["sessions", "bots"];
+  const i = Math.max(0, views.indexOf(cur));
+  return views[(i + dir + views.length) % views.length];
+}
 export const SELECTED_KEY = "mc_bot";
 export const OPEN_KEY = "mc_bots_open";
 export const MAX_INSTRUCTION_BYTES = 8 * 1024;
@@ -150,12 +158,12 @@ export function initBots(ctx) {
   const { json, api, store, h, icon, ago, notify, app } = ctx;
   const $ = (id) => document.getElementById(id);
   const el = {
-    tabSessions: $("tab-sessions"), tabBots: $("tab-bots"), sideLabel: $("side-label"), btnNew: $("btn-new"),
+    tabSessions: $("tab-sessions"), tabBots: $("tab-bots"), tabStudio: $("tab-studio"), sideLabel: $("side-label"), btnNew: $("btn-new"),
     sessionList: $("session-list"), botList: $("bot-list"),
     topBadge: $("top-badge"), topName: $("top-bot-name"), btnInstr: $("btn-instr"),
     drawer: $("instr-drawer"), drawerTitle: $("instr-title"), drawerClose: $("instr-close"),
     text: $("instr-text"), count: $("instr-count"), stateEl: $("instr-state"), save: $("instr-save"), revert: $("instr-revert"),
-    name: $("bd-name"), purpose: $("bd-purpose"), colors: $("bd-colors"), saveDetails: $("bd-save"), detailsState: $("bd-state"),
+    name: $("bd-name"), purpose: $("bd-purpose"), dept: $("bd-dept"), colors: $("bd-colors"), saveDetails: $("bd-save"), detailsState: $("bd-state"),
     model: $("bd-model"), modelState: $("bd-model-state"), remote: $("bd-remote"), remoteNote: $("bd-remote-note"), remoteLog: $("bd-remote-log"), remoteState: $("bd-remote-state"), faces: $("bd-faces"), faceDesc: $("bd-face-desc"), bnFaces: $("bn-faces"), bnFaceDesc: $("bn-face-desc"), bnColors: $("bn-colors"),
     del: $("bd-delete"), verText: $("bd-ver-text"), verCurrent: $("bd-ver-current"), verNotes: $("bd-ver-notes"), verBtn: $("bd-update"),
     card: $("bot-new"), cardForm: $("bot-new-form"), bnName: $("bn-name"), bnPurpose: $("bn-purpose"), bnInstr: $("bn-instr"),
@@ -168,7 +176,7 @@ export function initBots(ctx) {
 
   const st = {
     updating: new Set(), updated: new Map(),
-    view: store.get("localStorage", VIEW_KEY) === "bots" ? "bots" : "sessions",
+    view: viewOf(store.get("localStorage", VIEW_KEY)),
     bots: [], envs: [], botsLoaded: false, botsError: "",
     selected: store.get("localStorage", SELECTED_KEY) || "",
     expanded: new Set(),
@@ -191,7 +199,7 @@ export function initBots(ctx) {
 
   const botById = (id) => st.bots.find((b) => b.id === id);
   /** The bot the user is working with: the open thread's bot, else the one picked in the list. */
-  function activeBotId() { return app.currentBot() || (st.view === "bots" ? st.selected : "") || ""; }
+  function activeBotId() { return app.currentBot() || (st.view !== "sessions" ? st.selected : "") || ""; }
   const activeBot = () => botById(activeBotId());
 
   /** A bot's badge: the M mascot with the bot's chosen LED face, in its LED colour. */
@@ -270,11 +278,14 @@ export function initBots(ctx) {
 
   // ---------------------------------------------------------------- view switch
   function setView(v, { silent } = {}) {
-    st.view = v === "bots" ? "bots" : "sessions";
+    // Three views: Sessions, Bots, and the Studio (the bots as workers on the floor; the sidebar keeps the bot list under it).
+    st.view = viewOf(v === "studio" && !el.tabStudio ? "bots" : v);
     store.set("localStorage", VIEW_KEY, st.view);
-    const isBots = st.view === "bots";
-    el.tabSessions.setAttribute("aria-pressed", String(!isBots));
-    el.tabBots.setAttribute("aria-pressed", String(isBots));
+    const isBots = st.view !== "sessions";
+    el.tabSessions.setAttribute("aria-pressed", String(st.view === "sessions"));
+    el.tabBots.setAttribute("aria-pressed", String(st.view === "bots"));
+    if (el.tabStudio) el.tabStudio.setAttribute("aria-pressed", String(st.view === "studio"));
+    if (app.setStudio) app.setStudio(st.view === "studio");
     el.sessionList.hidden = isBots;
     el.botList.hidden = !isBots;
     el.sideLabel.firstChild.textContent = isBots ? "Bots" : "Sessions";
@@ -286,12 +297,13 @@ export function initBots(ctx) {
   }
   el.tabSessions.addEventListener("click", () => setView("sessions"));
   el.tabBots.addEventListener("click", () => setView("bots"));
+  if (el.tabStudio) el.tabStudio.addEventListener("click", () => setView("studio"));
   document.getElementById("seg").addEventListener("keydown", (e) => {
     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
     e.preventDefault();
-    const next = st.view === "bots" ? "sessions" : "bots";
+    const next = nextView(st.view, e.key === "ArrowRight" ? 1 : -1, !!el.tabStudio);
     setView(next);
-    (next === "bots" ? el.tabBots : el.tabSessions).focus();
+    (next === "bots" ? el.tabBots : next === "studio" ? el.tabStudio : el.tabSessions).focus();
   });
 
   // ---------------------------------------------------------------- data
@@ -675,6 +687,7 @@ export function initBots(ctx) {
   function paintDetails(bot) {
     el.name.value = bot ? bot.name : "";
     el.purpose.value = bot ? bot.purpose || "" : "";
+    if (el.dept) el.dept.value = bot ? bot.department || "" : "";
     st.color = safeColor(bot && bot.color);
     st.face = faceOf(bot && bot.face) ? bot.face : "";
     paintColors(); paintFaces(); paintModel(bot); paintRemote(bot); botVoice.paint(bot);
@@ -773,12 +786,13 @@ export function initBots(ctx) {
   function detailsChanged() {
     const bot = botById(st.drawerBot);
     if (!bot) return;
-    const changed = el.name.value.trim() !== bot.name || el.purpose.value.trim() !== (bot.purpose || "") || st.color !== safeColor(bot.color) || st.face !== (faceOf(bot.face) ? bot.face : "");
+    const changed = el.name.value.trim() !== bot.name || el.purpose.value.trim() !== (bot.purpose || "") || (el.dept && el.dept.value.trim() !== (bot.department || "")) || st.color !== safeColor(bot.color) || st.face !== (faceOf(bot.face) ? bot.face : "");
     el.saveDetails.disabled = !changed || !el.name.value.trim();
     el.detailsState.textContent = changed ? "Unsaved changes" : "";
   }
   el.name.addEventListener("input", detailsChanged);
   el.purpose.addEventListener("input", detailsChanged);
+  if (el.dept) el.dept.addEventListener("input", detailsChanged);
 
 
   /** The row's gear: settings for THAT bot, whichever thread is open. Toggles when it is already showing that bot. */
@@ -856,7 +870,7 @@ export function initBots(ctx) {
   el.saveDetails.addEventListener("click", async () => {
     const id = st.drawerBot, bot = botById(id);
     if (!bot) return;
-    const patch = { name: el.name.value.trim(), purpose: el.purpose.value.trim(), color: st.color, face: st.face };
+    const patch = { name: el.name.value.trim(), purpose: el.purpose.value.trim(), color: st.color, face: st.face, ...(el.dept ? { department: el.dept.value.trim() || null } : {}) };
     el.saveDetails.disabled = true; el.detailsState.textContent = "Saving…";
     try {
       const res = await api(`/bots/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) });

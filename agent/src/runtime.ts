@@ -37,6 +37,8 @@ import { createOllamaProvider, detectOllama, pickLocalModel, withLocal } from ".
 import { createAdvisorTool } from "./tools/advisor.ts";
 import { TIER_ORDER, loadPolicy } from "./provider/policy.ts";
 import { adviseTier, appendRouteLog, classOf, describeTable, loadTable, routeLogPath, rowFor } from "./provider/learned.ts";
+import { assembleStudio } from "./studio/index.ts";
+import type { StudioRowIn, StudioSessionIn } from "./studio/index.ts";
 import type { LearnedTable } from "./provider/learned.ts";
 import { mergeGrants, parseTenantRepos } from "./kernel/coder.ts";
 import { factGateMode } from "./kernel/fact.ts";
@@ -1134,6 +1136,24 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       L.store.recordOutcome(key, up, e!.scope);
       try { await L.store.flush(2); } catch { /* the delta is kept and flushed later */ }
       return true;
+    },
+    async studio(extra) {
+      const bots = botStore ? await botStore.list() : [];
+      const cutoff = Date.now() - BOARD_WINDOW_MS;
+      const sess = new Map<string, StudioSessionIn>();
+      for (const m of store?.list() ?? []) if (mine(m) && m.updatedAt >= cutoff && m.surface !== "routine") sess.set(m.id, { id: m.id, title: m.title, updatedAt: m.updatedAt, ...(m.bot ? { bot: m.bot } : {}), ...(m.peer ? { peer: m.peer } : {}) });
+      for (const [id, e] of sessions) if (e.updatedAt >= cutoff && e.surface !== "routine") sess.set(id, { id, title: e.title, updatedAt: e.updatedAt, ...(e.bot ? { bot: e.bot } : {}), ...(e.peer ? { peer: e.peer } : {}), running: e.run?.status === "running" });
+      const rows: StudioRowIn[] = [...this.boardRows!()];
+      for (const b of bots) for (const r of this.botBoardRows!(b.id)) rows.push({ ...r, bot: b.id });
+      const pending = permissions?.pendingList().map((p) => ({ id: p.id, sessionId: p.sessionId, tool: (p.event as { tool?: string }).tool })) ?? [];
+      const main = settings?.get().main ?? {};
+      return assembleStudio({
+        main: { name: main.name || "Daebot", ...(main.color ? { color: main.color } : {}), ...(main.face ? { face: main.face } : {}) },
+        bots: bots.map((b) => ({ id: b.id, slug: b.slug, name: b.name, color: b.color, ...(b.face ? { face: b.face } : {}), ...(b.department ? { department: b.department } : {}), purpose: b.purpose })),
+        sessions: [...sess.values()], rows, pending, exchanges: extra.exchanges,
+        chip: { mode: ROUTER_MODE, model: settings?.get().defaultModel ?? cfg.models.default, ...(ROUTER_MODE !== "off" ? { tier: "coder" } : {}) },
+        now: Date.now(),
+      });
     },
     routing() {
       return { mode: ROUTER_MODE, tiers: TIER_ORDER.map((t) => ({ tier: t, model: t === "local" && localModel ? localModel : ROUTER_POLICY[t].model, use: ROUTER_POLICY[t].use, ...(ROUTER_POLICY[t].effort ? { effort: ROUTER_POLICY[t].effort } : {}) })), ...(localModel ? { local: localModel } : {}), frontierSpentUsd: Number(frontierBudget.total().toFixed(4)), frontierCapUsd: frontierBudget.capUsd, learned: describeTable(learnedTable()), factGate: FACT_MODE };

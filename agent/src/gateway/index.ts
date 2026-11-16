@@ -1903,7 +1903,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path === "/settings/daebot/guards" || path === "/settings/daebot/coder" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/board" || path.startsWith("/board/") || path === "/routing" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/devices" || path === "/devices/pty" || path.startsWith("/browser/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
+    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path === "/settings/daebot/guards" || path === "/settings/daebot/coder" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/board" || path.startsWith("/board/") || path === "/routing" || path === "/studio" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/devices" || path === "/devices/pty" || path.startsWith("/browser/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -2181,7 +2181,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   }
 
   // ---------- bots + models REST (same cookie auth and origin rules as /sessions; one owner's bots are invisible to everyone else) ----------
-  const botView = (b: BotRecord) => ({ id: b.id, slug: b.slug, name: b.name, purpose: b.purpose, color: b.color, face: b.face ?? null, model: b.model ?? null, voice: b.voice ?? null, pinned: !!b.pinnedAt, pinnedAt: b.pinnedAt ?? null, remote: !!b.remote, remoteAt: b.remoteAt ?? null, remotePin: b.remote && b.remoteDevice ? b.remoteDevice : null, remoteLog: (b.remoteLog ?? []).slice(-5), createdAt: b.createdAt, updatedAt: b.updatedAt, ...versionInfo(b) });
+  const botView = (b: BotRecord) => ({ id: b.id, slug: b.slug, name: b.name, purpose: b.purpose, color: b.color, face: b.face ?? null, department: b.department ?? null, model: b.model ?? null, voice: b.voice ?? null, pinned: !!b.pinnedAt, pinnedAt: b.pinnedAt ?? null, remote: !!b.remote, remoteAt: b.remoteAt ?? null, remotePin: b.remote && b.remoteDevice ? b.remoteDevice : null, remoteLog: (b.remoteLog ?? []).slice(-5), createdAt: b.createdAt, updatedAt: b.updatedAt, ...versionInfo(b) });
 
   /** The computers and servers of an owner with duplicate registrations merged, renames applied (hosted: the Remote hub; a desktop: what daebot.live last sent). */
   function envState(owner: string): { groups: readonly EnvGroup[]; cloudName?: string } {
@@ -2353,8 +2353,9 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         if (b.moveHere !== undefined && typeof b.moveHere !== "boolean") return sendJson(res, 400, { error: "bad_move", message: "moveHere must be true or false" });
         if (b.deviceId !== undefined && (typeof b.deviceId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(b.deviceId))) return sendJson(res, 400, { error: "bad_device", message: "deviceId is not a computer id" });
         if (b.voice !== undefined && b.voice !== null && (typeof b.voice !== "object" || Array.isArray(b.voice))) return sendJson(res, 400, { error: "bad_voice", message: "voice must be an object of voice settings, or null to clear it" });
+        if (b.department !== undefined && b.department !== null && typeof b.department !== "string") return sendJson(res, 400, { error: "bad_department", message: "department must be a short name, or null to clear it" });
         syncAgent?.noteBotsChanged();
-        let upd = bots.update(id, { name: optStr(b.name, 120), purpose: optStr(b.purpose, 1000), color: optStr(b.color, 20), face: b.face, model, voice: b.voice, pinned: b.pinned, remote: b.remote });
+        let upd = bots.update(id, { name: optStr(b.name, 120), purpose: optStr(b.purpose, 1000), color: optStr(b.color, 20), face: b.face, model, voice: b.voice, pinned: b.pinned, remote: b.remote, ...(b.department !== undefined ? { department: b.department === null ? null : optStr(b.department, 80) ?? "" } : {}) });
         // Run on a computer pins the bot to ONE computer: the one it was turned on from (a desktop: this computer; daebot.live: the computer named, else the first that carries the bot).
         // "Move to this computer" (moveHere, or a deviceId on daebot.live) re-pins it. Turning it off clears the pin (the store does that).
         if (upd.remote && bots.setRemote && (b.remote === true || b.moveHere === true)) {
@@ -2726,6 +2727,15 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       // The model router's mode and policy table (read-only; the operator changes it with env or DAEBOT_ROUTING_POLICY).
       if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
       return sendJson(res, 200, manager.runtimeOf(me.id).routing?.() ?? { mode: "off", tiers: [] });
+    }
+    if (path === "/studio") {
+      // Daebot Studio: the user's bots as workers on an isometric floor (studio/index.ts). Read-only; the same facts the board, the Bots tab and the exchanges list show.
+      if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+      const rt = manager.runtimeOf(me.id);
+      if (!rt.studio) return sendJson(res, 404, { error: "the studio is not available on this deployment" });
+      try { await Promise.race([rt.boardSync?.(), new Promise((r) => setTimeout(r, 4000))]); } catch { /* the floor shows what it has */ }
+      const exchanges = botsOn() && exchangeHub ? exchangeHub.list(me.id).map((x) => ({ a: x.a, b: x.b, updatedAt: x.updatedAt, count: x.count })) : [];
+      return sendJson(res, 200, await rt.studio({ exchanges }));
     }
     if (path === "/board") {
       // Every task Daebot declared across THIS signed-in user's sessions. The runtime is the user's own, so another user's sessions can never appear.
