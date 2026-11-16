@@ -17,7 +17,7 @@
 # Layout on the droplet (one folder per product, mirrors the feed URL):
 #   /var/www/evie/download/daebot/
 #     Daebot-<v>-mac-universal.dmg / .zip / .blockmap
-#     Daebot-Setup-<v>-x64.exe / -arm64.exe
+#     Daebot-Setup-<v>-x64.exe / -arm64.exe (+ .blockmap); latest.yml names ONLY the x64 exe, latest-arm64.yml ONLY the arm64 exe
 #     Daebot-<v>-linux-x86_64.AppImage / -amd64.deb
 #     latest-mac.yml, latest.yml, latest-arm64.yml, latest-linux.yml
 #
@@ -73,7 +73,7 @@ runsh() { local label="$1" cmd="$2"; if [ "$DRY_RUN" = 1 ]; then printf '+ (dry-
 # Every name electron-builder produces, per platform. `feed` lists the update-feed files that
 # must travel with the installers (missing feed = installed apps never see the update).
 mac_files()    { echo "Daebot-$VERSION-mac-universal.dmg Daebot-$VERSION-mac-universal.zip Daebot-$VERSION-mac-universal.dmg.blockmap Daebot-$VERSION-mac-universal.zip.blockmap"; }
-win_files()    { echo "Daebot-Setup-$VERSION-x64.exe Daebot-Setup-$VERSION-arm64.exe"; }
+win_files()    { echo "Daebot-Setup-$VERSION-x64.exe Daebot-Setup-$VERSION-arm64.exe Daebot-Setup-$VERSION-x64.exe.blockmap Daebot-Setup-$VERSION-arm64.exe.blockmap"; }
 linux_files()  { echo "Daebot-$VERSION-linux-x86_64.AppImage Daebot-$VERSION-linux-amd64.deb"; }
 
 files_for() {
@@ -91,6 +91,11 @@ feed_for() {
         linux)   echo "latest-linux.yml" ;;
     esac
 }
+
+# The feeds this run publishes, as a comma list for check-feeds.mjs.
+FEEDS_CSV=""
+for p in ${PLATFORMS//,/ }; do for f in $(feed_for "$p"); do FEEDS_CSV+="${FEEDS_CSV:+,}$f"; done; done
+CHECK_FEEDS="$SCRIPT_DIR/check-feeds.mjs"
 
 echo "Daebot release $VERSION"
 echo "  artifacts : $DIR"
@@ -133,6 +138,15 @@ for p in ${PLATFORMS//,/ }; do
 done
 [ "$MISSING" = 0 ] || echo "    (a platform with a missing installer will keep its 'Coming soon' button)" >&2
 
+# ---------------------------------------------------------------- 1b. feeds must describe the files in <artifactsDir> BEFORE anything is uploaded
+echo ""
+echo "==> Feed integrity (local): every file named by $FEEDS_CSV matches its sha512 and size"
+if ! node "$CHECK_FEEDS" --dir "$DIR" --feeds "$FEEDS_CSV" --expect-version "$VERSION"; then
+    echo "error: a feed in $DIR does not match the installers next to it; nothing was uploaded." >&2
+    echo "       Windows: node scripts/write-win-feeds.mjs $DIR $VERSION rewrites latest.yml and latest-arm64.yml from the final exes." >&2
+    exit 1
+fi
+
 # ---------------------------------------------------------------- 2. upload, atomically
 echo ""
 echo "==> Uploading to $HOST:$REMOTE_DIR"
@@ -167,6 +181,16 @@ if [ "$DRY_RUN" != 1 ]; then
         if [ -n "$rlen" ] && [ "$rlen" != "$lsize" ]; then echo "    FAIL  $f  (content-length $rlen != local $lsize)" >&2; exit 1; fi
         echo "    ok    $f  (HTTP 200, $rlen bytes)"
     done
+fi
+
+# ---------------------------------------------------------------- 3b. the LIVE feeds must match the LIVE files (what an installed app actually sees)
+echo ""
+echo "==> Feed integrity (live): downloads every file named by $FEEDS_CSV from $PUBLIC_BASE and compares sha512 + size"
+if [ "$DRY_RUN" != 1 ]; then
+    if ! node "$CHECK_FEEDS" --base "$PUBLIC_BASE/" --feeds "$FEEDS_CSV" --expect-version "$VERSION"; then
+        echo "error: LIVE FEED MISMATCH. Installed apps will reject this update. Fix it before announcing the release." >&2
+        exit 1
+    fi
 fi
 
 # ---------------------------------------------------------------- 4. download manifest (the website)

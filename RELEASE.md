@@ -43,7 +43,7 @@ It prints which inputs this machine has (never the secret values) and exits 1 wi
 ```
 cd agent/desktop
 DAEBOT_SIGN=1 DAEBOT_NOTARIZE_STRICT=1 npm run dist:mac     # signed + notarized + stapled universal dmg and zip
-npm run dist:win                                            # NSIS x64 + arm64, unsigned
+npm run dist:win                                            # NSIS x64 then arm64 (one arch per run), then writes latest.yml + latest-arm64.yml from the final exes; unsigned
 npm run dist:linux                                          # AppImage + deb
 ```
 Output is `agent/desktop/dist/`. Bump `version` in `agent/package.json` and `agent/desktop/package.json` first.
@@ -60,7 +60,8 @@ This writes the zip, DMG, blockmaps and `latest-mac.yml` without touching the ap
 ```
 agent/desktop/scripts/publish-release.sh agent/desktop/dist <version> --notes "..." --dry-run   # then again without --dry-run
 ```
-Windows feeds (`latest.yml`, `latest-arm64.yml`) also reference the combined installer, and the script does not upload it, so copy these by hand (scp to `<name>.tmp`, then `mv`) BEFORE the feeds flip: `Daebot-Setup-<v>.exe`, `Daebot-Setup-<v>-x64.exe`, `Daebot-Setup-<v>-arm64.exe` and their `.blockmap` files. Re-running the script with `--force` is needed to overwrite the previous version's feeds.
+`latest.yml` names ONLY `Daebot-Setup-<v>-x64.exe` and `latest-arm64.yml` ONLY `Daebot-Setup-<v>-arm64.exe` (the combined installer is no longer built or referenced); `dist:win` writes both from the final exes via `scripts/write-win-feeds.mjs`. Never hand-edit or copy one feed over another. The script uploads the exes, their blockmaps and the feeds. Re-running it with `--force` is needed to overwrite the previous version's feeds.
+The script runs the feed integrity check twice and stops on a mismatch: before uploading (`check-feeds.mjs --dir <dist>`) and after uploading (`check-feeds.mjs` against the live URL).
 It uploads to `root@45.55.204.209:/var/www/evie/download/daebot` (public `https://download.m-i-n-d.ai/download/daebot/`), including the
 four electron-updater feeds `latest-mac.yml`, `latest.yml`, `latest-arm64.yml`, `latest-linux.yml` and the `.blockmap` files (a feed that
 is not flipped never reaches an installed app), and registers each platform and arch in the MIND registry.
@@ -70,6 +71,13 @@ is not flipped never reaches an installed app), and registers each platform and 
 node agent/scripts/release-manifest.mjs agent/desktop/dist <version>     # fills agent/web/download/releases.json
 ```
 Open the PR, merge it (`python3 ~/code/mac-ops/merge-guard.py theastraway/daebot <pr>`), let daebot.live deploy. Then verify:
-`curl -sIL https://download.m-i-n-d.ai/download/daebot/<file>` is 200 with the right `content-length`; the server's four `latest*.yml` name
+**the post-upload feed check passes** (run it by hand any time, it is the gate for calling a release live):
+```
+cd agent/desktop && node scripts/check-feeds.mjs --expect-version <version>      # live feeds; same as: npm run check:feeds -- --expect-version <version>
+```
+It downloads every file named by `latest.yml`, `latest-arm64.yml`, `latest-mac.yml` and `latest-linux.yml` from `https://download.m-i-n-d.ai/download/daebot/`,
+compares sha512 and size, and exits 1 with a FEED CHECK FAILED banner on any mismatch, 404, wrong-version file name, or an x64 feed naming an arm64 file (or the reverse). Its tests: `node --test scripts/check-feeds.test.mjs`.
+Why: on 2026-11-14 two Windows builds wrote the same exe names, `latest.yml` kept the first build's sha512, electron-updater rejected the download and Windows x64 stayed on 0.3.46.
+Then: `curl -sIL https://download.m-i-n-d.ai/download/daebot/<file>` is 200 with the right `content-length`; the server's four `latest*.yml` name
 the new version; `node agent/desktop/scripts/verify-feed.cjs` shows the update offered to the previous version; `daebot.live/download` shows it.
 No GitHub Actions: nothing here runs in CI.
