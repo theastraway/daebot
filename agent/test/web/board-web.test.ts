@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 // @ts-expect-error plain browser module
-import { LIGHTS, filterRows, groupRows, light, projectsOf, rowKey, stoppedCount, submitsOnKey } from "../../web/board.js";
+import { LIGHTS, filterRows, groupRows, light, projectsOf, proofChips, rowKey, stoppedCount, submitsOnKey } from "../../web/board.js";
 
 test("the lights are the client portal's: three statuses, red also means stopped with its own label", () => {
   assert.deepEqual([LIGHTS.not_started, LIGHTS.in_progress, LIGHTS.ready_to_test, LIGHTS.stopped], [
@@ -45,4 +45,12 @@ test("filters: by scope and by project; the project list follows the chosen scop
   assert.deepEqual(projectsOf(rows, "all").map((p: any) => p.name), ["Atlas Monitor", "Daebot", "Reframe"]);
   assert.equal(light("cancelled").label, "Cancelled");
   assert.equal(stoppedCount(rows), 0, "a cancelled task never counts as waiting on you");
+});
+
+test("proof chips: the advisor pass shows as a green chip, a skipped consult as a yellow one", () => {
+  const a = proofChips({ at: 1, calls: 2, failed: 0, blocked: 0, unverified: false, verified: true, advised: true, consult: "ok" });
+  assert.ok(a.some((c: any) => c.cls === "ok" && c.text === "Advisor consulted"));
+  const b = proofChips({ at: 1, calls: 2, failed: 0, blocked: 0, unverified: false, verified: true, consult: "skipped" });
+  assert.ok(b.some((c: any) => c.cls === "warn" && c.text === "No advisor pass"));
+  assert.ok(!proofChips({ at: 1, calls: 0, verified: false, unverified: false }).some((c: any) => /advisor/i.test(c.text)));
 });

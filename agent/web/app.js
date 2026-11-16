@@ -1954,6 +1954,7 @@ studio = initStudio({
     },
     pickBot: (id) => { if (id === "main") { bots.setView("sessions", { silent: true }); newSession(); return; } bots.pickBot(id); },
     openBoard: () => { if (!board.isOpen()) $("btn-board").click(); },
+    currentId: () => state.currentId,
     // The "new task for the team" box: a fresh thread with the chosen bot (or a new main session), then the text goes through the normal durable send path.
     sendTo: async (to, text) => {
       if (to === "main") { bots.setView("sessions", { silent: true }); newSession(); }

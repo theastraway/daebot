@@ -1675,3 +1675,26 @@ button.st-chip { cursor: pointer; font-family: var(--sans); }
   .st-side { max-height: none; }
   .st-room-wrap { grid-template-columns: 1fr; }
 }
+
+/* ---------- Studio 3: the token team room ---------- */
+.st-tt-edge { stroke: var(--line-strong); stroke-dasharray: 3 5; }
+.st-tt-edge.live { stroke: var(--led-deep); stroke-dasharray: none; opacity: .8; }
+.st-tt-node circle { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.5; }
+.st-tt-node.live circle { stroke: var(--ok); stroke-width: 2.5; }
+.st-tt-node.frontier.live circle { stroke: var(--accent); }
+.st-tt-center circle { fill: var(--plate); stroke: var(--led); stroke-width: 2; }
+.st-tt-center .st-tt-name { fill: var(--led); }
+.st-tt-center .st-tt-role { fill: var(--term-fg); }
+.st-tt-name { fill: var(--ink); font: 700 12px var(--display); }
+.st-tt-role { fill: var(--ink-3); font: 500 9px var(--mono); }
+.st-tt-share { fill: var(--ink-2); font: 600 10px var(--mono); }
+.st-bill { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.st-bill-row { display: flex; justify-content: space-between; gap: 10px; font: 12px var(--sans); color: var(--ink); }
+.st-bill-row strong { font: 600 12px var(--mono); text-align: right; }
+.st-bill-label { color: var(--ink-3); }
+.st-tiers { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px; }
+.st-tier { padding: 8px 10px; border: 1px solid var(--line); border-left: 4px solid var(--line-strong); border-radius: 10px; background: var(--surface); }
+.st-tier.frontier { border-left-color: var(--accent); } .st-tier.reasoner { border-left-color: var(--led-deep); } .st-tier.coder { border-left-color: var(--ok); } .st-tier.light, .st-tier.reflex, .st-tier.local { border-left-color: var(--env-remote); }
+.st-tier-head { font: 700 12px var(--sans); color: var(--ink); }
+.st-tier-line { font: 500 10.5px var(--mono); color: var(--ink-2); margin-top: 2px; }
+.st-rules { margin: 0; padding: 0 0 0 16px; display: flex; flex-direction: column; gap: 4px; font: 12px/1.45 var(--sans); color: var(--ink-2); }

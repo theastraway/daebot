@@ -16,6 +16,9 @@ import type { CallFacts } from "./permissions/rules.ts";
 import type { PermissionService, SessionPermMode } from "./permissions/index.ts";
 
 export const UNVERIFIED_FOOTER = "[unverified: receipt gate]";
+/** Appended when consult-before-done is on and a standard or large build answered without asking the advisor. */
+export const CONSULT_FOOTER = "[advisor: not consulted before done]";
+const CONSULT_TIERS = new Set(["reasoner", "frontier"]);
 const MAX_REGENERATIONS = 2;
 const MAX_TOOL_OUTPUT = 100_000;
 
@@ -63,6 +66,8 @@ export interface SessionDeps {
   skills?: readonly SkillRef[];
   /** The model router (provider/router.ts), called once per typed human turn with the message and the digest of the last turn. Returns undefined to abstain (a pinned model, the free plan, a photo). Absent = no routing. */
   router?: (input: { message: string; digest?: TurnDigest; hasPhoto: boolean; canBuild: boolean; hint?: ModelTier }) => RouteDecision | undefined;
+  /** Consult-before-done (provider/router.ts consultBeforeDone): standard and large builds need an advisor pass before the final answer. */
+  consultBeforeDone?: boolean;
   /** The learning scope of this session ("workspace:<owner/repo>", "bot:<slug>" or "person:<user>"): lessons are filed under it and recalled by it. */
   scope?: () => string | undefined;
   /** Focused context: per-turn volatile block (relevant MIND items, matching mistakes) for a typed human message. Injected AFTER the user message so the cached prefix is unchanged. */
@@ -466,10 +471,17 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
       const blocks = blockedThisTurn.length + gateBlocks;
       const unverified = (finalText ?? "").includes(UNVERIFIED_FOOTER);
       const talked = [...new Set(state.calls.filter((c) => c.tool === "bot_talk" && c.result.ok && typeof c.call.args?.to === "string").map((c) => String(c.call.args.to).trim().toLowerCase()))];
+      const advised = state.calls.some((c) => c.tool === "advisor" && c.result.ok);
+      // Consult before done: a standard or large build (the router's reasoner or frontier tier) that answered without the advisor says so at the end of the answer.
+      let consult: TurnProof["consult"];
+      if (deps.consultBeforeDone && origin === "user" && turnRoute && CONSULT_TIERS.has(turnRoute.tier) && finalText && !confirmed) {
+        consult = advised ? "ok" : "skipped";
+        if (consult === "skipped") { finalText = `${finalText}\n\n${CONSULT_FOOTER}`; yield { type: "text", delta: `\n\n${CONSULT_FOOTER}` }; }
+      }
       const proof: TurnProof = {
         at: Date.now(), calls: state.calls.length, failed: failedCalls, blocked: blocks, unverified, verified: !unverified && !failed && !confirmed,
         ...(lastServedBy ? { model: lastServedBy } : {}), ...(lastEffort ? { effort: lastEffort } : {}), ...(turnRoute ? { tier: turnRoute.tier, route: `${turnRoute.applied ? "" : "shadow: "}${turnRoute.tier} (${turnRoute.reason})` } : {}),
-        ...(talked.length ? { talked } : {}),
+        ...(talked.length ? { talked } : {}), ...(advised ? { advised } : {}), ...(consult ? { consult } : {}),
       };
       if (origin === "user") yield { type: "proof", proof };
       digest = nextDigest(digest, { failedCalls, blocks, unverified, repeatHits: repeatHitsThisTurn, ...(turnRoute?.applied ? { lastTier: turnRoute.tier } : {}) });

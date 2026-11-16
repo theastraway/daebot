@@ -68,6 +68,8 @@ export function proofChips(p) {
   const talked = Array.isArray(p.talked) ? p.talked : [];
   if (talked.includes("reviewer")) out.push({ cls: "ok", text: "Reviewer looked", title: "The reviewer bot was asked during the last turn" });
   else if (talked.length) out.push({ cls: "", text: `asked ${talked.slice(0, 3).join(", ")}`, title: "Agents consulted during the last turn" });
+  if (p.consult === "skipped") out.push({ cls: "warn", text: "No advisor pass", title: "Consult-before-done is on and this standard or large build answered without asking the advisor; the answer carries the footer" });
+  else if (p.advised) out.push({ cls: "ok", text: "Advisor consulted", title: "A stronger model looked at the problem during this turn" });
   return out;
 }
 

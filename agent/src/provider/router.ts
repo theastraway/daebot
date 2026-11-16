@@ -140,6 +140,12 @@ export class TierBudget {
 }
 
 /** DAEBOT_FRONTIER_DAILY_USD: the frontier tier's budget per owner per day (default $5; 0 = no budget). */
+/** DAEBOT_CONSULT_BEFORE_DONE=1: a standard or large build (reasoner or frontier tier) must consult the advisor before its final answer, or the answer ships with a footer saying it did not. Off by default. */
+export function consultBeforeDone(env: Record<string, string | undefined> = process.env): boolean {
+  const v = (env.DAEBOT_CONSULT_BEFORE_DONE ?? "").trim().toLowerCase();
+  return v === "1" || v === "true" || v === "on";
+}
+
 export function frontierBudgetUsd(env: Record<string, string | undefined> = process.env): number {
   const raw = (env.DAEBOT_FRONTIER_DAILY_USD ?? "").trim();
   if (!raw) return 5;

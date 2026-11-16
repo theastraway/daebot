@@ -53,6 +53,31 @@ export interface StudioView {
   brain: { bots: number; sessions: number; tasks: number; inMind: number; decisions: number; working: number; waiting: number };
 }
 
+/** The rules panel of the token team room: how Daebot spends tokens and when it stops to ask. Plain text, the same on every deployment. */
+export const PROTOCOL_RULES: readonly string[] = [
+  "Size the ask first: trivial and small you do now; standard and large start with a Gate 1 plan the user confirms.",
+  "Keep the main session small: repo searches, test runs and lookups go to a worker bot or the cheap tier, not the main context.",
+  "error.repeats(2): after the second failure of the same tool, ask the advisor once before a third try.",
+  "before(done): a standard or large build gets an advisor pass before its final answer (DAEBOT_CONSULT_BEFORE_DONE).",
+  "Never say done, fixed, live or merged without a receipt from this turn; otherwise the answer ships with the unverified footer.",
+  "Gate 2: anything outward, public, pushed, merged or deployed waits for the user's explicit go on that action.",
+];
+
+/** GET /studio/team: the token team's bill and the rules in play. Cost shapes come from provider/learned.ts costSummary. */
+export interface TeamView {
+  at: number;
+  mode: string;
+  consultBeforeDone: boolean;
+  tiers: { tier: string; model: string; use: string; effort?: string }[];
+  frontierSpentUsd: number;
+  frontierCapUsd: number;
+  today: import("../provider/learned.ts").CostSummary;
+  all: import("../provider/learned.ts").CostSummary;
+  session?: import("../provider/learned.ts").CostSummary;
+  protocol: readonly string[];
+  guards: { id: string; effect: string; tool: string; scope: string }[];
+}
+
 export const MAIN_ID = "main";
 export const MANAGER_DEPT = { slug: "manager-office", name: "Manager office" } as const;
 export const GENERAL_DEPT = { slug: "general", name: "General" } as const;

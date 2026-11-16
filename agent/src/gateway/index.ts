@@ -1903,7 +1903,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path === "/settings/daebot/guards" || path === "/settings/daebot/coder" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/board" || path.startsWith("/board/") || path === "/routing" || path === "/studio" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/devices" || path === "/devices/pty" || path.startsWith("/browser/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
+    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path === "/settings/daebot/guards" || path === "/settings/daebot/coder" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/board" || path.startsWith("/board/") || path === "/routing" || path === "/studio" || path === "/studio/team" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/devices" || path === "/devices/pty" || path.startsWith("/browser/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -2727,6 +2727,14 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       // The model router's mode and policy table (read-only; the operator changes it with env or DAEBOT_ROUTING_POLICY).
       if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
       return sendJson(res, 200, manager.runtimeOf(me.id).routing?.() ?? { mode: "off", tiers: [] });
+    }
+    if (path === "/studio/team") {
+      // The token team: the route log's bill per tier (today, all time, one session) with the all-frontier counterfactual, and the rules in play.
+      if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+      const rt = manager.runtimeOf(me.id);
+      if (!rt.team) return sendJson(res, 404, { error: "the studio is not available on this deployment" });
+      const sid = _query.get("session") ?? undefined;
+      return sendJson(res, 200, rt.team(sid && /^[A-Za-z0-9_.-]{1,80}$/.test(sid) ? sid : undefined));
     }
     if (path === "/studio") {
       // Daebot Studio: the user's bots as workers on an isometric floor (studio/index.ts). Read-only; the same facts the board, the Bots tab and the exchanges list show.

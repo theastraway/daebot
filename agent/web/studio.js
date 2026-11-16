@@ -16,7 +16,11 @@ export const VIEW_W = 1000, VIEW_H = 640;
 export const STATUS = { idle: "Idle", working: "Working", blocked: "Needs you" };
 export const FILTERS = [["all", "All"], ["waiting", "Waiting"], ["in_progress", "In progress"], ["not_started", "Backlog"], ["ready_to_test", "Done"]];
 export const LIGHT = { not_started: "red", in_progress: "yellow", ready_to_test: "green", stopped: "red", cancelled: "grey" };
-export const ROOMS = [["overview", "Overview"], ["office", "Manager office"], ["meeting", "Meeting room"], ["lounge", "Lounge"], ["workspaces", "Workspaces"]];
+export const ROOMS = [["overview", "Overview"], ["office", "Manager office"], ["meeting", "Meeting room"], ["lounge", "Lounge"], ["workspaces", "Workspaces"], ["team", "Token team"]];
+/** The token team's roles by tier, as the Altair "token team" screenshot names them. */
+export const TIER_ROLES = { frontier: "advisor", reasoner: "worker (standard)", coder: "worker", light: "chat", reflex: "scout", local: "scout (local)" };
+export const fmtUsd = (n) => (!n ? "$0.00" : n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`);
+export const fmtTok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n || 0));
 export const EXAMPLES = ["Research our top three competitors and file a one-page brief in MIND", "Draft this week's client follow-up emails for my review", "Audit the open tasks on the board and tell me what is stuck", "Build a landing page for the new offer and show me a screenshot"];
 /** Idle lines for the Lounge; picked per bot and hour, so a bot keeps its line for a while and the floor still changes over the day. */
 export const LOUNGE_LINES = ["grabbing a coffee", "reading the board", "tidying its MIND", "waiting for a task", "at the whiteboard", "stretching its legs", "filing yesterday's notes", "back at the desk soon"];
@@ -107,12 +111,26 @@ export function mergeLog(exchanges, max = MAX_LOG) {
   return out.sort((p, q) => q.at - p.at).slice(0, max);
 }
 
+/** Each tier's share of the turns in a cost summary, largest first; tiers with no turns are left out. */
+export function teamShares(summary) {
+  const by = (summary && summary.byTier) || {};
+  const total = Object.values(by).reduce((n, t) => n + (t.turns || 0), 0);
+  return Object.entries(by).filter(([, t]) => t.turns > 0).map(([tier, t]) => ({ tier, turns: t.turns, costUsd: t.costUsd || 0, tokensIn: t.tokensIn || 0, tokensOut: t.tokensOut || 0, verified: t.verified || 0, share: total ? Math.round((100 * t.turns) / total) : 0 })).sort((a, b) => b.turns - a.turns || a.tier.localeCompare(b.tier));
+}
+
+/** The saving line: what the turns cost against the all-frontier counterfactual. */
+export function savingText(summary) {
+  if (!summary || !summary.known) return "No priced turns yet.";
+  const saved = summary.frontierUsd - summary.costUsd;
+  return `${fmtUsd(summary.costUsd)} spent vs ${fmtUsd(summary.frontierUsd)} all-frontier${saved > 0 ? ` (${Math.round((100 * saved) / summary.frontierUsd)}% saved)` : ""}`;
+}
+
 /** Progress of a project as a percent of tasks ready to test. */
 export const progressPct = (p) => (p && p.total > 0 ? Math.round((100 * p.done) / p.total) : 0);
 
 export function initStudio({ json, h, ago, app, els }) {
   if (!els || !els.section) return null;
-  const st = { open: false, view: null, prev: null, filter: "all", room: "overview", dept: "", right: "tasks", timer: 0, loading: false, error: "", meeting: null, log: [], logAt: 0, sendTo: "main" };
+  const st = { open: false, view: null, prev: null, filter: "all", room: "overview", dept: "", right: "tasks", timer: 0, loading: false, error: "", meeting: null, log: [], logAt: 0, sendTo: "main", team: null, teamAt: 0 };
   const S = (tag, attrs) => { const n = document.createElementNS(NS, tag); for (const k in attrs || {}) n.setAttribute(k, String(attrs[k])); return n; };
   const T = (x, y, cls, text, attrs) => { const t = S("text", { x, y, class: cls, ...(attrs || {}) }); t.textContent = text; return t; };
   const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -391,6 +409,86 @@ export function initStudio({ json, h, ago, app, els }) {
     return wrap;
   }
 
+  // ---- the token team room ----
+  async function loadTeam() {
+    const sid = app.currentId ? app.currentId() : "";
+    try { st.team = await json(`/studio/team${sid ? `?session=${encodeURIComponent(sid)}` : ""}`); st.teamAt = Date.now(); }
+    catch (e) { st.team = { error: (e && e.message) || "Could not load the token team." }; }
+    if (st.room === "team") paintStage();
+  }
+  function teamGraph(t) {
+    const svg = S("svg", { viewBox: "0 0 600 300", class: "st-svg st-svg-small", role: "img", "aria-label": "The token team: tiers and their share of today's turns" });
+    const shares = teamShares(t.today);
+    const tiers = t.tiers || [];
+    const center = { x: 300, y: 150 };
+    const n = Math.max(1, tiers.length);
+    tiers.forEach((tier, i) => {
+      const a = -Math.PI / 2 + (2 * Math.PI * i) / n;
+      const x = Math.round(center.x + 200 * Math.cos(a)), y = Math.round(center.y + 105 * Math.sin(a));
+      const s = shares.find((z) => z.tier === tier.tier);
+      const w = s ? Math.min(6, 1 + Math.log2(1 + s.turns)) : 0.6;
+      const ln = S("line", { class: `st-tt-edge ${s ? "live" : ""}`, x1: center.x, y1: center.y, x2: x, y2: y, "stroke-width": w });
+      const tt = S("title"); tt.textContent = s ? `${s.turns} turns today, ${fmtUsd(s.costUsd)}` : "no turns today"; ln.append(tt);
+      svg.append(ln);
+      const g = S("g", { class: `st-tt-node ${tier.tier} ${s ? "live" : ""}`, transform: `translate(${x} ${y})` });
+      g.append(S("circle", { r: s ? 22 + Math.min(14, s.share / 5) : 18 }));
+      g.append(T(0, -3, "st-tt-name", tier.tier, { "text-anchor": "middle" }));
+      g.append(T(0, 10, "st-tt-role", TIER_ROLES[tier.tier] || "", { "text-anchor": "middle" }));
+      g.append(T(0, 44, "st-tt-share", s ? `${s.share}% · ${s.turns} turn${s.turns === 1 ? "" : "s"}` : "idle", { "text-anchor": "middle" }));
+      const nt = S("title"); nt.textContent = `${tier.tier}: ${tier.model}. ${tier.use}`; g.append(nt);
+      svg.append(g);
+    });
+    const c = S("g", { class: "st-tt-center", transform: `translate(${center.x} ${center.y})` });
+    c.append(S("circle", { r: 30 }));
+    c.append(T(0, -2, "st-tt-name", "Dae", { "text-anchor": "middle" }));
+    c.append(T(0, 11, "st-tt-role", t.mode === "off" ? "router off" : `router ${t.mode}`, { "text-anchor": "middle" }));
+    svg.append(c);
+    return svg;
+  }
+  function roomTeam(v) {
+    const wrap = h("div", "st-room-wrap col");
+    const t = st.team;
+    if (!t) { wrap.append(h("p", "st-muted", "Loading the token team…")); void loadTeam(); return wrap; }
+    if (t.error) { wrap.append(h("p", "st-muted", `Could not load the token team: ${t.error}`)); return wrap; }
+    const grid = h("div", "st-room-wrap");
+    const left = h("div", "st-room-col");
+    left.append(teamGraph(t));
+    const bill = h("div", "st-bill");
+    const line = (label, s) => { const row = h("div", "st-bill-row"); row.append(h("span", "st-bill-label", label), h("strong", "", savingText(s))); return row; };
+    if (t.session) bill.append(line("This session", t.session));
+    bill.append(line("Today", t.today), line("All time", t.all));
+    const cap = h("div", "st-bill-row"); cap.append(h("span", "st-bill-label", "Frontier today"), h("strong", "", `${fmtUsd(t.frontierSpentUsd)} of ${fmtUsd(t.frontierCapUsd)} cap`)); bill.append(cap);
+    left.append(bill);
+    const cards = h("div", "st-tiers");
+    for (const s of teamShares(t.all)) {
+      const c = h("div", `st-tier ${s.tier}`);
+      c.append(h("div", "st-tier-head", `${s.tier} · ${TIER_ROLES[s.tier] || ""}`));
+      c.append(h("div", "st-tier-line", `${s.turns} turn${s.turns === 1 ? "" : "s"} · ${fmtUsd(s.costUsd)} · in ${fmtTok(s.tokensIn)} · out ${fmtTok(s.tokensOut)}`));
+      c.append(h("div", "st-tier-line", `verified ${s.turns ? Math.round((100 * s.verified) / s.turns) : 0}%`));
+      cards.append(c);
+    }
+    if (!cards.children.length) cards.append(h("p", "st-muted", "No routed turns in the log yet. Turns are logged once the router has a decision for them."));
+    left.append(h("h3", "st-h", "All time, by tier"), cards);
+    const right = h("div", "st-room-col");
+    right.append(h("h3", "st-h", "Rules in play"));
+    const ul = h("ul", "st-rules");
+    for (const r of t.protocol || []) ul.append(h("li", "", r));
+    right.append(ul);
+    right.append(h("h3", "st-h", "Flags"));
+    const flags = h("ul", "st-rules");
+    flags.append(h("li", "", `Router: ${t.mode} (${t.mode === "enforce" ? "the router picks the model" : t.mode === "shadow" ? "decisions are logged, the configured model runs" : "off"})`));
+    flags.append(h("li", "", `Consult before done: ${t.consultBeforeDone ? "on" : "off (DAEBOT_CONSULT_BEFORE_DONE=1 turns it on)"}`));
+    right.append(flags);
+    right.append(h("h3", "st-h", "Guard rules"));
+    const gl = h("ul", "st-rules");
+    if (!(t.guards || []).length) gl.append(h("li", "st-muted", "No guard rules. Settings → Guards adds standing allow or deny rules per tool."));
+    for (const g of t.guards || []) gl.append(h("li", "", `${g.effect} ${g.tool}${g.scope ? ` (${g.scope})` : ""}`));
+    right.append(gl);
+    grid.append(left, right);
+    wrap.append(grid);
+    return wrap;
+  }
+
   function taskList(rows, v, empty) {
     const ul = h("ul", "st-list inline");
     if (!rows.length) { ul.append(h("li", "st-empty", empty)); return ul; }
@@ -429,6 +527,7 @@ export function initStudio({ json, h, ago, app, els }) {
     else if (st.room === "meeting") stage.append(roomMeeting(v));
     else if (st.room === "lounge") stage.append(roomLounge(v));
     else if (st.room === "workspaces") stage.append(roomWorkspaces(v));
+    else if (st.room === "team") { stage.append(roomTeam(v)); if (!st.team || Date.now() - st.teamAt > REFRESH_MS) void loadTeam(); }
   }
 
   // ---- the side panel ----
