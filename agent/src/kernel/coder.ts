@@ -80,6 +80,27 @@ export function coderAllows(grant: CoderGrant | undefined, tool: Pick<Tool, "mcp
   return repoAllowed(grant, args.owner, args.repo);
 }
 
+/** The operator's grant (DAEBOT_CODERS) and the tenant's own repo list (Settings), as one grant. Either alone is fine; both empty = no grant. */
+export function mergeGrants(operator: CoderGrant | undefined, tenant: CoderGrant | undefined): CoderGrant | undefined {
+  const repos = [...new Set([...(operator?.repos ?? []), ...(tenant?.repos ?? [])])];
+  return repos.length ? { repos } : undefined;
+}
+
+/** A tenant's own repo list from Settings, validated like DAEBOT_CODERS (owner/name or owner/prefix-*, never owner/*). Returns the grant and the refused patterns. */
+export function parseTenantRepos(raw: unknown): { grant?: CoderGrant; refused: string[] } {
+  const list = Array.isArray(raw) ? raw : typeof raw === "string" ? raw.split(/[\n,]+/) : [];
+  const ok: string[] = [];
+  const refused: string[] = [];
+  for (const g of list.slice(0, 50)) {
+    const t = typeof g === "string" ? g.trim() : "";
+    if (!t) continue;
+    const m = GLOB.exec(t);
+    if (!m || /^\*+$/.test(m[2]) || /^\.+$/.test(m[1]) || /^\.+$/.test(m[2])) { refused.push(t.slice(0, 80)); continue; }
+    ok.push(`${m[1].toLowerCase()}/${m[2].toLowerCase()}`);
+  }
+  return { ...(ok.length ? { grant: { repos: [...new Set(ok)] } } : {}), refused };
+}
+
 export function coderPrompt(grant: CoderGrant): string[] {
   return [
     "## Coder grant",

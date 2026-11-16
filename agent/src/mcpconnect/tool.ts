@@ -1,5 +1,6 @@
 // mcp_connect: the model's ONLY handle on connecting MCP servers. It can propose, list and browse the catalog.
 // It cannot approve, enable, allow, disable or remove: those are buttons on the consent card (cookie-authenticated routes).
+import { orderFeatured } from "./featured.ts";
 import type { Tool } from "../types.ts";
 import { McpConnectError, cleanLine } from "./service.ts";
 import type { McpConnectService, PendingView } from "./service.ts";
@@ -66,7 +67,7 @@ export function createMcpConnectTool(service: McpConnectService, uid: string, ap
         const all = await service.catalog(uid);
         const mine = apps ? await apps().catch(() => null) : null;
         const stateOf = (id?: string): string => { const r = mine?.find((x) => x.provider === id); return !mine ? "connected state unknown" : r?.connected ? (r.needsReconnect ? "connected, needs reconnect" : "connected") : "not connected"; };
-        const ordered = [...all.filter((e) => e.app && !e.unavailable), ...all.filter((e) => !e.app)]; // the user's own apps first: there are few and they are what people ask for
+        const ordered = orderFeatured([...all.filter((e) => e.app && !e.unavailable), ...all.filter((e) => !e.app)]); // the featured few first, then the user's own apps, then the rest
         const hits = (q ? ordered.filter((e) => `${e.name} ${e.id ?? ""} ${e.description ?? ""}`.toLowerCase().includes(q)) : ordered).slice(0, 25);
         if (!hits.length) return { ok: true, output: all.length ? "No App Store connector matches that." : "The MIND App Store connector list is not available right now. Search the web for the vendor's official MCP endpoint instead." };
         return { ok: true, output: hits.map((e) => e.app

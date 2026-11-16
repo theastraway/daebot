@@ -37,6 +37,8 @@ export interface LearningDeps {
   cfg: Config;                       // models.cheap is the reflection model (MINDCLAW_CHEAP_MODEL)
   learn: LearnConfig;
   tier: "public" | "staff" | "admin";
+  /** A per-tenant runtime: a hosted user learning into their own MIND. Lets a staff identity write lessons. */
+  tenant?: boolean;
   onCost?: (usd: number) => void;    // so the hosted daily cap sees reflection spend
   now?: () => Date;
 }
@@ -117,7 +119,7 @@ export function createLearning(d: LearningDeps): Learning {
         pending.settled = true;
       }
       if (!d.learn.enabled) return;
-      const trust = writeTrust(d.tier, t.calls);
+      const trust = writeTrust(d.tier, t.calls, { tenant: d.tenant });
       let triggers = detectTriggers(t);
       // Focused context: one tool failure is noise. A failure pattern becomes a lesson only the second time the same tool fails in this session.
       if (focusedContextOn()) triggers = triggers.filter((x) => x.kind !== "tool_failure" || repeatedFailure(t));

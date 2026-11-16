@@ -10,8 +10,9 @@ const UNTRUSTED_TOOLS = new Set(["web_fetch", "web_search"]);
 export interface Trust { ok: boolean; why?: string }
 
 /** Only the owner's own admin sessions may cause a write. Public/staff tiers, non-admin channel senders and turns that read web content never do. */
-export function writeTrust(tier: Tier, calls: CallRecord[]): Trust {
-  if (tier !== "admin") return { ok: false, why: `tier ${tier} is untrusted for learning` };
+export function writeTrust(tier: Tier, calls: CallRecord[], o: { tenant?: boolean } = {}): Trust {
+  // A tenant runtime (a hosted user on their own MIND key) learns into its own MIND as staff; a public identity never does.
+  if (tier !== "admin" && !(tier === "staff" && o.tenant)) return { ok: false, why: `tier ${tier} is untrusted for learning` };
   const tainted = calls.find((c) => UNTRUSTED_TOOLS.has(c.tool));
   if (tainted) return { ok: false, why: `turn read untrusted content (${tainted.tool})` };
   return { ok: true };

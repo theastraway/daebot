@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { MAX_GUARDS_BYTES, parseGuards } from "../permissions/guards.ts";
+import { parseTenantRepos } from "../kernel/coder.ts";
 import type { IncomingHttpHeaders, IncomingMessage, Server, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -1902,7 +1903,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path === "/settings/daebot/guards" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/board" || path.startsWith("/board/") || path === "/routing" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/devices" || path === "/devices/pty" || path.startsWith("/browser/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
+    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path === "/settings/daebot/guards" || path === "/settings/daebot/coder" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/board" || path.startsWith("/board/") || path === "/routing" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/devices" || path === "/devices/pty" || path.startsWith("/browser/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -2566,6 +2567,21 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     return sendJson(res, 200, { ok: true, ...show() });
   }
 
+  // The tenant's own coder grant: the GitHub repos (owner/name or owner/prefix-*) their Daebot may write to through their connected GitHub.
+  // Only this authenticated route writes it; no tool can. Refused patterns come back by name so nothing is silently widened or dropped.
+  async function coderApi(req: IncomingMessage, res: ServerResponse, method: string, me: Principal): Promise<void> {
+    const settings = manager.runtimeOf(me.id).settings;
+    if (!settings) return sendJson(res, 404, { error: "settings are not enabled on this deployment" });
+    const show = () => { const repos = settings.get().coderRepos ?? []; const p = parseTenantRepos(repos); return { repos: p.grant?.repos ?? [], refused: p.refused }; };
+    if (method === "GET") return sendJson(res, 200, show());
+    if (method !== "PUT") return sendJson(res, 405, { error: "method not allowed" });
+    const b = await readJson(req);
+    const p = parseTenantRepos(b.repos);
+    if (b.repos !== undefined && !Array.isArray(b.repos) && typeof b.repos !== "string") return sendJson(res, 400, { error: "bad_repos", message: "repos must be a list of owner/name patterns" });
+    settings.set({ coderRepos: p.grant ? p.grant.repos : null });
+    return sendJson(res, 200, { ok: true, ...show() });
+  }
+
   async function modelsApi(req: IncomingMessage, res: ServerResponse, path: string, method: string, me: Principal): Promise<void> {
     if (!opts.cfg) return sendJson(res, 404, { error: "models are not available here" });
     const settings = manager.runtimeOf(me.id).settings;
@@ -2762,6 +2778,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (path === "/settings/daebot") return mainProfileApi(req, res, method, me);
     if (path === "/settings/daebot/instructions") return mainInstructionsApi(req, res, method, me);
     if (path === "/settings/daebot/guards") return guardsApi(req, res, method, me);
+    if (path === "/settings/daebot/coder") return coderApi(req, res, method, me);
     if (path === "/bots" || path.startsWith("/bots/")) return botsApi(req, res, path, method, me);
     if (path.startsWith("/mcp/")) return mcpApi(req, res, path, method, me);
     if (path === "/models" || path.startsWith("/models/")) return modelsApi(req, res, path, method, me);
