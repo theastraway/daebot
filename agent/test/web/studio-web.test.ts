@@ -71,8 +71,8 @@ test("the sidebar remembers three views and the arrow keys cycle through them, s
 // @ts-expect-error plain browser module
 import { EXAMPLES, LOUNGE_LINES, ROOMS, loungeLine, mergeLog, progressPct, walks } from "../../web/studio.js";
 
-test("Studio 2 and 3: six rooms, example prompts, and a lounge line that is stable within the hour and varies across bots", () => {
-  assert.deepEqual(ROOMS.map((r: any) => r[0]), ["overview", "office", "meeting", "lounge", "workspaces", "team"]);
+test("Studio 2 to 4: seven rooms, example prompts, and a lounge line that is stable within the hour and varies across bots", () => {
+  assert.deepEqual(ROOMS.map((r: any) => r[0]), ["overview", "office", "meeting", "lounge", "workspaces", "team", "pipelines"]);
   assert.ok(EXAMPLES.length >= 3);
   assert.equal(loungeLine("b_1", 9), loungeLine("b_1", 9));
   assert.ok(LOUNGE_LINES.includes(loungeLine("b_1", 9)));
@@ -110,4 +110,15 @@ test("Studio 3: tier shares of the turns, largest first; the saving line against
   assert.equal(savingText({ known: 0 }), "No priced turns yet.");
   assert.equal(fmtUsd(0.001), "$0.0010");
   assert.equal(TIER_ROLES.frontier, "advisor");
+});
+
+// @ts-expect-error plain browser module
+import { STAGE_MARK, countersLine, fmtNum, stageMarks } from "../../web/studio.js";
+
+test("Studio 4: stage marks and the counters line on the island card", () => {
+  assert.equal(stageMarks(["done", "running", "todo", "failed"]), "✓◐○✗");
+  assert.equal(stageMarks(undefined), "");
+  assert.equal(STAGE_MARK.done, "✓");
+  assert.equal(countersLine([{ name: "applications", value: 389 }, { name: "docs live", value: 8 }, { name: "big", value: 1234567 }, { name: "fourth", value: 1 }]), "applications 389 · docs live 8 · big 1.2M");
+  assert.equal(fmtNum(12345), "12.3k"); assert.equal(fmtNum(8.456), "8.46"); assert.equal(fmtNum("x"), "–");
 });

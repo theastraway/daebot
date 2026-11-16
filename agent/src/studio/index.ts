@@ -6,6 +6,8 @@
 // awaiting-decision item) and a pending permission card, per bot and per island.
 import type { BoardRow, BoardStatus } from "../board/board.ts";
 import type { TurnProof } from "../types.ts";
+import type { Counter, Pipeline, StageStatus } from "./store.ts";
+import { pipelineSummary } from "./store.ts";
 
 export type BotStatus = "idle" | "working" | "blocked";
 export type NeedKind = "question" | "decision" | "permission";
@@ -26,16 +28,21 @@ export interface StudioInput {
   exchanges: readonly StudioExchangeIn[];
   chip: { mode: string; model: string; tier?: string };
   now: number;
+  /** Counters a bot published with studio_counter, by bot id. */
+  counters?: Record<string, Counter[]>;
+  /** Staged pipelines by department slug (studio_pipeline). */
+  pipelines?: Record<string, Pipeline>;
 }
+export interface StudioPipelineView { department: string; stage: number; of: number; done: number; current?: string; status: StageStatus; marks: StageStatus[]; stages: Pipeline["stages"]; log: Pipeline["log"]; updatedAt: number }
 
 export interface StudioTask { id: string; sessionId: string; sessionTitle: string; title: string; status: BoardStatus; question?: string; updatedAt: number; bot: string; botName: string; department: string; project?: string; peer?: boolean; inMind: boolean }
 export interface StudioNeed { kind: NeedKind; sessionId: string; title: string; question?: string; bot: string; botName: string; department: string; at: number; taskId?: string; pendingId?: string }
-export interface StudioBot { id: string; slug: string; name: string; color: string; face?: string; department: string; purpose: string; status: BotStatus; needs: number; task?: { id: string; sessionId: string; title: string; status: BoardStatus }; lastSeen: number; sessions: number; /** The last human turn of this bot's newest session (what ran, verified or not, the model). */ proof?: TurnProof }
+export interface StudioBot { id: string; slug: string; name: string; color: string; face?: string; department: string; purpose: string; status: BotStatus; needs: number; task?: { id: string; sessionId: string; title: string; status: BoardStatus }; lastSeen: number; sessions: number; /** The last human turn of this bot's newest session (what ran, verified or not, the model). */ proof?: TurnProof; counters?: Counter[] }
 /** A Life project seen on the board, with how its tasks stand (the left panel's progress bars). */
 export interface StudioProject { id: string; name: string; total: number; done: number; working: number; waiting: number; next: number }
 /** A bot_talk exchange for the Meeting room: who, how many messages, the last line. */
 export interface StudioMeeting { id: string; a: string; b: string; aName: string; bName: string; updatedAt: number; count: number; last?: { from: string; fromName: string; text: string; at: number; kind: "message" | "reply" } }
-export interface StudioDepartment { slug: string; name: string; color: string; bots: string[]; counts: { done: number; working: number; next: number; waiting: number }; needsYou: number; lead: string }
+export interface StudioDepartment { slug: string; name: string; color: string; bots: string[]; counts: { done: number; working: number; next: number; waiting: number }; needsYou: number; lead: string; /** The island's domain counters: the newest three its bots published. */ counters: Counter[]; /** Where its staged pipeline stands, when it has one. */ pipeline?: { stage: number; of: number; done: number; current?: string; status: StageStatus; marks: StageStatus[] } }
 export interface StudioLink { a: string; b: string; count: number; at: number }
 export interface StudioView {
   at: number;
@@ -48,6 +55,7 @@ export interface StudioView {
   links: StudioLink[];
   projects: StudioProject[];
   meetings: StudioMeeting[];
+  pipelines: StudioPipelineView[];
   /** The last day: tasks that became ready to test, and sessions that moved. */
   today: { completed: number; moved: number };
   brain: { bots: number; sessions: number; tasks: number; inMind: number; decisions: number; working: number; waiting: number };
@@ -85,6 +93,7 @@ export const MAX_DEPARTMENT = 40;
 export const MAX_TASKS = 80;
 export const MAX_NEEDS = 40;
 export const MAX_MEETINGS = 20;
+export const MAX_LOG_SHOWN = 30;
 export const DAY_MS = 24 * 60 * 60 * 1000;
 /** A bot with an in-progress row touched this recently counts as working even when no turn is in flight right now. */
 export const WORKING_WINDOW_MS = 10 * 60 * 1000;
@@ -172,6 +181,7 @@ export function assembleStudio(input: StudioInput): StudioView {
   const needsBy = new Map<string, number>();
   for (const n of needs) needsBy.set(n.bot, (needsBy.get(n.bot) ?? 0) + 1);
   // Bots, the main Daebot first (it is the manager).
+  const countersOf = (bot: string): Counter[] => (input.counters?.[bot] ?? []).filter((c) => c && typeof c.name === "string" && Number.isFinite(c.value)).map((c) => ({ name: oneLine(c.name, 32), value: c.value, at: c.at || 0, ...(c.note ? { note: oneLine(c.note, 80) } : {}) }));
   const proofFor = (bot: string): TurnProof | undefined => {
     let best: TurnProof | undefined;
     for (const r of input.rows) { const owner = r?.bot ?? MAIN_ID; if (owner !== bot || !r.proof) continue; if (!best || r.proof.at > best.at) best = r.proof; }
@@ -190,16 +200,16 @@ export function assembleStudio(input: StudioInput): StudioView {
   };
   const bots: StudioBot[] = [];
   const mainSessions = sessionsOf.get(MAIN_ID);
-  bots.push({ id: MAIN_ID, slug: MAIN_ID, name: oneLine(input.main.name, 80) || "Daebot", color: safeColor(input.main.color), ...(input.main.face ? { face: input.main.face } : {}), department: MANAGER_DEPT.slug, purpose: "Your main Daebot: plans, builds, verifies and directs your bots.", status: statusOf(MAIN_ID), needs: needsBy.get(MAIN_ID) ?? 0, ...(taskFor(MAIN_ID) ? { task: taskFor(MAIN_ID) } : {}), lastSeen: mainSessions?.last ?? 0, sessions: mainSessions?.n ?? 0, ...(proofFor(MAIN_ID) ? { proof: proofFor(MAIN_ID) } : {}) });
+  bots.push({ id: MAIN_ID, slug: MAIN_ID, name: oneLine(input.main.name, 80) || "Daebot", color: safeColor(input.main.color), ...(input.main.face ? { face: input.main.face } : {}), department: MANAGER_DEPT.slug, purpose: "Your main Daebot: plans, builds, verifies and directs your bots.", status: statusOf(MAIN_ID), needs: needsBy.get(MAIN_ID) ?? 0, ...(taskFor(MAIN_ID) ? { task: taskFor(MAIN_ID) } : {}), lastSeen: mainSessions?.last ?? 0, sessions: mainSessions?.n ?? 0, ...(proofFor(MAIN_ID) ? { proof: proofFor(MAIN_ID) } : {}), ...(countersOf(MAIN_ID).length ? { counters: countersOf(MAIN_ID) } : {}) });
   for (const b of [...input.bots].sort((x, y) => oneLine(x.name, 80).localeCompare(oneLine(y.name, 80)))) {
     const s = sessionsOf.get(b.id);
-    bots.push({ id: b.id, slug: b.slug, name: oneLine(b.name, 80), color: safeColor(b.color), ...(b.face ? { face: b.face } : {}), department: deptOf(b).slug, purpose: oneLine(b.purpose, 140), status: statusOf(b.id), needs: needsBy.get(b.id) ?? 0, ...(taskFor(b.id) ? { task: taskFor(b.id) } : {}), lastSeen: s?.last ?? 0, sessions: s?.n ?? 0, ...(proofFor(b.id) ? { proof: proofFor(b.id) } : {}) });
+    bots.push({ id: b.id, slug: b.slug, name: oneLine(b.name, 80), color: safeColor(b.color), ...(b.face ? { face: b.face } : {}), department: deptOf(b).slug, purpose: oneLine(b.purpose, 140), status: statusOf(b.id), needs: needsBy.get(b.id) ?? 0, ...(taskFor(b.id) ? { task: taskFor(b.id) } : {}), lastSeen: s?.last ?? 0, sessions: s?.n ?? 0, ...(proofFor(b.id) ? { proof: proofFor(b.id) } : {}), ...(countersOf(b.id).length ? { counters: countersOf(b.id) } : {}) });
   }
   // Departments: the Manager office first, then the user's, alphabetically; General last when it exists.
   const depts = new Map<string, StudioDepartment>();
   const dept = (slug: string, name: string, color: string): StudioDepartment => {
     let d = depts.get(slug);
-    if (!d) { d = { slug, name, color, bots: [], counts: { done: 0, working: 0, next: 0, waiting: 0 }, needsYou: 0, lead: "" }; depts.set(slug, d); }
+    if (!d) { d = { slug, name, color, bots: [], counts: { done: 0, working: 0, next: 0, waiting: 0 }, needsYou: 0, lead: "", counters: [] }; depts.set(slug, d); }
     return d;
   };
   for (const b of bots) {
@@ -216,6 +226,15 @@ export function assembleStudio(input: StudioInput): StudioView {
     else if (t.status === "not_started") d.counts.next++;
   }
   for (const n of needs) { const d = depts.get(n.department) ?? dept(GENERAL_DEPT.slug, GENERAL_DEPT.name, DEFAULT_COLOR); d.counts.waiting++; d.needsYou++; }
+  for (const d of depts.values()) {
+    d.counters = d.bots.flatMap((id) => countersOf(id)).sort((a, b) => b.at - a.at).slice(0, 3);
+    const p = input.pipelines?.[d.slug];
+    if (p && Array.isArray(p.stages) && p.stages.length) { const s = pipelineSummary(p); d.pipeline = { stage: s.stage, of: s.of, done: s.done, ...(s.current ? { current: s.current } : {}), status: s.status, marks: s.marks }; }
+  }
+  const pipelines: StudioPipelineView[] = Object.values(input.pipelines ?? {}).filter((p) => p && Array.isArray(p.stages) && p.stages.length).map((p) => {
+    const s = pipelineSummary(p);
+    return { department: p.department, stage: s.stage, of: s.of, done: s.done, ...(s.current ? { current: s.current } : {}), status: s.status, marks: s.marks, stages: p.stages, log: p.log.slice(-MAX_LOG_SHOWN), updatedAt: p.updatedAt };
+  }).sort((a, b) => b.updatedAt - a.updatedAt);
   const order = (d: StudioDepartment): string => (d.slug === MANAGER_DEPT.slug ? "0" : d.slug === GENERAL_DEPT.slug ? "2" : "1") + d.name.toLowerCase();
   const departments = [...depts.values()].sort((a, b) => order(a).localeCompare(order(b)));
   // Links: bot_talk traffic between islands, from the exchange list (party ids are bot ids or "main").
@@ -258,7 +277,7 @@ export function assembleStudio(input: StudioInput): StudioView {
     departments, bots,
     tasks: tasks.slice(0, MAX_TASKS),
     needsYou: needs.slice(0, MAX_NEEDS),
-    links, projects, meetings, today,
+    links, projects, meetings, pipelines, today,
     brain: {
       bots: input.bots.length, sessions: sessionBot.size, tasks: tasks.filter((t) => t.status !== "cancelled").length,
       inMind: tasks.filter((t) => t.inMind).length, decisions: tasks.filter((t) => t.peer).length,

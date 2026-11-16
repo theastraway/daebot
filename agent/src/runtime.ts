@@ -35,6 +35,8 @@ import { daeBase } from "./bots/dae.ts";
 import { TierBudget, frontierBudgetUsd, routeTurn, routerMode } from "./provider/router.ts";
 import { createOllamaProvider, detectOllama, pickLocalModel, withLocal } from "./provider/local.ts";
 import { createAdvisorTool } from "./tools/advisor.ts";
+import { createStudioTools } from "./tools/studio.ts";
+import { StudioStore } from "./studio/store.ts";
 import { TIER_ORDER, loadPolicy } from "./provider/policy.ts";
 import { adviseTier, appendRouteLog, classOf, costSummary, describeTable, loadTable, routeLogPath, rowFor } from "./provider/learned.ts";
 import { consultBeforeDone } from "./provider/router.ts";
@@ -456,6 +458,9 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       })
     : undefined;
   // advisor: one frontier-model call for a stuck point (tools/advisor.ts); same billing path as web_search. Offered when a model endpoint exists.
+  // The Studio's own state (counters, pipelines) and the tools that write it. A session's caller is its bot, or "main".
+  const studioStore = stateDir ? new StudioStore({ dir: joinPath(stateDir, "studio"), owner: ownerKey, now: hosted?.now ? () => hosted.now!().getTime() : undefined }) : undefined;
+  const studioTools = studioStore ? createStudioTools({ store: studioStore, botOf: (sid) => sessions.get(sid)?.bot ?? "main", nameOf: (id) => (id === "main" ? (settings?.get().main?.name || "Dae") : botStore?.get(id)?.name) }) : [];
   const advisorTool = createAdvisorTool({ endpoint: (sid) => { const bid = sid ? sessions.get(sid)?.bot : undefined; return llmEndpoint(cfg, billingKey, bid ? botStore?.get(bid)?.slug : undefined); }, fetchImpl: overrides.fetchImpl, model: () => ({ model: ROUTER_POLICY.frontier.model, ...(ROUTER_POLICY.frontier.effort ? { effort: ROUTER_POLICY.frontier.effort } : {}) }), now: hosted?.now ? () => hosted.now!().getTime() : undefined });
   // A handoff card goes to MIND as a private entry (best effort, never awaited by the turn), so the next session can start from it.
   const fileHandoff = async (e: Entry, c: HandoffCard): Promise<void> => {
@@ -666,7 +671,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         return r;
       },
     })] : [];
-    const every = [...builtinTools, searchTool, advisorTool, ...(photoTool ? [photoTool] : []), ...(documentTool ? [documentTool] : []), ...(imageTool ? [imageTool] : []), ...createMindTools({
+    const every = [...builtinTools, searchTool, advisorTool, ...studioTools, ...(photoTool ? [photoTool] : []), ...(documentTool ? [documentTool] : []), ...(imageTool ? [imageTool] : []), ...createMindTools({
       home, clientFor: clientForMind, roster: () => botStore?.roster() ?? [],
       refresh: botStore ? async () => { await botStore.list(); } : undefined,
     }, { user: hosted?.username }).filter((t) => on || t.spec.name !== "mind_tenants"),
@@ -1160,6 +1165,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         sessions: [...sess.values()], rows, pending, exchanges: extra.exchanges,
         chip: { mode: ROUTER_MODE, model: settings?.get().defaultModel ?? cfg.models.default, ...(ROUTER_MODE !== "off" ? { tier: "coder" } : {}) },
         now: Date.now(),
+        ...(studioStore ? { counters: studioStore.allCounters(), pipelines: studioStore.pipelines() } : {}),
       });
     },
     team(sessionId) {
