@@ -7,8 +7,8 @@ import { join } from "node:path";
 export interface MainProfile { name?: string; face?: string; color?: string; instructions?: string }
 /** When the main Daebot's look (name, face, colour) and its instructions last changed by the person's hand (ms). Device sync keeps the later change per group. */
 export interface MainMeta { profileAt?: number; instructionsAt?: number }
-export interface UserSettings { defaultModel?: string; main?: MainProfile; mainMeta?: MainMeta; /** The owner's guard rules in markdown (permissions/guards.ts). */ guards?: string }
-export type SettingsPatch = { defaultModel?: string | null; main?: { [K in keyof MainProfile]?: MainProfile[K] | null }; guards?: string | null };
+export interface UserSettings { defaultModel?: string; main?: MainProfile; mainMeta?: MainMeta; /** The owner's guard rules in markdown (permissions/guards.ts). */ guards?: string; /** The tenant's own coder grant: GitHub repos (owner/name or owner/prefix-*) their Daebot may write to through their connected GitHub. */ coderRepos?: string[] }
+export type SettingsPatch = { defaultModel?: string | null; main?: { [K in keyof MainProfile]?: MainProfile[K] | null }; guards?: string | null; coderRepos?: string[] | null };
 
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,127}$/;
 export const validModelId = (m: unknown): m is string => typeof m === "string" && MODEL_RE.test(m);
@@ -50,6 +50,7 @@ export function createSettings(dir: string, owner: string): SettingsStore {
       if (Number.isFinite(mm.instructionsAt) && mm.instructionsAt > 0) meta.instructionsAt = mm.instructionsAt;
       if (Object.keys(meta).length) out.mainMeta = meta;
       if (typeof j.guards === "string" && j.guards.trim() && Buffer.byteLength(j.guards, "utf8") <= 8 * 1024) out.guards = j.guards;
+      if (Array.isArray(j.coderRepos)) { const r = j.coderRepos.filter((x: unknown): x is string => typeof x === "string" && /^[a-z0-9._-]{1,100}\/[a-z0-9._*-]{1,100}$/.test(x)).slice(0, 50); if (r.length) out.coderRepos = r; }
       return out;
     } catch { return {}; }
   };
@@ -76,6 +77,8 @@ export function createSettings(dir: string, owner: string): SettingsStore {
         if (!validModelId(patch.defaultModel)) throw new Error("bad model id");
         cur.defaultModel = patch.defaultModel;
       }
+      if (patch.coderRepos === null) delete cur.coderRepos;
+      else if (Array.isArray(patch.coderRepos)) { const r = patch.coderRepos.filter((x) => typeof x === "string").slice(0, 50); if (r.length) cur.coderRepos = r; else delete cur.coderRepos; }
       if (patch.guards === null) delete cur.guards;
       else if (typeof patch.guards === "string") {
         if (Buffer.byteLength(patch.guards, "utf8") > 8 * 1024) throw new Error("guards too long");
