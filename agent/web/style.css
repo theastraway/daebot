@@ -1499,3 +1499,21 @@ html.browser-open .scroll, html.browser-open .composer-wrap { margin-right: var(
   #model-badge .mb-name { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
   #model-badge .mb-via { display: none; }
 }
+
+/* ---------- the inner voice (thinking) ---------- */
+.think { border-left: 3px solid var(--line); padding: 2px 0 2px 12px; font: 13.5px/1.55 var(--sans); color: var(--ink-3); }
+.think summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; min-height: 20px; }
+.think summary::-webkit-details-marker { display: none; }
+.think-label { font: 600 10.5px var(--sans); letter-spacing: .1em; text-transform: uppercase; }
+.think.live .think-label::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 8px; border-radius: 50%; background: var(--accent); vertical-align: middle; animation: think-pulse .9s infinite alternate; }
+@keyframes think-pulse { from { opacity: .25; } to { opacity: 1; } }
+.think-body { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 6px; max-height: 40vh; overflow-y: auto; font-style: italic; }
+
+/* ---------- proof card on the board, lesson drawer ---------- */
+.bd-proof { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 8px; }
+.bd-chip.ok { border-color: var(--ok); color: var(--ok); }
+.bd-chip.model { font: 600 11px/1 var(--mono); }
+.drawer-sub { margin: 18px 20px 0; font: 650 12px var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); }
+.lesson-votes { display: flex; gap: 8px; margin-top: 8px; }
+.lesson-scope { margin-top: 6px; font-size: 11.5px; color: var(--ink-3); }
+.viol.lesson.demoted { opacity: .7; }

@@ -6,7 +6,7 @@ import { rename, writeFile, mkdir, unlink } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { daebotHome } from "./home.ts";
-import type { HistoryEvent, Message, MessageMeta, SessionState, Violation } from "./types.ts";
+import type { HistoryEvent, Message, MessageMeta, SessionState, Violation, TurnProof } from "./types.ts";
 import type { BoardTask } from "./board/board.ts";
 import type { EnvTag } from "./env.ts";
 
@@ -47,6 +47,8 @@ export interface StoredSession {
   pinnedAt?: number;
   /** The task board the model keeps for this chat (task_board tool). Absent = none declared. */
   board?: BoardTask[];
+  /** The proof of the last human turn (receipts, blocks, model): the board's proof card. */
+  proof?: TurnProof;
   createdAt: number;
   updatedAt: number;
   /** When a non-transcript field last changed by the user's hand (rename, archive). Device sync orders such changes by it; it does not reorder the sidebar like updatedAt does. */

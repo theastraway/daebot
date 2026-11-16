@@ -39,6 +39,12 @@ export class HistoryRecorder {
     this.trim();
   }
   push(ev: AgentEvent): void {
+    if (ev.type === "thinking") {
+      const last = this.items[this.items.length - 1];
+      if (last && last.type === "thinking") last.delta += ev.delta;
+      else this.items.push({ type: "thinking", delta: ev.delta, ...(this.runId ? { rid: this.runId } : {}) });
+      return;
+    }
     if (ev.type === "text") {
       const last = this.items[this.items.length - 1];
       if (last && last.type === "text") last.delta += ev.delta;

@@ -21,11 +21,20 @@ export function ageDays(updated: string, now: Date): number {
   return Number.isFinite(t) ? Math.max(0, (now.getTime() - t) / 86_400_000) : 0;
 }
 
-export function rank(message: string, items: Item[], cfg: LearnConfig, now: Date = new Date()): Ranked[] {
+/** Is an item in play for a scope? Global items (no scope) always; an item of this scope; an item that helped here; an item promoted by helping in two scopes. No scope asked = everything. */
+export function inScope(it: Pick<Item, "scope" | "scopes">, scope: string | undefined): boolean {
+  if (!scope || !it.scope) return true;
+  if (it.scope === scope) return true;
+  const s = it.scopes ?? [];
+  return s.includes(scope) || s.length >= 2;
+}
+
+export function rank(message: string, items: Item[], cfg: LearnConfig, now: Date = new Date(), scope?: string): Ranked[] {
   const q = tokenSet(message);
   const out: Ranked[] = [];
   for (const it of items) {
     if (it.status !== "active") continue;
+    if (!inScope(it, scope)) continue;
     const d = tokenSet(itemText(it));
     let overlap = 0;
     for (const x of q) if (d.has(x)) overlap++;
@@ -37,7 +46,9 @@ export function rank(message: string, items: Item[], cfg: LearnConfig, now: Date
     const utility = (it.helped + 1) / (judged + 2);                 // Laplace-smoothed helped rate, 0.5 when unknown
     const decay = Math.pow(0.5, ageDays(it.updated, now) / cfg.halfLifeDays);
     const usage = 1 + Math.min(it.uses, 10) * 0.02;
-    out.push({ item: it, relevance, score: relevance * (0.5 + utility) * (0.5 + 0.5 * decay) * usage });
+    // Learned here: a small edge over a promoted or global item on the same words.
+    const local = scope && it.scope === scope ? 1.15 : 1;
+    out.push({ item: it, relevance, score: relevance * (0.5 + utility) * (0.5 + 0.5 * decay) * usage * local });
   }
   return out.sort((a, b) => b.score - a.score);
 }
@@ -67,7 +78,7 @@ export function renderUserModel(m: UserModel | undefined, budget: number, messag
 
 /** Build the note, or undefined when there is nothing to say. Never exceeds cfg.maxInjectChars. */
 export function buildNote(opts: {
-  message: string; items: Item[]; userModel?: UserModel; cfg: LearnConfig; clientNames?: string[]; now?: Date; maxItems?: number;
+  message: string; items: Item[]; userModel?: UserModel; cfg: LearnConfig; clientNames?: string[]; now?: Date; maxItems?: number; scope?: string;
 }): { note?: string; cited: Item[] } {
   const { cfg } = opts;
   const lines: string[] = [];
@@ -75,7 +86,7 @@ export function buildNote(opts: {
   const um = renderUserModel(opts.userModel, Math.min(600, cfg.maxInjectChars - used - 200), opts.message);
   if (um) { lines.push(um); used += um.length + 1; }
   const cited: Item[] = [];
-  for (const r of rank(opts.message, opts.items, cfg, opts.now)) {
+  for (const r of rank(opts.message, opts.items, cfg, opts.now, opts.scope)) {
     if (cited.length >= (opts.maxItems ?? 4)) break;
     // Defense in depth: anything that would not be allowed to be written is not allowed to be read either.
     if (contentProblem(itemText(r.item), { clientNames: opts.clientNames })) continue;

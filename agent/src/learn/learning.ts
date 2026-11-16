@@ -54,25 +54,25 @@ export function createLearning(d: LearningDeps): Learning {
   const stats = { reflections: 0, injections: 0, cost: 0 };
   const inflight = new Set<Promise<void>>();
   const history: string[] = [];
-  // Items shown on the previous turn and whether their outcome is settled yet.
-  let pending: { keys: string[]; settled: boolean } | undefined;
+  // Items shown on the previous turn and whether their outcome is settled yet, and the scope they were shown in.
+  let pending: { keys: string[]; settled: boolean; scope?: string } | undefined;
   const log = (e: Omit<LearnEvent, "at">) => { events.push({ at: Date.now(), ...e }); if (events.length > 500) events.splice(0, 100); };
 
-  function settle(keys: string[], good: boolean): void {
+  function settle(keys: string[], good: boolean, scope?: string): void {
     for (const k of keys) {
       const before = store.get(k)?.status;
-      store.recordOutcome(k, good);
+      store.recordOutcome(k, good, scope);
       log({ type: "outcome", key: k, detail: good ? "helped" : "hurt" });
       const after = store.get(k)?.status;
       if (before && after && before !== after) log({ type: "demoted", key: k, detail: `${before} -> ${after}` });
     }
   }
 
-  async function beforeTurn(userMessage: string): Promise<string | undefined> {
+  async function beforeTurn(userMessage: string, scope?: string): Promise<string | undefined> {
     try {
       // The user's reply to the previous turn is the verdict on whatever we injected there.
       if (pending && !pending.settled && pending.keys.length) {
-        settle(pending.keys, !looksLikeCorrection(userMessage, history));
+        settle(pending.keys, !looksLikeCorrection(userMessage, history), pending.scope);
       }
       pending = undefined;
       history.push(userMessage);
@@ -84,11 +84,11 @@ export function createLearning(d: LearningDeps): Learning {
       await withTimeout(retrieval, d.learn.beforeTurnTimeoutMs);
       const { note, cited } = buildNote({
         message: userMessage, items: focusedContextOn() ? store.turn() : store.all(), userModel: store.currentUserModel(),
-        cfg: d.learn, clientNames: d.cfg.clientNames, now: d.now?.(),
+        cfg: d.learn, clientNames: d.cfg.clientNames, now: d.now?.(), scope,
       });
       if (!note) return undefined;
       for (const it of cited) store.recordUse(it.key);
-      pending = { keys: cited.map((c: Item) => c.key), settled: false };
+      pending = { keys: cited.map((c: Item) => c.key), settled: false, ...(scope ? { scope } : {}) };
       stats.injections++;
       log({ type: "injected", detail: cited.map((c) => `${c.type === "lesson" ? "L" : "S"}-${c.key}`).join(",") || "user model" });
       return note;
@@ -113,7 +113,7 @@ export function createLearning(d: LearningDeps): Learning {
     try {
       // Immediate failure inside a turn that had items injected = they were in play when it broke.
       if (pending && !pending.settled && pending.keys.length && turnWentBadly(t)) {
-        settle(pending.keys, false);
+        settle(pending.keys, false, pending.scope);
         pending.settled = true;
       }
       if (!d.learn.enabled) return;
@@ -129,7 +129,7 @@ export function createLearning(d: LearningDeps): Learning {
       const p = (async () => {
         try {
           const res = await reflect(t, triggers, { provider: d.provider, model: d.cfg.models.cheap, onCost: (usd) => { stats.cost += usd; d.onCost?.(usd); } });
-          await apply(res, triggers);
+          await apply(res, triggers, t.scope);
         } catch (e) {
           log({ type: "error", detail: `reflection: ${String((e as Error)?.message ?? e).slice(0, 160)}` });
         }
@@ -141,7 +141,7 @@ export function createLearning(d: LearningDeps): Learning {
     }
   }
 
-  async function apply(res: ReflectionResult, triggers: Trigger[]): Promise<void> {
+  async function apply(res: ReflectionResult, triggers: Trigger[], scope?: string): Promise<void> {
     const kinds = new Set(triggers.map((x) => x.kind));
     const negative = kinds.has("kernel_block") || kinds.has("tool_failure") || kinds.has("user_correction");
     const co = { clientNames: d.cfg.clientNames };
@@ -156,7 +156,7 @@ export function createLearning(d: LearningDeps): Learning {
         ?? (l.kind === "failure" && !negative ? "a failure lesson needs a kernel block, tool failure or user correction" : null);
       if (problem) log({ type: "refused", detail: `lesson: ${problem}` });
       else {
-        const r = await store.upsertLesson(l);
+        const r = await store.upsertLesson({ ...l, ...(scope ? { scope } : {}) });
         log({ type: "lesson", action: r.action, key: r.item?.key, detail: r.why ?? r.item?.title ?? "" });
       }
     }

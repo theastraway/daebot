@@ -730,7 +730,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       })
     : undefined;
   const wsConns = new Set<WsConnection>();
-  const SESSION_ROUTE = /^\/sessions\/([^/]+)(?:\/(send|abort|violations|history|events|suggest|suggest-feedback|device-result))?$/;
+  const SESSION_ROUTE = /^\/sessions\/([^/]+)(?:\/(send|abort|violations|history|events|suggest|suggest-feedback|device-result|lessons))?$/;
   const MSG_ROUTE = /^\/sessions\/([^/]+)\/messages\/([^/]+)\/(react|feedback|report)$/;
   const PHOTO_ROUTE = /^\/sessions\/([^/]+)\/photos\/([^/]+)$/;
   let photoBodies = 0; // sends with a body over MAX_BODY being read or decoded right now: each holds tens of MB briefly
@@ -1901,7 +1901,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/board" || path.startsWith("/board/") || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/devices" || path === "/devices/pty" || path.startsWith("/browser/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
+    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/board" || path.startsWith("/board/") || path === "/routing" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/devices" || path === "/devices/pty" || path.startsWith("/browser/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -2689,6 +2689,11 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (path === "/account") return accountApi(res, method);
     if (path === "/usage" || path === "/usage/additional") return usageApi(req, res, path, method, me);
     if (path === "/spend-caps") return spendCapsApi(req, res, method, me, new URLSearchParams((req.url ?? "").includes("?") ? req.url!.slice(req.url!.indexOf("?") + 1) : ""));
+    if (path === "/routing") {
+      // The model router's mode and policy table (read-only; the operator changes it with env or DAEBOT_ROUTING_POLICY).
+      if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+      return sendJson(res, 200, manager.runtimeOf(me.id).routing?.() ?? { mode: "off", tiers: [] });
+    }
     if (path === "/board") {
       // Every task Daebot declared across THIS signed-in user's sessions. The runtime is the user's own, so another user's sessions can never appear.
       if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
@@ -2921,6 +2926,18 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (action === "violations") {
       if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
       return sendJson(res, 200, { violations: ls.session.violations() });
+    }
+    if (action === "lessons") {
+      // GET: the lessons in play for this chat (the lesson drawer). POST {key, rating: up|down}: the user's thumbs, written to MIND as helped/hurt.
+      const rt = manager.runtimeOf(me.id);
+      if (method === "GET") return sendJson(res, 200, rt.lessons?.(id) ?? { items: [] });
+      if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+      const b = await readJson(req);
+      const key = typeof b.key === "string" ? b.key.trim() : "";
+      const rating = b.rating === "up" || b.rating === "down" ? b.rating : undefined;
+      if (!key || !rating) return sendJson(res, 400, { error: "key and rating (up|down) are required" });
+      const ok = await (rt.voteLesson?.(id, key, rating === "up") ?? false);
+      return ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "no such lesson in this chat" });
     }
     if (action === "abort") {
       if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });

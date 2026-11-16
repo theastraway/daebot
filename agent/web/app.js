@@ -49,7 +49,7 @@ const els = {
   usageTokens: $("usage-tokens"), usageCost: $("usage-cost"), btnViol: $("btn-violations"), violCount: $("viol-count"),
   btnTheme: $("btn-theme"), themeIc: $("theme-ic"), scroll: $("scroll"), thread: $("thread"),
   composer: $("composer"), input: $("input"), btnSend: $("btn-send"), btnStop: $("btn-stop"),
-  drawer: $("drawer"), drawerClose: $("btn-drawer-close"), drawerNote: $("drawer-note"), violList: $("viol-list"),
+  drawer: $("drawer"), drawerClose: $("btn-drawer-close"), drawerNote: $("drawer-note"), violList: $("viol-list"), lessonNote: $("lesson-note"), lessonList: $("lesson-list"),
   connDot: $("conn-dot"), connText: $("conn-text"), tokenGate: $("token-gate"), tokenForm: $("token-form"),
   tokenInput: $("token-input"), tokenErr: $("token-err"), btnLogout: $("btn-logout"),
   attachStrip: $("attach-strip"), attachNote: $("attach-note"), dropOverlay: $("drop-overlay"), photoInput: $("photo-input"), btnAttach: $("btn-attach"),
@@ -296,6 +296,7 @@ function buildItem(it, tr) {
       break;
     }
     case "assistant": node = h("div", "msg-asst"); node.tabIndex = 0; node.setAttribute("aria-haspopup", "menu"); updateAssistant(node, it); break;
+    case "think": node = buildThink(it); break;
     case "tool": node = buildTool(it); break;
     case "gate": node = buildGate(it); break;
     case "confirm": node = buildConfirm(it); break;
@@ -311,6 +312,27 @@ function buildItem(it, tr) {
   it.node = node;
   return node;
 }
+// The model's inner voice: a dimmed, collapsible block ahead of the answer. Open while it streams, folded once the answer starts
+// (unless the reader opened it). It is narration, never the answer: nothing in it is a receipt.
+function buildThink(it) {
+  const d = document.createElement("details"); d.className = "think";
+  const s = document.createElement("summary");
+  const label = h("span", "think-label", "");
+  s.append(label);
+  const body = h("div", "think-body", "");
+  d.append(s, body);
+  d.addEventListener("toggle", () => { if (it.done) it.userOpened = d.open; });
+  it.paint = () => {
+    body.textContent = it.text;
+    d.classList.toggle("live", !it.done);
+    label.textContent = it.done ? "Thought" : "Thinking…";
+    d.open = it.done ? !!it.userOpened : true;
+  };
+  it.paint();
+  return d;
+}
+function paintThink(it) { if (it.paint) it.paint(); }
+function closeThink(tr) { const th = tr.curThink; if (th && !th.done) { th.done = true; paintThink(th); } tr.curThink = null; }
 function updateAssistant(node, it) {
   node.replaceChildren(renderMarkdown(it.text));
   node.classList.toggle("streaming", !!it.streaming);
@@ -395,7 +417,7 @@ function buildConfirm(it) {
 // above them while the browser is idle, and anything older loads when you scroll up. A 300-message chat costs the same
 // to open as a 10-message one. Items whose DOM node already exists (the chat was open before) are re-attached, not rebuilt.
 const FIRST_PAINT_ITEMS = 6, WINDOW_ITEMS = 40, OLDER_STEP = 40, SLICE_MS = 8;
-const REUSE_KINDS = new Set(["user", "tool", "gate", "notice"]);
+const REUSE_KINDS = new Set(["user", "tool", "gate", "notice", "think"]);
 let renderGen = 0, olderIO = null;
 const whenIdle = (f) => (window.requestIdleCallback ? window.requestIdleCallback(f, { timeout: 250 }) : setTimeout(f, 16));
 // The thread is a polite live region: while history is being built into it, screen readers must not read it all out.
@@ -505,6 +527,13 @@ function itemsFromHistory(events) {
   for (const ev of events) {
     switch (ev.type) {
       case "user": asst = null; items.push({ kind: "user", text: ev.text, ...(ev.id ? { mid: ev.id } : {}), ...(ev.rid ? { rid: ev.rid } : {}), ...(ev.quote ? { quote: ev.quote } : {}), ...(ev.photos?.length ? { photos: ev.photos } : {}) }); break;
+      case "thinking": {
+        asst = null;
+        const last = items[items.length - 1];
+        if (last && last.kind === "think") last.text += ev.delta; else items.push({ kind: "think", text: ev.delta, done: true });
+        break;
+      }
+      case "route": case "proof": break;
       case "text":
         if (!asst) { asst = { kind: "assistant", text: "", streaming: false, ...(ev.id ? { mid: ev.id } : {}), ...(ev.rid ? { rid: ev.rid } : {}) }; items.push(asst); }
         asst.text += ev.delta; break;
@@ -1434,7 +1463,17 @@ function paintAssistant(it) {
 function onEvent(id, ev, asst, toolByReceipt) {
   const tr = transcript(id);
   switch (ev.type) {
+    case "thinking": {
+      if (asst) { asst.streaming = false; paintAssistant(asst); }
+      let th = tr.curThink;
+      if (!th || th.done) { th = addItem(id, { kind: "think", text: "", done: false }); tr.curThink = th; }
+      th.text += ev.delta; paintThink(th);
+      return null; // the answer that follows is a new block
+    }
+    case "route": return asst; // the router's decision shows on the board's proof card
+    case "proof": board.poke(); return asst;
     case "text":
+      closeThink(tr);
       if (!asst) asst = addItem(id, { kind: "assistant", text: "", streaming: true });
       asst.text += ev.delta; paintAssistant(asst);
       return asst;
@@ -1445,6 +1484,7 @@ function onEvent(id, ev, asst, toolByReceipt) {
       return null;
     }
     case "toolStart": {
+      closeThink(tr);
       if (asst) { asst.streaming = false; paintAssistant(asst); }
       const it = addItem(id, { kind: "tool", receiptId: ev.receiptId, tool: ev.tool, args: ev.args, status: "run" });
       toolByReceipt.set(ev.receiptId, it);
@@ -1504,6 +1544,7 @@ function onEvent(id, ev, asst, toolByReceipt) {
       if (id === tkey()) renderHeader();
       return asst;
     case "done":
+      closeThink(tr);
       if (asst) { asst.streaming = false; paintAssistant(asst); }
       refreshPlan();
       return null;
@@ -1557,6 +1598,37 @@ async function loadViolations() {
       els.violList.append(li);
     }
   } catch (e) { els.drawerNote.textContent = `Could not load violations: ${e.message}`; }
+  await loadLessons(id);
+}
+// The lesson drawer: what Daebot learned that is in play for this chat, with the reader's thumbs (helped / hurt, written to MIND).
+async function loadLessons(id) {
+  if (!els.lessonList) return;
+  els.lessonList.replaceChildren();
+  try {
+    const { items, scope } = await json(`/sessions/${encodeURIComponent(id)}/lessons`);
+    const list = Array.isArray(items) ? items : [];
+    els.lessonNote.textContent = list.length
+      ? `${list.length} lesson${list.length === 1 ? "" : "s"} in play${scope ? ` for ${scope}` : ""}. Thumbs tell Daebot whether one helped.`
+      : "No lessons yet. Daebot files one when a turn teaches it something.";
+    for (const it of list) {
+      const li = h("li", `viol lesson ${it.status}`);
+      const top = h("div", "viol-top");
+      top.append(h("span", "g", `${it.type === "lesson" ? "L" : "S"}-${it.key}`), h("span", "a", it.status), h("span", "m", `${it.helped} helped · ${it.hurt} hurt`));
+      const row = h("div", "lesson-votes");
+      for (const [rating, label] of [["up", "👍 helped"], ["down", "👎 hurt"]]) {
+        const b = h("button", "bd-act", label); b.type = "button"; b.dataset.rating = rating; b.dataset.key = it.key;
+        b.addEventListener("click", async () => {
+          b.disabled = true;
+          try { await json(`/sessions/${encodeURIComponent(id)}/lessons`, { method: "POST", body: JSON.stringify({ key: it.key, rating }) }); await loadLessons(id); }
+          catch (e) { notify(`Could not record that: ${e.message}`); b.disabled = false; }
+        });
+        row.append(b);
+      }
+      li.append(top, h("p", "", it.text), row);
+      if (it.scope) li.append(h("div", "lesson-scope", `${it.scope}${Array.isArray(it.scopes) && it.scopes.length >= 2 ? " · promoted (helped in two places)" : ""}`));
+      els.lessonList.append(li);
+    }
+  } catch (e) { els.lessonNote.textContent = `Could not load lessons: ${e.message}`; }
 }
 async function refreshViolCount() {
   if (!state.currentId) return setViolCount(0);

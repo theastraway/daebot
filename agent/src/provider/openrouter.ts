@@ -1,7 +1,7 @@
 // OpenRouter chat-completions streaming provider (SSE). Retries once on 429/5xx with backoff,
 // then falls through cfg.models.fallback. fetch is injectable so tests never touch the network.
 import { ThinkFilter } from "./think-filter.ts";
-import type { Config, Message, Provider, StreamEvent, ToolCall, ToolSpec, Usage } from "../types.ts";
+import type { Config, Effort, Message, Provider, StreamEvent, ToolCall, ToolSpec, Usage } from "../types.ts";
 import { abortError, readSse } from "./sse.ts";
 import { acceptsImages, carriesImages, stripImages } from "./vision.ts";
 
@@ -122,7 +122,7 @@ export function createOpenRouterProvider(cfg: Config, fetchImpl: typeof fetch = 
   const backoffMs = opts.backoffMs ?? 800;
   const url = opts.url ?? OPENROUTER_URL;
 
-  async function open(model: string, req: { messages: Message[]; tools: ToolSpec[]; signal?: AbortSignal; bot?: string }): Promise<Response> {
+  async function open(model: string, req: { messages: Message[]; tools: ToolSpec[]; signal?: AbortSignal; bot?: string; effort?: Effort }): Promise<Response> {
     const body: Record<string, unknown> = {
       model,
       // Never put an image in front of a text-only model: OpenRouter answers 404 "No endpoints found that support image input".
@@ -131,6 +131,8 @@ export function createOpenRouterProvider(cfg: Config, fetchImpl: typeof fetch = 
       usage: { include: true },
     };
     if (req.tools.length) { body.tools = toWireTools(req.tools); body.tool_choice = "auto"; }
+    // The router's reasoning effort (OpenRouter's unified `reasoning` parameter; a model without reasoning ignores it).
+    if (req.effort) body.reasoning = { effort: req.effort };
     let lastErr: unknown;
     for (let attempt = 0; attempt < 2; attempt++) {
       if (req.signal?.aborted) throw abortError();
@@ -166,7 +168,9 @@ export function createOpenRouterProvider(cfg: Config, fetchImpl: typeof fetch = 
     const calls = new Map<number, PartialCall>();
     let usage: Usage = { promptTokens: 0, completionTokens: 0, costUsd: 0 };
     let finishReason = "stop";
-    const think = new ThinkFilter();
+    // The model's inner voice: <think> blocks in the content, or the provider's own reasoning delta (OpenRouter `reasoning`, DeepSeek `reasoning_content`).
+    const thoughts: string[] = [];
+    const think = new ThinkFilter((d) => thoughts.push(d));
     for await (const data of readSse(res.body!, signal)) {
       if (data.trim() === "[DONE]") break;
       let chunk: any;
@@ -175,8 +179,11 @@ export function createOpenRouterProvider(cfg: Config, fetchImpl: typeof fetch = 
       const choice = chunk.choices?.[0];
       const delta = choice?.delta;
       if (delta) {
+        const reasoning = typeof delta.reasoning === "string" ? delta.reasoning : typeof delta.reasoning_content === "string" ? delta.reasoning_content : "";
+        if (reasoning) yield { type: "thinking", delta: reasoning };
         if (typeof delta.content === "string" && delta.content) {
           const text = think.push(delta.content);
+          while (thoughts.length) yield { type: "thinking", delta: thoughts.shift()! };
           if (text) yield { type: "text", delta: text };
         }
         for (const tc of delta.tool_calls ?? []) {
@@ -198,6 +205,7 @@ export function createOpenRouterProvider(cfg: Config, fetchImpl: typeof fetch = 
       }
     }
     const tail = think.flush();
+    while (thoughts.length) yield { type: "thinking", delta: thoughts.shift()! };
     if (tail) yield { type: "text", delta: tail };
     const ordered = [...calls.entries()].sort((a, b) => a[0] - b[0]);
     for (const [idx, p] of ordered) {

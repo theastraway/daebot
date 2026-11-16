@@ -112,9 +112,18 @@ export class LearnStore {
     return d;
   }
   recordUse(key: string): void { this.delta(key).uses++; }
-  recordOutcome(key: string, good: boolean): void {
+  /** Scopes an item helped in that are not yet written to MIND (flushed with the counters). Two scopes = promoted. */
+  private scopeAdds = new Map<string, Set<string>>();
+  /** The scopes an item has helped in, stored plus pending. */
+  scopesOf(key: string): string[] {
+    const base = this.pool.get(key)?.scopes ?? [];
+    const add = this.scopeAdds.get(key);
+    return add ? [...new Set([...base, ...add])] : base;
+  }
+  recordOutcome(key: string, good: boolean, scope?: string): void {
     const d = this.delta(key);
-    if (good) { d.helped++; d.successes++; } else { d.hurt++; d.failures++; }
+    if (good) { d.helped++; d.successes++; if (scope) { let a = this.scopeAdds.get(key); if (!a) { a = new Set(); this.scopeAdds.set(key, a); } a.add(scope); } }
+    else { d.hurt++; d.failures++; }
     // Demotion is one-way: remember the worst status the counters ever implied, later successes do not undo it.
     const base = this.pool.get(key);
     if (base) this.sticky.set(key, worse(this.statusFor(this.view(base)), this.sticky.get(key) ?? "active"));
@@ -140,12 +149,14 @@ export class LearnStore {
       if (!base) { this.deltas.delete(key); continue; }
       if (!d.uses && !d.helped && !d.hurt) { this.deltas.delete(key); continue; }
       const v = this.view(base);
-      const next = { ...v, rev: base.rev + 1, updated: today(this.now()), supersedes: base.mindId } as Item;
+      const scopes = this.scopesOf(key);
+      const next = { ...v, rev: base.rev + 1, updated: today(this.now()), supersedes: base.mindId, ...(scopes.length ? { scopes } : {}) } as Item;
       try {
         const id = await this.persist(next);
         next.mindId = id;
         this.pool.set(key, next);
         this.deltas.delete(key);
+        this.scopeAdds.delete(key);
         n++;
       } catch { /* keep the delta, try on the next flush */ }
     }
@@ -174,7 +185,7 @@ export class LearnStore {
     return best;
   }
 
-  async upsertLesson(c: { kind: LessonKind; trigger: string; behavior: string; rule: string; evidence: string }): Promise<WriteResult> {
+  async upsertLesson(c: { kind: LessonKind; trigger: string; behavior: string; rule: string; evidence: string; scope?: string }): Promise<WriteResult> {
     const title = lessonTitle(c.kind, c.behavior);
     if (!validLessonTitle(title)) return { action: "rejected", why: "title does not fit the Lesson - <Failure|Win|Behavior> - <behavior> grammar" };
     const text = `${c.trigger} ${c.behavior} ${c.rule}`;
@@ -208,7 +219,7 @@ export class LearnStore {
     const lesson: Lesson = {
       type: "lesson", key: keyFor(`${c.behavior} ${c.rule}`), rev: 1, kind: c.kind, status: "active", title,
       trigger: oneLine(c.trigger, 200), behavior: oneLine(c.behavior, 80), rule: oneLine(c.rule, 300), evidence: [oneLine(c.evidence, 240)].filter(Boolean),
-      uses: 0, helped: 0, hurt: 0, created: today(t), updated: today(t),
+      uses: 0, helped: 0, hurt: 0, created: today(t), updated: today(t), ...(c.scope ? { scope: c.scope } : {}),
     };
     const id = await this.persist(lesson);
     lesson.mindId = id;

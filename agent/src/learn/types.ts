@@ -22,6 +22,10 @@ export interface Lesson extends Counters {
   updated: string;
   mindId?: string;        // id returned by MIND when THIS process wrote the revision
   supersedes?: string;
+  /** Where it was learned: "workspace:<owner/repo>", "bot:<slug>" or "person:<user>". Absent = global (learned before scopes existed). */
+  scope?: string;
+  /** Scopes it has helped in. Two or more = promoted: recalled everywhere. */
+  scopes?: string[];
 }
 
 export interface Skill extends Counters {
@@ -41,6 +45,8 @@ export interface Skill extends Counters {
   updated: string;
   mindId?: string;
   supersedes?: string;
+  scope?: string;
+  scopes?: string[];
 }
 
 export interface UserPref { area: string; statement: string; since: string }
@@ -60,11 +66,13 @@ export interface TurnSummary {
   calls: CallRecord[];          // executed calls of this turn
   violations: Violation[];      // kernel violations recorded during this turn
   failed: boolean;              // the turn errored out
+  /** The session's learning scope (loop deps.scope). A lesson from this turn is filed under it. */
+  scope?: string;
 }
 
 export interface LearnHooks {
-  /** Returns the "What you learned before" system note for this user message (or undefined). Never throws, bounded in time. */
-  beforeTurn(userMessage: string): Promise<string | undefined>;
+  /** Returns the "What you learned before" system note for this user message (or undefined). Never throws, bounded in time. scope: recall is scoped to it (see recall.ts). */
+  beforeTurn(userMessage: string, scope?: string): Promise<string | undefined>;
   /** Fire and forget. Never throws, never blocks. */
   afterTurn(summary: TurnSummary): void;
   /** Resolve once all in-flight reflections and writes are done. */

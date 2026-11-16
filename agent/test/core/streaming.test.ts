@@ -47,7 +47,7 @@ test("a blocked final draft streams, is retracted with the gate's reason, then t
   k.hooks.preAnswer = (_s, d) => (d.includes("BAD") ? [block("receipt", "cite a MIND✓ receipt")] : []);
   const ev = await collect(make(chunkedProvider([{ chunks: ["BA", "D claim"] }, { chunks: ["good ", "claim"] }]), k).send("q"));
   const kinds = ev.map((e) => e.type);
-  assert.deepEqual(kinds.filter((t) => t !== "usage"), ["text", "text", "retract", "gate", "text", "text", "done"]);
+  assert.deepEqual(kinds.filter((t) => t !== "usage"), ["text", "text", "retract", "gate", "text", "text", "proof", "done"]);
   assert.equal((ev.find((e) => e.type === "retract") as any).reason, "cite a MIND✓ receipt");
   assert.equal(visibleText(ev), "good claim", "a retracted draft counts as not shown");
   assert.equal((ev.at(-1) as any).finalText, "good claim");
