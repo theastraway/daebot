@@ -82,6 +82,7 @@
     <div class="seg" id="seg" role="group" aria-label="Sidebar view">
       <button class="seg-btn" id="tab-sessions" type="button" aria-pressed="true">Sessions</button>
       <button class="seg-btn" id="tab-bots" type="button" aria-pressed="false">Bots</button>
+      <button class="seg-btn" id="tab-studio" type="button" aria-pressed="false">Studio</button>
     </div>
     <button class="btn-new" id="btn-new" type="button"><svg class="ic"><use href="#i-plus"/></svg><span>New session</span></button>
     <div class="side-label" id="side-label">Sessions</div>
@@ -160,6 +161,7 @@
     <div class="scroll" id="scroll">
       <div class="thread" id="thread" aria-live="polite"></div>
     </div>
+    <section class="studio" id="studio" aria-label="Daebot Studio" hidden></section>
 
     <div class="composer-wrap">
       <div class="voice-dock" id="voice-dock" role="status" aria-live="polite" hidden>
@@ -337,6 +339,8 @@
         <input class="fld" id="bd-name" type="text" maxlength="40" autocomplete="off">
         <label class="fld-label" for="bd-purpose">Purpose</label>
         <input class="fld" id="bd-purpose" type="text" maxlength="140" autocomplete="off">
+        <label class="fld-label" for="bd-dept">Department (its island in the Studio)</label>
+        <input class="fld" id="bd-dept" type="text" maxlength="40" autocomplete="off" placeholder="General">
         <span class="fld-label" id="bd-faces-label">Face (personality)</span>
         <div class="faces" id="bd-faces" role="radiogroup" aria-labelledby="bd-faces-label"></div>
         <p class="drawer-fine" id="bd-face-desc"></p>

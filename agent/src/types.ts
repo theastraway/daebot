@@ -391,6 +391,8 @@ export interface Runtime {
   decisionDoc?(id: string): Promise<{ title: string; content: string } | undefined>;
   /** Task board rows of ONE bot's own threads (the Heartbeat's cheap check reads these). */
   botBoardRows?(botId: string): import("./board/board.ts").BoardRow[];
+  /** Daebot Studio: the user's bots as workers on the floor (studio/index.ts), from this owner's bots, sessions, board rows and pending permission cards. */
+  studio?(extra: { exchanges: readonly import("./studio/index.ts").StudioExchangeIn[] }): Promise<import("./studio/index.ts").StudioView>;
   /** The lessons and learned skills in play for a session (the lesson drawer), with their counters. Undefined = unknown session or no learning there. */
   lessons?(id: string): { scope?: string; items: LessonView[] } | undefined;
   /** The user's thumbs on a lesson or learned skill: up = it helped, down = it hurt. Written to MIND. false = unknown session or key. */

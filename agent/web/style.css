@@ -1518,3 +1518,78 @@ html.browser-open .scroll, html.browser-open .composer-wrap { margin-right: var(
 .lesson-scope { margin-top: 6px; font-size: 11.5px; color: var(--ink-3); }
 .viol.lesson.demoted { opacity: .7; }
 .bd-chip.handoff { border-style: dashed; cursor: help; }
+
+/* ---------- Daebot Studio (web/studio.js): the bots as workers on an isometric floor ---------- */
+.studio { flex: 1; display: flex; flex-direction: column; min-height: 0; background: var(--bg); color: var(--ink); }
+body.studio-on .scroll, body.studio-on .composer-wrap { display: none; }
+.st-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px 6px; flex-wrap: wrap; }
+.st-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.st-title strong { font: 700 15px/1.2 var(--display); letter-spacing: .01em; }
+.st-sub { font: 500 12px var(--sans); color: var(--ink-3); }
+.st-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.st-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font: 600 11.5px var(--mono); color: var(--ink-2); }
+button.st-chip { cursor: pointer; font-family: var(--sans); }
+.st-chip.warn { color: var(--warn); border-color: var(--warn); background: var(--warn-soft); }
+.st-clock { font: 600 12px var(--mono); color: var(--ink-3); padding: 0 4px; }
+.st-note { margin: 0 16px 6px; font: 12.5px/1.45 var(--sans); color: var(--ink-3); }
+.st-body { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) clamp(240px, 28%, 340px); gap: 0; min-height: 0; border-top: 1px solid var(--line); }
+.st-floor { position: relative; min-width: 0; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 8px; background: radial-gradient(ellipse at 50% 60%, var(--surface-2) 0%, var(--bg) 70%); }
+.st-svg { width: 100%; height: 100%; max-height: calc(100vh - 150px); font-family: var(--sans); }
+.st-spoke { stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 2 6; }
+.st-link { stroke: var(--led-deep); stroke-dasharray: 3 5; opacity: .75; }
+.st-brain-ring { fill: none; stroke: var(--line-strong); stroke-width: 1.5; stroke-dasharray: 4 4; }
+.st-brain-core { fill: var(--plate); stroke: var(--led); stroke-width: 2; }
+.st-brain-name { fill: var(--led); font: 800 15px var(--display); letter-spacing: .12em; }
+.st-brain-line { fill: var(--term-fg); font: 500 10px var(--mono); opacity: .85; }
+.st-island .st-top-face { fill: color-mix(in srgb, currentColor 22%, var(--surface)); stroke: color-mix(in srgb, currentColor 55%, var(--line-strong)); stroke-width: 1.5; }
+.st-island .st-side { fill: color-mix(in srgb, currentColor 30%, var(--surface-2)); stroke: color-mix(in srgb, currentColor 40%, var(--line-strong)); stroke-width: 1; }
+.st-island .st-side.r { fill: color-mix(in srgb, currentColor 18%, var(--surface-2)); }
+.st-card rect { fill: var(--surface); stroke: var(--line); stroke-width: 1; }
+.st-dept { fill: var(--ink); font: 700 12.5px var(--display); }
+.st-count { fill: var(--ink-3); font: 600 10.5px var(--mono); }
+.st-kpi { fill: var(--ink-2); font: 500 10px var(--mono); }
+.st-desk { cursor: pointer; outline: none; }
+.st-desk .st-desk-top { fill: color-mix(in srgb, currentColor 35%, var(--surface)); stroke: color-mix(in srgb, currentColor 60%, var(--ink-3)); stroke-width: 1; }
+.st-desk .st-ring { fill: var(--surface); stroke: var(--ink-3); stroke-width: 2; }
+.st-desk.working .st-ring { stroke: var(--ok); animation: st-pulse 1.6s ease-in-out infinite; }
+.st-desk.blocked .st-ring { stroke: var(--warn); }
+.st-desk:focus-visible .st-ring, .st-desk:hover .st-ring { stroke: var(--focus); stroke-width: 2.5; }
+.st-desk .face-svg { color: currentColor; }
+.st-initial { fill: currentColor; font: 800 13px var(--display); }
+.st-desk-name { fill: var(--ink-2); font: 600 10px var(--sans); }
+.st-warn polygon { fill: var(--warn); stroke: var(--surface); stroke-width: 1.5; }
+.st-warn-mark { fill: var(--bg); font: 800 9px var(--sans); }
+.st-badge { cursor: pointer; outline: none; }
+.st-badge rect { fill: var(--warn); stroke: var(--surface); stroke-width: 1.5; filter: drop-shadow(0 2px 4px rgba(0,0,0,.25)); }
+.st-badge:focus-visible rect, .st-badge:hover rect { stroke: var(--focus); }
+.st-badge-mark { fill: var(--bg); }
+.st-badge-text { fill: var(--bg); font: 700 10.5px var(--sans); letter-spacing: .02em; }
+/* Dark: the warn gold is light there, so the badge text goes dark (the plate colour) for contrast. */
+:root[data-theme="dark"] .st-badge-text, :root[data-theme="dark"] .st-badge-mark, :root[data-theme="dark"] .st-warn-mark { fill: var(--plate); }
+@keyframes st-pulse { 0%, 100% { stroke-width: 2; opacity: 1; } 50% { stroke-width: 3.5; opacity: .7; } }
+@media (prefers-reduced-motion: reduce) { .st-desk.working .st-ring { animation: none; } }
+.st-tasks { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); background: var(--surface); }
+.st-tasks-head { padding: 10px 12px 4px; }
+.st-tasks-head h3 { margin: 0; font: 700 12px var(--display); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+.st-filters { display: flex; gap: 4px; flex-wrap: wrap; padding: 4px 10px 8px; }
+.st-filter { border: 1px solid var(--line); background: none; border-radius: 999px; padding: 3px 9px; font: 600 11px var(--sans); color: var(--ink-3); cursor: pointer; }
+.st-filter[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.st-list { list-style: none; margin: 0; padding: 0 8px 12px; overflow-y: auto; min-height: 0; flex: 1; }
+.st-task { margin: 0 0 4px; }
+.st-task-btn { display: flex; gap: 9px; align-items: flex-start; width: 100%; text-align: left; border: 1px solid var(--line); background: var(--surface); border-radius: 10px; padding: 8px 10px; cursor: pointer; color: inherit; font: inherit; }
+.st-task-btn:hover { border-color: var(--line-strong); background: var(--surface-2); }
+.st-task.stopped .st-task-btn { border-color: var(--accent); }
+.st-dot { flex: none; width: 10px; height: 10px; border-radius: 3px; margin-top: 4px; background: var(--ink-3); }
+.st-dot.red { background: var(--accent); } .st-dot.yellow { background: var(--led-deep); } .st-dot.green { background: var(--ok); } .st-dot.grey { background: var(--line-strong); }
+.st-task-main { min-width: 0; flex: 1; }
+.st-task-title { font: 600 12.5px/1.35 var(--sans); color: var(--ink); overflow-wrap: anywhere; }
+.st-task-meta { display: flex; gap: 5px; flex-wrap: wrap; font: 500 10.5px var(--mono); color: var(--ink-3); margin-top: 2px; }
+.st-task-meta .sep { opacity: .6; }
+.st-task-dept { color: var(--ink-2); }
+.st-task-q { margin-top: 4px; font: 12px/1.4 var(--serif); color: var(--ink-2); font-style: italic; }
+.st-empty { padding: 14px 10px; font: 12.5px/1.45 var(--sans); color: var(--ink-3); }
+@media (max-width: 860px) {
+  .st-body { grid-template-columns: 1fr; grid-template-rows: minmax(260px, 55vh) minmax(0, 1fr); overflow-y: auto; }
+  .st-tasks { border-left: 0; border-top: 1px solid var(--line); }
+  .st-svg { max-height: 55vh; }
+}

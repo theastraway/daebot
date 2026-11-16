@@ -39,6 +39,7 @@ import { initToolRoll } from "/toolroll.js";
 import { initTerminalPane } from "/terminal-pane.js";
 import { initSimulatorPane } from "/simulator-pane.js";
 import { initBrowserPane, browserActionLabel, browserArgsForCard } from "/browser-pane.js";
+import { initStudio } from "/studio.js";
 import { argSummary } from "/toolargs.js";
 initScrollbars(); // scrollbars stay hidden until the user scrolls
 
@@ -1877,9 +1878,11 @@ const models = initModels({
 });
 els.title.addEventListener("click", () => renameCurrent());
 let xchg = null; // agent exchanges (cards in the chat, the read-only transcript, the Bots tab group); assigned just after the bots module
+let studio = null; // Daebot Studio (the third sidebar view); assigned after the task board exists, which its badge opens
 const bots = initBots({
   json, api, store, h, icon, ago, notify,
   app: {
+    setStudio: (on) => { if (studio) studio.show(on); },
     mountBotCap: (host, id) => caps.mountBot(host, id), // keyed by the bot's slug: ids are per device, the slug is the same on every device
     exchangesGroup: () => (xchg ? xchg.group() : null),
     exchangeUnread: (id) => (xchg ? xchg.unreadFor(id) : 0),
@@ -1936,6 +1939,25 @@ const board = initBoard({
     reply: (id, text) => replyInto(id, text),
   },
 });
+
+// ---------- Daebot Studio: the bots as workers on an isometric floor (the Studio tab; a sibling of the thread, shown instead of it) ----------
+studio = initStudio({
+  json, h, ago,
+  els: { section: $("studio") },
+  app: {
+    // Opening a thread from the floor leaves the Studio: the sidebar goes back to Bots (or Sessions for the main Daebot) and the thread shows.
+    openSession: async (id) => {
+      const s = state.sessions.find((x) => x.id === id);
+      if (!s) return notify("That session is not in your list any more.");
+      bots.setView(s.bot ? "bots" : "sessions", { silent: true });
+      await selectSession(s, { userClick: true });
+    },
+    pickBot: (id) => { if (id === "main") { bots.setView("sessions", { silent: true }); newSession(); return; } bots.pickBot(id); },
+    openBoard: () => { if (!board.isOpen()) $("btn-board").click(); },
+    notify,
+  },
+});
+if (bots.view() === "studio") studio.show(true); // the remembered view was the Studio: the tab is already pressed, show the floor
 
 // Apps card: the sidebar's Apps button opens MIND integrations (and any section other modules add with apps.addSection).
 const apps = initApps({ api, signOut: () => els.btnLogout.click() });
