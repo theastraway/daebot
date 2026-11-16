@@ -17,7 +17,14 @@ export function writeTrust(tier: Tier, calls: CallRecord[]): Trust {
   return { ok: true };
 }
 
-const SECRET = /\b(?:mind_[A-Za-z0-9]{12,}|sk-[A-Za-z0-9_-]{16,}|sk-or-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9]{20,}|xox[abp]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{12,}|Bearer\s+[A-Za-z0-9._-]{16,})\b/;
+export const SECRET = /\b(?:mind_[A-Za-z0-9]{12,}|sk-[A-Za-z0-9_-]{16,}|sk-or-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abp]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{12,}|AIza[0-9A-Za-z_-]{30,}|sk_(?:live|test)_[A-Za-z0-9]{16,}|Bearer\s+[A-Za-z0-9._-]{16,}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)\b/;
+const SECRET_ALL = new RegExp(SECRET.source, "g");
+
+/** Replaces every secret-looking token with a marker. Used on tool outputs before they reach the model, the transcript or a preview. */
+export function redactSecrets(text: string): string {
+  if (!text || !SECRET.test(text)) return text;
+  return text.replace(SECRET_ALL, (m) => (m.startsWith("Bearer") ? "Bearer [redacted secret]" : m.startsWith("-----") ? "[redacted private key]" : "[redacted secret]"));
+}
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/;
 const URL_RE = /\bhttps?:\/\/\S+/i;
 const LONG_ID = /\b(?=[0-9a-f]*\d)[0-9a-f]{8,}\b/i;

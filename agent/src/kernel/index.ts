@@ -5,6 +5,7 @@ import { feedGate, publicAllowed } from "./feed.ts";
 import { hostedGate } from "./hosted.ts";
 import { hostedToolAllowed } from "../hosted.ts";
 import { createIsolationGate } from "./isolation.ts";
+import { createCoderSafetyGate } from "./coder-safety.ts";
 import type { IsolationOptions } from "./isolation.ts";
 import { createOwnerGate } from "./owner.ts";
 import { receiptGate } from "./receipt.ts";
@@ -34,7 +35,8 @@ export function createKernel(opts: {
   const tier: Tier = opts.tier ?? "admin";
   // dangerGate is evaluated last (and only when nothing else refused the call) so a single-use approval is
   // never consumed by a call another gate stops.
-  const preGates: Gate[] = [...(opts.hosted ? [hostedGate] : []), createTierGate(tier, opts.coder), bootGate, feedGate, createOwnerGate({ clientNames: opts.clientNames }), createIsolationGate(opts.isolation)];
+  // coder-safety sits before danger: a blocked bypass never consumes an approval, and a protected-config edit asks like an outward action.
+  const preGates: Gate[] = [...(opts.hosted ? [hostedGate] : []), createTierGate(tier, opts.coder), bootGate, feedGate, createOwnerGate({ clientNames: opts.clientNames }), createIsolationGate(opts.isolation), createCoderSafetyGate({ cwd: opts.isolation?.cwd })];
   const turnGates: Gate[] = [...preGates, dangerGate];
   const answerGates: Gate[] = [receiptGate];
   const enabled = opts.enabled;

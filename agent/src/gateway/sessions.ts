@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AgentEvent, AgentSession, DeviceBridge, MessageQuote, PhotoRef, Runtime } from "../types.ts";
+import type { AgentEvent, AgentSession, DeviceBridge, MessageQuote, PhotoRef, Runtime, ModelTier } from "../types.ts";
 import type { SessionPermMode } from "../permissions/store.ts";
 
 export class BusyError extends Error {}
@@ -167,7 +167,7 @@ export class SessionManager {
   }
 
   /** Runs one turn. Throws BusyError / NotFoundError synchronously-in-promise before any event is emitted. */
-  async turn(id: string, text: string, onEvent: (e: AgentEvent) => void, external?: AbortSignal, origin: "user" | "bot" = "user", interactive = false, photos?: PhotoRef[], client?: { capabilities?: string[]; device?: DeviceBridge; peerReceipt?: string }, quote?: MessageQuote): Promise<void> {
+  async turn(id: string, text: string, onEvent: (e: AgentEvent) => void, external?: AbortSignal, origin: "user" | "bot" = "user", interactive = false, photos?: PhotoRef[], client?: { capabilities?: string[]; device?: DeviceBridge; peerReceipt?: string; /** A delegating agent's tier for this piece (bot_talk handoff card). */ routeHint?: ModelTier }, quote?: MessageQuote): Promise<void> {
     const ls = this.live.get(id);
     if (!ls) throw new NotFoundError("no such session");
     if (ls.busy) throw new BusyError("session is busy with another turn");
@@ -184,7 +184,7 @@ export class SessionManager {
     }
     let sawDone = false, failedMsg = "", finalText = "";
     try {
-      for await (const ev of ls.session.send(text, { signal: ac.signal, origin, interactive, ...(quote ? { quote } : {}), ...(photos?.length ? { photos } : {}), ...(client?.capabilities?.length ? { capabilities: client.capabilities } : {}), ...(client?.device ? { device: client.device } : {}), ...(origin === "bot" && client?.peerReceipt ? { peerReceipt: client.peerReceipt } : {}) })) {
+      for await (const ev of ls.session.send(text, { signal: ac.signal, origin, interactive, ...(quote ? { quote } : {}), ...(photos?.length ? { photos } : {}), ...(client?.capabilities?.length ? { capabilities: client.capabilities } : {}), ...(client?.device ? { device: client.device } : {}), ...(origin === "bot" && client?.peerReceipt ? { peerReceipt: client.peerReceipt } : {}), ...(origin === "bot" && client?.routeHint ? { routeHint: client.routeHint } : {}) })) {
         if (ev.type === "done") { sawDone = true; finalText = ev.finalText; }
         if (ev.type === "notice" && /^Turn failed/.test(ev.text)) failedMsg = ev.text;
         onEvent(ev);

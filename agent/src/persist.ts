@@ -6,7 +6,7 @@ import { rename, writeFile, mkdir, unlink } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { daebotHome } from "./home.ts";
-import type { HistoryEvent, Message, MessageMeta, SessionState, Violation, TurnProof } from "./types.ts";
+import type { HistoryEvent, Message, MessageMeta, SessionState, Violation, TurnProof, HandoffCard } from "./types.ts";
 import type { BoardTask } from "./board/board.ts";
 import type { EnvTag } from "./env.ts";
 
@@ -49,6 +49,8 @@ export interface StoredSession {
   board?: BoardTask[];
   /** The proof of the last human turn (receipts, blocks, model): the board's proof card. */
   proof?: TurnProof;
+  /** The handoff card compaction last wrote for this chat (objective, evidence, what is left, next action). */
+  handoff?: HandoffCard;
   createdAt: number;
   updatedAt: number;
   /** When a non-transcript field last changed by the user's hand (rename, archive). Device sync orders such changes by it; it does not reorder the sidebar like updatedAt does. */

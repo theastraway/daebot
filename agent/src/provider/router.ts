@@ -34,6 +34,8 @@ export interface TurnDigest {
   badStreak: number;
   /** Tokens in the transcript now (compaction pressure). */
   contextTokens?: number;
+  /** The tier the previous turn ran on (start strong, then downshift: a plan on the frontier hands the build down). */
+  lastTier?: ModelTier;
 }
 
 export interface RouteInput {
@@ -47,9 +49,18 @@ export interface RouteInput {
   ceiling?: ModelTier;
   /** The lowest tier allowed (a desktop with no local model: reflex). Default reflex. */
   floor?: ModelTier;
+  /** A delegating agent's tier for this piece (a handoff card): the floor for this turn. */
+  hint?: ModelTier;
+  /** A local model (ollama/...) that may take reflex and light work at zero spend. */
+  localModel?: string;
+  /** Why the ceiling is where it is, when it is not the identity (e.g. the frontier budget for today is spent). */
+  ceilingReason?: string;
   policy?: Record<ModelTier, TierSpec>;
   mode?: RouterMode;
 }
+
+/** "go ahead", "do it", "proceed", "yes build it": the user approved the plan; the build moves down from the frontier. */
+const APPROVAL = /^\s*(?:ok(?:ay)?|yes|yep|sure|sounds good|lgtm|approved|go|go ahead|do it|proceed|ship it|build it|make it so|let'?s (?:go|do it|build it)|please (?:go ahead|proceed|do it))\b[\s!.]*(?:(?:and|then|with|but)\b.*)?$/i;
 
 const SECURITY = /\b(?:auth(?:entication|oriz\w+)?|login|session|password|secret|token|api ?key|permission|tier|payment|billing|stripe|checkout|refund|delete|drop table|migration|sql|shell|exec|eval|webhook|oauth|cookie|csrf|xss|injection)\b/i;
 const LARGE = /\b(?:new (?:app|service|subsystem|module|product|feature set|platform)|from scratch|end[- ]to[- ]end|migrat\w+|rewrite|re-?architect\w*|across (?:repos|services|the codebase)|whole (?:app|codebase|system)|phase \d|roadmap|multi-?step|project plan|design (?:the|a) (?:system|architecture))\b/i;
@@ -68,6 +79,8 @@ export function classifyTurn(input: RouteInput): { tier: ModelTier; effort?: Eff
   const m = String(input.message ?? "");
   const d = input.digest;
   const stuck = !!d && (d.badStreak >= 2 || d.repeatHits > 0 || (d.unverified && d.failedCalls > 0));
+  // Start strong and downshift: the plan was made on the frontier; the user's go sends the build to the reasoner (large) or coder (small).
+  if (d?.lastTier === "frontier" && APPROVAL.test(m) && !stuck) return { tier: "reasoner", reason: "plan approved: downshift from the frontier to the reasoner for the build" };
   if (isTrivialMessage(m)) return { tier: "light", reason: "greeting or acknowledgement" };
   const codey = CODEY.test(m) || DEBUG.test(m);
   if (!codey) {
@@ -95,18 +108,41 @@ export function routeTurn(input: RouteInput): RouteDecision | undefined {
   const mode = input.mode ?? routerMode();
   if (mode === "off" || input.hasPhoto) return undefined;
   const policy = input.policy ?? loadPolicy();
-  const floor = input.floor ?? "reflex";
+  const floor = input.hint ? higherTier(input.hint, input.floor ?? "reflex") : input.floor ?? "reflex";
   const ceiling = input.ceiling ?? "frontier";
-  const c = classifyTurn(input);
+  const c = input.hint ? { tier: input.hint, reason: `delegated piece: the handoff card asks for the ${input.hint} tier` } : classifyTurn(input);
   const tier = clampTier(higherTier(c.tier, floor), floor, ceiling);
   const spec = policy[tier];
-  const effort = c.effort ?? spec.effort;
-  const clamped = tier !== c.tier ? ` (clamped from ${c.tier} to the ${tierIndex(c.tier) > tierIndex(ceiling) ? "ceiling" : "floor"})` : "";
+  const effort = (c as { effort?: Effort }).effort ?? spec.effort;
+  const clamped = tier !== c.tier ? ` (clamped from ${c.tier} to the ${tierIndex(c.tier) > tierIndex(ceiling) ? `ceiling${input.ceilingReason ? `: ${input.ceilingReason}` : ""}` : "floor"})` : "";
+  // The local tier takes reflex and light work when a local model is there: zero spend, same answer class.
+  if (input.localModel && (tier === "reflex" || tier === "light")) return { tier: "local", model: input.localModel, reason: `${c.reason}${clamped}; served locally`, source: "rules", applied: mode === "enforce" };
   return { tier, model: spec.model, ...(effort ? { effort } : {}), reason: `${c.reason}${clamped}`, source: "rules", applied: mode === "enforce" };
 }
 
 /** Rolls the digest forward with what the turn that just ended looked like. */
-export function nextDigest(prev: TurnDigest | undefined, turn: { failedCalls: number; blocks: number; unverified: boolean; repeatHits: number; contextTokens?: number }): TurnDigest {
+export function nextDigest(prev: TurnDigest | undefined, turn: { failedCalls: number; blocks: number; unverified: boolean; repeatHits: number; contextTokens?: number; lastTier?: ModelTier }): TurnDigest {
   const bad = turn.failedCalls > 0 || turn.blocks > 0 || turn.unverified || turn.repeatHits > 0;
   return { ...turn, badStreak: bad ? (prev?.badStreak ?? 0) + 1 : 0 };
+}
+
+/** A per-day budget for one tier's spend (the frontier): once spent, the router's ceiling drops to the tier below until tomorrow (UTC). */
+export class TierBudget {
+  readonly capUsd: number;
+  private day = "";
+  private spent = 0;
+  private now: () => Date;
+  constructor(capUsd: number, now: () => Date = () => new Date()) { this.capUsd = capUsd; this.now = now; }
+  private roll(): void { const d = this.now().toISOString().slice(0, 10); if (d !== this.day) { this.day = d; this.spent = 0; } }
+  add(usd: number): void { this.roll(); if (Number.isFinite(usd) && usd > 0) this.spent += usd; }
+  total(): number { this.roll(); return this.spent; }
+  exceeded(): boolean { this.roll(); return this.capUsd > 0 && this.spent >= this.capUsd; }
+}
+
+/** DAEBOT_FRONTIER_DAILY_USD: the frontier tier's budget per owner per day (default $5; 0 = no budget). */
+export function frontierBudgetUsd(env: Record<string, string | undefined> = process.env): number {
+  const raw = (env.DAEBOT_FRONTIER_DAILY_USD ?? "").trim();
+  if (!raw) return 5;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 5;
 }

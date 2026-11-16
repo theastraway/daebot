@@ -88,7 +88,7 @@ const TOOL_GROUP: Record<string, Group> = {
 
 /** Always sent, whatever the message says. */
 export const CORE_TOOLS = new Set([
-  "mind_query", "mind_remember", "web_search", "web_fetch", "read_file", "write_file", "edit_file", "glob", "grep", "bash", "process", "bot_talk", "bot_self",
+  "mind_query", "mind_remember", "web_search", "web_fetch", "read_file", "write_file", "edit_file", "glob", "grep", "bash", "process", "bot_talk", "bot_self", "advisor",
 ]);
 
 export function groupOfTool(name: string): Group | undefined { return TOOL_GROUP[name]; }

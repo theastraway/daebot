@@ -65,7 +65,18 @@ export function proofChips(p) {
   if (p.blocked) out.push({ cls: "warn", text: `${p.blocked} blocked`, title: "Calls a gate or a permission rule refused" });
   if (p.model) out.push({ cls: "model", text: `${p.model}${p.effort ? ` · ${p.effort}` : ""}`, title: p.route ? `Router: ${p.route}` : "The model that answered" });
   else if (p.route) out.push({ cls: "", text: `route: ${p.route}`, title: "The router's decision for the last turn" });
+  const talked = Array.isArray(p.talked) ? p.talked : [];
+  if (talked.includes("reviewer")) out.push({ cls: "ok", text: "Reviewer looked", title: "The reviewer bot was asked during the last turn" });
+  else if (talked.length) out.push({ cls: "", text: `asked ${talked.slice(0, 3).join(", ")}`, title: "Agents consulted during the last turn" });
   return out;
+}
+
+/** The handoff card as one chip with the card in its tooltip (objective, next action, what is left). */
+export function handoffChip(c) {
+  if (!c || typeof c !== "object" || !c.objective) return null;
+  const left = Array.isArray(c.left) ? c.left : [];
+  const lines = [`Objective: ${c.objective}`, `Next: ${c.next || ""}`, ...(left.length ? ["Left:", ...left.slice(0, 6).map((x) => `- ${x}`)] : []), ...(c.verify ? [`Verify: ${c.verify}`] : [])];
+  return { cls: "handoff", text: "Handoff card", title: lines.join("\n") };
 }
 
 /** Enter submits, Shift+Enter is a new line (and an IME composition never submits). */
@@ -297,6 +308,8 @@ export function initBoard({ json, h, els, app }) {
       // The proof card: the session's last turn, the same on every row, shown once under the title.
       const pr = (g.rows.find((r) => r && r.proof) || {}).proof;
       const chips = proofChips(pr);
+      const hc = handoffChip((g.rows.find((r) => r && r.handoff) || {}).handoff);
+      if (hc) chips.push(hc);
       if (chips.length) {
         const line = h("div", "bd-proof");
         line.title = "Proof of the last turn";
