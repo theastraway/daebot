@@ -828,8 +828,8 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       const learn = botRec
         // A bot does not reflect on every turn. Once its Heartbeat has recorded a lesson, the bot recalls its own lessons (read-only, its own MIND).
         ? (botsCtx?.routines?.book(ownerKey, botRec.id).lessons ? botRecall(clientForMind(botRec.slug), cfg, learnCfg) : undefined)
-        // Per-tenant learning: a hosted user (their own MIND key) learns as staff into their own MIND; DAEBOT_TENANT_LEARNING=0 keeps it admin-only.
-        : learnCfg.enabled && (tier === "admin" || (tier === "staff" && !!hosted?.username && !/^(0|off|false|no)$/i.test(((overrides.env ?? process.env).DAEBOT_TENANT_LEARNING ?? "").trim())))
+        // Per-tenant learning (opt-in, DAEBOT_TENANT_LEARNING=1): a hosted user (their own MIND key) learns as staff into their own MIND. Off: admin-only, as before.
+        : learnCfg.enabled && (tier === "admin" || (tier === "staff" && !!hosted?.username && /^(1|true|yes|on)$/i.test(((overrides.env ?? process.env).DAEBOT_TENANT_LEARNING ?? "").trim())))
         ? createLearning({ client, provider, cfg, learn: hosted?.username ? { ...learnCfg, user: learnUserName(hosted.username) } : learnCfg, tier, tenant: tier === "staff", onCost: (usd) => costCap?.add(usd) })
         : undefined;
       const wasInterrupted = stored?.run?.status === "running"; // a process died with this turn in flight
