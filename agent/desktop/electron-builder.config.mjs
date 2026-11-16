@@ -98,7 +98,10 @@ export default {
   afterPack: (context) => signPtyWindows(context),
   win: {
     icon: "build-resources/icon.ico",
-    target: [{ target: "nsis", arch: ["x64", "arm64"] }],
+    // No `arch` here on purpose: an explicit arch list makes EVERY electron-builder run build BOTH installers (CLI --x64/--arm64 is ignored),
+    // so the x64 run and the arm64 run overwrote each other's Daebot-Setup-<v>-<arch>.exe and left a feed with another build's sha512
+    // (Windows x64 stuck on 0.3.46, 2026-11-15). The arch now comes from the CLI flag, one arch per run (npm run dist:win).
+    target: [{ target: "nsis" }],
     artifactName: "Daebot-Setup-${version}-${arch}.${ext}",
     extraResources: [{ from: "build/bin", to: "bin", filter: ["daebot-windows-${arch}.exe"] }],
     // Unsigned unless DAEBOT_WIN_SIGN=azure (see azureSignOptions above). .dll and .node cover ConPTY and the pty addon when signing.
