@@ -32,8 +32,14 @@ import { focusedContextOn, relevantFromMind, type Group, type TurnFocus } from "
 import { loadSkills, renderSkills, skillsPrompt } from "./skills/index.ts";
 import type { SkillFile } from "./skills/index.ts";
 import { daeBase } from "./bots/dae.ts";
-import { routeTurn, routerMode } from "./provider/router.ts";
+import { TierBudget, frontierBudgetUsd, routeTurn, routerMode } from "./provider/router.ts";
+import { createOllamaProvider, detectOllama, pickLocalModel, withLocal } from "./provider/local.ts";
+import { createAdvisorTool } from "./tools/advisor.ts";
 import { TIER_ORDER, loadPolicy } from "./provider/policy.ts";
+import { adviseTier, appendRouteLog, classOf, describeTable, loadTable, routeLogPath, rowFor } from "./provider/learned.ts";
+import type { LearnedTable } from "./provider/learned.ts";
+import { mergeGrants, parseTenantRepos } from "./kernel/coder.ts";
+import { factGateMode } from "./kernel/fact.ts";
 import { botScope, personScope, workspaceScope } from "./learn/scope.ts";
 import { BOT_SKILL_PROMPT, BOT_TOOLKIT_PROMPT } from "./bots/skill.ts";
 import type { BotRecord, BotsContext, RosterEntry } from "./bots/types.ts";
@@ -74,7 +80,7 @@ import { facePersonality, faceOf } from "./bots/faces.ts";
 import type { RunMark, SessionStore, StoredSession } from "./persist.ts";
 import { routingSection } from "./routing.ts";
 import { screenFeed } from "./screen/feed.ts";
-import type { AgentEvent, AgentSession, Config, HistoryEvent, LessonView, Message, MessageMeta, MindClient, ModelTier, Provider, Runtime, SessionSync, Tool, TurnProof } from "./types.ts";
+import type { AgentEvent, AgentSession, Config, HandoffCard, HistoryEvent, LessonView, Message, MessageMeta, MindClient, ModelTier, Provider, Runtime, SessionSync, Tool, TurnProof } from "./types.ts";
 
 const noSync: SessionSync = { async open() {}, async append() {}, async pendingReplies() { return []; }, async close() {} };
 
@@ -315,7 +321,7 @@ export function composeSystemPrompt(o: {
   return lines.join("\n");
 }
 
-interface Entry { session: AgentSession; surface: string; title: string; updatedAt: number; tier: Tier; recorder: HistoryRecorder; createdAt: number; bot?: string; peer?: string; model?: string; permMode?: SessionPermMode; titleSet?: boolean; run?: RunMark; board?: BoardTask[]; proof?: TurnProof; scope?: string; msgMeta?: Record<string, MessageMeta>; unreadFrom?: string; archived?: boolean; metaAt?: number; env?: EnvTag; envAt?: number; envBy?: EnvBy; pinnedAt?: number; learn?: Learning }
+interface Entry { session: AgentSession; surface: string; title: string; updatedAt: number; tier: Tier; recorder: HistoryRecorder; createdAt: number; bot?: string; peer?: string; model?: string; permMode?: SessionPermMode; titleSet?: boolean; run?: RunMark; board?: BoardTask[]; proof?: TurnProof; handoff?: HandoffCard; scope?: string; msgMeta?: Record<string, MessageMeta>; unreadFrom?: string; archived?: boolean; metaAt?: number; env?: EnvTag; envAt?: number; envBy?: EnvBy; pinnedAt?: number; learn?: Learning }
 
 // The model router (provider/router.ts): mode and policy are read once per process (DAEBOT_ROUTER, DAEBOT_ROUTING_POLICY, DAEBOT_TIER_*).
 const ROUTER_MODE = routerMode();
@@ -410,7 +416,15 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
   // One tier + credits cache per runtime: the provider feeds it from MIND's response headers, and view_photo reads it to know the plan.
   const credits = overrides.credits ?? (mindBilled ? new MindCredits({ mindBaseUrl: cfg.mindBaseUrl, fetchImpl: overrides.fetchImpl }) : undefined);
   const billingKey = (): string => hosted?.mindClient?.getKey?.() ?? cfg.mindApiKey;
-  const provider = overrides.provider ?? createProvider(cfg, overrides.fetchImpl, { getKey: hosted?.mindClient?.getKey, credits });
+  const baseProvider = overrides.provider ?? createProvider(cfg, overrides.fetchImpl, { getKey: hosted?.mindClient?.getKey, credits });
+  // The local tier (provider/local.ts): a desktop or self-host runtime looks once for an Ollama on this machine; the hosted gateway never does.
+  // Detection is async and off the boot path: until it answers (or when nothing is there) the router routes as if no local model existed.
+  let localModel: string | undefined;
+  const localWanted = !hosted && !overrides.provider && !/^(0|off|false|no)$/i.test(((overrides.env ?? process.env).DAEBOT_LOCAL_LLM ?? "").trim());
+  const provider: Provider = localWanted ? withLocal(baseProvider, createOllamaProvider(cfg, overrides.fetchImpl ?? fetch)) : baseProvider;
+  if (localWanted) void detectOllama({ fetchImpl: overrides.fetchImpl }).then((r) => { if (r) localModel = pickLocalModel(r.models, (overrides.env ?? process.env).DAEBOT_TIER_LOCAL); });
+  // The frontier tier's budget for this owner, per day: once spent, the router's ceiling drops to the reasoner until tomorrow.
+  const frontierBudget = new TierBudget(frontierBudgetUsd(overrides.env ?? process.env), hosted?.now);
   // Agent Session sync may need a different key (chat:write); falls back to the main key.
   const sessionClient = cfg.mindSessionApiKey && cfg.mindSessionApiKey !== cfg.mindApiKey
     ? createMindClient({ ...cfg, mindApiKey: cfg.mindSessionApiKey }, overrides.fetchImpl, hosted?.mindClient)
@@ -424,7 +438,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
   const settings = botsCtx ? createSettings(botsCtx.dir, ownerKey) : undefined;
   // Granular permissions + suggested-reply feedback: per owner, under the data dir (hosted: the Render disk).
   const stateDir = overrides.stateDir ?? botsCtx?.dir;
-  const permissions = stateDir ? new PermissionService({ dir: stateDir, owner: ownerKey }) : undefined;
+  const permissions = stateDir ? new PermissionService({ dir: stateDir, owner: ownerKey, guards: () => settings?.get().guards }) : undefined;
   const suggestStore = stateDir ? new SuggestionStore(stateDir, ownerKey) : undefined;
   // Photos attached to chat messages: per owner, under the data dir. The vision call goes through the same provider as the chat
   // (hosted: the user's own MIND plan; self-host: OPENROUTER_API_KEY), and a free-tier (Explorer) user is read with the free model only.
@@ -435,6 +449,15 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         isFree: mindBilled && credits ? async () => (await credits.get(billingKey()))?.tier === FREE_TIER : undefined,
       })
     : undefined;
+  // advisor: one frontier-model call for a stuck point (tools/advisor.ts); same billing path as web_search. Offered when a model endpoint exists.
+  const advisorTool = createAdvisorTool({ endpoint: (sid) => { const bid = sid ? sessions.get(sid)?.bot : undefined; return llmEndpoint(cfg, billingKey, bid ? botStore?.get(bid)?.slug : undefined); }, fetchImpl: overrides.fetchImpl, model: () => ({ model: ROUTER_POLICY.frontier.model, ...(ROUTER_POLICY.frontier.effort ? { effort: ROUTER_POLICY.frontier.effort } : {}) }), now: hosted?.now ? () => hosted.now!().getTime() : undefined });
+  // A handoff card goes to MIND as a private entry (best effort, never awaited by the turn), so the next session can start from it.
+  const fileHandoff = async (e: Entry, c: HandoffCard): Promise<void> => {
+    try {
+      const body = [`Objective: ${c.objective}`, "Evidence:", ...c.evidence.map((x) => `- ${x}`), "What is left:", ...c.left.map((x) => `- ${x}`), `Next action: ${c.next}`, ...(c.verify ? [`How to verify: ${c.verify}`] : [])].join("\n");
+      await client.remember({ type: "entry", title: `Handoff card - ${cleanTitle(e.title) ?? "chat"} - ${new Date(c.at).toISOString().slice(0, 10)}`, content: body, tags: ["daebot-handoff"], source: "daebot" });
+    } catch { /* MIND unreachable: the card is still on the session and the board */ }
+  };
   // read_document: the text of a PDF the user attached. Pure local extraction (src/pdf.ts): no model, no cost, no write.
   const documentTool = photoStore ? createReadDocumentTool({ store: photoStore }) : undefined;
   // web_search: ranked web results through the same billing path as the chat (hosted: the user's own MIND key and credits; self-host: OPENROUTER_API_KEY).
@@ -637,7 +660,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         return r;
       },
     })] : [];
-    const every = [...builtinTools, searchTool, ...(photoTool ? [photoTool] : []), ...(documentTool ? [documentTool] : []), ...(imageTool ? [imageTool] : []), ...createMindTools({
+    const every = [...builtinTools, searchTool, advisorTool, ...(photoTool ? [photoTool] : []), ...(documentTool ? [documentTool] : []), ...(imageTool ? [imageTool] : []), ...createMindTools({
       home, clientFor: clientForMind, roster: () => botStore?.roster() ?? [],
       refresh: botStore ? async () => { await botStore.list(); } : undefined,
     }, { user: hosted?.username }).filter((t) => on || t.spec.name !== "mind_tenants"),
@@ -655,12 +678,26 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     const all = hosted ? filterHostedTools(withMcp) : withMcp;
     return selfBot ? botSessionTools(all, { localTools: localTools && !hosted }) : all;
   };
-  // One kernel per identity tier (each enforces its tier's tool classes on top of the shared gates).
-  const kernels = new Map<Tier, ReturnType<typeof createKernel>>();
+  // The effective coder grant: the operator's (DAEBOT_CODERS) plus the tenant's own repo list from Settings. Read live: an edit applies on the next session.
+  const coderGrant = () => mergeGrants(hosted?.coder, parseTenantRepos(settings?.get().coderRepos).grant);
+  // The fact gate's mode (DAEBOT_FACT_GATE) applies to runtimes with file tools, never hosted ones.
+  const FACT_MODE = hosted ? "off" : factGateMode(overrides.env ?? process.env);
+  // One kernel per identity tier (each enforces its tier's tool classes on top of the shared gates), rebuilt when the grant changes.
+  const kernels = new Map<string, ReturnType<typeof createKernel>>();
   const kernelFor = (tier: Tier) => {
-    let k = kernels.get(tier);
-    if (!k) { k = createKernel({ shadow: cfg.shadow, enabled: cfg.kernel, clientNames: cfg.clientNames, tier, coder: hosted?.coder, hosted: !!hosted }); kernels.set(tier, k); }
+    const grant = coderGrant();
+    const key = `${tier}|${grant?.repos.join(",") ?? ""}`;
+    let k = kernels.get(key);
+    if (!k) { k = createKernel({ shadow: cfg.shadow, enabled: cfg.kernel, clientNames: cfg.clientNames, tier, coder: grant, hosted: !!hosted, fact: FACT_MODE }); if (kernels.size > 20) kernels.clear(); kernels.set(key, k); }
     return k;
+  };
+  // The route log and the learned table (provider/learned.ts): rows per human turn, the table re-read at most every few minutes.
+  const routeLog = stateDir ? routeLogPath(stateDir, ownerKey) : undefined;
+  let learned: { at: number; table: LearnedTable } | undefined;
+  const learnedTable = (): LearnedTable => {
+    if (!routeLog) return new Map();
+    if (!learned || Date.now() - learned.at > 5 * 60_000) learned = { at: Date.now(), table: loadTable(routeLog) };
+    return learned.table;
   };
   const sessions = new Map<string, Entry>();
   const learnCfg = resolveLearnConfig(overrides.env ?? process.env, { hosted: !!hosted });
@@ -686,7 +723,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     void store.save({
       v: 1, id, surface: e.surface, title: e.title, tier: e.tier, owner: ownerId, createdAt: e.createdAt, updatedAt: e.updatedAt,
       state: st, violations: e.session.violations(), history: e.recorder.events(),
-      ...(e.bot ? { bot: e.bot } : {}), ...(e.peer ? { peer: e.peer } : {}), ...(e.model ? { model: e.model } : {}), ...(e.permMode ? { permMode: e.permMode } : {}), ...(e.titleSet ? { titleSet: true } : {}), ...(e.run ? { run: { ...e.run } } : {}), ...(e.board?.length ? { board: e.board } : {}), ...(e.proof ? { proof: e.proof } : {}),
+      ...(e.bot ? { bot: e.bot } : {}), ...(e.peer ? { peer: e.peer } : {}), ...(e.model ? { model: e.model } : {}), ...(e.permMode ? { permMode: e.permMode } : {}), ...(e.titleSet ? { titleSet: true } : {}), ...(e.run ? { run: { ...e.run } } : {}), ...(e.board?.length ? { board: e.board } : {}), ...(e.proof ? { proof: e.proof } : {}), ...(e.handoff ? { handoff: e.handoff } : {}),
       ...(e.msgMeta && Object.keys(e.msgMeta).length ? { msgMeta: e.msgMeta } : {}), ...(e.unreadFrom ? { unreadFrom: e.unreadFrom } : {}), ...(e.archived ? { archived: true } : {}), ...(e.metaAt ? { metaAt: e.metaAt } : {}),
       ...(e.env ? { env: e.env } : {}), ...(e.env && e.envAt ? { envAt: e.envAt } : {}), ...(e.env && e.envBy ? { envBy: e.envBy } : {}), ...(e.pinnedAt ? { pinnedAt: e.pinnedAt } : {}),
     }).catch((err) => process.stderr.write(`persist: could not save a session (${String((err as Error)?.message ?? err).split("\n")[0].slice(0, 120)})\n`));
@@ -755,7 +792,8 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       // Tools a tier may not use are neither offered nor executable (the loop only knows this list).
       const sessionTools = toolsFor(home, botRec?.id, !botRec && !!peer, !peer); // a bot's message to the main Daebot runs without bot_manage, mcp_connect and the board: a peer can ask, never reconfigure
       const allWithMcp = mcp.configured ? [...sessionTools, ...(await mcp.tools())] : sessionTools;
-      const tools = tier === "admin" ? allWithMcp : allWithMcp.filter((t) => tierAllows(tier, t, undefined, hosted?.coder));
+      const grantNow = coderGrant();
+      const tools = tier === "admin" ? allWithMcp : allWithMcp.filter((t) => tierAllows(tier, t, undefined, grantNow));
       // The model: an explicit choice (open / PATCH), else the stored one, else the user's default, else the configured default.
       const explicitModel = opts.model && validModelId(opts.model) ? opts.model : stored?.model && validModelId(stored.model) ? stored.model : undefined;
       // The user's default: a model they picked as the Daebot default, else the model chosen in their MIND account (read with the plan, cached),
@@ -770,8 +808,10 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       const focusedOn = focusedContextOn();
       // File skills (agent/skills + DAEBOT_SKILLS_DIR), read once per process; the loop decides per turn which are in play.
       const fileSkills: readonly SkillFile[] = loadSkills().skills;
-      // Router ceiling by identity: the owner reaches the frontier, staff the reasoner, a public identity stays light.
-      const routeCeiling: ModelTier = tier === "admin" ? "frontier" : tier === "staff" ? "reasoner" : "light";
+      // Router ceiling by identity: the owner reaches the frontier, staff the reasoner, a public identity stays light. A spent frontier budget lowers it for the day.
+      const identityCeiling: ModelTier = tier === "admin" ? "frontier" : tier === "staff" ? "reasoner" : "light";
+      const routeCeiling = (): { ceiling: ModelTier; reason?: string } =>
+        identityCeiling === "frontier" && frontierBudget.exceeded() ? { ceiling: "reasoner", reason: `the frontier budget for today ($${frontierBudget.capUsd.toFixed(2)}) is spent` } : { ceiling: identityCeiling };
       // Learning scope: a bot's threads learn as the bot; a local session inside a git checkout as the workspace; everything else as the person.
       const scopeOf = (): string => botRec ? botScope(botRec.slug) : (!hosted ? workspaceScope(cwd) : undefined) ?? personScope(hosted?.username ?? learnCfg.user);
       let boot: { ok: boolean; context: string; error?: string; degraded?: boolean };
@@ -788,8 +828,9 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       const learn = botRec
         // A bot does not reflect on every turn. Once its Heartbeat has recorded a lesson, the bot recalls its own lessons (read-only, its own MIND).
         ? (botsCtx?.routines?.book(ownerKey, botRec.id).lessons ? botRecall(clientForMind(botRec.slug), cfg, learnCfg) : undefined)
-        : learnCfg.enabled && tier === "admin"
-        ? createLearning({ client, provider, cfg, learn: hosted?.username ? { ...learnCfg, user: learnUserName(hosted.username) } : learnCfg, tier, onCost: (usd) => costCap?.add(usd) })
+        // Per-tenant learning (opt-in, DAEBOT_TENANT_LEARNING=1): a hosted user (their own MIND key) learns as staff into their own MIND. Off: admin-only, as before.
+        : learnCfg.enabled && (tier === "admin" || (tier === "staff" && !!hosted?.username && /^(1|true|yes|on)$/i.test(((overrides.env ?? process.env).DAEBOT_TENANT_LEARNING ?? "").trim())))
+        ? createLearning({ client, provider, cfg, learn: hosted?.username ? { ...learnCfg, user: learnUserName(hosted.username) } : learnCfg, tier, tenant: tier === "staff", onCost: (usd) => costCap?.add(usd) })
         : undefined;
       const wasInterrupted = stored?.run?.status === "running"; // a process died with this turn in flight
       const inner = createAgentSession({
@@ -811,7 +852,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
           persist(id);
         },
         // Servers the user connects mid-chat appear on the next round, without reopening the session. A tier only ever sees the classes it may run.
-        dynamicTools: overrides.mcpConnect ? () => overrides.mcpConnect!.tools(ownerKey).filter((t) => tier === "admin" || tierAllows(tier, t, undefined, hosted?.coder)) : undefined,
+        dynamicTools: overrides.mcpConnect ? () => overrides.mcpConnect!.tools(ownerKey).filter((t) => tier === "admin" || tierAllows(tier, t, undefined, coderGrant())) : undefined,
         model: explicitModel ?? userDefault(),
         // A function: DAEBOT.md edits, renames and roster changes apply on the very next message.
         focus: focusedOn,
@@ -820,7 +861,14 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         router: ROUTER_MODE === "off" ? undefined : (input) => {
           if ((botId && (botStore?.get(botId)?.model ?? botRec?.model)) || curModel) return undefined;
           if (mindBilled) { const b = credits?.peek(billingKey()); if (b && b.tier === FREE_TIER && !usesOwnKey(b)) return undefined; }
-          return routeTurn({ ...input, ceiling: routeCeiling, policy: ROUTER_POLICY, mode: ROUTER_MODE });
+          const c = routeCeiling();
+          const d = routeTurn({ ...input, ceiling: c.ceiling, ...(c.reason ? { ceilingReason: c.reason } : {}), ...(localModel ? { localModel } : {}), policy: ROUTER_POLICY, mode: ROUTER_MODE });
+          if (!d || d.tier === "local") return d;
+          // The learned table (provider/learned.ts) moves a class one tier when the log says the rules keep getting it wrong; never above the ceiling.
+          const adv = adviseTier(learnedTable(), classOf(d), d.tier);
+          if (adv.tier === d.tier || TIER_ORDER.indexOf(adv.tier) > TIER_ORDER.indexOf(c.ceiling)) return d;
+          const spec = ROUTER_POLICY[adv.tier];
+          return { ...d, tier: adv.tier, model: spec.model, ...(spec.effort ? { effort: spec.effort } : {}), reason: `${d.reason}; ${adv.why}`, source: "classifier" };
         },
         scope: scopeOf,
         // Per turn, for a message the human typed: the few MIND items that bear on it plus the mistakes that match it. Never for routines, heartbeats, check-ins or peer turns.
@@ -845,7 +893,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
             roster: botsOn() ? botStore?.roster() : undefined,
             mcp: !!overrides.mcpConnect?.enabled() && !botId,
             mcpBot: !!overrides.mcpConnect?.enabled() && !!botId,
-            coder: tier === "staff" ? hosted?.coder : undefined,
+            coder: tier === "staff" ? coderGrant() : undefined,
             sessions: tools.some((t) => t.spec.name === "mind_sessions"),
             astraBoard: tools.some((t) => t.spec.name === "astra_board"),
             toolNames: focus ? [...focus.toolNames] : tools.map((t) => t.spec.name),
@@ -873,7 +921,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         ...(stored?.titleSet ? { titleSet: true } : {}),
         ...(stored?.board?.length ? { board: loadTasks(stored.board) } : {}),
         ...(stored?.msgMeta ? { msgMeta: stored.msgMeta } : {}), ...(stored?.unreadFrom ? { unreadFrom: stored.unreadFrom } : {}), ...(stored?.archived ? { archived: true } : {}), ...(stored?.metaAt ? { metaAt: stored.metaAt } : {}), ...(learn && "feedback" in learn ? { learn: learn as Learning } : {}),
-        ...(stored?.proof ? { proof: stored.proof } : {}), scope: scopeOf(),
+        ...(stored?.proof ? { proof: stored.proof } : {}), ...(stored?.handoff ? { handoff: stored.handoff } : {}), scope: scopeOf(),
         // A new session is born here: this is its home. A saved one keeps the home it already has (or none, for records from before environments).
         // A new session starts on MIND Cloud (a computer is only ever the person's choice, see env.ts defaultHome); a bot thread starts where its bot runs.
         // A saved one keeps the home it already has (or none, for records from before environments).
@@ -916,6 +964,8 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
           const photos = o?.photos?.length ? o.photos : undefined;
           if (!entry.titleSet && DEFAULT_TITLE.test(entry.title) && !entry.recorder.events().some((h) => h.type === "user")) entry.title = msg.trim().slice(0, 60) || (photos ? "Photo" : entry.title);
           const runId = randomUUID();
+          let turnDecision: import("./types.ts").RouteDecision | undefined;
+          const turnCostStart = lastTotal;
           entry.recorder.setRun(runId);
           entry.recorder.user(msg, photos, o?.quote?.text ? { ...(o.quote.id ? { id: o.quote.id } : {}), text: o.quote.text.slice(0, 600) } : undefined); // the transcript keeps the user's own words and the photos; the model also gets one line per photo
           const run: RunMark = entry.run = { id: runId, status: "running", startedAt: Date.now(), updatedAt: Date.now() };
@@ -935,7 +985,10 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
           else if (mindBilled) { const m = resolveTurnModel({ sessionModel: curModel, userDefault: userDefault() }); if (m) inner.setModel?.(m); }
           for await (const ev of inner.send(messageWithQuote(messageWithPhotos(msg, photos), o?.quote), o)) {
             entry.recorder.push(ev);
-            if (ev.type === "proof") entry.proof = ev.proof; // the board's proof card: the last human turn of this chat
+            if (ev.type === "route") turnDecision = ev.decision; // the row for the route log is written when the proof arrives
+            if (ev.type === "proof") { entry.proof = ev.proof; if (routeLog && turnDecision) { appendRouteLog(routeLog, rowFor(msg, turnDecision, ev.proof, lastTotal - turnCostStart)); turnDecision = undefined; } } // the board's proof card: the last human turn of this chat
+            if (ev.type === "handoff") { entry.handoff = ev.card; void fileHandoff(entry, ev.card); } // compaction wrote a card: keep it with the chat, file it in MIND
+            if (ev.type === "usage" && ev.model && ev.model === ROUTER_POLICY.frontier.model) frontierBudget.add(ev.usage.costUsd);
             if (ev.type === "done") { entry.updatedAt = Date.now(); run.status = "done"; run.updatedAt = Date.now(); persist(id); }
             else if (Date.now() - lastCheckpoint > 1500) { lastCheckpoint = Date.now(); run.updatedAt = lastCheckpoint; persist(id); } // partial reply survives a crash
             if (ev.type === "usage" && (costCap || userCap)) {
@@ -1037,13 +1090,13 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       }
       for (const s of [...picks.values()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, BOARD_MAX_SESSIONS)) {
         const live = sessions.get(s.id);
-        if (live) { rows.push(...rowsFor(s, live.board ?? [], live.proof)); continue; }
+        if (live) { rows.push(...rowsFor(s, live.board ?? [], live.proof, live.handoff)); continue; }
         // A saved session only changes when it is written, so its rows are cached by updatedAt (no file read on every poll).
         const hit = boardCache.get(s.id);
         if (hit && hit.updatedAt === s.updatedAt) { rows.push(...hit.rows); continue; }
         const rec = store?.load(s.id);
         if (!rec || !mine(rec)) continue;
-        const made = rowsFor(s, loadTasks(rec.board), rec.proof);
+        const made = rowsFor(s, loadTasks(rec.board), rec.proof, rec.handoff);
         boardCache.set(s.id, { updatedAt: s.updatedAt, rows: made });
         if (boardCache.size > 200) boardCache.delete(boardCache.keys().next().value as string);
         rows.push(...made);
@@ -1057,9 +1110,9 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       for (const [id, e] of sessions) if (e.bot === botId && !e.peer && e.surface !== "routine" && (picks.has(id) || e.recorder.events().some((h) => h.type === "user"))) picks.set(id, { id, title: e.title, updatedAt: e.updatedAt });
       for (const s of [...picks.values()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 15)) {
         const live = sessions.get(s.id);
-        if (live) { rows.push(...rowsFor(s, live.board ?? [], live.proof)); continue; }
+        if (live) { rows.push(...rowsFor(s, live.board ?? [], live.proof, live.handoff)); continue; }
         const rec = store?.load(s.id);
-        if (rec && mine(rec)) rows.push(...rowsFor(s, loadTasks(rec.board), rec.proof));
+        if (rec && mine(rec)) rows.push(...rowsFor(s, loadTasks(rec.board), rec.proof, rec.handoff));
       }
       return rows;
     },
@@ -1083,7 +1136,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       return true;
     },
     routing() {
-      return { mode: ROUTER_MODE, tiers: TIER_ORDER.map((t) => ({ tier: t, model: ROUTER_POLICY[t].model, use: ROUTER_POLICY[t].use, ...(ROUTER_POLICY[t].effort ? { effort: ROUTER_POLICY[t].effort } : {}) })) };
+      return { mode: ROUTER_MODE, tiers: TIER_ORDER.map((t) => ({ tier: t, model: t === "local" && localModel ? localModel : ROUTER_POLICY[t].model, use: ROUTER_POLICY[t].use, ...(ROUTER_POLICY[t].effort ? { effort: ROUTER_POLICY[t].effort } : {}) })), ...(localModel ? { local: localModel } : {}), frontierSpentUsd: Number(frontierBudget.total().toFixed(4)), frontierCapUsd: frontierBudget.capUsd, learned: describeTable(learnedTable()), factGate: FACT_MODE };
     },
     bots: botStore,
     settings,

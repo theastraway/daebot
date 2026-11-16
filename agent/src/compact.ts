@@ -2,7 +2,7 @@
 // turns are summarized by the cheap model into ONE system note. The last N turns stay verbatim and every
 // receipt line (MIND✓ / SURFACE✓) from the compacted turns is carried over word for word, so the receipt
 // trail survives. Summarization failure never fails the chat: a mechanical digest takes its place.
-import type { Message, Provider, Usage } from "./types.ts";
+import type { HandoffCard, Message, Provider, Usage } from "./types.ts";
 
 export const SUMMARY_TAG = "[context summary: earlier turns were compacted to save context]";
 export const KEEP_TURNS = 8;
@@ -60,9 +60,29 @@ function mechanicalDigest(older: Message[]): string {
   return out.join("\n").slice(0, 6000);
 }
 
+/** The summary is written in the handoff card's shape, so the next worker (or the same model after compaction) starts from the same five lines. */
+export const HANDOFF_HEADINGS = ["Objective", "Evidence", "What is left", "Next action", "How to verify"] as const;
+
+/** Parses a summary written in the handoff shape. undefined when the headings are not there (a free-form summary is still a fine summary). */
+export function parseHandoff(text: string, at = Date.now()): HandoffCard | undefined {
+  const sec: Record<string, string[]> = {};
+  let cur: string | undefined;
+  for (const raw of String(text ?? "").split(/\r?\n/)) {
+    const h = /^\s*(?:#+\s*)?(Objective|Evidence|What is left|Next action|How to verify)\s*:?\s*(.*)$/i.exec(raw);
+    if (h) { cur = HANDOFF_HEADINGS.find((x) => x.toLowerCase() === h[1].toLowerCase()); if (cur) { sec[cur] = sec[cur] ?? []; if (h[2].trim()) sec[cur].push(h[2].trim()); } continue; }
+    if (cur && raw.trim()) sec[cur].push(raw.trim().replace(/^[-*]\s+/, ""));
+  }
+  const objective = (sec.Objective ?? []).join(" ").trim();
+  const next = (sec["Next action"] ?? []).join(" ").trim();
+  if (!objective || !next) return undefined;
+  const lines = (k: string) => (sec[k] ?? []).map((l) => l.slice(0, 300)).filter(Boolean).slice(0, 12);
+  const verify = (sec["How to verify"] ?? []).join(" ").trim();
+  return { objective: objective.slice(0, 400), evidence: lines("Evidence"), left: lines("What is left"), next: next.slice(0, 400), ...(verify ? { verify: verify.slice(0, 400) } : {}), at };
+}
+
 async function summarize(older: Message[], provider: Provider, model: string, signal?: AbortSignal): Promise<{ text: string; usage?: Usage }> {
   const prompt: Message[] = [
-    { role: "system", content: "You compress a conversation between a user and an AI agent so the agent can continue it later. Write a dense factual summary (at most 400 words): decisions made, facts established with their sources, open tasks, names, numbers and ids that matter, what the user asked for and what is still pending. No preamble. Do not invent anything; leave out what you are unsure of." },
+    { role: "system", content: "You compress a conversation between a user and an AI agent so the agent (or another agent) can continue it later. Write a handoff card, at most 400 words, under exactly these five headings: Objective (what the user wants, one or two sentences), Evidence (facts established and receipts: paths, ids, numbers, what already works, with their sources, one per line), What is left (open tasks, one per line), Next action (the one thing to do next), How to verify (the check that proves the result). No preamble. Do not invent anything; leave out what you are unsure of." },
     { role: "user", content: renderTranscript(older) },
   ];
   let text = "";
@@ -74,7 +94,7 @@ async function summarize(older: Message[], provider: Provider, model: string, si
   return { text: text.trim(), usage };
 }
 
-export interface CompactResult { messages: Message[]; compacted: number; usage?: Usage; mechanical: boolean }
+export interface CompactResult { messages: Message[]; compacted: number; usage?: Usage; mechanical: boolean; /** The handoff card, when the summary came in that shape. */ card?: HandoffCard }
 
 /**
  * Replaces everything before the last `keepTurns` user messages with one summary note.
@@ -106,7 +126,8 @@ export async function compactMessages(
 
   const receipts = receiptLines(older);
   const note = [SUMMARY_TAG, summary, receipts.length ? `Receipt lines from the compacted turns (verbatim):\n${receipts.join("\n")}` : ""].filter(Boolean).join("\n\n");
-  return { messages: [messages[0], { role: "system", content: note }, ...messages.slice(cut)], compacted: older.length, usage, mechanical };
+  const card = mechanical ? undefined : parseHandoff(summary);
+  return { messages: [messages[0], { role: "system", content: note }, ...messages.slice(cut)], compacted: older.length, usage, mechanical, ...(card ? { card } : {}) };
 }
 
 /** Last resort when even the verbatim tail is too big: clip old tool outputs (never the newest `protect` messages). */

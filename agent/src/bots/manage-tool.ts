@@ -6,6 +6,7 @@
 import type { Tool, ToolClass, ToolResult } from "../types.ts";
 import { validModelId } from "../settings.ts";
 import { cleanTitle } from "../persist.ts";
+import { listTemplates, templateOf } from "./templates.ts";
 import { BOT_FACES, isFaceId } from "./faces.ts";
 import { BotError, MAX_INSTRUCTIONS_BYTES, SLUG_RE } from "./types.ts";
 import { summarizeTiming } from "../routines/clock.ts";
@@ -97,7 +98,7 @@ function withMain(bots: BotsApi, main: NonNullable<BotManageDeps["main"]>): Bots
 
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 const ACTIONS = [
-  "list", "get", "create", "update", "delete", "create_many", "delete_many", "faces", "models", "reset_self",
+  "list", "get", "create", "update", "delete", "create_many", "delete_many", "faces", "models", "reset_self", "templates", "create_from_template",
   "rename", "set_face", "set_color", "set_purpose", "set_model", "pin", "unpin",
   "read_instructions", "write_instructions", "append_instructions", "patch_instructions",
   "list_threads", "create_thread", "rename_thread", "archive_thread", "unarchive_thread",
@@ -198,6 +199,7 @@ export function createBotManageTool(d: BotManageDeps): Tool {
         "ONE-FIELD EDITS (same as update): rename {slug, name}, set_face {slug, face}, set_color {slug, color}, set_purpose {slug, purpose}, set_model {slug, model (\"\" clears)}, pin {slug}, unpin {slug}. get {slug}: the bot's settings plus its instructions. " +
         "INSTRUCTIONS (its DAEBOT.md): read_instructions {slug}; write_instructions {slug, instructions} replaces all; append_instructions {slug, text} adds to the end; patch_instructions {slug, find, replace_with, all?} swaps one exact piece of text (find must match exactly once unless all:true). " +
         "THREADS: list_threads {slug, archived?}; create_thread {slug, title?, message?} opens a NEW thread in that bot and, when message is given, the bot starts working on it; rename_thread {slug, thread, title}; archive_thread / unarchive_thread {slug, thread} hide or restore a thread in the sidebar (nothing is deleted). " +
+        "TEMPLATES: templates lists the stock bots (reviewer: reviews diffs, plans and outward actions; findings with evidence, adversarially verified). create_from_template {template, slug?} makes one (idempotent by slug); then bot_talk it. " +
         "SELF: slug \"self\" means YOU. In a bot's thread it is that bot; in the plain Sessions chat it is the main Daebot (your own name, face, color, instructions, threads and routines: edit them like any bot's; purpose, model and pin do not apply; reset_self returns you to the stock Daebot). Any bot (not only the main Daebot) can create, change and delete OTHER bots in the user's account: the same toolkit, no extra permission. Only the main chat changes the main Daebot, and no bot can delete itself or the main Daebot. " +
         "ROUTINES (work a bot does on its own, inside Daebot, nothing to install): list_routines {slug}. add_routine {slug, name, prompt, kind:\"timed\"|\"trigger\", expression + tz (timed: 5 fields minute hour day-of-month month day-of-week, e.g. \"0 9 * * 1-5\", tz an IANA name, default America/New_York) or trigger: one of webhook, thread_message, bot_message (+ from: a bot slug), keyword (+ phrase: words separated by commas, where: user|bot|either), turn_done (+ on: done|failed|any), mind_document, mind_task, mind_task_due, mind_contact, mail_new (+ every: 5|15|30|60 minutes), gh_issue / gh_pr / gh_push / gh_comment (GitHub pushes to Daebot; + repo: owner/name optional, + branch for gh_push), and on the desktop app only app_opened, wake, file_changed (+ path: a folder), screen_change (+ sensitivity: low|medium|high)). " +
         "ANY routine can be limited with weekdays_only:true (Monday to Friday) and active_from + active_to (\"09:00\" to \"17:00\", both ends included), in tz: \"every hour, weekdays only, 9 to 5\" is expression \"0 * * * *\" with weekdays_only, active_from \"09:00\", active_to \"17:00\". Several times a day: join 5-field parts with \";\" (\"0 9 * * *;30 13 * * *\"). " +
@@ -309,6 +311,20 @@ export function createBotManageTool(d: BotManageDeps): Tool {
           return { ok: true, output: JSON.stringify({ bot: rec.slug, threads: d.threadOps.list(rec.id, args.archived === true).slice(0, 100) }) };
         }
         if (action === "faces") return { ok: true, output: JSON.stringify({ faces: BOT_FACES.map((f) => ({ id: f.id, name: f.name, blurb: f.blurb })) }) };
+        if (action === "templates") return { ok: true, output: JSON.stringify({ templates: listTemplates(), how: "create_from_template {template} makes the stock bot (same slug); it is a normal bot afterwards: edit it like any other." }) };
+        if (action === "create_from_template") {
+          if (d.selfBot) return fail("a bot cannot create bots from a template from inside its own thread; ask the main Daebot");
+          const t = templateOf(args.template);
+          if (!t) return fail(`template must be one of ${listTemplates().map((x) => x.id).join(", ")}`);
+          const slug = (str(args.slug) ?? t.slug).trim().toLowerCase();
+          if (!SLUG_RE.test(slug) || slug === "main") return fail("slug must be 1 to 32 characters: lowercase letters, digits and dashes");
+          const existing = bots.bySlug(slug);
+          if (existing) return { ok: true, output: JSON.stringify({ exists: view(existing, d.threads(existing.id)), note: `"${slug}" already exists; use it as is (bot_talk) or update it.` }) };
+          const rec = await bots.create({ slug, name: t.name, purpose: t.purpose, face: t.face });
+          try { bots.setInstructions(rec.id, t.instructions); }
+          catch (e) { await bots.remove(rec.id).catch(() => {}); throw e; }
+          return { ok: true, output: JSON.stringify({ created: view(rec, 0), template: t.id, tier: t.tier, where: "Bots tab, with a \"New thread with " + rec.name + "\" button", next: `bot_talk to "${slug}" with what to review.` }) };
+        }
         if (action === "list") {
           const all = await bots.list();
           return { ok: true, output: JSON.stringify({ bots: all.map((b) => view(b, d.threads(b.id))) }) };

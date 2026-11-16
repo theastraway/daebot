@@ -533,7 +533,7 @@ function itemsFromHistory(events) {
         if (last && last.kind === "think") last.text += ev.delta; else items.push({ kind: "think", text: ev.delta, done: true });
         break;
       }
-      case "route": case "proof": break;
+      case "route": case "proof": case "handoff": break;
       case "text":
         if (!asst) { asst = { kind: "assistant", text: "", streaming: false, ...(ev.id ? { mid: ev.id } : {}), ...(ev.rid ? { rid: ev.rid } : {}) }; items.push(asst); }
         asst.text += ev.delta; break;
@@ -1471,7 +1471,7 @@ function onEvent(id, ev, asst, toolByReceipt) {
       return null; // the answer that follows is a new block
     }
     case "route": return asst; // the router's decision shows on the board's proof card
-    case "proof": board.poke(); return asst;
+    case "proof": case "handoff": board.poke(); return asst;
     case "text":
       closeThink(tr);
       if (!asst) asst = addItem(id, { kind: "assistant", text: "", streaming: true });

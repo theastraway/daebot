@@ -1517,3 +1517,4 @@ html.browser-open .scroll, html.browser-open .composer-wrap { margin-right: var(
 .lesson-votes { display: flex; gap: 8px; margin-top: 8px; }
 .lesson-scope { margin-top: 6px; font-size: 11.5px; color: var(--ink-3); }
 .viol.lesson.demoted { opacity: .7; }
+.bd-chip.handoff { border-style: dashed; cursor: help; }

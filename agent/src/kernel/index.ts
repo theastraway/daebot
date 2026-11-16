@@ -5,6 +5,10 @@ import { feedGate, publicAllowed } from "./feed.ts";
 import { hostedGate } from "./hosted.ts";
 import { hostedToolAllowed } from "../hosted.ts";
 import { createIsolationGate } from "./isolation.ts";
+import { createCoderSafetyGate } from "./coder-safety.ts";
+import { createFactGate } from "./fact.ts";
+import type { FactGateMode } from "./fact.ts";
+import { existsSync } from "node:fs";
 import type { IsolationOptions } from "./isolation.ts";
 import { createOwnerGate } from "./owner.ts";
 import { receiptGate } from "./receipt.ts";
@@ -29,12 +33,16 @@ export function createKernel(opts: {
   tier?: Tier;                       // identity tier; default admin (unrestricted)
   coder?: CoderGrant;                // staff only: the GitHub repos this user may write to (DAEBOT_CODERS)
   hosted?: boolean;                  // public deployment: only web_fetch, view_photo and mind_* tools may run
+  fact?: FactGateMode;               // the fact gate (kernel/fact.ts): off (default) | shadow | enforce
+  extraGates?: Gate[];               // the eval harness's arms (a placebo gate); never set in production
 }): Kernel {
   const log: Violation[] = [];
   const tier: Tier = opts.tier ?? "admin";
   // dangerGate is evaluated last (and only when nothing else refused the call) so a single-use approval is
   // never consumed by a call another gate stops.
-  const preGates: Gate[] = [...(opts.hosted ? [hostedGate] : []), createTierGate(tier, opts.coder), bootGate, feedGate, createOwnerGate({ clientNames: opts.clientNames }), createIsolationGate(opts.isolation)];
+  // coder-safety sits before danger: a blocked bypass never consumes an approval, and a protected-config edit asks like an outward action.
+  const fact = opts.fact && opts.fact !== "off" ? [createFactGate({ mode: opts.fact, exists: (p) => { try { return existsSync(p); } catch { return false; } } })] : [];
+  const preGates: Gate[] = [...(opts.hosted ? [hostedGate] : []), createTierGate(tier, opts.coder), bootGate, feedGate, createOwnerGate({ clientNames: opts.clientNames }), createIsolationGate(opts.isolation), createCoderSafetyGate({ cwd: opts.isolation?.cwd }), ...fact, ...(opts.extraGates ?? [])];
   const turnGates: Gate[] = [...preGates, dangerGate];
   const answerGates: Gate[] = [receiptGate];
   const enabled = opts.enabled;
@@ -52,7 +60,8 @@ export function createKernel(opts: {
     const shadow = opts.shadow || s.shadow;
     for (const v of verdicts) {
       if (!v || v.action === "allow") continue;
-      if (shadow) {
+      // The fact gate in shadow mode logs what it would have refused and lets the call run (its own mode, independent of the kernel's).
+      if (shadow || (v.gate === "fact" && opts.fact === "shadow")) {
         record(s, v, false);
         out.push({ gate: v.gate, action: "allow", reason: `[shadow] would ${v.action}: ${v.reason}` });
       } else {

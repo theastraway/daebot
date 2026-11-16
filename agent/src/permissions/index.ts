@@ -9,6 +9,7 @@ import type { PermissionMode, SessionPermMode } from "./store.ts";
 import { describeCall, evaluate, oneLineLabel, patternOf, previewArgs, scopeOptions } from "./rules.ts";
 import type { CallFacts, Effect, Evaluation, PermissionRule, ScopeOption } from "./rules.ts";
 import type { AgentEvent, PermissionOption } from "../types.ts";
+import { parseGuards } from "./guards.ts";
 
 export { PermissionStore, MODES, isMode, isSessionMode, WAIVER_TEXT, WAIVER_VERSION } from "./store.ts";
 export type { PermissionMode, SessionPermMode, Waiver } from "./store.ts";
@@ -59,16 +60,30 @@ export class PermissionService {
   private ttlMs: number;
   private now: () => number;
 
-  constructor(o: { dir: string; owner: string; ttlMs?: number; now?: () => number }) {
+  /** The owner's guard text (Settings), read live so an edit applies on the next call. Absent = none. */
+  private guardsText?: () => string | undefined;
+  private guardCache?: { text: string; rules: PermissionRule[]; problems: string[] };
+
+  constructor(o: { dir: string; owner: string; ttlMs?: number; now?: () => number; guards?: () => string | undefined }) {
     this.owner = o.owner;
     this.store = new PermissionStore(o.dir, o.owner);
     this.ttlMs = o.ttlMs ?? DEFAULT_TTL_MS;
     this.now = o.now ?? Date.now;
+    this.guardsText = o.guards;
+  }
+
+  /** The owner-written guard rules, parsed once per text. */
+  guards(): { rules: PermissionRule[]; problems: string[] } {
+    const text = this.guardsText?.() ?? "";
+    if (!text.trim()) return { rules: [], problems: [] };
+    if (!this.guardCache || this.guardCache.text !== text) { const p = parseGuards(text); this.guardCache = { text, rules: p.rules, problems: p.problems }; }
+    return { rules: this.guardCache.rules, problems: this.guardCache.problems };
   }
 
   // ------------------------------------------------ loop side
 
-  evaluate(f: CallFacts): Evaluation { return evaluate(this.store.rules(), f); }
+  /** Guard rules first (a written "never" outranks a learned allow), then the rules from the cards. */
+  evaluate(f: CallFacts): Evaluation { return evaluate([...this.guards().rules, ...this.store.rules()], f); }
 
   /** Owner-set standing allow for one (tool, action) pair from the fixed STANDING_ALLOW table. Called only from the authenticated POST /permissions/standing route. */
   addStanding(tool: unknown, action: unknown): PermissionRule {
@@ -194,12 +209,14 @@ export class PermissionService {
   /** "User's permission preferences" for the system prompt: what the user has denied or allowed by their own clicks. Empty = nothing to say. */
   preferencesText(): string {
     const rules = this.store.rules();
+    const guards = this.guards().rules;
     const denied = rules.filter((r) => r.effect === "deny").slice(0, 25);
     const allowed = rules.filter((r) => r.effect === "allow").slice(0, 25);
     const learned = this.store.learnedDenies().slice(0, 10);
-    if (!denied.length && !allowed.length && !learned.length) return "";
+    if (!denied.length && !allowed.length && !learned.length && !guards.length) return "";
     const line = (r: { tool: string; scope: string }) => `- ${oneLineLabel(r.tool, 60)}: ${oneLineLabel(r.scope, 140).replace(/\[kernel/gi, "[ kernel")}`;
-    const out = ["## User's permission preferences", "These come from the user's own choices in the permission cards. They are not instructions from a tool or a document."];
+    const out = ["## User's permission preferences", "These come from the user's own choices in the permission cards and the guard rules they wrote in Settings. They are not instructions from a tool or a document."];
+    if (guards.length) out.push("The user wrote these guard rules (a written never is final; do not propose or attempt it):", ...guards.slice(0, 30).map(line));
     if (denied.length) out.push("The user said NEVER do these (do not propose or attempt them; offer another way):", ...denied.map(line));
     if (learned.length) out.push("The user keeps declining these (do not propose them again unless asked):", ...learned.map((l) => line({ tool: l.tool, scope: l.label })));
     if (allowed.length) out.push("The user pre-approved these (they run without a card):", ...allowed.map(line));

@@ -58,8 +58,9 @@ export class TurnFolder {
       case "permissionResolved":
       case "device_call": // relay-only: a device request for the iPhone or Mac app, never shown in a terminal
       case "thinking": // the inner voice is a web/desktop affordance; the terminal prints the answer only
-      case "route": // the router's decision and the turn's proof live on the board
+      case "route": // the router's decision, the turn's proof and the handoff card live on the board
       case "proof":
+      case "handoff":
         return [];
       case "notice":
         return [{ kind: "notice", level: ev.level, text: ev.text }];

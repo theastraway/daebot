@@ -78,6 +78,23 @@ export interface TurnProof {
   effort?: Effort;
   tier?: ModelTier;
   route?: string;
+  /** Slugs of the agents a successful bot_talk reached this turn ("reviewer" = the reviewer looked). */
+  talked?: string[];
+}
+
+/** The handoff card: what a session (or a delegated piece) is about, in the shape the next worker needs. Written by compaction and by bot_talk delegation. */
+export interface HandoffCard {
+  objective: string;
+  /** Facts and receipts established so far, one per line (paths, ids, what already works). */
+  evidence: string[];
+  /** What is still to do. */
+  left: string[];
+  next: string;
+  /** How the result is proven. */
+  verify?: string;
+  /** The tier the piece should run on (delegation). */
+  tier?: ModelTier;
+  at: number;
 }
 
 // ---------- tools ----------
@@ -264,6 +281,8 @@ export type AgentEvent =
   | { type: "route"; decision: RouteDecision }
   // The proof of the turn that just ended (receipts, blocks, model): the board's proof card reads it.
   | { type: "proof"; proof: TurnProof }
+  // Compaction wrote a handoff card for this session (objective, evidence, what is left, next action): kept on the session, shown on the board, filed in MIND.
+  | { type: "handoff"; card: HandoffCard }
   // The draft just streamed (the text since the last tool/gate/confirm boundary) was withheld by a gate.
   // Clients replace that assistant block with a "rewriting: <reason>" note; the regenerated text streams after it.
   | { type: "retract"; reason: string }
@@ -297,7 +316,7 @@ export interface AgentSession {
   // interactive: a person is looking at a UI that can answer a `permission` card (web, desktop, mobile). Absent/false = typed confirmations only.
   // photos: already stored for this session (Runtime.photos); the model is told about them in the message text and reads them with view_photo.
   // capabilities/device: what the sending client can do and the relay to it, for this turn only (see DeviceBridge).
-  send(userMessage: string, opts?: { signal?: AbortSignal; origin?: "user" | "bot"; peerReceipt?: string; interactive?: boolean; photos?: PhotoRef[]; quote?: MessageQuote; capabilities?: string[]; device?: DeviceBridge }): AsyncIterable<AgentEvent>;
+  send(userMessage: string, opts?: { signal?: AbortSignal; origin?: "user" | "bot"; peerReceipt?: string; interactive?: boolean; photos?: PhotoRef[]; quote?: MessageQuote; capabilities?: string[]; device?: DeviceBridge; /** A delegating agent's tier for this piece (a handoff card): the router's floor for this turn. */ routeHint?: ModelTier }): AsyncIterable<AgentEvent>;
   /** Model for the next turn (per-session model). undefined = the configured default. */
   setModel?(model: string | undefined): void;
   /** This chat's permission mode for the next call onward. undefined = the account default. The caller has already checked bypass against the waiver. */
@@ -377,7 +396,7 @@ export interface Runtime {
   /** The user's thumbs on a lesson or learned skill: up = it helped, down = it hurt. Written to MIND. false = unknown session or key. */
   voteLesson?(id: string, key: string, up: boolean): Promise<boolean>;
   /** The model router's mode and policy table of this runtime. */
-  routing?(): { mode: "off" | "shadow" | "enforce"; tiers: { tier: ModelTier; model: string; use: string; effort?: Effort }[] };
+  routing?(): { mode: "off" | "shadow" | "enforce"; tiers: { tier: ModelTier; model: string; use: string; effort?: Effort }[]; local?: string; frontierSpentUsd?: number; frontierCapUsd?: number; learned?: string[]; factGate?: string };
 }
 
 /** One lesson or learned skill as the lesson drawer shows it. */
