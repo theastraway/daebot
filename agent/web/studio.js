@@ -16,7 +16,13 @@ export const VIEW_W = 1000, VIEW_H = 640;
 export const STATUS = { idle: "Idle", working: "Working", blocked: "Needs you" };
 export const FILTERS = [["all", "All"], ["waiting", "Waiting"], ["in_progress", "In progress"], ["not_started", "Backlog"], ["ready_to_test", "Done"]];
 export const LIGHT = { not_started: "red", in_progress: "yellow", ready_to_test: "green", stopped: "red", cancelled: "grey" };
-export const ROOMS = [["overview", "Overview"], ["office", "Manager office"], ["meeting", "Meeting room"], ["lounge", "Lounge"], ["workspaces", "Workspaces"], ["team", "Token team"]];
+export const ROOMS = [["overview", "Overview"], ["office", "Manager office"], ["meeting", "Meeting room"], ["lounge", "Lounge"], ["workspaces", "Workspaces"], ["team", "Token team"], ["pipelines", "Pipelines"]];
+/** Stage marks for an island: done ✓, running ◐, failed ✗, todo ○. */
+export const STAGE_MARK = { done: "✓", running: "◐", failed: "✗", todo: "○" };
+export const stageMarks = (marks) => (Array.isArray(marks) ? marks.map((m) => STAGE_MARK[m] || STAGE_MARK.todo).join("") : "");
+/** One line for the island card: the newest counters ("applications 389 · docs live 8"). */
+export const countersLine = (list) => (Array.isArray(list) ? list.filter((c) => c && c.name).slice(0, 3).map((c) => `${c.name} ${fmtNum(c.value)}`).join(" · ") : "");
+export const fmtNum = (n) => (typeof n !== "number" || !Number.isFinite(n) ? "–" : Math.abs(n) >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : Math.abs(n) >= 10000 ? `${(n / 1000).toFixed(1)}k` : Number.isInteger(n) ? String(n) : n.toFixed(2));
 /** The token team's roles by tier, as the Altair "token team" screenshot names them. */
 export const TIER_ROLES = { frontier: "advisor", reasoner: "worker (standard)", coder: "worker", light: "chat", reflex: "scout", local: "scout (local)" };
 export const fmtUsd = (n) => (!n ? "$0.00" : n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`);
@@ -130,7 +136,7 @@ export const progressPct = (p) => (p && p.total > 0 ? Math.round((100 * p.done) 
 
 export function initStudio({ json, h, ago, app, els }) {
   if (!els || !els.section) return null;
-  const st = { open: false, view: null, prev: null, filter: "all", room: "overview", dept: "", right: "tasks", timer: 0, loading: false, error: "", meeting: null, log: [], logAt: 0, sendTo: "main", team: null, teamAt: 0 };
+  const st = { open: false, view: null, prev: null, filter: "all", room: "overview", dept: "", right: "tasks", timer: 0, loading: false, error: "", meeting: null, log: [], logAt: 0, sendTo: "main", team: null, teamAt: 0, skills: null, skillsAt: 0, skillsError: "" };
   const S = (tag, attrs) => { const n = document.createElementNS(NS, tag); for (const k in attrs || {}) n.setAttribute(k, String(attrs[k])); return n; };
   const T = (x, y, cls, text, attrs) => { const t = S("text", { x, y, class: cls, ...(attrs || {}) }); t.textContent = text; return t; };
   const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -239,10 +245,15 @@ export function initStudio({ json, h, ago, app, els }) {
     g.append(S("polygon", { class: "st-side r", points: `0,${hh / 2} ${w / 2},0 ${w / 2},${depth} 0,${hh / 2 + depth}` }));
     g.append(S("polygon", { class: "st-top-face", points: isoPoints(0, 0, w, hh) }));
     const card = S("g", { class: "st-card", transform: `translate(0 ${-hh / 2 - 46})` });
-    card.append(S("rect", { x: -92, y: -16, width: 184, height: 44, rx: 8 }));
+    const extra = (d.counters && d.counters.length ? 1 : 0) + (d.pipeline ? 1 : 0);
+    card.setAttribute("transform", `translate(0 ${-hh / 2 - 46 - extra * 13})`);
+    card.append(S("rect", { x: -92, y: -16, width: 184, height: 44 + extra * 13, rx: 8 }));
     card.append(T(-84, 1, "st-dept", d.name.length > 22 ? d.name.slice(0, 21) + "…" : d.name));
     card.append(T(84, 1, "st-count", `${bots.length} ${bots.length === 1 ? "bot" : "bots"}`, { "text-anchor": "end" }));
     card.append(T(-84, 19, "st-kpi", `done ${d.counts.done} · working ${d.counts.working} · next ${d.counts.next}`));
+    let y = 32;
+    if (d.counters && d.counters.length) { const line = countersLine(d.counters); card.append(T(-84, y, "st-kpi strong", line.length > 34 ? line.slice(0, 33) + "…" : line)); y += 13; }
+    if (d.pipeline) { card.append(T(-84, y, "st-kpi", `stage ${d.pipeline.stage} of ${d.pipeline.of}${d.pipeline.current ? ` · ${d.pipeline.current}` : " · done"}`)); card.append(T(84, y, `st-marks ${d.pipeline.status}`, stageMarks(d.pipeline.marks), { "text-anchor": "end" })); }
     g.append(card);
     const slots = deskSlots(bots.length, 0, 0, w, hh);
     bots.forEach((b, i) => g.append(desk(b, slots[i].x, slots[i].y)));
@@ -319,6 +330,7 @@ export function initStudio({ json, h, ago, app, els }) {
     head.append(av, nm);
     card.append(head);
     if (bot.purpose) card.append(h("p", "st-botcard-purpose", bot.purpose));
+    if (bot.counters && bot.counters.length) card.append(h("p", "st-botcard-counters", countersLine(bot.counters)));
     if (bot.task) { const t = h("button", "st-botcard-task"); t.type = "button"; t.append(h("i", `st-dot ${LIGHT[bot.task.status] || "red"}`), h("span", "", bot.task.title)); t.addEventListener("click", () => app.openSession(bot.task.sessionId)); card.append(t); }
     else { const b = h("button", "st-botcard-task quiet", bot.id === "main" ? "Open a new session" : "Open a thread"); b.type = "button"; b.addEventListener("click", () => app.pickBot(bot.id)); card.append(b); }
     const dept = v.departments.find((d) => d.bots.includes(bot.id));
@@ -489,6 +501,57 @@ export function initStudio({ json, h, ago, app, els }) {
     return wrap;
   }
 
+  // ---- the pipelines room ----
+  async function loadSkills() {
+    try { st.skills = (await json("/studio/skills")).skills || []; } catch (e) { st.skills = []; st.skillsError = (e && e.message) || "error"; }
+    st.skillsAt = Date.now();
+    if (st.room === "pipelines") paintStage();
+  }
+  function roomPipelines(v) {
+    const wrap = h("div", "st-room-wrap col");
+    const intro = h("p", "st-muted", "A department runs a staged pipeline: each stage names the skill that runs it and the bot that owns it. Ask Dae: \"set up a pipeline for Design with the stages style, design, system, build, review\" (the studio_pipeline tool), and the island shows where it stands.");
+    wrap.append(intro);
+    if (!v.pipelines.length) wrap.append(h("p", "st-muted", "No pipeline yet."));
+    for (const p of v.pipelines) {
+      const dept = v.departments.find((d) => d.slug === p.department);
+      const box = h("div", "st-pipe");
+      const head = h("div", "st-pipe-head");
+      head.append(h("strong", "", dept ? dept.name : p.department), h("span", "st-muted", ` · stage ${p.stage} of ${p.of} · ${p.done} done · ${ago(p.updatedAt)}`), h("span", `st-marks-text ${p.status}`, stageMarks(p.marks)));
+      box.append(head);
+      const stages = h("ol", "st-stages");
+      p.stages.forEach((s, i) => {
+        const li = h("li", `st-stage ${s.status}`);
+        li.append(h("span", "st-stage-mark", STAGE_MARK[s.status] || "○"), h("strong", "", `${i + 1} ${s.name}`));
+        const meta = [];
+        if (s.skill) meta.push(`skill ${s.skill}`);
+        if (s.bot) meta.push(`→ ${s.bot}`);
+        meta.push(s.status);
+        if (s.note) meta.push(s.note);
+        li.append(h("span", "st-muted", ` · ${meta.join(" · ")}`));
+        stages.append(li);
+      });
+      box.append(stages);
+      const log = h("ul", "st-exec");
+      for (const e of [...p.log].reverse()) log.append(h("li", `st-exec-row ${e.status}`, `${ago(e.at)} · ${e.stage} · ${e.status} · by ${e.by}${e.skill ? ` · ${e.skill}` : ""}${e.note ? ` · ${e.note}` : ""}`));
+      if (p.log.length) { box.append(h("h3", "st-h", "Exec log"), log); }
+      wrap.append(box);
+    }
+    wrap.append(h("h3", "st-h", "Skills inventory"));
+    if (!st.skills) { wrap.append(h("p", "st-muted", "Loading skills…")); void loadSkills(); return wrap; }
+    if (!st.skills.length) { wrap.append(h("p", "st-muted", st.skillsError ? `Could not load the skills: ${st.skillsError}` : "No file skills loaded.")); return wrap; }
+    const table = h("table", "st-skills");
+    const thead = h("thead"); const tr = h("tr"); for (const c of ["Skill", "What it does", "Group", "Licence", "Source"]) tr.append(h("th", "", c)); thead.append(tr); table.append(thead);
+    const tb = h("tbody");
+    for (const s of st.skills) {
+      const r = h("tr");
+      r.append(h("td", "st-skill-name", s.name), h("td", "", s.description), h("td", "", s.group || ""), h("td", "", s.license || "own"), h("td", "st-muted", s.source || (s.origin === "embedded" ? "bundled" : "bundled file")));
+      tb.append(r);
+    }
+    table.append(tb);
+    wrap.append(table);
+    return wrap;
+  }
+
   function taskList(rows, v, empty) {
     const ul = h("ul", "st-list inline");
     if (!rows.length) { ul.append(h("li", "st-empty", empty)); return ul; }
@@ -528,6 +591,7 @@ export function initStudio({ json, h, ago, app, els }) {
     else if (st.room === "lounge") stage.append(roomLounge(v));
     else if (st.room === "workspaces") stage.append(roomWorkspaces(v));
     else if (st.room === "team") { stage.append(roomTeam(v)); if (!st.team || Date.now() - st.teamAt > REFRESH_MS) void loadTeam(); }
+    else if (st.room === "pipelines") { stage.append(roomPipelines(v)); if (st.skills && Date.now() - st.skillsAt > 60_000) void loadSkills(); }
   }
 
   // ---- the side panel ----

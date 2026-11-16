@@ -1698,3 +1698,24 @@ button.st-chip { cursor: pointer; font-family: var(--sans); }
 .st-tier-head { font: 700 12px var(--sans); color: var(--ink); }
 .st-tier-line { font: 500 10.5px var(--mono); color: var(--ink-2); margin-top: 2px; }
 .st-rules { margin: 0; padding: 0 0 0 16px; display: flex; flex-direction: column; gap: 4px; font: 12px/1.45 var(--sans); color: var(--ink-2); }
+
+/* ---------- Studio 4: counters, pipelines, the skills inventory ---------- */
+.st-kpi.strong { fill: var(--ink); font-weight: 700; }
+.st-marks { font: 700 11px var(--mono); fill: var(--ink-3); letter-spacing: .1em; }
+.st-marks.running { fill: var(--led-deep); } .st-marks.failed { fill: var(--accent); } .st-marks.done { fill: var(--ok); }
+.st-marks-text { font: 700 12px var(--mono); letter-spacing: .12em; color: var(--ink-3); margin-left: 8px; }
+.st-marks-text.running { color: var(--led-deep); } .st-marks-text.failed { color: var(--accent); } .st-marks-text.done { color: var(--ok); }
+.st-botcard-counters { margin: 0; font: 600 12px var(--mono); color: var(--ink); }
+.st-pipe { width: 100%; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.st-pipe-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; font: 600 13px var(--sans); color: var(--ink); }
+.st-stages { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+.st-stage { font: 12px/1.4 var(--sans); color: var(--ink); display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.st-stage-mark { font: 700 12px var(--mono); width: 14px; color: var(--ink-3); }
+.st-stage.done .st-stage-mark { color: var(--ok); } .st-stage.running .st-stage-mark { color: var(--led-deep); } .st-stage.failed .st-stage-mark { color: var(--accent); }
+.st-exec { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; max-height: 180px; overflow-y: auto; }
+.st-exec-row { font: 500 10.5px/1.4 var(--mono); color: var(--ink-2); }
+.st-exec-row.failed { color: var(--accent); }
+.st-skills { width: 100%; border-collapse: collapse; font: 12px/1.4 var(--sans); color: var(--ink); }
+.st-skills th { text-align: left; font: 700 10.5px var(--display); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); padding: 4px 8px; border-bottom: 1px solid var(--line); }
+.st-skills td { padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.st-skill-name { font-family: var(--mono); font-weight: 600; white-space: nowrap; }
