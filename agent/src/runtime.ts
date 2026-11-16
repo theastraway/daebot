@@ -36,7 +36,10 @@ import { TierBudget, frontierBudgetUsd, routeTurn, routerMode } from "./provider
 import { createOllamaProvider, detectOllama, pickLocalModel, withLocal } from "./provider/local.ts";
 import { createAdvisorTool } from "./tools/advisor.ts";
 import { TIER_ORDER, loadPolicy } from "./provider/policy.ts";
-import { adviseTier, appendRouteLog, classOf, describeTable, loadTable, routeLogPath, rowFor } from "./provider/learned.ts";
+import { adviseTier, appendRouteLog, classOf, costSummary, describeTable, loadTable, routeLogPath, rowFor } from "./provider/learned.ts";
+import { consultBeforeDone } from "./provider/router.ts";
+import { PROTOCOL_RULES } from "./studio/index.ts";
+import { parseGuards } from "./permissions/guards.ts";
 import { assembleStudio } from "./studio/index.ts";
 import type { StudioRowIn, StudioSessionIn } from "./studio/index.ts";
 import type { LearnedTable } from "./provider/learned.ts";
@@ -327,6 +330,7 @@ interface Entry { session: AgentSession; surface: string; title: string; updated
 
 // The model router (provider/router.ts): mode and policy are read once per process (DAEBOT_ROUTER, DAEBOT_ROUTING_POLICY, DAEBOT_TIER_*).
 const ROUTER_MODE = routerMode();
+const CONSULT_BEFORE_DONE = consultBeforeDone();
 const ROUTER_POLICY = loadPolicy(process.env, (f) => readFileSync(f, "utf8"));
 
 export const INTERRUPTED_TEXT = "Interrupted: the server restarted while this reply was being written. Your message is saved above; send it again to retry.";
@@ -860,6 +864,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         focus: focusedOn,
         skills: fileSkills,
         // The router sits below the floors: a bot's pinned model, the user's explicit pick for this chat, and the free plan (free models only) all win.
+        consultBeforeDone: CONSULT_BEFORE_DONE,
         router: ROUTER_MODE === "off" ? undefined : (input) => {
           if ((botId && (botStore?.get(botId)?.model ?? botRec?.model)) || curModel) return undefined;
           if (mindBilled) { const b = credits?.peek(billingKey()); if (b && b.tier === FREE_TIER && !usesOwnKey(b)) return undefined; }
@@ -968,6 +973,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
           const runId = randomUUID();
           let turnDecision: import("./types.ts").RouteDecision | undefined;
           const turnCostStart = lastTotal;
+          let turnTokensIn = 0, turnTokensOut = 0; // every model call of this turn, for the route log (the token team's bill)
           entry.recorder.setRun(runId);
           entry.recorder.user(msg, photos, o?.quote?.text ? { ...(o.quote.id ? { id: o.quote.id } : {}), text: o.quote.text.slice(0, 600) } : undefined); // the transcript keeps the user's own words and the photos; the model also gets one line per photo
           const run: RunMark = entry.run = { id: runId, status: "running", startedAt: Date.now(), updatedAt: Date.now() };
@@ -988,7 +994,8 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
           for await (const ev of inner.send(messageWithQuote(messageWithPhotos(msg, photos), o?.quote), o)) {
             entry.recorder.push(ev);
             if (ev.type === "route") turnDecision = ev.decision; // the row for the route log is written when the proof arrives
-            if (ev.type === "proof") { entry.proof = ev.proof; if (routeLog && turnDecision) { appendRouteLog(routeLog, rowFor(msg, turnDecision, ev.proof, lastTotal - turnCostStart)); turnDecision = undefined; } } // the board's proof card: the last human turn of this chat
+            if (ev.type === "usage") { turnTokensIn += ev.usage.promptTokens || 0; turnTokensOut += ev.usage.completionTokens || 0; }
+            if (ev.type === "proof") { entry.proof = ev.proof; if (routeLog && turnDecision) { appendRouteLog(routeLog, rowFor(msg, turnDecision, ev.proof, lastTotal - turnCostStart, { tokensIn: turnTokensIn, tokensOut: turnTokensOut, session: id })); turnDecision = undefined; } } // the board's proof card: the last human turn of this chat
             if (ev.type === "handoff") { entry.handoff = ev.card; void fileHandoff(entry, ev.card); } // compaction wrote a card: keep it with the chat, file it in MIND
             if (ev.type === "usage" && ev.model && ev.model === ROUTER_POLICY.frontier.model) frontierBudget.add(ev.usage.costUsd);
             if (ev.type === "done") { entry.updatedAt = Date.now(); run.status = "done"; run.updatedAt = Date.now(); persist(id); }
@@ -1154,6 +1161,26 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         chip: { mode: ROUTER_MODE, model: settings?.get().defaultModel ?? cfg.models.default, ...(ROUTER_MODE !== "off" ? { tier: "coder" } : {}) },
         now: Date.now(),
       });
+    },
+    team(sessionId) {
+      let text = "";
+      if (routeLog) { try { text = readFileSync(routeLog, "utf8"); } catch { text = ""; } }
+      const policy = ROUTER_POLICY as unknown as Record<string, { model?: string; priceIn: number; priceOut: number }>;
+      const dayStart = new Date(); dayStart.setUTCHours(0, 0, 0, 0);
+      const guardsText = settings?.get().guards ?? "";
+      const g = parseGuards(guardsText);
+      return {
+        at: Date.now(),
+        mode: ROUTER_MODE,
+        consultBeforeDone: CONSULT_BEFORE_DONE,
+        tiers: this.routing!().tiers,
+        frontierSpentUsd: Number(frontierBudget.total().toFixed(4)), frontierCapUsd: frontierBudget.capUsd,
+        today: costSummary(text, { policy, since: dayStart.getTime() }),
+        all: costSummary(text, { policy }),
+        ...(sessionId ? { session: costSummary(text, { policy, session: sessionId }) } : {}),
+        protocol: PROTOCOL_RULES,
+        guards: g.rules.map((r) => ({ id: r.id, effect: r.effect, tool: r.tool, scope: r.scope })),
+      };
     },
     routing() {
       return { mode: ROUTER_MODE, tiers: TIER_ORDER.map((t) => ({ tier: t, model: t === "local" && localModel ? localModel : ROUTER_POLICY[t].model, use: ROUTER_POLICY[t].use, ...(ROUTER_POLICY[t].effort ? { effort: ROUTER_POLICY[t].effort } : {}) })), ...(localModel ? { local: localModel } : {}), frontierSpentUsd: Number(frontierBudget.total().toFixed(4)), frontierCapUsd: frontierBudget.capUsd, learned: describeTable(learnedTable()), factGate: FACT_MODE };

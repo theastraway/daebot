@@ -71,8 +71,8 @@ test("the sidebar remembers three views and the arrow keys cycle through them, s
 // @ts-expect-error plain browser module
 import { EXAMPLES, LOUNGE_LINES, ROOMS, loungeLine, mergeLog, progressPct, walks } from "../../web/studio.js";
 
-test("Studio 2: five rooms, example prompts, and a lounge line that is stable within the hour and varies across bots", () => {
-  assert.deepEqual(ROOMS.map((r: any) => r[0]), ["overview", "office", "meeting", "lounge", "workspaces"]);
+test("Studio 2 and 3: six rooms, example prompts, and a lounge line that is stable within the hour and varies across bots", () => {
+  assert.deepEqual(ROOMS.map((r: any) => r[0]), ["overview", "office", "meeting", "lounge", "workspaces", "team"]);
   assert.ok(EXAMPLES.length >= 3);
   assert.equal(loungeLine("b_1", 9), loungeLine("b_1", 9));
   assert.ok(LOUNGE_LINES.includes(loungeLine("b_1", 9)));
@@ -97,4 +97,17 @@ test("the communication log merges exchanges newest first with who spoke to whom
   assert.equal(mergeLog(exs, 1).length, 1);
   assert.equal(progressPct({ total: 4, done: 1 }), 25);
   assert.equal(progressPct({ total: 0, done: 0 }), 0);
+});
+
+// @ts-expect-error plain browser module
+import { TIER_ROLES, fmtUsd, savingText, teamShares } from "../../web/studio.js";
+
+test("Studio 3: tier shares of the turns, largest first; the saving line against the all-frontier counterfactual", () => {
+  const s = { turns: 10, costUsd: 1.5, frontierUsd: 9, known: 10, byTier: { coder: { turns: 6, costUsd: 1, tokensIn: 10, tokensOut: 5, verified: 5 }, frontier: { turns: 1, costUsd: 0.4, tokensIn: 1, tokensOut: 1, verified: 1 }, light: { turns: 3, costUsd: 0.1, tokensIn: 0, tokensOut: 0, verified: 3 }, local: { turns: 0, costUsd: 0, tokensIn: 0, tokensOut: 0, verified: 0 } } };
+  assert.deepEqual(teamShares(s).map((x: any) => [x.tier, x.share]), [["coder", 60], ["light", 30], ["frontier", 10]]);
+  assert.deepEqual(teamShares(undefined), []);
+  assert.equal(savingText(s), "$1.50 spent vs $9.00 all-frontier (83% saved)");
+  assert.equal(savingText({ known: 0 }), "No priced turns yet.");
+  assert.equal(fmtUsd(0.001), "$0.0010");
+  assert.equal(TIER_ROLES.frontier, "advisor");
 });

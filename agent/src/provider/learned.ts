@@ -23,6 +23,22 @@ export interface RouteLogRow {
   blocked: number;
   calls: number;
   costUsd?: number;
+  /** Tokens the turn spent (every model call of the turn), when the provider reported them. */
+  tokensIn?: number;
+  tokensOut?: number;
+  /** The session the turn belongs to (an id, never text). */
+  session?: string;
+}
+
+export interface TierCost { turns: number; costUsd: number; tokensIn: number; tokensOut: number; verified: number }
+export interface CostSummary {
+  turns: number;
+  costUsd: number;
+  /** What the same turns would have cost on the frontier tier (tokens at frontier prices; without tokens, cost scaled by the output price ratio). */
+  frontierUsd: number;
+  /** Turns that could be priced for the counterfactual. */
+  known: number;
+  byTier: Record<string, TierCost>;
 }
 
 export const MIN_SAMPLES = 30;
@@ -38,8 +54,53 @@ export function appendRouteLog(file: string, row: RouteLogRow): void {
   try { mkdirSync(join(file, ".."), { recursive: true, mode: 0o700 }); appendFileSync(file, JSON.stringify(row) + "\n", { mode: 0o600 }); } catch { /* best effort */ }
 }
 
-export function rowFor(message: string, d: RouteDecision, p: TurnProof, costUsd?: number): RouteLogRow {
-  return { at: p.at, h: hashOf(message), cls: classOf(d), tier: d.tier, applied: d.applied, ...(p.model ? { model: p.model } : {}), verified: p.verified, failed: p.failed, blocked: p.blocked, calls: p.calls, ...(costUsd !== undefined ? { costUsd } : {}) };
+export function rowFor(message: string, d: RouteDecision, p: TurnProof, costUsd?: number, extra?: { tokensIn?: number; tokensOut?: number; session?: string }): RouteLogRow {
+  return {
+    at: p.at, h: hashOf(message), cls: classOf(d), tier: d.tier, applied: d.applied, ...(p.model ? { model: p.model } : {}), verified: p.verified, failed: p.failed, blocked: p.blocked, calls: p.calls, ...(costUsd !== undefined ? { costUsd } : {}),
+    ...(extra?.tokensIn ? { tokensIn: extra.tokensIn } : {}), ...(extra?.tokensOut ? { tokensOut: extra.tokensOut } : {}), ...(extra?.session ? { session: extra.session } : {}),
+  };
+}
+
+/** Parses route log text into rows, skipping anything malformed. */
+export function parseRouteLog(text: string): RouteLogRow[] {
+  const out: RouteLogRow[] = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    try { const r = JSON.parse(line) as RouteLogRow; if (r && typeof r === "object" && typeof r.at === "number" && typeof r.tier === "string") out.push(r); } catch { /* skip */ }
+  }
+  return out;
+}
+
+/**
+ * The token team's bill: turns and cost per tier (the tier the router chose; in shadow mode the configured model still ran), and the
+ * all-frontier counterfactual the Altair "token team" screenshot shows ("$14.86 vs $93 all-Opus"). `since` keeps turns at or after it,
+ * `session` keeps one session's. Prices are USD per 1M tokens, from the policy table.
+ */
+export function costSummary(text: string, o: { policy: Record<string, { model?: string; priceIn: number; priceOut: number }>; since?: number; session?: string; frontier?: string }): CostSummary {
+  const fkey = o.frontier ?? "frontier";
+  const fp = o.policy[fkey] ?? { priceIn: 0, priceOut: 0 };
+  const sum: CostSummary = { turns: 0, costUsd: 0, frontierUsd: 0, known: 0, byTier: {} };
+  for (const r of parseRouteLog(text)) {
+    if (o.since !== undefined && r.at < o.since) continue;
+    if (o.session !== undefined && r.session !== o.session) continue;
+    const key = r.applied ? r.tier : (r.model && modelTier(o.policy, r.model)) || "light";
+    const t = sum.byTier[key] ?? (sum.byTier[key] = { turns: 0, costUsd: 0, tokensIn: 0, tokensOut: 0, verified: 0 });
+    const cost = Number(r.costUsd) || 0;
+    t.turns++; t.costUsd += cost; t.tokensIn += r.tokensIn || 0; t.tokensOut += r.tokensOut || 0; if (r.verified) t.verified++;
+    sum.turns++; sum.costUsd += cost;
+    if (r.tokensIn || r.tokensOut) { sum.frontierUsd += ((r.tokensIn || 0) * fp.priceIn + (r.tokensOut || 0) * fp.priceOut) / 1e6; sum.known++; }
+    else if (cost > 0) { const tp = o.policy[key]; const base = tp && tp.priceOut > 0 ? tp.priceOut : fp.priceOut; sum.frontierUsd += cost * (fp.priceOut / base); sum.known++; }
+  }
+  const r4 = (n: number): number => Number(n.toFixed(4));
+  sum.costUsd = r4(sum.costUsd); sum.frontierUsd = r4(sum.frontierUsd);
+  for (const t of Object.values(sum.byTier)) t.costUsd = r4(t.costUsd);
+  return sum;
+}
+
+/** The tier whose configured model this is, if any (shadow rows ran the configured model, not the router's pick). */
+export function modelTier(policy: Record<string, { model?: string }>, model: string): string | undefined {
+  for (const [tier, p] of Object.entries(policy)) if (p.model === model) return tier;
+  return undefined;
 }
 
 export interface CellStat { n: number; verified: number; cost: number }

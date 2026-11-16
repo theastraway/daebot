@@ -80,6 +80,10 @@ export interface TurnProof {
   route?: string;
   /** Slugs of the agents a successful bot_talk reached this turn ("reviewer" = the reviewer looked). */
   talked?: string[];
+  /** The advisor tool answered this turn (a stronger model looked before the answer). */
+  advised?: boolean;
+  /** Consult-before-done (DAEBOT_CONSULT_BEFORE_DONE=1) on a standard or large build: "ok" = the advisor was consulted, "skipped" = it was not and the answer carries the footer. */
+  consult?: "ok" | "skipped";
 }
 
 /** The handoff card: what a session (or a delegated piece) is about, in the shape the next worker needs. Written by compaction and by bot_talk delegation. */
@@ -393,6 +397,8 @@ export interface Runtime {
   botBoardRows?(botId: string): import("./board/board.ts").BoardRow[];
   /** Daebot Studio: the user's bots as workers on the floor (studio/index.ts), from this owner's bots, sessions, board rows and pending permission cards. */
   studio?(extra: { exchanges: readonly import("./studio/index.ts").StudioExchangeIn[] }): Promise<import("./studio/index.ts").StudioView>;
+  /** The token team (Studio): the route log's bill per tier today, all time and for one session, with the all-frontier counterfactual, plus the rules in play. */
+  team?(sessionId?: string): import("./studio/index.ts").TeamView;
   /** The lessons and learned skills in play for a session (the lesson drawer), with their counters. Undefined = unknown session or no learning there. */
   lessons?(id: string): { scope?: string; items: LessonView[] } | undefined;
   /** The user's thumbs on a lesson or learned skill: up = it helped, down = it hurt. Written to MIND. false = unknown session or key. */
