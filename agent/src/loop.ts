@@ -2,7 +2,7 @@
 // pre_turn, pre_tool, pre_answer and post_turn; this file only routes verdicts, it holds no policy.
 import { createHash } from "node:crypto";
 import { effectiveClass } from "./tool-class.ts";
-import { computeFocus, isAutomatedMessage, type TurnFocus } from "./focus.ts";
+import { computeFocus, isAutomatedMessage, type SkillRef, type TurnFocus } from "./focus.ts";
 import type { LearnHooks } from "./learn/types.ts";
 import type {
   AgentEvent, AgentSession, CallRecord, Config, DecisionReceipt, GateVerdict, Kernel, Message, Provider,
@@ -57,6 +57,8 @@ export interface SessionDeps {
   systemPrompt: string | ((focus?: TurnFocus) => string);
   /** Focused context (DAEBOT_FOCUSED_CONTEXT). On: a typed human turn gets only the skill text and tools its message needs; routine, heartbeat and bot turns keep the full set. Absent = as before. */
   focus?: boolean;
+  /** File skills (src/skills) this session may use; computeFocus decides which are in play each turn. Absent = none. */
+  skills?: readonly SkillRef[];
   /** Focused context: per-turn volatile block (relevant MIND items, matching mistakes) for a typed human message. Injected AFTER the user message so the cached prefix is unchanged. */
   turnContext?: (message: string) => Promise<string | undefined>;
   bootContext: string;
@@ -212,7 +214,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     try {
       if (messages[0]?.role === "system") {
         let f: TurnFocus | undefined;
-        if (turnFocused) { refreshDynamic(); f = computeFocus(liveTools, userMessage, recentRounds); focusKey = f.key; }
+        if (turnFocused) { refreshDynamic(); f = computeFocus(liveTools, userMessage, recentRounds, deps.skills); focusKey = f.key; }
         messages[0] = { role: "system", content: buildSystem(f) };
       }
     } catch { /* keep the previous prompt */ }
@@ -284,7 +286,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
         let offered = safe(() => kernel.allowedTools(state, liveTools), liveTools).filter(hasCap);
         if (turnFocused) {
           // Only the tools this message needs (plus core and anything used in the last 3 rounds); skill text follows the same groups.
-          const f = computeFocus(offered, turnText, recentRounds);
+          const f = computeFocus(offered, turnText, recentRounds, deps.skills);
           offered = offered.filter((t) => f.toolNames.has(t.spec.name));
           if (f.key !== focusKey) { focusKey = f.key; try { if (messages[0]?.role === "system") messages[0] = { role: "system", content: buildSystem(f) }; } catch { /* keep */ } }
         }

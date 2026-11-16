@@ -55,7 +55,7 @@ export const readFileTool: Tool = {
       const more = offset - 1 + limit < lines.length ? `\n[${lines.length - (offset - 1 + limit)} more lines; use offset=${offset + limit}]` : "";
       return ok(cap(body, MAX_READ_CHARS) + more, { lines: lines.length });
     } catch (e) {
-      return fail(`read_file: ${errMsg(e)}`);
+      return fail(`read_file: ${errMsg(e)}`, { retry: "pointless", next: "find the right path with glob or grep first" });
     }
   },
 };
@@ -80,7 +80,7 @@ export const writeFileTool: Tool = {
       await writeFile(p, args.content, "utf8");
       return ok(`wrote ${args.content.length} chars to ${p}`);
     } catch (e) {
-      return fail(`write_file: ${errMsg(e)}`);
+      return fail(`write_file: ${errMsg(e)}`, { retry: "pointless", next: "check the directory exists and is writable" });
     }
   },
 };
@@ -112,13 +112,13 @@ export const editFileTool: Tool = {
     try {
       const text = await readFile(p, "utf8");
       const count = text.split(oldS).length - 1;
-      if (count === 0) return fail("edit_file: old_string not found");
+      if (count === 0) return fail("edit_file: old_string not found", { retry: "pointless", next: "read_file the current text and copy old_string exactly", stop: "after one re-read; then ask the user" });
       if (count > 1 && args.replace_all !== true) return fail(`edit_file: old_string matches ${count} places; add context to make it unique or set replace_all`);
       const next = args.replace_all === true ? text.split(oldS).join(newS) : text.replace(oldS, () => newS);
       await writeFile(p, next, "utf8");
       return ok(`edited ${p} (${args.replace_all === true ? count : 1} replacement${count > 1 && args.replace_all === true ? "s" : ""})`);
     } catch (e) {
-      return fail(`edit_file: ${errMsg(e)}`);
+      return fail(`edit_file: ${errMsg(e)}`, { retry: "pointless", next: "check the path with glob; use write_file for a new file" });
     }
   },
 };

@@ -1,9 +1,14 @@
 // Assets baked into the `bun build --compile` binary: the web UI (web/) and the package version.
 // On plain Node the generated module is an empty stub, so nothing here changes behaviour.
-import { EMBEDDED_FILES, EMBEDDED_VERSION } from "./embedded.generated.ts";
+import { EMBEDDED_FILES, EMBEDDED_SKILLS, EMBEDDED_VERSION } from "./embedded.generated.ts";
 
 export function embeddedVersion(): string | undefined {
   return EMBEDDED_VERSION || undefined;
+}
+
+/** The bundled skills (agent/skills/<name>/SKILL.md) baked into the binary, as { "<name>/SKILL.md": utf8 text }. Empty on plain Node. */
+export function embeddedSkills(): Record<string, string> {
+  return EMBEDDED_SKILLS;
 }
 
 export function hasEmbeddedSite(files: Record<string, string> = EMBEDDED_FILES): boolean {
