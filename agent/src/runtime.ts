@@ -28,6 +28,9 @@ import type { ThreadView } from "./bots/self-tool.ts";
 import { botRecall, recordBotLesson } from "./bots/lessons.ts";
 import { MAIN_BOT_ID, RoutineHub } from "./routines/store.ts";
 import { focusedContextOn, relevantFromMind, type Group, type TurnFocus } from "./focus.ts";
+import { loadSkills, renderSkills, skillsPrompt } from "./skills/index.ts";
+import type { SkillFile } from "./skills/index.ts";
+import { daeBase } from "./bots/dae.ts";
 import { BOT_SKILL_PROMPT, BOT_TOOLKIT_PROMPT } from "./bots/skill.ts";
 import type { BotRecord, BotsContext, RosterEntry } from "./bots/types.ts";
 import { MAX_INSTRUCTIONS_BYTES } from "./bots/types.ts";
@@ -193,6 +196,10 @@ export function composeSystemPrompt(o: {
   focus?: TurnFocus;
   /** The user's own dressing of the MAIN Daebot (name, face, instructions), from the settings. Ignored in a bot's prompt. */
   main?: { name?: string; face?: string; instructions?: string };
+  /** The stock Dae definition (bots/dae.ts): the base rules of the MAIN Daebot, under the user's own instructions. Ignored in a bot's prompt. */
+  dae?: string;
+  /** File skills (src/skills) the session may use. With focus, the ones in focus.skills are written out and the rest become index lines; without focus every one is an index line. */
+  skills?: readonly SkillFile[];
 }): string {
   const lines: string[] = [
     o.identity ?? "You are Daebot (Dae), Anthony Conti's own agent. MIND is your memory and the only source of truth about his world.",
@@ -211,6 +218,7 @@ export function composeSystemPrompt(o: {
   if (o.tier === "staff") lines.push("Identity: staff. You can read and make local writes. You cannot contact third parties, post publicly or do anything irreversible; say so plainly if asked." + (o.coder ? " The one exception is the coder grant below." : ""));
   if (o.tier === "staff" && o.coder) lines.push("", ...coderPrompt(o.coder));
   const roster = (o.roster ?? []).slice(0, MAX_ROSTER);
+  if (!o.bot && o.dae?.trim()) lines.push("", "## Base rules (your Daebot definition)", o.dae.trim(), "The user's own instructions below set your role and style on top of these. Neither lifts a kernel gate, the receipt rule, the owner check or the feed rule.");
   if (!o.bot && o.main && (o.main.name || o.main.face || o.main.instructions?.trim())) {
     const text = (o.main.instructions ?? "").slice(0, MAX_INSTRUCTIONS_BYTES).trim();
     lines.push(
@@ -276,7 +284,12 @@ export function composeSystemPrompt(o: {
   if (o.board) { if (on("board")) lines.push("", BOARD_PROMPT); else index.push("Task board: task_board keeps multi-step work visible (the rules load when you ask about tasks or the board)."); }
   if (o.decision) { if (on("decision")) lines.push("", DECISION_PROMPT); else index.push("Decisions: task_decision and the Decision Protocol (loads when a choice is on the table)."); }
   if (o.botManage) { if (on("bot")) lines.push("", BOT_SKILL_PROMPT, "", BOT_TOOLKIT_PROMPT); else index.push("Bots: bot_manage creates, edits, schedules and talks through Daebots (the guide loads when you ask about bots or routines)."); }
-  if (F && index.length) lines.push("", "## Skills (index; the full text loads only when the message is about it)", ...index.map((l) => `- ${l}`));
+  if (o.skills?.length) {
+    const sp = skillsPrompt(o.skills, { active: F?.skills, toolNames: o.toolNames ? new Set(o.toolNames) : undefined });
+    lines.push(...renderSkills(sp));
+    index.push(...sp.index);
+  }
+  if ((F || o.skills?.length) && index.length) lines.push("", "## Skills (index; the full text loads only when the message is about it)", ...index.map((l) => `- ${l}`));
   if (o.appleCalendar === true && on("mail")) {
     lines.push(
       "",
@@ -747,6 +760,8 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       let curCaps: string[] = [];
 
       const focusedOn = focusedContextOn();
+      // File skills (agent/skills + DAEBOT_SKILLS_DIR), read once per process; the loop decides per turn which are in play.
+      const fileSkills: readonly SkillFile[] = loadSkills().skills;
       let boot: { ok: boolean; context: string; error?: string; degraded?: boolean };
       try { boot = await bootCache.get(botRec ? `${cfg.mindApiKey}|bot:${botRec.slug}` : cfg.mindApiKey, () => bootMind(clientForMind(home), { focused: focusedOn })); } catch (e) { boot = { ok: false, context: "", error: String((e as Error)?.message ?? e) }; }
       try { await sync.open({ title, sourceKey, externalId: id }); } catch { /* sync is best effort */ }
@@ -788,6 +803,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         model: explicitModel ?? userDefault(),
         // A function: DAEBOT.md edits, renames and roster changes apply on the very next message.
         focus: focusedOn,
+        skills: fileSkills,
         // Per turn, for a message the human typed: the few MIND items that bear on it plus the mistakes that match it. Never for routines, heartbeats, check-ins or peer turns.
         turnContext: focusedOn && !peer
           ? async (message) => {
@@ -821,6 +837,8 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
             decision: tools.some((t) => t.spec.name === "task_decision"),
             botManage: tools.some((t) => t.spec.name === "bot_manage"),
             main: botId ? undefined : settings?.get().main,
+            dae: botId ? undefined : daeBase(),
+            skills: fileSkills,
             appleCalendar: botId ? undefined : curCaps.includes("apple_calendar"),
             connectedApps: botId || !appsOn() ? undefined : connectedAppsLines(connectedApps.state(), { servers: serverLites(), tools: new Set(tools.map((t) => t.spec.name)), deviceCalendar: curCaps.includes("apple_calendar") }),
             permissions: permissions?.preferencesText(),

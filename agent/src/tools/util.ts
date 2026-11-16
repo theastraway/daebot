@@ -2,7 +2,12 @@ import { isAbsolute, resolve } from "node:path";
 import type { ToolResult } from "../types.ts";
 
 export const ok = (output: string, meta?: Record<string, unknown>): ToolResult => ({ ok: true, output, ...(meta ? { meta } : {}) });
-export const fail = (message: string): ToolResult => ({ ok: false, output: message });
+/** A failed result. `hint` adds the contract tail (see tools/contract.ts): what to do next, whether the same call may be retried, when to stop. */
+export const fail = (message: string, hint?: { next?: string; retry?: "safe" | "unsafe" | "pointless"; stop?: string }): ToolResult => {
+  if (!hint) return { ok: false, output: message };
+  const tail = [hint.retry ? `retry: ${hint.retry}` : "", hint.next ? `next: ${hint.next}` : "", hint.stop ? `stop: ${hint.stop}` : ""].filter(Boolean).join(" | ");
+  return { ok: false, output: tail ? `${message} | ${tail}` : message, meta: { contract: { status: "failed", summary: message.split("\n")[0], cause: message.split("\n")[0], ...hint } } };
+};
 
 export function resolvePath(cwd: string, p: unknown): string | undefined {
   if (typeof p !== "string" || p === "") return undefined;

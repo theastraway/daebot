@@ -86,9 +86,9 @@ export const bashTool: Tool = {
         ctx.signal?.removeEventListener("abort", onAbort);
         let text = cap(out, OUTPUT_CAP);
         if (hardCap) text += "\n[output exceeded buffer; middle dropped]";
-        if (timedOut) return resolve({ ok: false, output: `${text}\n[timed out after ${timeoutMs}ms]`.trim() });
+        if (timedOut) return resolve({ ok: false, output: `${text}\n[timed out after ${timeoutMs}ms] | retry: unsafe | next: run it with process (start, then status or tail) if it is a long job; otherwise narrow the command`.trim(), meta: { contract: { status: "failed", summary: `timed out after ${timeoutMs}ms`, cause: "timeout", retry: "unsafe", next: "use process for long jobs or narrow the command" } } });
         if (aborted) return resolve({ ok: false, output: `${text}\n[aborted]`.trim() });
-        if (extra) return resolve({ ok: false, output: `bash: ${extra}` });
+        if (extra) return resolve({ ok: false, output: `bash: ${extra} | retry: pointless | next: check the shell and the command`, meta: { contract: { status: "failed", summary: extra, cause: extra, retry: "pointless", next: "check the shell and the command" } } });
         if (win) text = `[${sh.label}]\n${text}`;
         resolve({ ok: code === 0, output: code === 0 ? text : `${text}\n[exit code ${code}]`.trim(), meta: { exitCode: code } });
       };

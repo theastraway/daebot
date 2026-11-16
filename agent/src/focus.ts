@@ -46,9 +46,11 @@ export function isAutomatedMessage(message: string): boolean {
 // ---------------------------------------------------------------- groups
 export type Group =
   | "bot" | "board" | "decision" | "photos" | "sessions" | "astra" | "computer" | "work" | "voice" | "mail" | "connect"
-  | "people" | "mind" | "env" | "docs";
+  | "people" | "mind" | "env" | "docs" | "build";
 
 export const GROUP_TRIGGERS: Record<Group, RegExp> = {
+  // build: a change to software, not a lookup. Narrower than "work" (which fires on "find" or "file"): the Build protocol skill loads only here.
+  build: /\b(?:build|builds|building|implement\w*|refactor\w*|feature|features|bug ?fix\w*|fix(?:es|ed|ing)? (?:the |a |this |that )?(?:bug|issue|error|test|build|crash|failure)|failing tests?|pull request|prs?\b|merge|ship (?:it|this|the)|deploy\w*|migration|migrate|endpoint|api|schema|rewrite|write (?:a |the |some )?(?:code|function|module|script|test|tests)|add (?:a |the |an )?(?:tool|test|tests|route|endpoint|field|column|flag|option|command)|code ?review|review (?:the |this |my )?(?:code|diff|pr|change|changes|branch)|worktree|typecheck|lint|unit tests?|regression)\b/i,
   bot: /\b(?:bots?|daebots?|workforce|work ?force|teams?|org ?chart|hire[ds]?|hiring|staff(?:ed|ing)?|departments?|agents?|employees?|sales ?reps?|assistants?|routines?|schedul\w*|heartbeats?|cron|persona|personas|dae ?bot\.md|every (?:day|morning|evening|night|hour|week|weekday|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|(?:daily|weekly|hourly|monthly|nightly))\b/i,
   board: /\b(?:tasks?|task ?board|board|to-?dos?|checklists?|kanon|projects?|priorit\w+|what'?s next|backlog|punch list|life board|outcome)\b/i,
   decision: /\b(?:decide|decision|decisions|options?|should (?:we|i)|recommend\w*|pros and cons|trade-?offs?|which (?:one|option|should)|choose|ooc|emr|worth it)\b/i,
@@ -106,8 +108,36 @@ export interface TurnFocus {
   groups: ReadonlySet<Group>;
   /** Names of the tools offered this round. */
   toolNames: ReadonlySet<string>;
+  /** Names of the file skills (skills/<name>/SKILL.md) whose full text is in play this turn; the rest get one index line. */
+  skills: ReadonlySet<string>;
   /** Changes whenever the prompt or tool list would change (the loop rebuilds the system prompt on a change). */
   key: string;
+}
+
+/** What computeFocus needs to know about a file skill (src/skills). Kept here so skills can be matched without importing the loader. */
+export interface SkillRef {
+  name: string;
+  /** The focus group that loads it (a built-in Group or the skill's own name). */
+  group: string;
+  /** Extra trigger on the message text, from the skill's frontmatter. */
+  triggers?: RegExp;
+  /** A tool the model used in the last rounds that brings the skill along. */
+  tools: readonly string[];
+  /** The skill is offered only when the session has at least one of these tools (empty = always). */
+  needs: readonly string[];
+}
+
+/** Which file skills are in play: group in focus, own trigger on the message, a recently used tool of the skill, or the skill named outright; never one whose `needs` the session lacks. */
+export function activeSkills(skills: readonly SkillRef[], o: { message: string; groups: ReadonlySet<string>; recent: ReadonlySet<string>; toolNames: ReadonlySet<string> }): Set<string> {
+  const out = new Set<string>();
+  const lower = String(o.message ?? "").toLowerCase();
+  for (const s of skills) {
+    if (s.needs.length && !s.needs.some((n) => o.toolNames.has(n))) continue;
+    const named = lower.includes(s.name.toLowerCase());
+    const byTool = s.tools.some((t) => o.recent.has(t));
+    if (named || byTool || o.groups.has(s.group) || (s.triggers?.test(o.message) ?? false)) out.add(s.name);
+  }
+  return out;
 }
 
 function mcpServerOf(t: Tool): string | undefined {
@@ -122,7 +152,7 @@ function mcpServerOf(t: Tool): string | undefined {
  *  - a tool the model is mid-use of is never removed;
  *  - MCP connector tools (<server>__<tool>) only for a server the message names or the model just used, or tools whose name/description match the message; capped at MAX_MCP_TOOLS, ranked by match.
  */
-export function computeFocus(all: readonly Tool[], message: string, recentRounds: readonly (readonly string[])[]): TurnFocus {
+export function computeFocus(all: readonly Tool[], message: string, recentRounds: readonly (readonly string[])[], skills: readonly SkillRef[] = []): TurnFocus {
   const recent = new Set(recentRounds.slice(-RECENT_ROUNDS).flat());
   const groups = groupsForMessage(message);
   for (const n of recent) { const g = groupOfTool(n); if (g) groups.add(g); }
@@ -149,8 +179,9 @@ export function computeFocus(all: readonly Tool[], message: string, recentRounds
   for (const { t } of mcp.slice(0, MAX_MCP_TOOLS)) names.add(t.spec.name);
   // MCP use or naming a connected app brings the connector skill text.
   if (mcp.length) groups.add("connect");
-  const key = `${[...groups].sort().join(",")}|${names.size}|${[...names].filter((n) => n.includes("__")).length}`;
-  return { groups, toolNames: names, key };
+  const on = activeSkills(skills, { message, groups, recent, toolNames: names });
+  const key = `${[...groups].sort().join(",")}|${names.size}|${[...names].filter((n) => n.includes("__")).length}|${[...on].sort().join(",")}`;
+  return { groups, toolNames: names, skills: on, key };
 }
 
 // ---------------------------------------------------------------- per-turn "Relevant from MIND" block

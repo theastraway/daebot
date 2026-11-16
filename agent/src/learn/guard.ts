@@ -42,6 +42,19 @@ function negated(text: string, at: number): boolean {
 
 export interface ScrubOpts { clientNames?: string[] }
 
+/**
+ * The lighter scan for prompt text that is allowed to carry URLs, code and numbers (a file skill, an imported how-to): refuses a
+ * secret-looking token and any attempt to override the kernel or its rules. Returns the reason, else null.
+ */
+export function promptInjectionProblem(text: string): string | null {
+  if (SECRET.test(text)) return "contains a secret-looking token";
+  for (const re of KERNEL_OVERRIDE) {
+    const m = re.exec(text);
+    if (m && !negated(text, m.index)) return "tries to override the kernel or its rules";
+  }
+  return null;
+}
+
 /** Returns a reason when the text must not be stored or injected, else null. */
 export function contentProblem(text: string, o: ScrubOpts = {}): string | null {
   if (SECRET.test(text)) return "contains a secret-looking token";
