@@ -5,7 +5,7 @@
 //
 // Every declared task is linked to the user's own MIND: it carries a scope (Astra AI or MIND), the LIFE project it belongs to, the LIFE
 // item that mirrors it, and (when a choice was involved) the OOC/EMR decision document that was written for it. See board/mind.ts.
-import type { Tool } from "../types.ts";
+import type { Tool, TurnProof } from "../types.ts";
 
 export type BoardStatus = "not_started" | "in_progress" | "ready_to_test" | "stopped" | "cancelled";
 export const BOARD_STATUSES: readonly BoardStatus[] = ["not_started", "in_progress", "ready_to_test", "stopped", "cancelled"];
@@ -36,8 +36,8 @@ export interface BoardTask {
   decision?: BoardDecision;
 }
 
-/** One row of GET /board. */
-export interface BoardRow extends BoardTask { sessionId: string; sessionTitle: string }
+/** One row of GET /board. proof: the session's last human turn (what ran, what was blocked, verified or not, the model), the same on every row of the session. */
+export interface BoardRow extends BoardTask { sessionId: string; sessionTitle: string; proof?: TurnProof }
 
 export const MAX_TASKS = 30;
 const ID_OK = /^[A-Za-z0-9_.-]{1,40}$/;
@@ -365,7 +365,7 @@ const line = (t: BoardTask): string =>
   `${t.id} [${t.status}] ${t.title}${t.scope ? ` {${SCOPE_LABEL[t.scope]}${t.project ? ` / ${t.project.name}` : ""}}` : ""}${t.question ? ` -- asks: ${t.question}` : ""}${t.decision ? ` -- decision: ${t.decision.winner}` : ""}`;
 
 /** Rows for one session: only the tasks the model declared. A session that declared none has no row: a conversation is not a card. */
-export function rowsFor(s: { id: string; title: string }, tasks: BoardTask[]): BoardRow[] {
-  const base = { sessionId: s.id, sessionTitle: s.title || "Untitled" };
+export function rowsFor(s: { id: string; title: string }, tasks: BoardTask[], proof?: TurnProof): BoardRow[] {
+  const base = { sessionId: s.id, sessionTitle: s.title || "Untitled", ...(proof ? { proof } : {}) };
   return tasks.map((t) => ({ ...base, ...t }));
 }

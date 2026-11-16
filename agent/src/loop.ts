@@ -3,11 +3,12 @@
 import { createHash } from "node:crypto";
 import { effectiveClass } from "./tool-class.ts";
 import { computeFocus, isAutomatedMessage, type SkillRef, type TurnFocus } from "./focus.ts";
+import { nextDigest } from "./provider/router.ts";
+import type { TurnDigest } from "./provider/router.ts";
 import type { LearnHooks } from "./learn/types.ts";
 import type {
   AgentEvent, AgentSession, CallRecord, Config, DecisionReceipt, GateVerdict, Kernel, Message, Provider,
-  DeviceBridge, SessionState, SessionSync, StreamEvent, Tool, ToolCall, ToolResult, TurnState, Usage, Violation,
-} from "./types.ts";
+  DeviceBridge, SessionState, SessionSync, StreamEvent, Tool, ToolCall, ToolResult, TurnState, Usage, Violation, Effort, RouteDecision, TurnProof } from "./types.ts";
 import { clipToolOutputs, compactMessages, estimateTokens, needsCompaction } from "./compact.ts";
 import { describeCall, factsOf } from "./permissions/rules.ts";
 import type { CallFacts } from "./permissions/rules.ts";
@@ -59,6 +60,10 @@ export interface SessionDeps {
   focus?: boolean;
   /** File skills (src/skills) this session may use; computeFocus decides which are in play each turn. Absent = none. */
   skills?: readonly SkillRef[];
+  /** The model router (provider/router.ts), called once per typed human turn with the message and the digest of the last turn. Returns undefined to abstain (a pinned model, the free plan, a photo). Absent = no routing. */
+  router?: (input: { message: string; digest?: TurnDigest; hasPhoto: boolean; canBuild: boolean }) => RouteDecision | undefined;
+  /** The learning scope of this session ("workspace:<owner/repo>", "bot:<slug>" or "person:<user>"): lessons are filed under it and recalled by it. */
+  scope?: () => string | undefined;
   /** Focused context: per-turn volatile block (relevant MIND items, matching mistakes) for a typed human message. Injected AFTER the user message so the cached prefix is unchanged. */
   turnContext?: (message: string) => Promise<string | undefined>;
   bootContext: string;
@@ -186,6 +191,13 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
   let turnInteractive = false;
   let turnCaps: string[] = [];
   let turnDevice: DeviceBridge | undefined;
+  // Router state: what the last turn looked like (never message text), the decision for this turn, and what actually served it (the proof card).
+  let digest: TurnDigest | undefined;
+  let turnRoute: RouteDecision | undefined;
+  let repeatHitsThisTurn = 0;
+  let lastServedBy: string | undefined;
+  let lastEffort: Effort | undefined;
+  const BUILD_TOOLS = new Set(["bash", "write_file", "edit_file", "github__push_files", "github__create_or_update_file", "github__create_pull_request"]);
   // A tool that needs a client capability is offered (and runs) only on a turn whose client listed it.
   const hasCap = (t: Pick<Tool, "requires">): boolean => !t.requires || turnCaps.includes(t.requires);
 
@@ -219,6 +231,16 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
       }
     } catch { /* keep the previous prompt */ }
 
+    // ---- model route for this turn (once, at the user-turn boundary; a bot, routine or automated turn keeps the configured model)
+    turnRoute = undefined; repeatHitsThisTurn = 0;
+    if (deps.router && origin === "user" && surface !== "routine" && !isAutomatedMessage(userMessage)) {
+      try {
+        refreshDynamic();
+        turnRoute = deps.router({ message: userMessage, digest, hasPhoto: /\[photo p\d+:/.test(userMessage), canBuild: liveTools.some((t) => BUILD_TOOLS.has(t.spec.name)) });
+      } catch { turnRoute = undefined; }
+      if (turnRoute) yield { type: "route", decision: turnRoute };
+    }
+
     // Pending confirmations from earlier turns are granted by the kernel only on an explicit action phrase, spoken by a HUMAN.
     if (origin !== "bot") { try { kernel.onUserMessage?.(state, userMessage); } catch { /* gate bug must not kill the turn */ } }
 
@@ -243,7 +265,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     const skipRecall = deps.focus === true && (origin === "bot" || surface === "routine" || isAutomatedMessage(userMessage));
     if (learn) {
       if (learnedNote) { const i = messages.indexOf(learnedNote); if (i >= 0) messages.splice(i, 1); learnedNote = undefined; }
-      const note = skipRecall ? undefined : await learn.beforeTurn(userMessage).catch(() => undefined);
+      const note = skipRecall ? undefined : await learn.beforeTurn(userMessage, deps.scope?.()).catch(() => undefined);
       if (note) { learnedNote = { role: "system", content: note }; messages.push(learnedNote); }
     }
     if (ctxNote) { const i = messages.indexOf(ctxNote); if (i >= 0) messages.splice(i, 1); ctxNote = undefined; }
@@ -297,13 +319,17 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
         let text = "";
         const toolCalls: ToolCall[] = [];
         let usage: Usage | undefined;
-        const useModel = modelNow();
+        // The router's model and effort apply only when it is enforced; in shadow mode the decision is on the proof card and the configured model runs.
+        const useModel = turnRoute?.applied ? turnRoute.model : modelNow();
+        const useEffort = turnRoute?.applied ? turnRoute.effort : undefined;
         let servedBy = useModel;
-        for await (const ev of provider.stream({ model: useModel, messages: [...messages], tools: specs, signal }) as AsyncIterable<StreamEvent>) {
+        for await (const ev of provider.stream({ model: useModel, messages: [...messages], tools: specs, signal, ...(useEffort ? { effort: useEffort } : {}) }) as AsyncIterable<StreamEvent>) {
           if (ev.type === "text") { text += ev.delta; if (ev.delta) yield { type: "text", delta: ev.delta }; }
+          else if (ev.type === "thinking") { if (ev.delta) yield { type: "thinking", delta: ev.delta }; } // inner voice: shown, never part of `text`
           else if (ev.type === "toolCall") toolCalls.push(ev.call);
           else if (ev.type === "done") { usage = ev.usage; if (ev.model) servedBy = ev.model; if (ev.notice) yield { type: "notice", level: "info", text: ev.notice }; }
         }
+        lastServedBy = servedBy; lastEffort = useEffort;
         if (signal?.aborted) throw abortErr();
 
         const emitUsage = function* (): Generator<AgentEvent> {
@@ -425,10 +451,23 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
         learn.afterTurn({
           sessionId: id, userMessage, finalText: finalText ?? "", userHistory: userHistory.slice(), calls: state.calls.slice(),
           violations: safe(() => kernel.violations(), [] as Violation[]).filter((v) => v.sessionId === id && v.at >= turnStartedAt),
-          failed,
+          failed, scope: deps.scope?.(),
         });
       } catch { /* learning must not crash a turn */ }
       userHistory.push(userMessage);
+    }
+    // ---- proof of the turn (the board's proof card) and the digest the router reads next turn. Both come from the loop's own records, never from text.
+    {
+      const failedCalls = state.calls.filter((c) => !c.result.ok).length;
+      const gateBlocks = safe(() => kernel.violations(), [] as Violation[]).filter((v) => v.sessionId === id && v.at >= turnStartedAt && v.enforced && v.action === "block").length;
+      const blocks = blockedThisTurn.length + gateBlocks;
+      const unverified = (finalText ?? "").includes(UNVERIFIED_FOOTER);
+      const proof: TurnProof = {
+        at: Date.now(), calls: state.calls.length, failed: failedCalls, blocked: blocks, unverified, verified: !unverified && !failed && !confirmed,
+        ...(lastServedBy ? { model: lastServedBy } : {}), ...(lastEffort ? { effort: lastEffort } : {}), ...(turnRoute ? { tier: turnRoute.tier, route: `${turnRoute.applied ? "" : "shadow: "}${turnRoute.tier} (${turnRoute.reason})` } : {}),
+      };
+      if (origin === "user") yield { type: "proof", proof };
+      digest = nextDigest(digest, { failedCalls, blocks, unverified, repeatHits: repeatHitsThisTurn });
     }
     yield { type: "done", finalText: finalText ?? "" };
   }
@@ -626,6 +665,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     const sig = callSignature(call);
     if (sig === lastCallSig) sameCallCount++; else { lastCallSig = sig; sameCallCount = 1; }
     if (sameCallCount > 0 && sameCallCount % REPEAT_CALL_LIMIT === 0) {
+      repeatHitsThisTurn++;
       loopNudges.push(`[Loop guard: you have made the identical ${tool.spec.name} call ${sameCallCount} times in a row with the same arguments. It is not getting you anywhere. Change your approach: different arguments, a different tool, or tell the user what is blocking you.]`);
     }
     return "ok";

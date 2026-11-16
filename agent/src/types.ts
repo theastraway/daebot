@@ -34,13 +34,50 @@ export interface Usage { promptTokens: number; completionTokens: number; costUsd
 
 export type StreamEvent =
   | { type: "text"; delta: string }
+  // The model's reasoning (a <think> block in the content stream, or the provider's reasoning delta). Shown to the user as its inner voice;
+  // never answer text, never part of the transcript the model sees again, never a receipt.
+  | { type: "thinking"; delta: string }
   | { type: "toolCall"; call: ToolCall }
   | { type: "done"; usage: Usage; finishReason: string; notice?: string; model?: string }; // notice: a one-line info for the user (e.g. answered on the free model); model: the model that actually answered, when the provider chose another
 
+/** How hard a reasoning model should think on one call. Sent as OpenRouter's `reasoning.effort`; ignored by models without it. */
+export type Effort = "low" | "medium" | "high";
+
 export interface Provider {
   readonly name: string;
-  /** pinModel: use exactly req.model, with no tier swap and no fallback list (a vision call must not land on a text-only chat model). */
-  stream(req: { model: string; messages: Message[]; tools: ToolSpec[]; signal?: AbortSignal; pinModel?: boolean; bot?: string }): AsyncIterable<StreamEvent>;
+  /** pinModel: use exactly req.model, with no tier swap and no fallback list (a vision call must not land on a text-only chat model). effort: reasoning effort for this call (router). */
+  stream(req: { model: string; messages: Message[]; tools: ToolSpec[]; signal?: AbortSignal; pinModel?: boolean; bot?: string; effort?: Effort }): AsyncIterable<StreamEvent>;
+}
+
+/** The model tiers the router chooses between (provider/policy.ts has the table; cheapest first). */
+export type ModelTier = "local" | "reflex" | "light" | "coder" | "reasoner" | "frontier";
+
+/** What the router decided for one user turn. applied=false in shadow mode (logged, the configured model still ran). */
+export interface RouteDecision {
+  tier: ModelTier;
+  model: string;
+  effort?: Effort;
+  /** One line a person can read on the proof card: why this tier. */
+  reason: string;
+  /** rules = the policy table; later: classifier (a cheap model decision). */
+  source: "rules" | "classifier";
+  applied: boolean;
+}
+
+/** The proof of one turn: what ran, what the kernel blocked, whether the answer carried receipts. Shown on the board. */
+export interface TurnProof {
+  at: number;
+  calls: number;
+  failed: number;
+  blocked: number;
+  /** The final answer shipped with the unverified footer (the receipt gate refused it twice). */
+  unverified: boolean;
+  /** The answer made a claim that the receipt gate accepted (or needed no receipt). */
+  verified: boolean;
+  model?: string;
+  effort?: Effort;
+  tier?: ModelTier;
+  route?: string;
 }
 
 // ---------- tools ----------
@@ -221,6 +258,12 @@ export type AgentEvent =
   // `exchangeId` opens the read-only two-sided transcript of that pair of agents (GET /exchanges/:id).
   | { type: "exchange"; exchangeId: string; from: ExchangeParty; to: ExchangeParty; message: string; reply?: { text: string; ok: boolean }; at: number }
   | { type: "usage"; usage: Usage; totalCostUsd: number; model?: string } // model = the model that produced this call
+  // The model's inner voice for the block being produced: shown dimmed and collapsible ahead of the answer, kept in the transcript, never sent back to the model.
+  | { type: "thinking"; delta: string }
+  // The router's decision for this turn (shadow: applied=false). One per user turn, before the first model call.
+  | { type: "route"; decision: RouteDecision }
+  // The proof of the turn that just ended (receipts, blocks, model): the board's proof card reads it.
+  | { type: "proof"; proof: TurnProof }
   // The draft just streamed (the text since the last tool/gate/confirm boundary) was withheld by a gate.
   // Clients replace that assistant block with a "rewriting: <reason>" note; the regenerated text streams after it.
   | { type: "retract"; reason: string }
@@ -329,6 +372,18 @@ export interface Runtime {
   decisionDoc?(id: string): Promise<{ title: string; content: string } | undefined>;
   /** Task board rows of ONE bot's own threads (the Heartbeat's cheap check reads these). */
   botBoardRows?(botId: string): import("./board/board.ts").BoardRow[];
+  /** The lessons and learned skills in play for a session (the lesson drawer), with their counters. Undefined = unknown session or no learning there. */
+  lessons?(id: string): { scope?: string; items: LessonView[] } | undefined;
+  /** The user's thumbs on a lesson or learned skill: up = it helped, down = it hurt. Written to MIND. false = unknown session or key. */
+  voteLesson?(id: string, key: string, up: boolean): Promise<boolean>;
+  /** The model router's mode and policy table of this runtime. */
+  routing?(): { mode: "off" | "shadow" | "enforce"; tiers: { tier: ModelTier; model: string; use: string; effort?: Effort }[] };
+}
+
+/** One lesson or learned skill as the lesson drawer shows it. */
+export interface LessonView {
+  key: string; type: "lesson" | "skill"; title: string; text: string; status: "active" | "demoted" | "retired";
+  uses: number; helped: number; hurt: number; updated: string; scope?: string; scopes?: string[];
 }
 
 // Wire protocol over HTTP (JSON) + WebSocket: gateway <-> surface. See agent/SPEC.md section 5.

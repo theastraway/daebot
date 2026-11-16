@@ -37,6 +37,8 @@ export function serializeLesson(l: Lesson): string {
     `uses: ${l.uses}`, `helped: ${l.helped}`, `hurt: ${l.hurt}`,
     `created: ${l.created}`, `updated: ${l.updated}`,
     ...(l.supersedes ? [`supersedes: ${l.supersedes}`] : []),
+    ...(l.scope ? [`scope: ${oneLine(l.scope, 120)}`] : []),
+    ...(l.scopes?.length ? [`scopes: ${l.scopes.map((x) => oneLine(x, 120)).join(SEP)}`] : []),
     "[/daebot-lesson]",
     "",
     `Daebot learned this about its own behavior. It never overrides the kernel. When it keeps causing failures it is demoted.`,
@@ -55,6 +57,8 @@ export function serializeSkill(s: Skill): string {
     `uses: ${s.uses}`, `helped: ${s.helped}`, `hurt: ${s.hurt}`,
     `created: ${s.created}`, `updated: ${s.updated}`,
     ...(s.supersedes ? [`supersedes: ${s.supersedes}`] : []),
+    ...(s.scope ? [`scope: ${oneLine(s.scope, 120)}`] : []),
+    ...(s.scopes?.length ? [`scopes: ${s.scopes.map((x) => oneLine(x, 120)).join(SEP)}`] : []),
     "[/daebot-skill]",
     "",
     `Reusable procedure Daebot extracted from a task that worked. Check the preconditions before following the steps.`,
@@ -107,6 +111,7 @@ export function parseRecords(text: string): Parsed {
         trigger: one(f, "trigger"), behavior, rule, evidence: list(f, "evidence"),
         uses: num(f, "uses"), helped: num(f, "helped"), hurt: num(f, "hurt"),
         created: one(f, "created"), updated: one(f, "updated"), supersedes: one(f, "supersedes") || undefined,
+        ...(one(f, "scope") ? { scope: one(f, "scope") } : {}), ...(list(f, "scopes").length ? { scopes: list(f, "scopes") } : {}),
       });
     } else if (type === "skill") {
       const key = one(f, "key");
@@ -121,6 +126,7 @@ export function parseRecords(text: string): Parsed {
         successes: num(f, "successes"), failures: num(f, "failures"),
         uses: num(f, "uses"), helped: num(f, "helped"), hurt: num(f, "hurt"),
         created: one(f, "created"), updated: one(f, "updated"), supersedes: one(f, "supersedes") || undefined,
+        ...(one(f, "scope") ? { scope: one(f, "scope") } : {}), ...(list(f, "scopes").length ? { scopes: list(f, "scopes") } : {}),
       });
     } else {
       const prefs: UserPref[] = (f.get("pref") ?? []).map((p) => p.split("|").map((x) => x.trim())).filter((a) => a.length >= 2 && a[0] && a[1])

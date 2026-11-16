@@ -49,6 +49,25 @@ export function projectsOf(rows, scope) {
 }
 export const rowKey = (r) => `${r.sessionId}\u0000${r.id}`;
 
+/**
+ * The proof card of a session's last turn, as chips: verified or unverified (yellow), calls, failed, blocked, and the model it ran on
+ * (its tooltip carries the router's decision). Pure: the drawer turns these into elements.
+ */
+export function proofChips(p) {
+  if (!p || typeof p !== "object") return [];
+  const out = [];
+  if (p.unverified) out.push({ cls: "warn", text: "Unverified answer", title: "The receipt gate refused the answer twice; it shipped with the unverified footer" });
+  else if (p.verified) out.push({ cls: "ok", text: "Verified", title: "The answer carried the receipts the gate asked for, or needed none" });
+  else out.push({ cls: "", text: "No final answer", title: "The turn ended without a final answer (a confirmation is waiting, or it failed)" });
+  const n = Number(p.calls) || 0;
+  out.push({ cls: "", text: `${n} call${n === 1 ? "" : "s"}`, title: "Tool calls in the last turn" });
+  if (p.failed) out.push({ cls: "warn", text: `${p.failed} failed`, title: "Tool calls that returned a failure" });
+  if (p.blocked) out.push({ cls: "warn", text: `${p.blocked} blocked`, title: "Calls a gate or a permission rule refused" });
+  if (p.model) out.push({ cls: "model", text: `${p.model}${p.effort ? ` · ${p.effort}` : ""}`, title: p.route ? `Router: ${p.route}` : "The model that answered" });
+  else if (p.route) out.push({ cls: "", text: `route: ${p.route}`, title: "The router's decision for the last turn" });
+  return out;
+}
+
 /** Enter submits, Shift+Enter is a new line (and an IME composition never submits). */
 export function submitsOnKey(e) {
   return e.key === "Enter" && !e.shiftKey && !e.isComposing;
@@ -274,7 +293,17 @@ export function initBoard({ json, h, els, app }) {
       head.addEventListener("click", () => { app.openSession(g.sessionId); });
       const ul = h("ul", "bd-tasks");
       for (const r of g.rows) ul.append(taskRow(r));
-      sec.append(head, ul);
+      sec.append(head);
+      // The proof card: the session's last turn, the same on every row, shown once under the title.
+      const pr = (g.rows.find((r) => r && r.proof) || {}).proof;
+      const chips = proofChips(pr);
+      if (chips.length) {
+        const line = h("div", "bd-proof");
+        line.title = "Proof of the last turn";
+        for (const c of chips) { const el = h("span", `bd-chip ${c.cls}`.trim(), c.text); el.title = c.title; line.append(el); }
+        sec.append(line);
+      }
+      sec.append(ul);
       els.list.append(sec);
     }
   }

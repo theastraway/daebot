@@ -1,5 +1,6 @@
 // Runtime: wires MindClient, boot, kernel, tools and provider into AgentSessions.
 import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { join as joinPath } from "node:path";
 import { DailyCostCap, filterHostedTools } from "./hosted.ts";
 import { createKernel, parseTier } from "./kernel/index.ts";
@@ -31,6 +32,9 @@ import { focusedContextOn, relevantFromMind, type Group, type TurnFocus } from "
 import { loadSkills, renderSkills, skillsPrompt } from "./skills/index.ts";
 import type { SkillFile } from "./skills/index.ts";
 import { daeBase } from "./bots/dae.ts";
+import { routeTurn, routerMode } from "./provider/router.ts";
+import { TIER_ORDER, loadPolicy } from "./provider/policy.ts";
+import { botScope, personScope, workspaceScope } from "./learn/scope.ts";
 import { BOT_SKILL_PROMPT, BOT_TOOLKIT_PROMPT } from "./bots/skill.ts";
 import type { BotRecord, BotsContext, RosterEntry } from "./bots/types.ts";
 import { MAX_INSTRUCTIONS_BYTES } from "./bots/types.ts";
@@ -43,7 +47,7 @@ import type { ServerLite } from "./mind/connected.ts";
 import { createAppTools } from "./mind/apps-tools.ts";
 import type { MindClientOpts } from "./mind/client.ts";
 import { createProvider, withBot } from "./provider/index.ts";
-import { FREE_TIER, MindCredits } from "./provider/mind.ts";
+import { FREE_TIER, MindCredits, usesOwnKey } from "./provider/mind.ts";
 import { createBuiltinTools } from "./tools/index.ts";
 import { createViewPhotoTool, DEFAULT_VISION } from "./tools/photo.ts";
 import { createReadDocumentTool } from "./tools/document.ts";
@@ -70,7 +74,7 @@ import { facePersonality, faceOf } from "./bots/faces.ts";
 import type { RunMark, SessionStore, StoredSession } from "./persist.ts";
 import { routingSection } from "./routing.ts";
 import { screenFeed } from "./screen/feed.ts";
-import type { AgentEvent, AgentSession, Config, HistoryEvent, Message, MessageMeta, MindClient, Provider, Runtime, SessionSync, Tool } from "./types.ts";
+import type { AgentEvent, AgentSession, Config, HistoryEvent, LessonView, Message, MessageMeta, MindClient, ModelTier, Provider, Runtime, SessionSync, Tool, TurnProof } from "./types.ts";
 
 const noSync: SessionSync = { async open() {}, async append() {}, async pendingReplies() { return []; }, async close() {} };
 
@@ -311,7 +315,11 @@ export function composeSystemPrompt(o: {
   return lines.join("\n");
 }
 
-interface Entry { session: AgentSession; surface: string; title: string; updatedAt: number; tier: Tier; recorder: HistoryRecorder; createdAt: number; bot?: string; peer?: string; model?: string; permMode?: SessionPermMode; titleSet?: boolean; run?: RunMark; board?: BoardTask[]; msgMeta?: Record<string, MessageMeta>; unreadFrom?: string; archived?: boolean; metaAt?: number; env?: EnvTag; envAt?: number; envBy?: EnvBy; pinnedAt?: number; learn?: Learning }
+interface Entry { session: AgentSession; surface: string; title: string; updatedAt: number; tier: Tier; recorder: HistoryRecorder; createdAt: number; bot?: string; peer?: string; model?: string; permMode?: SessionPermMode; titleSet?: boolean; run?: RunMark; board?: BoardTask[]; proof?: TurnProof; scope?: string; msgMeta?: Record<string, MessageMeta>; unreadFrom?: string; archived?: boolean; metaAt?: number; env?: EnvTag; envAt?: number; envBy?: EnvBy; pinnedAt?: number; learn?: Learning }
+
+// The model router (provider/router.ts): mode and policy are read once per process (DAEBOT_ROUTER, DAEBOT_ROUTING_POLICY, DAEBOT_TIER_*).
+const ROUTER_MODE = routerMode();
+const ROUTER_POLICY = loadPolicy(process.env, (f) => readFileSync(f, "utf8"));
 
 export const INTERRUPTED_TEXT = "Interrupted: the server restarted while this reply was being written. Your message is saved above; send it again to retry.";
 const interruptedNotice = (): AgentEvent => ({ type: "notice", level: "warn", text: INTERRUPTED_TEXT });
@@ -678,7 +686,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     void store.save({
       v: 1, id, surface: e.surface, title: e.title, tier: e.tier, owner: ownerId, createdAt: e.createdAt, updatedAt: e.updatedAt,
       state: st, violations: e.session.violations(), history: e.recorder.events(),
-      ...(e.bot ? { bot: e.bot } : {}), ...(e.peer ? { peer: e.peer } : {}), ...(e.model ? { model: e.model } : {}), ...(e.permMode ? { permMode: e.permMode } : {}), ...(e.titleSet ? { titleSet: true } : {}), ...(e.run ? { run: { ...e.run } } : {}), ...(e.board?.length ? { board: e.board } : {}),
+      ...(e.bot ? { bot: e.bot } : {}), ...(e.peer ? { peer: e.peer } : {}), ...(e.model ? { model: e.model } : {}), ...(e.permMode ? { permMode: e.permMode } : {}), ...(e.titleSet ? { titleSet: true } : {}), ...(e.run ? { run: { ...e.run } } : {}), ...(e.board?.length ? { board: e.board } : {}), ...(e.proof ? { proof: e.proof } : {}),
       ...(e.msgMeta && Object.keys(e.msgMeta).length ? { msgMeta: e.msgMeta } : {}), ...(e.unreadFrom ? { unreadFrom: e.unreadFrom } : {}), ...(e.archived ? { archived: true } : {}), ...(e.metaAt ? { metaAt: e.metaAt } : {}),
       ...(e.env ? { env: e.env } : {}), ...(e.env && e.envAt ? { envAt: e.envAt } : {}), ...(e.env && e.envBy ? { envBy: e.envBy } : {}), ...(e.pinnedAt ? { pinnedAt: e.pinnedAt } : {}),
     }).catch((err) => process.stderr.write(`persist: could not save a session (${String((err as Error)?.message ?? err).split("\n")[0].slice(0, 120)})\n`));
@@ -762,6 +770,10 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       const focusedOn = focusedContextOn();
       // File skills (agent/skills + DAEBOT_SKILLS_DIR), read once per process; the loop decides per turn which are in play.
       const fileSkills: readonly SkillFile[] = loadSkills().skills;
+      // Router ceiling by identity: the owner reaches the frontier, staff the reasoner, a public identity stays light.
+      const routeCeiling: ModelTier = tier === "admin" ? "frontier" : tier === "staff" ? "reasoner" : "light";
+      // Learning scope: a bot's threads learn as the bot; a local session inside a git checkout as the workspace; everything else as the person.
+      const scopeOf = (): string => botRec ? botScope(botRec.slug) : (!hosted ? workspaceScope(cwd) : undefined) ?? personScope(hosted?.username ?? learnCfg.user);
       let boot: { ok: boolean; context: string; error?: string; degraded?: boolean };
       try { boot = await bootCache.get(botRec ? `${cfg.mindApiKey}|bot:${botRec.slug}` : cfg.mindApiKey, () => bootMind(clientForMind(home), { focused: focusedOn })); } catch (e) { boot = { ok: false, context: "", error: String((e as Error)?.message ?? e) }; }
       try { await sync.open({ title, sourceKey, externalId: id }); } catch { /* sync is best effort */ }
@@ -804,6 +816,13 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         // A function: DAEBOT.md edits, renames and roster changes apply on the very next message.
         focus: focusedOn,
         skills: fileSkills,
+        // The router sits below the floors: a bot's pinned model, the user's explicit pick for this chat, and the free plan (free models only) all win.
+        router: ROUTER_MODE === "off" ? undefined : (input) => {
+          if ((botId && (botStore?.get(botId)?.model ?? botRec?.model)) || curModel) return undefined;
+          if (mindBilled) { const b = credits?.peek(billingKey()); if (b && b.tier === FREE_TIER && !usesOwnKey(b)) return undefined; }
+          return routeTurn({ ...input, ceiling: routeCeiling, policy: ROUTER_POLICY, mode: ROUTER_MODE });
+        },
+        scope: scopeOf,
         // Per turn, for a message the human typed: the few MIND items that bear on it plus the mistakes that match it. Never for routines, heartbeats, check-ins or peer turns.
         turnContext: focusedOn && !peer
           ? async (message) => {
@@ -854,6 +873,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         ...(stored?.titleSet ? { titleSet: true } : {}),
         ...(stored?.board?.length ? { board: loadTasks(stored.board) } : {}),
         ...(stored?.msgMeta ? { msgMeta: stored.msgMeta } : {}), ...(stored?.unreadFrom ? { unreadFrom: stored.unreadFrom } : {}), ...(stored?.archived ? { archived: true } : {}), ...(stored?.metaAt ? { metaAt: stored.metaAt } : {}), ...(learn && "feedback" in learn ? { learn: learn as Learning } : {}),
+        ...(stored?.proof ? { proof: stored.proof } : {}), scope: scopeOf(),
         // A new session is born here: this is its home. A saved one keeps the home it already has (or none, for records from before environments).
         // A new session starts on MIND Cloud (a computer is only ever the person's choice, see env.ts defaultHome); a bot thread starts where its bot runs.
         // A saved one keeps the home it already has (or none, for records from before environments).
@@ -915,6 +935,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
           else if (mindBilled) { const m = resolveTurnModel({ sessionModel: curModel, userDefault: userDefault() }); if (m) inner.setModel?.(m); }
           for await (const ev of inner.send(messageWithQuote(messageWithPhotos(msg, photos), o?.quote), o)) {
             entry.recorder.push(ev);
+            if (ev.type === "proof") entry.proof = ev.proof; // the board's proof card: the last human turn of this chat
             if (ev.type === "done") { entry.updatedAt = Date.now(); run.status = "done"; run.updatedAt = Date.now(); persist(id); }
             else if (Date.now() - lastCheckpoint > 1500) { lastCheckpoint = Date.now(); run.updatedAt = lastCheckpoint; persist(id); } // partial reply survives a crash
             if (ev.type === "usage" && (costCap || userCap)) {
@@ -1016,13 +1037,13 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       }
       for (const s of [...picks.values()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, BOARD_MAX_SESSIONS)) {
         const live = sessions.get(s.id);
-        if (live) { rows.push(...rowsFor(s, live.board ?? [])); continue; }
+        if (live) { rows.push(...rowsFor(s, live.board ?? [], live.proof)); continue; }
         // A saved session only changes when it is written, so its rows are cached by updatedAt (no file read on every poll).
         const hit = boardCache.get(s.id);
         if (hit && hit.updatedAt === s.updatedAt) { rows.push(...hit.rows); continue; }
         const rec = store?.load(s.id);
         if (!rec || !mine(rec)) continue;
-        const made = rowsFor(s, loadTasks(rec.board));
+        const made = rowsFor(s, loadTasks(rec.board), rec.proof);
         boardCache.set(s.id, { updatedAt: s.updatedAt, rows: made });
         if (boardCache.size > 200) boardCache.delete(boardCache.keys().next().value as string);
         rows.push(...made);
@@ -1036,11 +1057,33 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       for (const [id, e] of sessions) if (e.bot === botId && !e.peer && e.surface !== "routine" && (picks.has(id) || e.recorder.events().some((h) => h.type === "user"))) picks.set(id, { id, title: e.title, updatedAt: e.updatedAt });
       for (const s of [...picks.values()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 15)) {
         const live = sessions.get(s.id);
-        if (live) { rows.push(...rowsFor(s, live.board ?? [])); continue; }
+        if (live) { rows.push(...rowsFor(s, live.board ?? [], live.proof)); continue; }
         const rec = store?.load(s.id);
-        if (rec && mine(rec)) rows.push(...rowsFor(s, loadTasks(rec.board)));
+        if (rec && mine(rec)) rows.push(...rowsFor(s, loadTasks(rec.board), rec.proof));
       }
       return rows;
+    },
+    lessons(id) {
+      const e = sessions.get(id);
+      const L = e?.learn;
+      if (!L) return undefined;
+      const items: LessonView[] = L.store.all().filter((i) => i.status !== "retired").map((i) => ({
+        key: i.key, type: i.type, title: i.title, status: i.status, uses: i.uses, helped: i.helped, hurt: i.hurt, updated: i.updated,
+        text: i.type === "lesson" ? `When: ${i.trigger} Rule: ${i.rule}` : `${i.description} Steps: ${i.steps.slice(0, 4).join(" / ")}`,
+        ...(i.scope ? { scope: i.scope } : {}), ...(L.store.scopesOf(i.key).length ? { scopes: L.store.scopesOf(i.key) } : {}),
+      }));
+      return { ...(e!.scope ? { scope: e!.scope } : {}), items };
+    },
+    async voteLesson(id, key, up) {
+      const e = sessions.get(id);
+      const L = e?.learn;
+      if (!L || !/^[0-9a-f]{6}$/.test(key) || !L.store.get(key)) return false;
+      L.store.recordOutcome(key, up, e!.scope);
+      try { await L.store.flush(2); } catch { /* the delta is kept and flushed later */ }
+      return true;
+    },
+    routing() {
+      return { mode: ROUTER_MODE, tiers: TIER_ORDER.map((t) => ({ tier: t, model: ROUTER_POLICY[t].model, use: ROUTER_POLICY[t].use, ...(ROUTER_POLICY[t].effort ? { effort: ROUTER_POLICY[t].effort } : {}) })) };
     },
     bots: botStore,
     settings,
