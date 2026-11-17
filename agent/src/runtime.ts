@@ -478,7 +478,10 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     const f = overrides.fetchImpl ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
     return async (messages) => {
       const model = settings?.get().defaultModel ?? cfg.models.default;
-      const res = await f(ep.url, { method: "POST", headers: ep.headers(), body: JSON.stringify({ model, messages, temperature: 0.2, max_tokens: 1200 }), signal: AbortSignal.timeout(30_000) });
+      const call = (m: string) => f(ep.url, { method: "POST", headers: ep.headers(), body: JSON.stringify({ model: m, messages, temperature: 0.2, max_tokens: 1200 }), signal: AbortSignal.timeout(30_000) });
+      let res = await call(model);
+      // A free plan cannot pay for the default model: plan with its free variant instead (no spend), else the rules layout stands.
+      if (res.status === 402 && !model.endsWith(":free")) res = await call(`${model}:free`);
       const text = await res.text();
       if (!res.ok) throw new Error(`plan call HTTP ${res.status}`);
       const j = JSON.parse(text);
