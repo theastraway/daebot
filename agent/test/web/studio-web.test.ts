@@ -122,3 +122,37 @@ test("Studio 4: stage marks and the counters line on the island card", () => {
   assert.equal(countersLine([{ name: "applications", value: 389 }, { name: "docs live", value: 8 }, { name: "big", value: 1234567 }, { name: "fourth", value: 1 }]), "applications 389 · docs live 8 · big 1.2M");
   assert.equal(fmtNum(12345), "12.3k"); assert.equal(fmtNum(8.456), "8.46"); assert.equal(fmtNum("x"), "–");
 });
+
+import { readFileSync } from "node:fs";
+import { PILLS, deskGrid, dueText, hotIsland, iso, palOf, pillCounts, taskPill, worldBounds, brainNodes } from "../../web/studio.js";
+
+test("style.css is balanced: an unclosed block once swallowed every Studio rule above 760px (the unstyled Studio of 11/16)", () => {
+  const css = readFileSync(new URL("../../web/style.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  let depth = 0, min = 0;
+  for (const ch of css) { if (ch === "{") depth++; else if (ch === "}") depth--; min = Math.min(min, depth); }
+  assert.equal(depth, 0); assert.equal(min, 0);
+  // The office rules sit at the top level, not inside a media query.
+  const at = css.indexOf(".oc-top {");
+  const before = css.slice(0, at);
+  let d = 0; for (const ch of before) { if (ch === "{") d++; else if (ch === "}") d--; }
+  assert.equal(d, 0, ".oc-top must not be nested in an @media block");
+});
+
+test("Studio 5: the office geometry, task pills, filter counts and the glowing card", () => {
+  assert.deepEqual(iso(1, 0), { x: 250, y: 146 });
+  assert.equal(palOf("nope"), palOf("indigo"));
+  assert.equal(deskGrid(0).slots.length, 0);
+  const g30 = deskGrid(30); assert.equal(g30.slots.length, 30); assert.ok(g30.scale < deskGrid(3).scale, "a crowded island draws smaller desks");
+  const one = worldBounds([]); assert.ok(one.w >= 900 && one.h >= 560, "one island never fills the screen");
+  const wide = worldBounds([{ u: -2, v: 2 }, { u: 2, v: -2 }]); assert.ok(wide.w > one.w);
+  assert.deepEqual(taskPill({ status: "in_progress", progress: 42 }), { text: "42%", cls: "run" });
+  assert.equal(taskPill({ status: "stopped" }).text, "WAIT");
+  assert.equal(taskPill({ status: "ready_to_test" }).text, "DONE");
+  const c = pillCounts({ tasks: [{ status: "stopped" }, { status: "in_progress" }, { status: "cancelled" }], scheduled: [{}] });
+  assert.deepEqual(c, { all: 2, scheduled: 1, not_started: 0, in_progress: 1, waiting: 1, ready_to_test: 0 });
+  assert.equal(PILLS.length, 6);
+  assert.equal(hotIsland([{ slug: "a", counts: { working: 1 } }, { slug: "b", counts: { working: 3 } }]), "b");
+  assert.equal(hotIsland([{ slug: "a", counts: { working: 0 } }]), "manager-office");
+  assert.equal(dueText(Date.now() + 3 * 3600000), "in 3h");
+  assert.deepEqual(brainNodes(10), brainNodes(10), "the Brain's graph is the same every paint");
+});

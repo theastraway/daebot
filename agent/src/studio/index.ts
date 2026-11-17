@@ -8,6 +8,8 @@ import type { BoardRow, BoardStatus } from "../board/board.ts";
 import type { TurnProof } from "../types.ts";
 import type { Counter, Pipeline, StageStatus } from "./store.ts";
 import { pipelineSummary } from "./store.ts";
+import { islandFor, rulesLayout, SLOTS, STAT_LABEL } from "./layout.ts";
+import type { StudioLayout } from "./layout.ts";
 
 export type BotStatus = "idle" | "working" | "blocked";
 export type NeedKind = "question" | "decision" | "permission";
@@ -32,17 +34,22 @@ export interface StudioInput {
   counters?: Record<string, Counter[]>;
   /** Staged pipelines by department slug (studio_pipeline). */
   pipelines?: Record<string, Pipeline>;
+  /** The account's office layout (layout.ts). Absent: the rules layout of these bots. */
+  layout?: StudioLayout;
+  /** Timed routines of the main Daebot and the bots (the "Scheduled" filter). */
+  scheduled?: readonly { id: string; name: string; bot: string; nextDueAt?: number; enabled: boolean }[];
 }
+export interface StudioScheduled { id: string; name: string; bot: string; botName: string; department: string; nextDueAt: number }
 export interface StudioPipelineView { department: string; stage: number; of: number; done: number; current?: string; status: StageStatus; marks: StageStatus[]; stages: Pipeline["stages"]; log: Pipeline["log"]; updatedAt: number }
 
-export interface StudioTask { id: string; sessionId: string; sessionTitle: string; title: string; status: BoardStatus; question?: string; updatedAt: number; bot: string; botName: string; department: string; project?: string; peer?: boolean; inMind: boolean }
+export interface StudioTask { id: string; sessionId: string; sessionTitle: string; title: string; status: BoardStatus; question?: string; updatedAt: number; bot: string; botName: string; department: string; project?: string; peer?: boolean; inMind: boolean; /** Share of its session's plan that is done (ready to test), 0-100. */ progress: number }
 export interface StudioNeed { kind: NeedKind; sessionId: string; title: string; question?: string; bot: string; botName: string; department: string; at: number; taskId?: string; pendingId?: string }
 export interface StudioBot { id: string; slug: string; name: string; color: string; face?: string; department: string; purpose: string; status: BotStatus; needs: number; task?: { id: string; sessionId: string; title: string; status: BoardStatus }; lastSeen: number; sessions: number; /** The last human turn of this bot's newest session (what ran, verified or not, the model). */ proof?: TurnProof; counters?: Counter[] }
 /** A Life project seen on the board, with how its tasks stand (the left panel's progress bars). */
 export interface StudioProject { id: string; name: string; total: number; done: number; working: number; waiting: number; next: number }
 /** A bot_talk exchange for the Meeting room: who, how many messages, the last line. */
 export interface StudioMeeting { id: string; a: string; b: string; aName: string; bName: string; updatedAt: number; count: number; last?: { from: string; fromName: string; text: string; at: number; kind: "message" | "reply" } }
-export interface StudioDepartment { slug: string; name: string; color: string; bots: string[]; counts: { done: number; working: number; next: number; waiting: number }; needsYou: number; lead: string; /** The island's domain counters: the newest three its bots published. */ counters: Counter[]; /** Where its staged pipeline stands, when it has one. */ pipeline?: { stage: number; of: number; done: number; current?: string; status: StageStatus; marks: StageStatus[] } }
+export interface StudioDepartment { slug: string; name: string; color: string; /** Palette key of the island (layout.ts) and its place on the iso grid around the Brain. */ palette: string; slot: number; u: number; v: number; /** The two card stats the layout picked, with values. */ stats: { key: string; label: string; value: number }[]; source: string; bots: string[]; counts: { done: number; working: number; next: number; waiting: number }; needsYou: number; lead: string; /** The island's domain counters: the newest three its bots published. */ counters: Counter[]; /** Where its staged pipeline stands, when it has one. */ pipeline?: { stage: number; of: number; done: number; current?: string; status: StageStatus; marks: StageStatus[] } }
 export interface StudioLink { a: string; b: string; count: number; at: number }
 export interface StudioView {
   at: number;
@@ -56,6 +63,8 @@ export interface StudioView {
   projects: StudioProject[];
   meetings: StudioMeeting[];
   pipelines: StudioPipelineView[];
+  scheduled: StudioScheduled[];
+  layout: { v: number; renderer: string; builtBy: string; builtAt: number; updatedAt: number; rooms: string[] };
   /** The last day: tasks that became ready to test, and sessions that moved. */
   today: { completed: number; moved: number };
   brain: { bots: number; sessions: number; tasks: number; inMind: number; decisions: number; working: number; waiting: number };
@@ -133,10 +142,13 @@ export function assembleStudio(input: StudioInput): StudioView {
   const now = input.now;
   const byBot = new Map<string, StudioBotIn>();
   for (const b of input.bots) byBot.set(b.id, b);
+  const layout = input.layout ?? rulesLayout(input.bots.map((b) => ({ id: b.id, name: b.name, department: b.department })), now);
+  const islandBy = new Map(layout.islands.map((i) => [i.slug, i]));
   const deptOf = (b: StudioBotIn | undefined): { slug: string; name: string } => {
     if (!b) return MANAGER_DEPT;
-    const name = cleanDepartment(b.department);
-    return name ? { slug: departmentSlug(name), name } : GENERAL_DEPT;
+    const slug = islandFor(layout, { id: b.id, name: b.name, department: b.department });
+    const isl = islandBy.get(slug);
+    return isl ? { slug, name: isl.name } : GENERAL_DEPT;
   };
   const who = (bot: string | undefined) => {
     const b = bot ? byBot.get(bot) : undefined;
@@ -166,8 +178,12 @@ export function assembleStudio(input: StudioInput): StudioView {
     if (seen.has(key)) continue;
     seen.add(key);
     const w = who(r.bot);
-    tasks.push({ id: r.id, sessionId: r.sessionId, sessionTitle: oneLine(r.sessionTitle, 120), title: oneLine(r.title, 140), status: r.status, ...(r.question ? { question: oneLine(r.question, 300) } : {}), updatedAt: r.updatedAt || 0, bot: w.bot, botName: w.botName, department: w.department, ...(r.project?.name ? { project: oneLine(r.project.name, 120) } : {}), ...(r.peer ? { peer: true } : {}), inMind: !!r.lifeId });
+    tasks.push({ id: r.id, sessionId: r.sessionId, sessionTitle: oneLine(r.sessionTitle, 120), title: oneLine(r.title, 140), status: r.status, ...(r.question ? { question: oneLine(r.question, 300) } : {}), updatedAt: r.updatedAt || 0, bot: w.bot, botName: w.botName, department: w.department, ...(r.project?.name ? { project: oneLine(r.project.name, 120) } : {}), ...(r.peer ? { peer: true } : {}), inMind: !!r.lifeId, progress: 0 });
   }
+  // Progress of a task: how much of its session's plan is ready to test.
+  const plan = new Map<string, { n: number; done: number }>();
+  for (const t of tasks) { if (t.status === "cancelled") continue; const p = plan.get(t.sessionId) ?? { n: 0, done: 0 }; p.n++; if (t.status === "ready_to_test") p.done++; plan.set(t.sessionId, p); }
+  for (const t of tasks) { const p = plan.get(t.sessionId); t.progress = t.status === "ready_to_test" ? 100 : p && p.n ? Math.round((100 * p.done) / p.n) : 0; }
   tasks.sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || b.updatedAt - a.updatedAt);
   // Needs you: stopped rows, then pending permission cards (attributed to the session's bot).
   const needs = needsOfRows(input.rows, who);
@@ -209,9 +225,16 @@ export function assembleStudio(input: StudioInput): StudioView {
   const depts = new Map<string, StudioDepartment>();
   const dept = (slug: string, name: string, color: string): StudioDepartment => {
     let d = depts.get(slug);
-    if (!d) { d = { slug, name, color, bots: [], counts: { done: 0, working: 0, next: 0, waiting: 0 }, needsYou: 0, lead: "", counters: [] }; depts.set(slug, d); }
+    if (!d) {
+      const isl = islandBy.get(slug);
+      const slot = isl ? isl.slot : Math.min(SLOTS.length - 1, depts.size + 1);
+      d = { slug, name: isl ? isl.name : name, color, palette: isl ? isl.color : "indigo", slot, u: SLOTS[slot].u, v: SLOTS[slot].v, stats: [], source: isl ? isl.source : "general", bots: [], counts: { done: 0, working: 0, next: 0, waiting: 0 }, needsYou: 0, lead: "", counters: [] };
+      depts.set(slug, d);
+    }
     return d;
   };
+  // Islands the user added stand even with nobody on them yet.
+  for (const i of layout.islands) if (i.source === "user") dept(i.slug, i.name, DEFAULT_COLOR);
   for (const b of bots) {
     const src = b.id === MAIN_ID ? undefined : byBot.get(b.id);
     const d0 = deptOf(src);
@@ -231,12 +254,31 @@ export function assembleStudio(input: StudioInput): StudioView {
     const p = input.pipelines?.[d.slug];
     if (p && Array.isArray(p.stages) && p.stages.length) { const s = pipelineSummary(p); d.pipeline = { stage: s.stage, of: s.of, done: s.done, ...(s.current ? { current: s.current } : {}), status: s.status, marks: s.marks }; }
   }
+  // Scheduled: timed routines, soonest first.
+  const scheduled: StudioScheduled[] = (input.scheduled ?? []).filter((r) => r && r.enabled && typeof r.nextDueAt === "number").map((r) => { const w = who(r.bot === MAIN_ID ? undefined : r.bot); return { id: oneLine(r.id, 40), name: oneLine(r.name, 120), bot: w.bot, botName: w.botName, department: w.department, nextDueAt: r.nextDueAt! }; }).sort((a, b) => a.nextDueAt - b.nextDueAt).slice(0, 40);
+  // The two card stats of each island, as the layout picked them.
+  const botDept = new Map(bots.map((b) => [b.id, b.department]));
+  const msgBy = new Map<string, number>();
+  for (const x of input.exchanges) { if (!x) continue; for (const p of new Set([botDept.get(x.a) ?? "", botDept.get(x.b) ?? ""])) if (p) msgBy.set(p, (msgBy.get(p) ?? 0) + Math.max(0, x.count | 0)); }
+  for (const d of depts.values()) {
+    const keys = islandBy.get(d.slug)?.stats ?? [];
+    const val = (k: string): number => {
+      if (k === "sessions") return d.bots.reduce((n, id) => n + (bots.find((b) => b.id === id)?.sessions ?? 0), 0);
+      if (k === "messages") return msgBy.get(d.slug) ?? 0;
+      if (k === "routines") return scheduled.filter((r) => r.department === d.slug).length;
+      if (k === "in_mind") return tasks.filter((t) => t.department === d.slug && t.inMind).length;
+      if (k === "waiting") return d.needsYou;
+      if (k === "today") return tasks.filter((t) => t.department === d.slug && t.status === "ready_to_test" && now - t.updatedAt <= DAY_MS).length;
+      if (k.startsWith("counter:")) { const n = k.slice(8).toLowerCase(); const c = d.bots.flatMap((id) => countersOf(id)).filter((x) => x.name.toLowerCase() === n).sort((a, b) => b.at - a.at)[0]; return c ? c.value : 0; }
+      return 0;
+    };
+    d.stats = keys.map((k) => ({ key: k, label: k.startsWith("counter:") ? k.slice(8) : STAT_LABEL[k] ?? k, value: val(k) }));
+  }
   const pipelines: StudioPipelineView[] = Object.values(input.pipelines ?? {}).filter((p) => p && Array.isArray(p.stages) && p.stages.length).map((p) => {
     const s = pipelineSummary(p);
     return { department: p.department, stage: s.stage, of: s.of, done: s.done, ...(s.current ? { current: s.current } : {}), status: s.status, marks: s.marks, stages: p.stages, log: p.log.slice(-MAX_LOG_SHOWN), updatedAt: p.updatedAt };
   }).sort((a, b) => b.updatedAt - a.updatedAt);
-  const order = (d: StudioDepartment): string => (d.slug === MANAGER_DEPT.slug ? "0" : d.slug === GENERAL_DEPT.slug ? "2" : "1") + d.name.toLowerCase();
-  const departments = [...depts.values()].sort((a, b) => order(a).localeCompare(order(b)));
+  const departments = [...depts.values()].sort((a, b) => a.slot - b.slot);
   // Links: bot_talk traffic between islands, from the exchange list (party ids are bot ids or "main").
   const linkBy = new Map<string, StudioLink>();
   for (const x of input.exchanges) {
@@ -277,7 +319,8 @@ export function assembleStudio(input: StudioInput): StudioView {
     departments, bots,
     tasks: tasks.slice(0, MAX_TASKS),
     needsYou: needs.slice(0, MAX_NEEDS),
-    links, projects, meetings, pipelines, today,
+    links, projects, meetings, pipelines, today, scheduled,
+    layout: { v: layout.v, renderer: layout.renderer, builtBy: layout.builtBy, builtAt: layout.builtAt, updatedAt: layout.updatedAt, rooms: [...layout.rooms] },
     brain: {
       bots: input.bots.length, sessions: sessionBot.size, tasks: tasks.filter((t) => t.status !== "cancelled").length,
       inMind: tasks.filter((t) => t.inMind).length, decisions: tasks.filter((t) => t.peer).length,

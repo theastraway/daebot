@@ -6,9 +6,14 @@
 import type { Tool, ToolResult } from "../types.ts";
 import { StudioError, StudioStore, MAX_COUNTERS, STAGE_STATUSES, pipelineSummary } from "../studio/store.ts";
 import { done, failed } from "./contract.ts";
+import type { StudioBuilder } from "../studio/builder.ts";
+import { LayoutEditError, PALETTE, STAT_KEYS } from "../studio/layout.ts";
+import type { LayoutEdit, StudioLayout } from "../studio/layout.ts";
 
 export interface StudioToolsOptions {
   store: StudioStore;
+  /** The Studio Builder of this account: studio_build and studio_edit are offered only with it. */
+  builder?: StudioBuilder;
   /** The bot id of a session ("main" for the user's own Daebot). */
   botOf: (sessionId: string) => string;
   /** A bot's name for the log, by id. */
@@ -51,5 +56,37 @@ export function createStudioTools(o: StudioToolsOptions): Tool[] {
       } catch (e) { return failed(e instanceof StudioError ? e.message : "the pipeline could not be changed"); }
     },
   };
-  return [counter, pipeline];
+  const tools: Tool[] = [counter, pipeline];
+  const b = o.builder;
+  if (b) {
+    const plan = (l: StudioLayout): string => l.islands.slice().sort((x, y) => x.slot - y.slot).map((i) => `${i.name} (${i.color}, slot ${i.slot}${i.slot > 0 && i.slot < 8 ? ", next to the Brain" : ""}; card: ${i.stats.join(" + ")})`).join("; ");
+    tools.push({
+      spec: {
+        name: "studio_build",
+        description: "Rebuild the user's Studio office (the isometric floor of their bots) from their real bots: islands per department, desks, colours, the two stats per island card. The user's own edits (renamed or moved islands, hand-placed desks, added departments) are kept. Use it when the user asks to rebuild, redo or refresh the office. New bots and department changes are placed automatically; this is not needed for them.",
+        parameters: { type: "object", properties: {}, required: [] },
+      },
+      class: "write",
+      async run(): Promise<ToolResult> {
+        try { const l = await b.rebuild(); return done(`office rebuilt (${l.builtBy}): ${plan(l)}${b.lastError ? `. The model plan was skipped (${b.lastError}); the rules layout stands.` : ""}`); }
+        catch (e) { return failed(`could not rebuild the office: ${String((e as Error)?.message ?? e).slice(0, 160)}`); }
+      },
+    });
+    tools.push({
+      spec: {
+        name: "studio_edit",
+        description: `Change the user's Studio office layout in their words. op "rename" (island, name): "rename the sales island to Revenue". op "move" (island, to: "brain" | "outer" | slot 1-23): "move Ops next to the Brain". op "add" (name, color?, nearBrain?): "add a Compliance department". op "remove" (island): an island nobody's department names. op "color" (island, color: ${PALETTE.join(", ")}). op "stats" (island, stats: two of ${STAT_KEYS.join(", ")} or "counter:<name>"): what the island card counts. op "move_bot" (bot name or id, island): put a bot's desk on another island. op "rooms" (rooms: list of overview, office, meeting, lounge, workspaces, team, pipelines). Islands are matched by name. Every edit is kept through later rebuilds.`,
+        parameters: { type: "object", properties: { op: { type: "string", enum: ["rename", "move", "add", "remove", "color", "stats", "move_bot", "rooms"] }, island: { type: "string" }, name: { type: "string" }, to: { type: ["string", "number"] }, color: { type: "string", enum: [...PALETTE] }, nearBrain: { type: "boolean" }, stats: { type: "array", items: { type: "string" } }, bot: { type: "string" }, rooms: { type: "array", items: { type: "string" } } }, required: ["op"] },
+      },
+      class: "write",
+      async run(args): Promise<ToolResult> {
+        const op = String(args.op ?? "");
+        const to = typeof args.to === "number" ? args.to : /^\d+$/.test(String(args.to ?? "")) ? Number(args.to) : String(args.to ?? "brain").toLowerCase().includes("outer") ? "outer" : "brain";
+        const e = { op, island: args.island, name: args.name, to, color: args.color, nearBrain: args.nearBrain === true, stats: args.stats, bot: args.bot, rooms: args.rooms } as unknown as LayoutEdit;
+        try { const l = await b.edit(e); return done(`office updated: ${plan(l)}`); }
+        catch (err) { return failed(err instanceof LayoutEditError ? err.message : `could not change the office: ${String((err as Error)?.message ?? err).slice(0, 160)}`); }
+      },
+    });
+  }
+  return tools;
 }

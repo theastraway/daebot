@@ -161,6 +161,13 @@ export function createRuntimeHub(o: HubOptions): { runtimeFor(p: Principal): Run
       boardSync: () => inner.boardSync?.() ?? Promise.resolve(0),
       mindReconcile: (o) => inner.mindReconcile?.(o) ?? Promise.resolve(undefined),
       decisionDoc: (id) => inner.decisionDoc?.(id) ?? Promise.resolve(undefined),
+      // Daebot Studio: every signed-in user gets their own office (before 11/17 only the owner's runtime forwarded these, so every
+      // other account read "the studio is not available").
+      ...(inner.studio ? { studio: (x: Parameters<NonNullable<Runtime["studio"]>>[0]) => inner.studio!(x) } : {}),
+      ...(inner.studioRebuild ? { studioRebuild: () => inner.studioRebuild!() } : {}),
+      ...(inner.team ? { team: (sid?: string) => inner.team!(sid) } : {}),
+      ...(inner.routing ? { routing: () => inner.routing!() } : {}),
+      ...(inner.botBoardRows ? { botBoardRows: (id: string) => inner.botBoardRows!(id) } : {}),
     };
     return slot.runtime;
   }
