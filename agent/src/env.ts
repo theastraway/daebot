@@ -223,3 +223,14 @@ export function canonEnv(tag: unknown, groups: readonly EnvGroup[], cloudName?: 
   const g = groups.find((x) => x.kind === t.kind && x.members.includes(t.id)) ?? groups.find((x) => x.kind === t.kind && x.keys.includes(`${t.kind}:${deviceKey(t.name)}`));
   return g ? { id: g.id, kind: g.kind, name: g.name } : t;
 }
+
+/**
+ * The place a thread is homed when it is NOT this runner's own, else undefined. No recorded env (or no own env) = unknown: treated as here.
+ * `canon` maps a tag to its merged/renamed form first, so two registrations of one computer count as one.
+ */
+export function otherHome(rowEnv: EnvTag | undefined, own: EnvTag | undefined, canon?: (t: EnvTag) => EnvTag | undefined): EnvTag | undefined {
+  if (!rowEnv || !own) return undefined;
+  const a = canon?.(rowEnv) ?? rowEnv, b = canon?.(own) ?? own;
+  if (a.kind === "cloud" || b.kind === "cloud") return a.kind === b.kind ? undefined : a;
+  return a.id === b.id ? undefined : a;
+}

@@ -122,7 +122,7 @@ async function gwRig() {
   const a = bearer(gw.token);
   const bot = JSON.parse((await http(gw.url, "POST", "/bots", { headers: a, body: { slug: "quinn", name: "Quinn", purpose: "tests" } })).body).bot;
   const j = async (m: string, p: string, body?: unknown) => { const r = await http(gw.url, m, p, { headers: a, body }); return { status: r.status, json: r.body ? JSON.parse(r.body) : {}, raw: r }; };
-  return { gw, a, bot, provider, store, bots, j, close: async () => { await gw.close(); await fake.close(); } };
+  return { gw, a, bot, provider, store, bots, runtime, j, close: async () => { await gw.close(); await fake.close(); } };
 }
 const until = async (f: () => boolean, ms = 3000) => { const t = Date.now(); while (!f() && Date.now() - t < ms) await new Promise((r) => setTimeout(r, 25)); };
 
@@ -167,5 +167,37 @@ test("a person typing into a routine thread gets an ordinary chat with its own m
     // a second message goes to the same chat
     const again = await http(r.gw.url, "POST", `/sessions/${th.id}/send`, { headers: r.a, body: { text: "and tomorrow" } });
     assert.equal(again.headers["x-daebot-session"], hid);
+  } finally { await r.close(); }
+});
+
+const ELSEWHERE = { id: "d_00000000000000aa", kind: "machine" as const, name: "Legion" };
+
+test("a heartbeat check-in is not sent into a thread homed on another device", async () => {
+  const r = await gwRig();
+  try {
+    const { sessionId } = (await r.j("POST", "/sessions", { surface: "web", bot: r.bot.id })).json;
+    await http(r.gw.url, "POST", `/sessions/${sessionId}/send`, { headers: r.a, body: { text: "hello quinn" } });
+    await until(() => r.provider.requests.length > 0);
+    assert.equal(await r.runtime.setHome!(sessionId, ELSEWHERE), true);
+    const before = r.provider.requests.length;
+    const msg = await r.bots.manage.current.continueThread("owner", r.bot.id, sessionId, "go back to the old board item");
+    assert.equal(msg, "not sent: that thread runs on Legion; leave it to that device.");
+    await new Promise((res) => setTimeout(res, 150));
+    assert.equal(r.provider.requests.length, before, "no turn was started for another device's thread");
+  } finally { await r.close(); }
+});
+
+test("the heartbeat reviews only threads homed on this device: a thread homed elsewhere does not count as activity", async () => {
+  const r = await gwRig();
+  try {
+    const hb = (await r.j("GET", `/bots/${r.bot.id}/routines`)).json.routines[0];
+    const { sessionId } = (await r.j("POST", "/sessions", { surface: "web", bot: r.bot.id })).json;
+    await http(r.gw.url, "POST", `/sessions/${sessionId}/send`, { headers: r.a, body: { text: "plan the launch" } });
+    await until(() => r.provider.requests.length > 0);
+    await r.runtime.setHome!(sessionId, ELSEWHERE);
+    const n = r.provider.requests.length;
+    const run = (await r.j("POST", `/bots/${r.bot.id}/routines/${hb.id}/run`)).json;
+    assert.equal(run.routine.lastStatus, "idle", JSON.stringify(run));
+    assert.equal(r.provider.requests.length, n, "its only thread lives on another device: nothing to review here");
   } finally { await r.close(); }
 });
