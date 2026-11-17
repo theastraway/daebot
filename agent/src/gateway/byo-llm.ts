@@ -90,7 +90,7 @@ export function createByoLlmHandler(o: ByoLlmOptions): (req: IncomingMessage, re
 
     // GET /byo-llm -> status
     if (method === "GET" && !isTest) {
-      if (needsSignIn) return json(res, 200, { feature_enabled: false, configured: false, providers: BYO_PROVIDERS });
+      if (needsSignIn) return json(res, 200, { feature_enabled: false, configured: false, signed_out: true, providers: BYO_PROVIDERS });
       try {
         const r = await upstream("/byo-llm", { method: "GET", headers: { "X-API-Key": key! } });
         if (!r.ok) {

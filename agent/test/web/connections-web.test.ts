@@ -5,6 +5,7 @@ import { FALLBACK_PROVIDERS, dbFromForm, dbLine, llmFromForm, llmLine, localLine
 
 test("llmLine: off, not configured, configured with key tail and model", () => {
   assert.match(llmLine({ feature_enabled: false }), /not switched on/);
+  assert.match(llmLine({ feature_enabled: false, signed_out: true }), /Sign in with MIND/);
   assert.match(llmLine({ feature_enabled: true, configured: false }), /MIND's models/);
   assert.equal(llmLine({ feature_enabled: true, configured: true, provider: "openrouter", key_last4: "abcd", model: "x/y" }), "Running on your OpenRouter key (key …abcd, model x/y). Your provider bills you directly.");
   assert.match(llmLine({ feature_enabled: true, configured: true, provider: "ollama" }), /Ollama \(local\) key\./);

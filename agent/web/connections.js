@@ -17,7 +17,9 @@ export const SSL_MODES = [["require", "Require"], ["verify-full", "Verify full"]
 
 /** "Running on your OpenRouter key (…abcd), model x" or "Daebot runs on MIND's models." */
 export function llmLine(st, providers = FALLBACK_PROVIDERS) {
-  if (!st || !st.feature_enabled) return "Bring your own AI is not switched on at MIND yet.";
+  if (!st) return "";
+  if (st.signed_out) return "Sign in with MIND to run Daebot on your own AI key.";
+  if (!st.feature_enabled) return "Bring your own AI is not switched on at MIND yet.";
   if (!st.configured) return "Daebot runs on MIND's models and bills your MIND account. Add your own key to run on it instead.";
   const p = providers.find((x) => x.id === st.provider);
   const name = p ? p.label : st.provider || "your provider";
@@ -157,7 +159,7 @@ export function initConnections({ json, h, notify, isHosted }) {
       host.replaceChildren(line, acts);
       return;
     }
-    const sw = h("button", "u-switch"); sw.type = "button"; sw.setAttribute("role", "switch"); sw.setAttribute("aria-checked", String(!!v.enabled)); sw.setAttribute("aria-label", "Use a model on this computer"); sw.append(h("i"));
+    const sw = h("button", `u-switch${v.enabled ? " on" : ""}`); sw.type = "button"; sw.setAttribute("role", "switch"); sw.setAttribute("aria-checked", String(!!v.enabled)); sw.setAttribute("aria-label", "Use a model on this computer"); sw.append(h("i"));
     const swRow = h("div", "conn-switch"); swRow.append(h("span", "", "Use a model on this computer"), sw);
     const base = input("url", "http://127.0.0.1:11434", { label: "Server address", value: v.source === "panel" ? v.base : "" });
     base.placeholder = v.base || "http://127.0.0.1:11434";

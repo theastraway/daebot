@@ -1727,5 +1727,4 @@ button.st-chip { cursor: pointer; font-family: var(--sans); }
 .conn-rows.two { grid-template-columns: 1fr 1fr; }
 .conn-rows label[hidden] { display: none; }
 .conn-switch { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 14px; font-weight: 550; }
-.u-switch[aria-checked="true"] { background: var(--led-deep); }
 @media (max-width: 520px) { .conn-rows.two { grid-template-columns: 1fr; } }
