@@ -6,13 +6,32 @@ import type { Provider } from "../types.ts";
 import { createOpenRouterProvider } from "./openrouter.ts";
 import type { Config } from "../types.ts";
 
+import type { LocalLlmConfig } from "./local-config.ts";
+
 export const LOCAL_PREFIX = "ollama/";
 export const DEFAULT_OLLAMA = "http://127.0.0.1:11434";
 
+/** What the Connections panel saved (local-config.ts), applied by the gateway at start and after every save. Empty = environment only. */
+export const localLlm: { saved: LocalLlmConfig } = { saved: {} };
+export function applyLocalLlm(c: LocalLlmConfig): void { localLlm.saved = { ...c }; }
+
+/** The server to talk to: the panel's address, else OLLAMA_HOST, else Ollama's default. */
 export function ollamaBase(env: Record<string, string | undefined> = process.env): string {
+  if (localLlm.saved.base) return localLlm.saved.base;
   const v = (env.OLLAMA_HOST ?? "").trim();
   if (!v) return DEFAULT_OLLAMA;
   return (/^https?:\/\//.test(v) ? v : `http://${v}`).replace(/\/+$/, "");
+}
+
+/** Whether a local server may be used at all: the panel's switch, else on unless DAEBOT_LOCAL_LLM says off. */
+export function localEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  if (typeof localLlm.saved.enabled === "boolean") return localLlm.saved.enabled;
+  return !/^(0|off|false|no)$/i.test((env.DAEBOT_LOCAL_LLM ?? "").trim());
+}
+
+/** The model the router should prefer locally: the panel's pick, else DAEBOT_TIER_LOCAL. */
+export function preferredLocal(env: Record<string, string | undefined> = process.env): string | undefined {
+  return localLlm.saved.model || (env.DAEBOT_TIER_LOCAL ?? "").trim() || undefined;
 }
 
 export const isLocalModel = (id: string): boolean => id.startsWith(LOCAL_PREFIX);
@@ -53,9 +72,15 @@ export function pickLocalModel(served: string[], preferred?: string): string | u
 }
 
 /** A provider for the local Ollama (same SSE reader as OpenRouter; no key, no fallback list, no vision). */
-export function createOllamaProvider(cfg: Config, fetchImpl: typeof fetch, base = ollamaBase()): Provider {
-  const inner = createOpenRouterProvider({ ...cfg, models: { ...cfg.models, fallback: [] } }, fetchImpl, { url: `${base}/v1/chat/completions`, name: "ollama", headers: () => ({ "Content-Type": "application/json" }) });
-  return { name: "ollama", stream: (req) => inner.stream({ ...req, model: localModelName(req.model), pinModel: true }) };
+export function createOllamaProvider(cfg: Config, fetchImpl: typeof fetch, base?: string): Provider {
+  // The address is read per call (not at start), so a server saved from the Connections panel is used by the next turn.
+  const inners = new Map<string, Provider>();
+  const innerFor = (b: string): Provider => {
+    let p = inners.get(b);
+    if (!p) { p = createOpenRouterProvider({ ...cfg, models: { ...cfg.models, fallback: [] } }, fetchImpl, { url: `${b}/v1/chat/completions`, name: "ollama", headers: () => ({ "Content-Type": "application/json" }) }); if (inners.size > 8) inners.clear(); inners.set(b, p); }
+    return p;
+  };
+  return { name: "ollama", stream: (req) => innerFor(base ?? ollamaBase()).stream({ ...req, model: localModelName(req.model), pinModel: true }) };
 }
 
 /** Routes "ollama/..." models to the local provider and everything else to the main one. */

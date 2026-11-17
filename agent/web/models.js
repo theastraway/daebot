@@ -132,7 +132,7 @@ export function badgeTitle({ label, served, chosen, servedLabel, origin = "", ke
   return `${label}${origin ? ` (${origin}${key ? `, ${key}` : ""})` : key ? ` (${key})` : ""}. Click to change.`;
 }
 
-export function initModels({ json, store, notify, icon, getSessionId, onPicked, onPinnedClick }) {
+export function initModels({ json, store, notify, icon, getSessionId, onPicked, onPinnedClick, onConnectors }) {
   const $ = (id) => document.getElementById(id);
   const btn = $("model-badge"), menu = $("model-menu"), nameEl = $("mb-name"), viaEl = $("mb-via");
   if (!btn || !menu || !nameEl) return null;
@@ -251,6 +251,12 @@ export function initModels({ json, store, notify, icon, getSessionId, onPicked, 
       const mk = document.createElement("button"); mk.type = "button"; mk.className = "mm-link"; mk.textContent = "Use for new sessions";
       mk.addEventListener("click", () => { store.set("localStorage", MODEL_KEY, cur); paint(); render(); });
       foot.append(mk);
+    }
+    if (onConnectors) {
+      const lc = document.createElement("button"); lc.type = "button"; lc.className = "mm-link"; lc.textContent = "LLM connectors";
+      lc.title = "Run Daebot on your own AI key, a model on this computer, or your own database";
+      lc.addEventListener("click", () => { setOpen(false); onConnectors(); });
+      foot.append(lc);
     }
     menu.append(foot);
   }

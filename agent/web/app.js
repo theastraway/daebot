@@ -27,6 +27,7 @@ import { initAccount } from "/account.js";
 import { initMainBot } from "/mainbot.js";
 import { initUsage } from "/usage.js";
 import { initSpendCaps } from "/spendcaps.js";
+import { initConnections } from "/connections.js";
 import { initBoard } from "/board.js";
 import { initExchanges } from "/exchanges.js";
 import { initSuggest } from "/suggest.js";
@@ -1857,6 +1858,7 @@ chatMode = initChatMode({
 });
 const usage = initUsage({ json, notify });
 const caps = initSpendCaps({ json, h, notify });
+const connections = initConnections({ json, h, notify, isHosted: () => state.hosted });
 void caps.refresh();
 setInterval(() => { if (!document.hidden) void caps.refresh(); }, 120_000);
 account = initAccount({
@@ -1875,6 +1877,7 @@ const models = initModels({
   getSessionId: () => state.currentId,
   onPicked: () => renderHeader(),
   onPinnedClick: () => { if (state.curBot) bots.openSettings(state.curBot); },
+  onConnectors: () => connections.open(),
 });
 els.title.addEventListener("click", () => renameCurrent());
 let xchg = null; // agent exchanges (cards in the chat, the read-only transcript, the Bots tab group); assigned just after the bots module

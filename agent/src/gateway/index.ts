@@ -37,7 +37,10 @@ import type { BotRecord, BotsContext } from "../bots/types.ts";
 import { botsEnabled } from "../bots/flag.ts";
 import { versionInfo } from "../bots/versions.ts";
 import { createModelCatalog } from "../models.ts";
-import { detectOllama } from "../provider/local.ts";
+import { detectOllama, localEnabled } from "../provider/local.ts";
+import { createByoLlmHandler } from "./byo-llm.ts";
+import { createBridgesHandler } from "./bridges.ts";
+import { createLocalLlmApi, loadLocalLlm } from "./local-llm.ts";
 import { McpConnectError } from "../mcpconnect/service.ts";
 import type { McpConnectService } from "../mcpconnect/service.ts";
 import { createHash, createHmac } from "node:crypto";
@@ -181,6 +184,9 @@ export interface GatewayOptions {
   /** Device sync (desktop <-> daebot.live). Local gateways start it only when `enabled` is true (the CLI sets it); tests inject `fetchImpl`/`url`/`key`. */
   sync?: { enabled?: boolean; stateFile?: string; url?: string; key?: string; intervalMs?: number; fetchImpl?: typeof fetch; deviceId?: string; deviceName?: string; remoteWaitSec?: number; botEveryMs?: number };
   /** MIND Voice (/voice/stt, /voice/tts). Defaults from cfg + auth; pass to override (tests). */
+  /** Where the local model server setting is kept (default DATA_DIR) and the fetch the probe uses. Tests. */
+  localLlmDir?: string;
+  localFetch?: typeof fetch;
   voice?: Partial<VoiceOptions>;
   /** Apps card (/apps/integrations): MIND integrations proxied with the signed-in user's own key. Defaults from cfg + auth; pass to override (tests). */
   apps?: Partial<AppsOptions>;
@@ -365,7 +371,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   const routinesLate: { fire?: (m: { owner: string; to: string; from: string; text: string }) => void } = {};
   const exchangeHub = opts.bots ? (opts.bots.exchanges ??= new ExchangeHub(opts.bots.dir)) : undefined;
   if (opts.bots) opts.bots.bus.current = createBotBus({ manager, exchanges: exchangeHub, botsFor: (owner) => manager.runtimeOf(owner).bots, tierOf: (owner) => (owner === OWNER.id ? OWNER.tier : auth?.store.principal(owner)?.tier), onBotMessage: (m) => routinesLate.fire?.(m) });
-  const catalog = createModelCatalog({ cfg: opts.cfg ?? ({ mindBaseUrl: "", models: { default: "", cheap: "", fallback: [] } } as unknown as Config), fetchImpl: opts.fetchImpl ?? opts.auth?.fetchImpl, ...(!hosted && !opts.fetchImpl && !/^(0|off|false|no)$/i.test((process.env.DAEBOT_LOCAL_LLM ?? "").trim()) ? { local: async () => (await detectOllama())?.models ?? [] } : {}) });
+  const catalog = createModelCatalog({ cfg: opts.cfg ?? ({ mindBaseUrl: "", models: { default: "", cheap: "", fallback: [] } } as unknown as Config), fetchImpl: opts.fetchImpl ?? opts.auth?.fetchImpl, ...(!hosted && !opts.fetchImpl && !/^(0|off|false|no)$/i.test((process.env.DAEBOT_LOCAL_LLM ?? "").trim()) ? { local: async () => (localEnabled() ? (await detectOllama())?.models ?? [] : []) } : {}) });
 
   // ---- bot_manage (Daebot makes its own bots): lend the runtimes the user's plan models and the cleanup after a delete.
   if (opts.bots) {
@@ -1906,7 +1912,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path === "/settings/daebot/guards" || path === "/settings/daebot/coder" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/board" || path.startsWith("/board/") || path === "/routing" || path === "/studio" || path === "/studio/team" || path === "/studio/skills" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/devices" || path === "/devices/pty" || path.startsWith("/browser/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
+    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path === "/settings/daebot/guards" || path === "/settings/daebot/coder" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/byo-llm" || path === "/byo-llm/test" || path === "/bridges" || path.startsWith("/bridges/") || path === "/settings/local-llm" || path === "/settings/local-llm/detect" || path === "/board" || path.startsWith("/board/") || path === "/routing" || path === "/studio" || path === "/studio/team" || path === "/studio/skills" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/devices" || path === "/devices/pty" || path.startsWith("/browser/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -2035,6 +2041,17 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
 
   // ---------- spend caps: the account cap and each bot's cap, read and set in MIND (which enforces them in its LLM proxy).
   // Always the signed-in user's own MIND key, so a user can only ever read or change their own caps.
+  // Connections: the user's own AI key and own database live in MIND (one setting for MIND and Daebot); the local model server lives here.
+  const connKeyFor = (p: Principal): string | undefined => (hosted && p.owner ? undefined : billingKeyOf(p));
+  const connBase = auth?.mindBaseUrl ?? opts.cfg?.mindBaseUrl ?? "https://m-i-n-d.ai/developer/v1";
+  const byoLlm = createByoLlmHandler({ baseUrl: connBase, keyFor: connKeyFor, fetchImpl: opts.fetchImpl ?? auth?.fetchImpl });
+  const bridges = createBridgesHandler({ baseUrl: connBase, keyFor: connKeyFor, fetchImpl: opts.fetchImpl ?? auth?.fetchImpl });
+  if (!hosted) loadLocalLlm(opts.localLlmDir ?? dataDir());
+  const localLlmApi = createLocalLlmApi({
+    hosted: !!hosted, dir: opts.localLlmDir ?? dataDir(), fetchImpl: opts.localFetch, readJson, sendJson,
+    onChange: async () => { catalog.invalidateLocal(); await opts.runtime.refreshLocal?.(); },
+  });
+
   async function spendCapsApi(req: IncomingMessage, res: ServerResponse, method: string, me: Principal, q: URLSearchParams): Promise<void> {
     if (method !== "GET" && method !== "PUT") return sendJson(res, 405, { error: "method not allowed" });
     let key: string | undefined;
@@ -2802,6 +2819,9 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (path === "/envs" && method === "GET") return sendJson(res, 200, { envs: envsFor(me.id, []) });
     if (path === "/exchanges" || path.startsWith("/exchanges/")) return exchangesApi(res, path, method, me);
     if (path === "/bots/caelum") return caelumApi(req, res, method, me);
+    if (path === "/byo-llm" || path === "/byo-llm/test") return byoLlm(req, res, path, me);
+    if (path === "/bridges" || path.startsWith("/bridges/")) return bridges(req, res, path, me);
+    if (path === "/settings/local-llm" || path === "/settings/local-llm/detect") return localLlmApi(req, res, path, method);
     if (path === "/settings/daebot") return mainProfileApi(req, res, method, me);
     if (path === "/settings/daebot/instructions") return mainInstructionsApi(req, res, method, me);
     if (path === "/settings/daebot/guards") return guardsApi(req, res, method, me);
