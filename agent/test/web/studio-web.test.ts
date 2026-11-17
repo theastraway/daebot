@@ -157,3 +157,22 @@ test("Studio 5: the office geometry, task pills, filter counts and the glowing c
   assert.equal(dueText(Date.now() + 3 * 3600000), "in 3h");
   assert.deepEqual(brainNodes(10), brainNodes(10), "the Brain's graph is the same every paint");
 });
+
+// @ts-expect-error plain browser module
+import { placeCards, tagText } from "../../web/studio.js";
+
+test("Studio 5: island cards never collide, even when every island wants the same spot; name tags fit the room between desks", () => {
+  // Five islands in a tight cluster (the 1440 layout where Compliance sat on the Manager office card), cards 150x110.
+  const isl = (id: string, cx: number, cy: number, wx: number, wy: number) => ({ id, cx, cy, top: cy - 40, bottom: cy + 50, left: cx - 80, right: cx + 80, w: 150, h: 110, side: wy < 0 ? "above" : wy > 0 ? "below" : wx >= 0 ? "right" : "left", wx, wy });
+  const items = [isl("manager", 530, 320, 0, -292), isl("compliance", 655, 400, 250, -146), isl("general", 225, 490, -500, 0), isl("sales", 838, 490, 500, 0), isl("finance", 530, 660, 0, 292)];
+  const pill = { x: 440, y: 400, w: 190, h: 24 };
+  const spots = placeCards(items, [pill], [], { w: 1060, h: 840 });
+  const rects = items.map((it) => ({ x: spots[it.id].x, y: spots[it.id].y, w: it.w, h: it.h }));
+  const hit = (a: { x: number; y: number; w: number; h: number }, b: typeof a) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+  for (let i = 0; i < rects.length; i++) { assert.ok(!hit(rects[i], pill), `${items[i].id} sits on the Brain label`); for (let j = i + 1; j < rects.length; j++) assert.ok(!hit(rects[i], rects[j]), `${items[i].id} collides with ${items[j].id}`); }
+  assert.equal(spots.manager.side, "above", "the top island keeps its card above it");
+  assert.equal(spots.finance.side, "below", "the bottom island keeps its card below it");
+  const t = tagText("Atlas Adjustment Ontologist", 0.6, 62);
+  assert.ok(t.text.endsWith("…") && t.w <= 62, "a long name is clipped to the room between desks");
+  assert.equal(tagText("Kai", 1, 200).text, "Kai");
+});

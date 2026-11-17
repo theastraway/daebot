@@ -1624,7 +1624,9 @@ button.oc-chip { cursor: pointer; border: 0; }
 .oc-torso, .oc-head { stroke: rgba(0, 0, 0, .28); stroke-width: .8; }
 .oc-desk:hover .oc-dk-t, .oc-desk:focus-visible .oc-dk-t { fill: var(--o-white); }
 .oc-desk:focus-visible .oc-desk-shadow { fill: rgba(255, 255, 255, .5); }
-.oc-desk-name { fill: var(--o-white); font: 700 10px var(--sans); paint-order: stroke; stroke: rgba(10, 12, 30, .55); stroke-width: 3px; }
+.oc-tag { pointer-events: none; }
+.oc-tag rect { fill: rgba(10, 13, 32, .78); stroke: rgba(255, 255, 255, .18); stroke-width: .8; }
+.oc-tag-text { fill: var(--o-white); font-family: var(--mono); font-weight: 700; letter-spacing: .02em; }
 .oc-need circle { fill: var(--o-led); stroke: var(--o-on-led); stroke-width: 1; animation: oc-pulse 1.6s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
 .oc-need-mark { fill: var(--o-on-led); font: 900 10px var(--sans); }
 @keyframes oc-flicker { 0%, 100% { opacity: 1; } 50% { opacity: .78; } }
@@ -1633,13 +1635,20 @@ button.oc-chip { cursor: pointer; border: 0; }
 
 /* the cards over the islands, and the Brain's label */
 .oc-cards-layer { position: absolute; inset: 0; pointer-events: none; }
-.oc-card { position: absolute; left: 0; top: 0; transform-origin: 50% 100%; width: 188px; box-sizing: border-box; padding: 10px 12px 9px; border-radius: 12px; background: var(--o-panel); box-shadow: 0 0 0 1px var(--o-line-2), 0 14px 30px -12px rgba(0, 0, 0, .65); color: var(--o-ink); pointer-events: auto; font-family: var(--mono); backdrop-filter: blur(6px); }
+.oc-leaders { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.oc-leader { stroke: var(--o-wire); stroke-width: 1.4; stroke-dasharray: 2 4; opacity: .9; }
+.oc-leader-dot { stroke: rgba(255, 255, 255, .8); stroke-width: 1.2; }
+.oc-card::after { display: none; }
+.oc-card { position: absolute; left: 0; top: 0; transform-origin: 0 0; width: 188px; box-sizing: border-box; padding: 10px 12px 9px; border-radius: 12px; background: var(--o-panel); box-shadow: 0 0 0 1px var(--o-line-2), 0 14px 30px -12px rgba(0, 0, 0, .65); color: var(--o-ink); pointer-events: auto; font-family: var(--mono); backdrop-filter: blur(6px); }
 .oc-card::after { content: ""; position: absolute; left: 50%; bottom: -7px; width: 12px; height: 12px; background: var(--o-panel); transform: translateX(-50%) rotate(45deg); box-shadow: 1px 1px 0 0 var(--o-line-2); }
 .oc-card.hot { box-shadow: 0 0 0 1.5px var(--o-ok), 0 0 26px 2px rgba(77, 255, 166, .38), 0 14px 30px -12px rgba(0, 0, 0, .65); }
 .oc-card.hot::after { box-shadow: 1.5px 1.5px 0 0 var(--o-ok); }
-.oc-card.below { transform-origin: 50% 0; }
-.oc-card.below::after { bottom: auto; top: -7px; box-shadow: -1px -1px 0 0 var(--o-line-2); }
-.oc-card.below.hot::after { box-shadow: -1.5px -1.5px 0 0 var(--o-ok); }
+.oc-card[data-side="below"]::after { bottom: auto; top: -7px; box-shadow: -1px -1px 0 0 var(--o-line-2); }
+.oc-card.hot[data-side="below"]::after { box-shadow: -1.5px -1.5px 0 0 var(--o-ok); }
+.oc-card[data-side="right"]::after { left: -7px; bottom: auto; top: 50%; transform: translateY(-50%) rotate(45deg); box-shadow: -1px 1px 0 0 var(--o-line-2); }
+.oc-card[data-side="left"]::after { left: auto; right: -7px; bottom: auto; top: 50%; transform: translateY(-50%) rotate(45deg); box-shadow: 1px -1px 0 0 var(--o-line-2); }
+.oc-card.hot[data-side="right"]::after { box-shadow: -1.5px 1.5px 0 0 var(--o-ok); }
+.oc-card.hot[data-side="left"]::after { box-shadow: 1.5px -1.5px 0 0 var(--o-ok); }
 .oc-card-head { display: flex; align-items: center; gap: 7px; font: 800 10.5px var(--mono); letter-spacing: .1em; }
 .oc-card-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .oc-sdot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--isl, var(--o-pal-default)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--isl, var(--o-pal-default)) 22%, transparent); }
@@ -1656,7 +1665,7 @@ button.oc-chip { cursor: pointer; border: 0; }
 .oc-pipe { margin-top: 5px; font: 700 10px var(--mono); letter-spacing: .08em; color: var(--o-ink-2); }
 .oc-wait { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; margin-top: 8px; padding: 5px 8px; border: 0; border-radius: 999px; background: var(--o-led); color: var(--o-on-led); font: 800 10px var(--mono); letter-spacing: .08em; cursor: pointer; box-shadow: 0 0 16px -2px rgba(255, 210, 90, .55); }
 .oc-wait-mark { font-style: normal; font-size: 9px; }
-.oc-brain-pill { position: absolute; left: 0; top: 0; transform-origin: 50% 100%; display: flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; background: var(--o-panel); box-shadow: 0 0 0 1px var(--o-line-2), 0 8px 18px -8px rgba(0, 0, 0, .6); font: 800 10.5px var(--mono); letter-spacing: .1em; color: var(--o-ink); white-space: nowrap; pointer-events: auto; }
+.oc-brain-pill { position: absolute; left: 0; top: 0; transform-origin: 0 0; display: flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; background: var(--o-panel); box-shadow: 0 0 0 1px var(--o-line-2), 0 8px 18px -8px rgba(0, 0, 0, .6); font: 800 10.5px var(--mono); letter-spacing: .1em; color: var(--o-ink); white-space: nowrap; pointer-events: auto; }
 .oc-brain-pill .dim { color: var(--o-ink-3); font-weight: 700; }
 .oc-brain-pill b { font-size: 12px; }
 .oc-mind { width: 14px; height: 14px; object-fit: contain; }

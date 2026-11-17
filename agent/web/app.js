@@ -1060,7 +1060,7 @@ const sharedThreads = createSharedThreads({
 async function refreshSessions() {
   void sharedThreads.refresh();
   try { const r = await json("/sessions"); state.sessions = r.sessions; state.envs = r.envs || state.envs; } catch { /* shown via connection state */ }
-  if (bots.view() === "bots" || state.curBot) await bots.refresh();
+  if (bots.view() !== "sessions" || state.curBot) await bots.refresh(); // the Studio view lists the bots in the sidebar too
   renderSessions(); renderHeader();
 }
 
