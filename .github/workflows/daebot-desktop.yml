@@ -4,15 +4,18 @@
 #
 # What runs
 #   verify  : agent typecheck + tests, desktop tests (ubuntu). Every build job waits for it.
-#   windows : bun-compiled gateway (x64 + arm64) + electron-builder NSIS installers. UNSIGNED: there is no Windows code-signing
-#             certificate yet, so SmartScreen shows "Windows protected your PC" on first launch (More info, Run anyway).
+#   windows : bun-compiled gateway (x64 + arm64) + electron-builder NSIS installers. Signed through Azure Artifact Signing
+#             when the repository variable DAEBOT_WIN_SIGN is "azure" (secrets AZURE_TENANT_ID / AZURE_CLIENT_ID /
+#             AZURE_CLIENT_SECRET, variables DAEBOT_AZURE_ENDPOINT / DAEBOT_AZURE_ACCOUNT / DAEBOT_AZURE_PROFILE /
+#             DAEBOT_WIN_PUBLISHER); otherwise unsigned and SmartScreen shows "Windows protected your PC" on first launch.
 #   linux   : bun-compiled gateway + AppImage and .deb (x64).
 #   mac     : DISABLED unless the repository secret CSC_LINK exists. Builds the universal DMG + zip signed with the
 #             Developer ID identity (DAEBOT_SIGN=1). Notarization needs the MINDNotarize keychain profile, which only exists on the
 #             owner's signing Mac, so this job's output is signed-only; to ship a notarized DMG run `DAEBOT_SIGN=1 npm run dist:mac`
 #             on the signing Mac (see agent/desktop/README.md).
 #
-# No secrets are needed for windows/linux. Artifacts are uploaded to the run; nothing is published or released from here.
+# Linux needs no secrets; Windows needs them only when DAEBOT_WIN_SIGN=azure. Artifacts are uploaded to the run; nothing is
+# published or released from here.
 # After uploading the files to https://download.m-i-n-d.ai/daebot/<version>/, run agent/scripts/release-manifest.mjs to fill
 # agent/web/download/releases.json (size, sha256, URL) and merge it; the page on daebot.live/download then lights up.
 
@@ -94,8 +97,34 @@ jobs:
         with:
           name: daebot-win-bin
           path: agent/desktop/build/bin
-      - name: electron-builder --win (unsigned)
+      # Signed through Azure Artifact Signing (account astraaisigning, see agent/desktop/README.md) when the
+      # repository variable DAEBOT_WIN_SIGN is "azure"; otherwise exactly the unsigned build as before. The
+      # three AZURE_* secrets and four DAEBOT_* variables are read by electron-builder.config.mjs, which
+      # refuses to build if DAEBOT_WIN_SIGN=azure and any of them is missing. Flip the variable only once the
+      # certificate profile named in DAEBOT_AZURE_PROFILE exists (it needs the organization identity
+      # validation to be Completed in the Azure portal first).
+      - name: electron-builder --win (Azure Artifact Signing when DAEBOT_WIN_SIGN=azure, else unsigned)
+        env:
+          DAEBOT_WIN_SIGN: ${{ vars.DAEBOT_WIN_SIGN }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          DAEBOT_AZURE_ENDPOINT: ${{ vars.DAEBOT_AZURE_ENDPOINT }}
+          DAEBOT_AZURE_ACCOUNT: ${{ vars.DAEBOT_AZURE_ACCOUNT }}
+          DAEBOT_AZURE_PROFILE: ${{ vars.DAEBOT_AZURE_PROFILE }}
+          DAEBOT_WIN_PUBLISHER: ${{ vars.DAEBOT_WIN_PUBLISHER }}
         run: npx electron-builder --config electron-builder.config.mjs --win --x64 --arm64 --publish never
+      - name: Verify the Authenticode signature (only when signing was on)
+        if: ${{ vars.DAEBOT_WIN_SIGN == 'azure' }}
+        shell: pwsh
+        run: |
+          $bad = 0
+          foreach ($f in Get-ChildItem dist -Filter "Daebot-Setup-*.exe") {
+            $s = Get-AuthenticodeSignature $f.FullName
+            Write-Host "$($f.Name): $($s.Status) $($s.SignerCertificate.Subject)"
+            if ($s.Status -ne 'Valid') { Write-Host "::error::$($f.Name) is not validly signed"; $bad = 1 }
+          }
+          if ($bad) { exit 1 }
       - name: Check the installers carry the bundled gateway
         shell: pwsh
         run: |
