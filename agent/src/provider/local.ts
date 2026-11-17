@@ -18,16 +18,30 @@ export function ollamaBase(env: Record<string, string | undefined> = process.env
 export const isLocalModel = (id: string): boolean => id.startsWith(LOCAL_PREFIX);
 export const localModelName = (id: string): string => (isLocalModel(id) ? id.slice(LOCAL_PREFIX.length) : id);
 
-/** The models a local Ollama serves, or undefined when none answers in time. Never throws. */
+/** Embedding, reranking and speech models cannot chat: never offered or picked as the local chat model. */
+export const isChatModelName = (n: string): boolean => !/(^|[\/:._-])(embed|embedding|rerank|reranker|whisper|bge|nomic-embed)/i.test(n);
+
+/**
+ * The models a local server serves, or undefined when none answers in time. Never throws.
+ * Ollama answers GET /api/tags. Any other OpenAI-compatible server (LM Studio, llama.cpp's llama-server, vLLM) has no /api/tags
+ * but answers GET /v1/models, so that is the fallback; point OLLAMA_HOST at it (for example 127.0.0.1:1234 for LM Studio).
+ */
 export async function detectOllama(o: { fetchImpl?: typeof fetch; base?: string; timeoutMs?: number } = {}): Promise<{ base: string; models: string[] } | undefined> {
   const f = o.fetchImpl ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
   const base = o.base ?? ollamaBase();
+  const ms = o.timeoutMs ?? 1200;
   try {
-    const res = await f(`${base}/api/tags`, { signal: AbortSignal.timeout(o.timeoutMs ?? 1200) });
+    const res = await f(`${base}/api/tags`, { signal: AbortSignal.timeout(ms) });
+    if (res.ok) {
+      const j = (await res.json()) as { models?: { name?: string }[] };
+      return { base, models: (j.models ?? []).map((m) => String(m.name ?? "")).filter(Boolean).filter(isChatModelName) };
+    }
+  } catch { /* try the OpenAI-compatible listing below */ }
+  try {
+    const res = await f(`${base}/v1/models`, { signal: AbortSignal.timeout(ms) });
     if (!res.ok) return undefined;
-    const j = (await res.json()) as { models?: { name?: string }[] };
-    const models = (j.models ?? []).map((m) => String(m.name ?? "")).filter(Boolean);
-    return { base, models };
+    const j = (await res.json()) as { data?: { id?: string }[] };
+    return { base, models: (j.data ?? []).map((m) => String(m.id ?? "")).filter(Boolean).filter(isChatModelName) };
   } catch { return undefined; }
 }
 

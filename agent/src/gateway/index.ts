@@ -37,6 +37,7 @@ import type { BotRecord, BotsContext } from "../bots/types.ts";
 import { botsEnabled } from "../bots/flag.ts";
 import { versionInfo } from "../bots/versions.ts";
 import { createModelCatalog } from "../models.ts";
+import { detectOllama } from "../provider/local.ts";
 import { McpConnectError } from "../mcpconnect/service.ts";
 import type { McpConnectService } from "../mcpconnect/service.ts";
 import { createHash, createHmac } from "node:crypto";
@@ -364,7 +365,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   const routinesLate: { fire?: (m: { owner: string; to: string; from: string; text: string }) => void } = {};
   const exchangeHub = opts.bots ? (opts.bots.exchanges ??= new ExchangeHub(opts.bots.dir)) : undefined;
   if (opts.bots) opts.bots.bus.current = createBotBus({ manager, exchanges: exchangeHub, botsFor: (owner) => manager.runtimeOf(owner).bots, tierOf: (owner) => (owner === OWNER.id ? OWNER.tier : auth?.store.principal(owner)?.tier), onBotMessage: (m) => routinesLate.fire?.(m) });
-  const catalog = createModelCatalog({ cfg: opts.cfg ?? ({ mindBaseUrl: "", models: { default: "", cheap: "", fallback: [] } } as unknown as Config), fetchImpl: opts.fetchImpl ?? opts.auth?.fetchImpl });
+  const catalog = createModelCatalog({ cfg: opts.cfg ?? ({ mindBaseUrl: "", models: { default: "", cheap: "", fallback: [] } } as unknown as Config), fetchImpl: opts.fetchImpl ?? opts.auth?.fetchImpl, ...(!hosted && !opts.fetchImpl && !/^(0|off|false|no)$/i.test((process.env.DAEBOT_LOCAL_LLM ?? "").trim()) ? { local: async () => (await detectOllama())?.models ?? [] } : {}) });
 
   // ---- bot_manage (Daebot makes its own bots): lend the runtimes the user's plan models and the cleanup after a delete.
   if (opts.bots) {
