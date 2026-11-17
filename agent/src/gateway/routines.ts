@@ -6,6 +6,8 @@ import { routineView } from "../bots/manage-tool.ts";
 import type { BotManageHooks } from "../bots/manage-tool.ts";
 import type { Principal } from "../auth/users.ts";
 import type { AgentEvent } from "../types.ts";
+import { otherHome } from "../env.ts";
+import type { EnvTag } from "../env.ts";
 import { TurnRateLimiter } from "./agent-api.ts";
 import { RunRegistry } from "./runs.ts";
 import type { SessionManager } from "./sessions.ts";
@@ -51,11 +53,16 @@ export interface RoutineGatewayDeps {
   integrations?: (owner: string) => Promise<SetupApp[] | undefined>;
   /** Does this owner have a MIND key of their own (the owner access-code login has none)? */
   hasKey?: (owner: string) => boolean;
+  /** Maps an environment tag to its merged/renamed form (two registrations of one computer are one place). Absent = compare as stored. */
+  canonEnv?: (owner: string, tag: EnvTag) => EnvTag | undefined;
   /** The gateway runs on the user's own computer (desktop app): folder, wake, app-open and screen triggers exist. */
   desktop?: boolean;
   screen?: ScreenFeed;
   runner?: { tickMs?: number; scanMs?: number; jitterMs?: number; runTimeoutMs?: number; maxRunsPerOwnerHour?: number; now?: () => number };
 }
+
+/** The home a session was deliberately given. MIND Cloud that nobody chose (the standard default on every new session) says nothing about where it runs, so it counts as unknown. */
+const homeOf = (s: { env?: EnvTag; envBy?: string }): EnvTag | undefined => (s.env?.kind === "cloud" && s.envBy === "default" ? undefined : s.env);
 
 /** The bot of a routine book as the session layer wants it: the main Daebot is "no bot". */
 const realBot = (botId: string): string | undefined => (botId === MAIN_BOT_ID ? undefined : botId);
@@ -114,9 +121,12 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
     state(owner, botId) {
       const rt = manager.runtimeOf(owner);
       if (!rt.bots) return { threads: [], board: [] };           // the account's sign-in lapsed: the run itself will say so
-      if (botId === MAIN_BOT_ID) return { threads: rt.listSessions().filter((s) => !s.bot && !s.peer).map((s) => ({ id: s.id, title: s.title, updatedAt: s.updatedAt, surface: s.surface })), board: [] };
+      // Every device runs its own Heartbeat per bot: each reviews only the threads homed on itself (unknown home counts as here).
+      const own = rt.ownEnv?.(), canon = d.canonEnv ? (t: EnvTag) => d.canonEnv!(owner, t) : undefined;
+      const here = (s: { env?: EnvTag; envBy?: string }) => !otherHome(homeOf(s), own, canon);
+      if (botId === MAIN_BOT_ID) return { threads: rt.listSessions().filter((s) => !s.bot && !s.peer && here(s)).map((s) => ({ id: s.id, title: s.title, updatedAt: s.updatedAt, surface: s.surface })), board: [] };
       if (!rt.bots.get(botId)) return undefined;
-      const threads = rt.listSessions().filter((s) => s.bot === botId).map((s) => ({ id: s.id, title: s.title, updatedAt: s.updatedAt, surface: s.surface, peer: s.peer }));
+      const threads = rt.listSessions().filter((s) => s.bot === botId && here(s)).map((s) => ({ id: s.id, title: s.title, updatedAt: s.updatedAt, surface: s.surface, peer: s.peer }));
       const board = (rt.botBoardRows?.(botId) ?? []).map((b) => ({ sessionId: b.sessionId, id: b.id, title: b.title, status: b.status, question: b.question, updatedAt: b.updatedAt }));
       return { threads, board };
     },
@@ -161,7 +171,11 @@ export function createRoutineGateway(d: RoutineGatewayDeps) {
       if (n && now - n.at < 10 * 60_000 && n.n >= 3) throw new Error("already resumed 3 threads in this review");
       // A thread the user is chatting in (open right now, mid-turn, or touched in the last 2 hours) is never given a "[Check-in from your Heartbeat]" user turn:
       // it would pull their live conversation to old board items. The note goes into the Heartbeat's own summary instead (its thread is a separate sidebar item).
-      const row = manager.runtimeOf(owner).listSessions().find((x) => x.id === tid);
+      const rt = manager.runtimeOf(owner);
+      const row = rt.listSessions().find((x) => x.id === tid);
+      // A thread homed on another device or the cloud runs there: this device's Heartbeat must not open it here and collide with a live turn on its home.
+      const away = otherHome(row ? homeOf(row) : undefined, rt.ownEnv?.(), d.canonEnv ? (t) => d.canonEnv!(owner, t) : undefined);
+      if (away) return `not sent: that thread runs on ${away.name}; leave it to that device.`;
       if (manager.get(tid) || (row && now - row.updatedAt < ACTIVE_CHAT_MS)) return "not sent: the user is active in that thread, and a check-in must never land in their live chat. Put it in your one-line summary instead; it shows in your Heartbeat thread.";
       nudges.set(key, n && now - n.at < 10 * 60_000 ? { n: n.n + 1, at: n.at } : { n: 1, at: now });
       const ls = await manager.open({ surface: "web", resumeId: tid, owner, bot: botId });

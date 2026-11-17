@@ -202,15 +202,34 @@ test("budget: 10 bot turns per ROOT user message across the whole chain; a new r
   assert.equal((await w2.talk("S", "c")).ok, true);
 });
 
-test("90 s timeout ABORTS the recipient (here 40 ms): the signal fires, the caller gets a clear failure, the chain is cleaned up", async () => {
+test("wait timeout (here 40 ms) stops the CALLER waiting, never the recipient: it runs on, its reply lands in the exchange, the chain is released only when it ends", async () => {
   const w = await world({ timeoutMs: 40 });
   let aborted = false;
-  w.mgr.run = (_id, _t, signal) => new Promise<string>((res) => { signal?.addEventListener("abort", () => { aborted = true; res(""); }, { once: true }); });
-  const r = await w.talk("S", "a");
-  assert.equal(r.ok, false);
-  assert.match(r.output, /did not answer within/);
-  assert.equal(aborted, true, "the recipient turn was aborted, not just abandoned");
-  assert.deepEqual(w.bus._stats().chains, 0);
+  let finishTurn: (s: string) => void = () => {};
+  w.mgr.run = (_id, _t, signal) => new Promise<string>((res) => { finishTurn = res; signal?.addEventListener("abort", () => { aborted = true; res(""); }, { once: true }); });
+  const r = await w.talk("S", "a", "slow job");
+  assert.equal(r.ok, true, r.output);
+  assert.match(r.output, /is still working after 0s\. It keeps going on its own and its answer will be recorded in your exchange with it\. Do not send this again/);
+  assert.equal(aborted, false, "the recipient turn was NOT aborted");
+  assert.equal(w.bus._stats().chains, 1, "the chain stays until the recipient's turn ends");
+  const again = await w.talk("S", "a", "slow job");
+  assert.ok(again.output.endsWith(r.output), "a re-ask returns the same still-working note");
+  assert.equal(w.mgr.turnsRun.length, 1, "the re-ask did not start another turn");
+  finishTurn("done at last");
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(aborted, false);
+  assert.equal(w.bus._stats().chains, 0, "chain released once the recipient finished");
+});
+
+test("a detached send has no abort timer: the recipient finishes on its own", async () => {
+  const w = await world({ timeoutMs: 20 });
+  let aborted = false;
+  w.mgr.run = (_id, _t, signal) => new Promise<string>((res) => { signal?.addEventListener("abort", () => { aborted = true; res(""); }, { once: true }); setTimeout(() => res("late answer"), 80); });
+  const r = await w.bus.talk({ owner: "u1", fromSession: "S", to: "a", message: "background", waitForReply: false });
+  assert.equal(r.ok, true);
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(aborted, false);
+  assert.equal(w.bus._stats().chains, 0);
 });
 
 test("the caller's abort signal aborts the recipient too", async () => {

@@ -119,7 +119,7 @@ test("F-2: the tool's abort signal reaches the HTTP request: aborting cancels th
   assert.equal((await q2.run({ query: "x" }, { cwd: "/", sessionId: "s", signal: dead.signal })).ok, false);
 });
 
-test("F-2: the bus returns at the timeout without waiting for a recipient that ignores the abort", async () => {
+test("F-2: the bus returns at the wait timeout without waiting for the recipient, and does NOT abort it", async () => {
   const dir = mkdtempSync(join(tmpdir(), "bus-"));
   const store = new BotStore({ dir, owner: "u1", mind: { list: async () => [], create: async () => {}, remove: async () => {} } });
   await store.create({ slug: "slow" });
@@ -129,7 +129,7 @@ test("F-2: the bus returns at the timeout without waiting for a recipient that i
     get: (id) => (id === "S" ? { owner: "u1", busy: true, turns: 1 } : { owner: "u1", busy: false, turns: 0 }),
     turn: async (_id, _t, onEvent, signal) => {
       signal?.addEventListener("abort", () => { aborted = true; });
-      await new Promise((r) => setTimeout(r, 400)); // a generator that takes its time to unwind
+      await new Promise((r) => setTimeout(r, 400)); // a generator that takes its time to finish
       unwound = true;
       onEvent({ type: "done", finalText: "late" } as AgentEvent);
     },
@@ -138,10 +138,12 @@ test("F-2: the bus returns at the timeout without waiting for a recipient that i
   const t0 = Date.now();
   const r = await bus.talk({ owner: "u1", fromSession: "S", to: "slow", message: "hi" });
   assert.ok(Date.now() - t0 < 300, `returned at the timeout (${Date.now() - t0} ms)`);
-  assert.equal(r.ok, false);
-  assert.match(r.output, /did not answer/);
-  assert.equal(aborted, true, "and the recipient was still told to abort");
+  assert.equal(r.ok, true);
+  assert.match(r.output, /is still working after/);
+  assert.equal(aborted, false, "the recipient is never told to abort on a wait timeout");
   assert.equal(unwound, false);
+  await new Promise((res) => setTimeout(res, 450));
+  assert.equal(unwound, true, "it ran to its end on its own");
 });
 
 // ---------- F-3 ----------

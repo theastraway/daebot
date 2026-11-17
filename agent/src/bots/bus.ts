@@ -96,6 +96,8 @@ export function dmThreadId(owner: string, recipientBot: string, sender: string, 
   return "dm_" + createHash("sha256").update(`${owner}|${recipientBot}|${sender}|${tier}`).digest("hex").slice(0, 32);
 }
 
+/** Safety cap on a detached (fire-and-forget) recipient turn. */
+const DETACHED_CAP_MS = 30 * 60_000;
 export function createBotBus(o: BotBusOptions): BotBus & { _stats(): { chains: number; budgets: number } } {
   const maxDepth = o.maxDepth ?? 3;
   const budgetPerRoot = o.budgetPerRoot ?? 10;
@@ -218,11 +220,14 @@ export function createBotBus(o: BotBusOptions): BotBus & { _stats(): { chains: n
       };
       const ac = new AbortController();
       let timedOut = false;
+      let waitRelease: () => void = () => {};
       const onCaller = () => ac.abort();
       const detached = req.waitForReply === false;
       if (!detached && req.signal) { if (req.signal.aborted) ac.abort(); else req.signal.addEventListener("abort", onCaller, { once: true }); }
-      const timer = setTimeout(() => { timedOut = true; ac.abort(); }, timeoutMs);
-      // Deliberately NOT unref'd: while a recipient turn is pending, this timer is what settles the race. Unref'd, an otherwise idle event loop (CI) drains with the promise pending. The finally below always clears it.
+      // The wait timer only stops the CALLER waiting: it never aborts the recipient, whose turn runs to its end and records its own reply. A detached send has no wait timer, only a 30-minute safety cap.
+      const waitDone = new Promise<void>((res) => { waitRelease = res; });
+      const timer = setTimeout(() => { timedOut = true; if (detached) ac.abort(); else waitRelease(); }, detached ? DETACHED_CAP_MS : timeoutMs);
+      // Deliberately NOT unref'd: while a recipient turn is pending, this timer is what settles the race. Unref'd, an otherwise idle event loop (CI) drains with the promise pending. It is cleared when the turn ends.
       let final = "";
       const tools: ExTool[] = [];
       const receiverDecisions: string[] = [];
@@ -247,29 +252,38 @@ export function createBotBus(o: BotBusOptions): BotBus & { _stats(): { chains: n
       if (detached) {
         // Deliver and return: the recipient answers in the background and the answer lands in the exchange (unread unless the user is driving).
         const turnP = o.manager.turn(dm.id, text, onEvent, ac.signal, "bot", false, undefined, clientOpts());
-        turnP.then(() => { if (!timedOut) finish(false); }, () => {}).finally(() => { clearTimeout(timer); chains.delete(dm.id); });
+        turnP.then(() => { finish(false); }, () => {}).finally(() => { clearTimeout(timer); chains.delete(dm.id); });
         if (userDriven && exchangeId) o.exchanges?.markSeen(req.owner, exchangeId);
         rememberAsk("[sent earlier; the answer is recorded in the exchange.]");
         return { ok: true, output: `[sent to ${safeName(recipient.name)} (${recipient.slug}). It answers on its own; the reply is recorded in your exchange with it (the user can open it from the card). Do not wait for it.]`, ...ex(card()) };
       }
 
+      let turnEnded = false;
+      let turnP: Promise<unknown>;
       try {
-        const turnP = o.manager.turn(dm.id, text, onEvent, ac.signal, "bot", false, undefined, clientOpts());
+        turnP = o.manager.turn(dm.id, text, onEvent, ac.signal, "bot", false, undefined, clientOpts());
         turnP.catch(() => {}); // if we stop waiting, a late failure is not an unhandled rejection
-        // Return the moment the signal fires (timeout or caller abort): do not wait for the recipient's generator to unwind. The abort itself is already sent.
+        // Return when the turn ends, the caller aborts, or the wait timer fires. A timeout leaves the recipient running.
         const aborted = new Promise<void>((res) => { if (ac.signal.aborted) res(); else ac.signal.addEventListener("abort", () => res(), { once: true }); });
-        await Promise.race([turnP, aborted]);
+        await Promise.race([turnP.then(() => { turnEnded = true; }), aborted, waitDone]);
       } catch (e) {
+        clearTimeout(timer);
+        chains.delete(dm.id);
+        req.signal?.removeEventListener("abort", onCaller);
         forgetAsk();
         if (e instanceof BusyError) { budget.used--; return fail("busy, try again shortly"); }
         return { ok: false, output: `bot_talk: ${recipient.slug} failed (${String((e as Error)?.message ?? e).split("\n")[0].slice(0, 120)})`, ...ex(card({ text: "(failed)", ok: false })) };
-      } finally {
-        clearTimeout(timer);
-        req.signal?.removeEventListener("abort", onCaller);
-        chains.delete(dm.id);
       }
-      if (timedOut) forgetAsk();
-      if (timedOut) return { ok: false, output: `bot_talk: ${recipient.slug} did not answer within ${Math.round(timeoutMs / 1000)}s; its turn was stopped. Answer with what you have.`, ...ex(card({ text: "(no answer in time)", ok: false })) };
+      req.signal?.removeEventListener("abort", onCaller);
+      if (!turnEnded && !ac.signal.aborted) {
+        // Wait timer fired: stop waiting, never stop the recipient. Its reply is recorded when it finishes; the chain is released only then.
+        turnP!.then(() => { finish(false); }, () => {}).finally(() => { clearTimeout(timer); chains.delete(dm.id); });
+        const note = `[${safeName(recipient.name)} (${recipient.slug}) is still working after ${Math.round(timeoutMs / 1000)}s. It keeps going on its own and its answer will be recorded in your exchange with it. Do not send this again; answer with what you have or check back later.]`;
+        rememberAsk(note);
+        return { ok: true, output: note, ...ex(card()) };
+      }
+      clearTimeout(timer);
+      chains.delete(dm.id);
       if (req.signal?.aborted) { forgetAsk(); return fail("bot_talk: aborted"); }
 
       const clean = finish(true);

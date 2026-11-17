@@ -763,6 +763,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         readBody, readJson, sendJson, clientIp: (r) => clientIp(r),
         desktop: !hosted,
         screen: opts.screenFeed ?? screenFeed,
+        canonEnv: (owner, tag) => canon(owner, tag),
         hasKey: (owner) => { const p = owner === OWNER.id ? OWNER : auth?.store.principal(owner); return !!p && !!appsKeyFor(p); },
         integrations: async (owner) => {
           const p = owner === OWNER.id ? OWNER : auth?.store.principal(owner);

@@ -1047,11 +1047,11 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       return session;
     },
     listSessions() {
-      type Row = { id: string; surface: string; title: string; updatedAt: number; bot?: string; peer?: string; model?: string; permMode?: string; unread?: boolean; archived?: boolean; env?: EnvTag; pinnedAt?: number };
+      type Row = { id: string; surface: string; title: string; updatedAt: number; bot?: string; peer?: string; model?: string; permMode?: string; unread?: boolean; archived?: boolean; env?: EnvTag; envBy?: import("./env.ts").EnvBy; pinnedAt?: number };
       const out = new Map<string, Row>();
-      const row = (m: Row): Row => ({ id: m.id, surface: m.surface, title: m.title, updatedAt: m.updatedAt, ...(m.bot ? { bot: m.bot } : {}), ...(m.peer ? { peer: m.peer } : {}), ...(m.model ? { model: m.model } : {}), ...(m.permMode ? { permMode: m.permMode } : {}), ...(m.unread ? { unread: true } : {}), ...(m.archived ? { archived: true } : {}), env: m.env ?? ownEnv, ...(m.pinnedAt ? { pinnedAt: m.pinnedAt } : {}) });
+      const row = (m: Row): Row => ({ id: m.id, surface: m.surface, title: m.title, updatedAt: m.updatedAt, ...(m.bot ? { bot: m.bot } : {}), ...(m.peer ? { peer: m.peer } : {}), ...(m.model ? { model: m.model } : {}), ...(m.permMode ? { permMode: m.permMode } : {}), ...(m.unread ? { unread: true } : {}), ...(m.archived ? { archived: true } : {}), env: m.env ?? ownEnv, ...(m.envBy ? { envBy: m.envBy } : {}), ...(m.pinnedAt ? { pinnedAt: m.pinnedAt } : {}) });
       for (const m of store?.list() ?? []) if (mine(m)) out.set(m.id, row(m));
-      for (const [id, e] of sessions) if (out.has(id) || e.recorder.events().some((h) => h.type === "user")) out.set(id, row({ id, surface: e.surface, title: e.title, updatedAt: e.updatedAt, bot: e.bot, peer: e.peer, model: e.model, ...(e.permMode ? { permMode: e.permMode } : {}), ...(e.unreadFrom ? { unread: true } : {}), ...(e.archived ? { archived: true } : {}), env: e.env, ...(e.pinnedAt ? { pinnedAt: e.pinnedAt } : {}) }));
+      for (const [id, e] of sessions) if (out.has(id) || e.recorder.events().some((h) => h.type === "user")) out.set(id, row({ id, surface: e.surface, title: e.title, updatedAt: e.updatedAt, bot: e.bot, peer: e.peer, model: e.model, ...(e.permMode ? { permMode: e.permMode } : {}), ...(e.unreadFrom ? { unread: true } : {}), ...(e.archived ? { archived: true } : {}), env: e.env, ...(e.envBy ? { envBy: e.envBy } : {}), ...(e.pinnedAt ? { pinnedAt: e.pinnedAt } : {}) }));
       return [...out.values()].sort((a, b) => b.updatedAt - a.updatedAt);
     },
     async boardCancel(sid, taskId) {
