@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // Daebot CLI. Subcommands: chat (default), run "<prompt>", serve. Flags: --shadow, --local, --version.
+import { startKeepAwake } from "./keepawake.ts";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { createInterface } from "node:readline";
@@ -189,6 +190,9 @@ async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promis
     process.stdout.write(`Daebot hosted gateway listening on ${gw.url} (login required; allowed hosts: ${hosted.allowedHosts.join(", ")}; MIND sign-in: ${auth?.store.enabled ? `on (${auth.store.count()} users${auth.oauth ? ", OAuth" : ""})` : "off, set DAEBOT_SECRET_KEY to enable"})\n`);
   } else {
     process.stdout.write(`Daebot gateway on ${gw.url} (token in ~/.daebot/gateway-token)\n`);
+    // Keep this computer awake while the gateway runs (the desktop app holds its own assertion; DAEBOT_KEEP_AWAKE=off turns this off).
+    const awake = startKeepAwake({ hosted: hostedMode });
+    if (awake) process.stdout.write(`Keeping this computer awake while Daebot works (${awake.tool}).\n`);
     // Machine-readable line for the desktop shell and scripts.
     process.stdout.write(`${JSON.stringify({ mindclawGateway: { url: gw.url, token: gw.token } })}\n`);
   }
