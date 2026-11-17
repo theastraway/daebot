@@ -159,7 +159,7 @@ export function pillCounts(v) {
 }
 /** Desk places on an island top, in island-local screen units: an iso grid as square as the count allows, and the desk scale. */
 export function deskGrid(k) {
-  if (k <= 0) return { slots: [], scale: 1 };
+  if (k <= 0) return { slots: [], scale: 1, room: 2 * IW };
   const cols = Math.ceil(Math.sqrt(k)), rows = Math.ceil(k / cols), n = Math.max(cols, rows);
   const pitch = 1.45 / (n + 0.9);
   const slots = [];
@@ -168,22 +168,71 @@ export function deskGrid(k) {
     const u = (c - (cols - 1) / 2) * pitch, w = (r - (rows - 1) / 2) * pitch;
     slots.push({ x: Math.round((u - w) * IW), y: Math.round((u + w) * IH) });
   }
-  return { slots, scale: Math.min(1.4, 3.5 / (n + 0.6)) };
+  // room: the screen width between two desks on the same row, the most a name label may take without touching its neighbour's.
+  return { slots, scale: Math.min(1.4, 3.5 / (n + 0.6)), room: Math.round(2 * pitch * IW) };
 }
 /** The world box that holds every island and the Brain (cards float in screen space: padTop/padBottom are the pixels they need). */
 export function worldBounds(depts) {
-  let x0 = -BW - 30, x1 = BW + 30, y0 = -BH - 60, y1 = BH + BD + 30, below = false;
+  let x0 = -BW - 30, x1 = BW + 30, y0 = -BH - 60, y1 = BH + BD + 30, below = false, level = false;
   for (const d of depts || []) {
     const p = iso(d.u, d.v);
     if (p.y > 0) below = true;
+    if (p.y === 0) level = true;
     x0 = Math.min(x0, p.x - IW - 30); x1 = Math.max(x1, p.x + IW + 30);
     y0 = Math.min(y0, p.y - IH - 20); y1 = Math.max(y1, p.y + IH + ID + 24);
   }
   const minW = 900, minH = 560;
   if (x1 - x0 < minW) { const g = (minW - (x1 - x0)) / 2; x0 -= g; x1 += g; }
   if (y1 - y0 < minH) { const g = (minH - (y1 - y0)) / 2; y0 -= g; y1 += g; }
-  return { x: Math.floor(x0), y: Math.floor(y0), w: Math.ceil(x1 - x0), h: Math.ceil(y1 - y0), padTop: 150, padBottom: below ? 160 : 24 };
+  return { x: Math.floor(x0), y: Math.floor(y0), w: Math.ceil(x1 - x0), h: Math.ceil(y1 - y0), padTop: 150, padBottom: below ? 160 : 24, padSide: level ? 70 : 16 };
 }
+/**
+ * Places the island cards in screen space so no two collide, none sits on the Brain's label, and as few as possible sit on an island.
+ * Each card tries the far side of its island from the Brain first (above for islands above it, below for those below, outward for
+ * those level with it), lifted further out in steps when that spot is taken, then the other sides. Score: a card-on-card overlap
+ * outweighs everything, then leaving the floor, then covering an island; ties keep the preferred order.
+ * items: [{ id, cx, cy, top, bottom, left, right, w, h, side, wx, wy }] (px; wx/wy the island's floor position); fixed: rects already
+ * taken (the Brain's label); islands: island rects to avoid; bounds: { w, h } of the floor. Returns id -> { x, y, side }.
+ */
+export function placeCards(items, fixed = [], islands = [], bounds = null, gap = 10) {
+  const placed = fixed.map((r) => ({ ...r }));
+  const ov = (a, b, g) => Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x) + g) * Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) + g);
+  const cardHit = (r) => placed.reduce((n, b) => n + ov(r, b, gap), 0);
+  const isleHit = (r, own) => islands.reduce((n, b) => (b.id === own ? n : n + ov(r, b, 0)), 0);
+  const outside = (r) => (bounds ? Math.max(0, -r.x) + Math.max(0, r.x + r.w - bounds.w) + Math.max(0, -r.y) + Math.max(0, r.y + r.h - bounds.h) : 0);
+  const spot = (it, side, lift) => side === "above" ? { x: it.cx - it.w / 2, y: it.top - it.h - gap - lift, w: it.w, h: it.h, side }
+    : side === "below" ? { x: it.cx - it.w / 2, y: it.bottom + gap + lift, w: it.w, h: it.h, side }
+    : side === "right" ? { x: it.right + gap + lift, y: it.cy - it.h / 2, w: it.w, h: it.h, side }
+    : { x: it.left - it.w - gap - lift, y: it.cy - it.h / 2, w: it.w, h: it.h, side };
+  const outward = (it) => ((it.wx ?? 0) >= 0 ? "right" : "left");
+  const sides = (it) => (it.side === "above" ? ["above", outward(it), "below"] : it.side === "below" ? ["below", outward(it), "above"] : [it.side, "above", "below"]);
+  const out = {};
+  // The top of the floor first (its cards have only the sky above them), then the bottom, then the middle rows; the outer columns
+  // before the inner ones on each row, since an outer card can still step outward.
+  const key = (it) => [Math.abs(it.wy ?? 0) * -1, -Math.abs(it.wx ?? 0)];
+  const list = [...items].sort((a, b) => { const p = key(a), q = key(b); return p[0] - q[0] || (a.wy ?? 0) - (b.wy ?? 0) || p[1] - q[1]; });
+  for (const it of list) {
+    let best = null, bestScore = Infinity, rank = 0;
+    for (const sd of sides(it)) for (const lift of [0, 28, 56, 84, 112, 140]) {
+      const r = spot(it, sd, lift);
+      const score = cardHit(r) * 1e6 + outside(r) * 1e4 + isleHit(r, it.id) + rank++ * 40;
+      if (score < bestScore) { best = r; bestScore = score; }
+    }
+    placed.push(best);
+    out[it.id] = { x: best.x, y: best.y, side: best.side };
+  }
+  return out;
+}
+
+/** A desk's name tag: font size from the desk scale, the name clipped with an ellipsis to fit the room between desks. */
+export function tagText(name, scale, room) {
+  const f = Math.max(7.5, Math.min(11, 10.5 * scale));
+  const cw = f * 0.6, max = Math.max(3, Math.floor((room * 0.74 - f) / cw));
+  const n = String(name || "?");
+  const text = n.length > max ? n.slice(0, max - 1) + "…" : n;
+  return { text, f, w: Math.round(text.length * cw + f * 1.1) };
+}
+
 /** The island whose card glows: the one with the most work in flight, else the Manager office. */
 export function hotIsland(depts) {
   let best = null;
@@ -268,7 +317,8 @@ export function initStudio({ json, h, ago, app, els }) {
   const floor = h("div", "oc-floor");
   const world = h("div", "oc-world");
   const cardsLayer = h("div", "oc-cards-layer");
-  floor.append(world, cardsLayer);
+  const leaders = S("svg", { class: "oc-leaders", "aria-hidden": "true" });
+  floor.append(world, leaders, cardsLayer);
   const hud = h("div", "oc-hud");
   const kpi = (label) => { const box = h("div", "oc-kpi"); const v = h("b", "", "–"); box.append(v, h("span", "", label)); hud.append(box); return v; };
   const kActive = kpi("ACTIVE"), kRunning = kpi("RUNNING"), kDone = kpi("DONE TODAY"), kWaiting = kpi("WAITING ON YOU");
@@ -335,22 +385,52 @@ export function initStudio({ json, h, ago, app, els }) {
   const statusChip = (bot) => h("span", `st-status ${bot.status}`, STATUS[bot.status] || bot.status);
 
   // ---- pan and zoom (one transform on the world: the floor, the lines and the cards move together) ----
-  let base = { s: 1, x: 0, y: 0 }, box = { x: 0, y: 0, w: 1000, h: 660, padTop: 150, padBottom: 24 };
+  let base = { s: 1, x: 0, y: 0 }, box = { x: 0, y: 0, w: 1000, h: 660, padTop: 150, padBottom: 24, padSide: 16 };
   function applyZoom() {
     const z = st.zoom, s = base.s * z.k, ox = base.x + z.x, oy = base.y + z.y;
     world.style.transform = `translate(${ox}px, ${oy}px) scale(${s})`;
-    // The cards float in screen space: they follow the floor but keep a readable size at any zoom.
+    // The cards float in screen space: they follow the floor but keep a readable size at any zoom, and never collide (placeCards).
     const cs = Math.max(0.78, Math.min(1.08, s * 1.05));
-    for (const c of cardsLayer.children) {
-      const x = ox + (Number(c.dataset.x) - box.x) * s, y = oy + (Number(c.dataset.y) - box.y) * s;
-      c.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, ${c.dataset.anchor === "top" ? "0" : "-100%"}) scale(${cs.toFixed(3)})`;
+    const sx = (wx) => ox + (wx - box.x) * s, sy = (wy) => oy + (wy - box.y) * s;
+    const cards = [...cardsLayer.querySelectorAll(".oc-card")];
+    const pill = cardsLayer.querySelector(".oc-brain-pill");
+    const fixed = [];
+    if (pill) {
+      const pw = pill.offsetWidth * cs, ph = pill.offsetHeight * cs, px = sx(0) - pw / 2, py = sy(Number(pill.dataset.y));
+      pill.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px) scale(${cs.toFixed(3)})`;
+      fixed.push({ x: px, y: py, w: pw, h: ph });
+    }
+    const items = cards.map((c) => {
+      const x = Number(c.dataset.x), y = Number(c.dataset.y);
+      return { id: c.dataset.dept, cx: sx(x), cy: sy(y), top: sy(y - IH), bottom: sy(y + IH + ID), left: sx(x - IW), right: sx(x + IW), w: c.offsetWidth * cs, h: c.offsetHeight * cs, side: y < -1 ? "above" : y > 1 ? "below" : x >= 0 ? "right" : "left", wx: x, wy: y };
+    });
+    const isles = items.map((it) => ({ id: it.id, x: it.left, y: it.top, w: it.right - it.left, h: it.bottom - it.top }));
+    isles.push({ id: "brain", x: sx(-BW), y: sy(-BH), w: 2 * BW * s, h: (2 * BH + BD) * s });
+    const fr = floor.getBoundingClientRect();
+    // The HUD and the zoom buttons sit over the floor: no card goes under them.
+    for (const el of [hud, zoomBox]) { if (el.hidden) continue; const r = el.getBoundingClientRect(); if (r.width) fixed.push({ x: r.left - fr.left, y: r.top - fr.top, w: r.width, h: r.height }); }
+    const spots = placeCards(items, fixed, isles, { w: fr.width, h: fr.height });
+    // A dotted leader from each card to its island, so a card that had to move still points home.
+    leaders.replaceChildren();
+    for (const c of cards) {
+      const p = spots[c.dataset.dept];
+      if (!p) continue;
+      const it = items.find((x) => x.id === c.dataset.dept);
+      c.dataset.side = p.side;
+      c.style.transform = `translate(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px) scale(${cs.toFixed(3)})`;
+      const cw = it.w, ch = it.h;
+      const from = p.side === "above" ? { x: p.x + cw / 2, y: p.y + ch } : p.side === "below" ? { x: p.x + cw / 2, y: p.y } : p.side === "right" ? { x: p.x, y: p.y + ch / 2 } : { x: p.x + cw, y: p.y + ch / 2 };
+      const to = p.side === "above" ? { x: it.cx, y: it.top + 6 } : p.side === "below" ? { x: it.cx, y: it.bottom - 6 } : p.side === "right" ? { x: it.right - 8, y: it.cy } : { x: it.left + 8, y: it.cy };
+      leaders.append(S("line", { class: "oc-leader", x1: from.x.toFixed(1), y1: from.y.toFixed(1), x2: to.x.toFixed(1), y2: to.y.toFixed(1) }));
+      const dot = S("circle", { class: "oc-leader-dot", cx: to.x.toFixed(1), cy: to.y.toFixed(1), r: 3.6 }); dot.style.fill = getComputedStyle(c).getPropertyValue("--isl"); leaders.append(dot);
     }
   }
   function fit() {
     const r = floor.getBoundingClientRect();
     if (!r.width || !r.height) return;
     const top = box.padTop + 8, bottom = box.padBottom + 8, availH = Math.max(120, r.height - top - bottom);
-    const s = Math.min((r.width - 32) / box.w, availH / box.h, 1.3);
+    const availW = Math.max(160, r.width - 2 * box.padSide);
+    const s = Math.min(availW / box.w, availH / box.h, 1.3);
     base = { s, x: (r.width - box.w * s) / 2, y: top + (availH - box.h * s) / 2 };
     applyZoom();
   }
@@ -376,7 +456,7 @@ export function initStudio({ json, h, ago, app, els }) {
     g.append(S("polygon", { class: `${cls}-r`, points: `0,${hh} ${w},0 ${w},${d} 0,${hh + d}`, fill: right }));
     g.append(S("polygon", { class: `${cls}-t`, points: `0,${-hh} ${w},0 0,${hh} ${-w},0`, fill: top }));
   }
-  function desk(bot, x, y, s, showName) {
+  function desk(bot, x, y, s) {
     const g = S("g", { class: `oc-desk ${bot.status}`, transform: `translate(${x} ${y}) scale(${s})`, tabindex: "0", role: "button" });
     const label = `${bot.name}: ${STATUS[bot.status] || bot.status}${bot.task ? `, ${bot.task.title}` : ""}`;
     g.setAttribute("aria-label", label);
@@ -398,10 +478,16 @@ export function initStudio({ json, h, ago, app, els }) {
     w.append(body, head);
     g.append(w);
     if (bot.needs > 0) { const b = S("g", { class: "oc-need", transform: "translate(10 -38)" }); b.append(S("circle", { r: 7 })); b.append(T(0, 3.6, "oc-need-mark", "!", { "text-anchor": "middle" })); g.append(b); }
-    if (showName) g.append(T(0, 30, "oc-desk-name", bot.name.length > 14 ? bot.name.slice(0, 13) + "…" : bot.name, { "text-anchor": "middle" }));
     const open = () => { if (bot.task && bot.task.sessionId) app.openSession(bot.task.sessionId); else app.pickBot(bot.id); };
     g.addEventListener("click", open);
     g.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
+    return g;
+  }
+  function nameTag(name, x, y, scale, room) {
+    const t = tagText(name, scale, room);
+    const g = S("g", { class: "oc-tag", transform: `translate(${x} ${y})`, "aria-hidden": "true" });
+    g.append(S("rect", { x: -t.w / 2, y: -t.f * 0.82, width: t.w, height: t.f * 1.5, rx: t.f * 0.75 }));
+    g.append(T(0, t.f * 0.32, "oc-tag-text", t.text, { "text-anchor": "middle", "font-size": t.f.toFixed(1) }));
     return g;
   }
   function islandG(d, bots) {
@@ -414,9 +500,13 @@ export function initStudio({ json, h, ago, app, els }) {
     for (let i = 1; i < 6; i++) { const f = i / 6; grid.append(S("line", { x1: -IW + IW * f, y1: -IH * f, x2: IW * f, y2: IH - IH * f })); grid.append(S("line", { x1: IW * f, y1: -IH + IH * f, x2: -IW + IW * f, y2: IH * f })); }
     g.append(grid);
     g.append(S("polygon", { class: "oc-rim", points: `0,${-IH + 5} ${IW - 10},0 0,${IH - 5} ${-IW + 10},0` }));
-    const { slots, scale } = deskGrid(bots.length);
+    const { slots, scale, room } = deskGrid(bots.length);
     const order = bots.map((b, i) => ({ b, s: slots[i] })).sort((a, z) => a.s.y - z.s.y);
-    for (const { b, s } of order) g.append(desk(b, s.x, s.y + 4, scale, bots.length <= 4));
+    for (const { b, s } of order) g.append(desk(b, s.x, s.y + 4, scale));
+    // Every desk has its name tag, on a layer above all desks (a desk in front never hides a name), sized to the room between desks.
+    const tags = S("g", { class: "oc-tags" });
+    for (const { b, s } of order) tags.append(nameTag(b.name, s.x, s.y + 4 + 22 * scale, scale, room));
+    g.append(tags);
     if (!bots.length) g.append(T(0, 5, "oc-empty-isl", "no desks yet", { "text-anchor": "middle" }));
     g.addEventListener("dblclick", () => { st.dept = d.slug; st.room = "workspaces"; paintRooms(); paintStage(); });
     return g;
@@ -442,7 +532,7 @@ export function initStudio({ json, h, ago, app, els }) {
   }
   function wiresG(v, pos) {
     const g = S("g", { class: "oc-wires" });
-    for (const d of v.departments) { const p = pos.get(d.slug); if (p.y > 0) g.append(S("path", { class: "oc-wire", d: `M0,${BH + BD} Q${p.x * 0.5},${p.y + IH + 60} ${p.x},${p.y + IH + ID + 18}` })); else g.append(S("path", { class: "oc-wire", d: `M0,${-BH - 30} Q${p.x * 0.5},${Math.min(p.y, 0) - 120} ${p.x},${p.y - IH - 26}` })); }
+    for (const d of v.departments) { const p = pos.get(d.slug); if (p.y > 0) g.append(S("path", { class: "oc-wire", d: `M0,${BH + BD} Q${p.x * 0.5},${p.y + IH} ${p.x},${p.y + IH + ID}` })); else g.append(S("path", { class: "oc-wire", d: `M0,${-BH - 30} Q${p.x * 0.5},${Math.min(p.y, 0) - 120} ${p.x},${p.y - IH}` })); }
     let dots = 0;
     const bots = new Map(v.bots.map((b) => [b.id, b]));
     for (const l of v.links) {
@@ -472,10 +562,8 @@ export function initStudio({ json, h, ago, app, els }) {
   function card(d, v, p, hot) {
     const pal = palOf(d.palette);
     const c = h("div", `oc-card${hot ? " hot" : ""}`);
-    // Islands above or level with the Brain carry their card above; islands below it carry it underneath, so no card hides the Brain.
-    const below = p.y > 0;
-    c.classList.toggle("below", below);
-    c.dataset.x = String(p.x); c.dataset.y = String(below ? p.y + IH + ID + 18 : p.y - IH - 22); c.dataset.anchor = below ? "top" : "bottom";
+    // Where the card goes is decided at every pan and zoom by placeCards (far side of the island from the Brain, never on another card).
+    c.dataset.x = String(p.x); c.dataset.y = String(p.y); c.dataset.dept = d.slug;
     c.style.setProperty("--isl", pal[3]);
     const head = h("div", "oc-card-head");
     const dot = h("i", `oc-sdot ${d.counts.working ? "on" : d.needsYou ? "warn" : ""}`);
@@ -517,7 +605,7 @@ export function initStudio({ json, h, ago, app, els }) {
     const hot = hotIsland(v.departments);
     for (const d of v.departments) cards.append(card(d, v, pos.get(d.slug), d.slug === hot));
     const pill = h("div", "oc-brain-pill");
-    pill.dataset.x = "0"; pill.dataset.y = String(-BH - 30);
+    pill.dataset.x = "0"; pill.dataset.y = String(BH + BD + 12); // under the Brain's front edge: the one spot no island or desk tag reaches
     const mark = h("img", "oc-mind"); mark.src = "/brand/mind-flame.png"; mark.alt = ""; mark.width = 14; mark.height = 14;
     pill.append(mark, h("span", "", "THE BRAIN"), h("b", "", String(v.brain.inMind)), h("span", "dim", v.brain.inMind === 1 ? "FILED" : "FILED"), h("b", "", String(v.brain.sessions)), h("span", "dim", "SESSIONS"));
     cards.append(pill);
