@@ -84,7 +84,8 @@ export function initConnections({ json, h, notify, isHosted }) {
   const $ = (id) => document.getElementById(id);
   const modal = $("conn-modal"), closeBtn = $("conn-close"), open = $("am-conn");
   const hosts = { llm: $("conn-llm"), local: $("conn-local"), db: $("conn-db") };
-  let isOpen = false, lastFocus = null, gen = 0;
+  let isOpen = false, lastFocus = null;
+  const gens = { llm: 0, local: 0, db: 0 }; // one in-flight generation per section: a close or a re-mount makes the older paint a no-op
   const fine = (t) => h("p", "drawer-fine", t);
   const fld = (label, el) => { const l = h("label", "cap-f"); l.append(h("span", "fld-label", label), el); return l; };
   const input = (type, placeholder, extra = {}) => { const i = h("input", "fld"); i.type = type; i.placeholder = placeholder; i.autocomplete = extra.autocomplete || "off"; i.spellcheck = false; if (extra.value !== undefined) i.value = extra.value; if (extra.label) i.setAttribute("aria-label", extra.label); return i; };
@@ -94,11 +95,11 @@ export function initConnections({ json, h, notify, isHosted }) {
   // ---- Your AI (LLM connectors)
   async function mountLlm(host) {
     if (!host) return;
-    const my = ++gen;
+    const my = ++gens.llm;
     host.replaceChildren(fine("Loading…"));
     let st;
     try { st = await json("/byo-llm"); } catch (e) { host.replaceChildren(fine(`Could not load: ${errText(e)}`)); return; }
-    if (my !== gen) return;
+    if (my !== gens.llm || !isOpen) return;
     const providers = Array.isArray(st.providers) && st.providers.length ? st.providers : FALLBACK_PROVIDERS;
     const line = h("p", "cap-line", llmLine(st, providers));
     if (!st.feature_enabled) { host.replaceChildren(line); return; }
@@ -144,11 +145,11 @@ export function initConnections({ json, h, notify, isHosted }) {
   // ---- Local model server
   async function mountLocal(host) {
     if (!host) return;
-    const my = ++gen;
+    const my = ++gens.local;
     host.replaceChildren(fine("Loading…"));
     let v;
     try { v = await json("/settings/local-llm"); } catch (e) { host.replaceChildren(fine(`Could not load: ${errText(e)}`)); return; }
-    if (my !== gen) return;
+    if (my !== gens.local || !isOpen) return;
     const line = h("p", "cap-line", localLine(v));
     if (!v.available) {
       const a = h("a", "btn-quiet sm", "Get the desktop app"); a.href = "/download/"; a.target = "_blank"; a.rel = "noopener";
@@ -191,11 +192,11 @@ export function initConnections({ json, h, notify, isHosted }) {
   // ---- Your database
   async function mountDb(host) {
     if (!host) return;
-    const my = ++gen;
+    const my = ++gens.db;
     host.replaceChildren(fine("Loading…"));
     let p;
     try { p = await json("/bridges"); } catch (e) { host.replaceChildren(fine(`Could not load: ${errText(e)}`)); return; }
-    if (my !== gen) return;
+    if (my !== gens.db || !isOpen) return;
     const line = h("p", "cap-line", dbLine(p));
     if (p.signed_out || !p.feature_available) { host.replaceChildren(line); return; }
     const db = p.db || {};
@@ -250,7 +251,7 @@ export function initConnections({ json, h, notify, isHosted }) {
     if (!modal) return;
     isOpen = on; modal.hidden = !on;
     if (on) { lastFocus = document.activeElement; void mountLlm(hosts.llm); void mountLocal(hosts.local); void mountDb(hosts.db); if (closeBtn) closeBtn.focus(); }
-    else { gen++; if (lastFocus && lastFocus.focus) lastFocus.focus(); }
+    else { gens.llm++; gens.local++; gens.db++; if (lastFocus && lastFocus.focus) lastFocus.focus(); }
   }
   if (open) open.addEventListener("click", () => setOpen(true));
   if (closeBtn) closeBtn.addEventListener("click", () => setOpen(false));
