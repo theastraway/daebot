@@ -1,5 +1,5 @@
 {
-  "version": "0.3.48",
+  "version": "0.3.49",
   "releasedAt": "2026-11-13T14:30:00Z",
   "platforms": {
     "mac": {
@@ -9,11 +9,11 @@
         {
           "label": "Download for Mac",
           "kind": "dmg",
-          "file": "Daebot-0.3.48-mac-universal.dmg",
-          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-0.3.48-mac-universal.dmg",
-          "size": 284426822,
-          "sha256": "848a786c703cadf6a2e1599032eec4734eead8b35ae9a3e107b9ce1ed6faa61b",
-          "version": "0.3.48"
+          "file": "Daebot-0.3.49-mac-universal.dmg",
+          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-0.3.49-mac-universal.dmg",
+          "size": 316562936,
+          "sha256": "7f5e4d66c243a5f6e84b728c38209ac8f65769e6f2c033984660da19832fc0a8",
+          "version": "0.3.49"
         }
       ]
     },
@@ -24,20 +24,20 @@
         {
           "label": "Download for Windows",
           "kind": "exe",
-          "file": "Daebot-Setup-0.3.48-x64.exe",
-          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-Setup-0.3.48-x64.exe",
-          "size": 146582511,
-          "sha256": "ef06373639576a42f1ef68da618d926518f1867b79bf0ed98e3378e62c2eedba",
-          "version": "0.3.48"
+          "file": "Daebot-Setup-0.3.49-x64.exe",
+          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-Setup-0.3.49-x64.exe",
+          "size": 162404617,
+          "sha256": "6426c99c8e4bcb6a381cbbfc1534536e0e61873703f75007276eccdbe2a6f06e",
+          "version": "0.3.49"
         },
         {
           "label": "Windows on ARM (arm64)",
           "kind": "exe",
-          "file": "Daebot-Setup-0.3.48-arm64.exe",
-          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-Setup-0.3.48-arm64.exe",
-          "size": 139671298,
-          "sha256": "d53114b2fa88121b24dbaaee0e602fb962b4a510b102c9272fafee53dda51f9b",
-          "version": "0.3.48"
+          "file": "Daebot-Setup-0.3.49-arm64.exe",
+          "url": "https://download.m-i-n-d.ai/download/daebot/Daebot-Setup-0.3.49-arm64.exe",
+          "size": 151399373,
+          "sha256": "ebb7816ab8bdc6556dd7d1700d689165e2b258395c04440555dd97dcdb7f574b",
+          "version": "0.3.49"
         }
       ]
     },
