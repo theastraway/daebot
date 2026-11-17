@@ -12,7 +12,24 @@ const MAX_ROWS = 300;
 
 export const isFreeModelId = (id: string): boolean => id.endsWith(":free") || id === "openrouter/free";
 
-export function createModelCatalog(o: { cfg: Config; fetchImpl?: typeof fetch; now?: () => number }) {
+export const LOCAL_ROW_PREFIX = "ollama/";
+const LOCAL_TTL_MS = 30_000;
+
+/**
+ * `local`: desktop and self-host only. Returns the model names a local server (Ollama, LM Studio, llama.cpp) serves right now. They are listed
+ * as "ollama/<name>", always allowed (they cost nothing and use no plan), so a bot or the default can be pinned to one. Never set when hosted.
+ */
+export function createModelCatalog(o: { cfg: Config; fetchImpl?: typeof fetch; now?: () => number; local?: () => Promise<string[]> }) {
+  let localHit: { at: number; names: string[] } | undefined;
+  async function localRows(): Promise<ModelRow[]> {
+    if (!o.local) return [];
+    if (!localHit || (o.now ?? Date.now)() - localHit.at > LOCAL_TTL_MS) {
+      const names = await o.local().catch(() => [] as string[]);
+      localHit = { at: (o.now ?? Date.now)(), names: names.slice(0, 50) };
+    }
+    return localHit.names.map((n) => ({ id: `${LOCAL_ROW_PREFIX}${n}`, name: `${n} (this computer)`.slice(0, 120), free: true, allowed: true, price_hint: "free, runs on this computer" }));
+  }
+
   const cache = new Map<string, { at: number; rows: { id: string; name: string; free: boolean; price_hint?: string }[]; source: "mind" | "config" }>();
   const now = o.now ?? Date.now;
   const f = o.fetchImpl ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
@@ -55,7 +72,7 @@ export function createModelCatalog(o: { cfg: Config; fetchImpl?: typeof fetch; n
         if (cache.size > 500) cache.clear();
         cache.set(k, hit);
       }
-      return { source: hit.source, models: hit.rows.map((r) => ({ ...r, allowed: !freePlan || r.free })) };
+      return { source: hit.source, models: [...hit.rows.map((r) => ({ ...r, allowed: !freePlan || r.free })), ...(await localRows())] };
     },
   };
 }
