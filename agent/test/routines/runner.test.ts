@@ -250,3 +250,24 @@ test("a hung run that outlives its timeout does not block the next scheduled run
   r.gate.release!();
   void rt;
 });
+
+test("a run that hits its time limit is recorded as an error that says why, never as ok [aborted]", async () => {
+  const r = rig({ deps: { runTimeoutMs: 30 } });
+  r.deps.runTurn = async (a) => new Promise((res) => a.signal!.addEventListener("abort", () => res({ ok: true, threadId: "th_1", finalText: "[aborted]" }), { once: true }));
+  const rt = timed(r.hub);
+  const f = r.runner.runNow(OWNER, BOT, rt.id);
+  await (f as any).done;
+  const run = r.hub.book(OWNER, BOT).get(rt.id)!;
+  assert.equal(run.lastStatus, "error");
+  assert.match(run.lastResult!, /^stopped after \d+ seconds? without finishing: the task is too big for one run; split it into smaller routines or narrow the prompt$/);
+});
+
+test("a timed-out run keeps the first 200 characters of its partial text", async () => {
+  const r = rig({ deps: { runTimeoutMs: 30 } });
+  r.deps.runTurn = async (a) => new Promise((res) => a.signal!.addEventListener("abort", () => res({ ok: true, threadId: "th_1", finalText: "x".repeat(500) }), { once: true }));
+  const rt = timed(r.hub);
+  await (r.runner.runNow(OWNER, BOT, rt.id) as any).done;
+  const run = r.hub.book(OWNER, BOT).get(rt.id)!;
+  assert.equal(run.lastStatus, "error");
+  assert.ok(run.lastResult!.endsWith(". Partial: " + "x".repeat(200)));
+});
