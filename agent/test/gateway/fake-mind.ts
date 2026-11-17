@@ -59,6 +59,10 @@ export interface FakeMind {
   grants?: Map<string, { username: string; role: "owner" | "viewer"; label?: string }[]>;
   /** every key minted through /developer/keys with a switch token: [tenant, actor] */
   minted: { key: string; tenant: string; actor: string }[];
+  /** BYO LLM (GET/PUT/DELETE /developer/v1/byo-llm, POST /byo-llm/test): status per username; unset = 404 (feature off). */
+  byo: { enabled: boolean; status: Map<string, Record<string, unknown>>; seen: Seen[]; nextSave?: { status: number; body: unknown }; nextTest?: { status: number; body: unknown }; set(status: Record<string, unknown>, key?: string): void };
+  /** Database bridge (GET /developer/v1/bridges, /bridges/db*): available flag and the db status per username. */
+  bridges: { available: boolean; db: Map<string, Record<string, unknown>>; seen: Seen[]; nextTest?: { status: number; body: unknown } };
   newKey(username: string): string;
   close(): Promise<void>;
 }
@@ -76,6 +80,8 @@ export async function startFakeMind(initial: Record<string, string> = {}): Promi
   const m: FakeMind = {
     url: "", base: "", seen: [], keys: new Map(Object.entries(initial)), registered: [], consentUser: "", codes: new Map(), refreshTokens: new Map(),
     minted: [], agentSessions: new Map(), sessionShares: [], chatScopeless: new Set(), adminKeys: new Set(), bots: new Map(), integrations: new Map(), usage: new Map(), life: new Map(),
+    byo: { enabled: false, status: new Map(), seen: [], set(status, key) { m.byo.enabled = true; if (key) m.byo.status.set(m.keys.get(key) ?? "", status); else m.byo.status.set("*", status); } },
+    bridges: { available: true, db: new Map(), seen: [] },
     newKey(username) { const k = "mind_" + randomBytes(24).toString("base64url"); m.keys.set(k, username); return k; },
     close: () => new Promise((r) => { server.close(() => r()); server.closeAllConnections(); }),
   };
@@ -227,6 +233,37 @@ export async function startFakeMind(initial: Record<string, string> = {}): Promi
           credits_balance: 123, credits_limit: 400,
           additional_usage: { available: u.available, eligible: u.available, enabled: u.enabled, active: u.enabled && u.available, automatic: !!u.automatic, rate_note: u.available ? u.rateNote ?? null : null, overflow_usd: 0 },
         });
+      }
+      if (rest === "/byo-llm" || rest === "/byo-llm/test") {
+        m.byo.seen.push({ method: req.method ?? "GET", path: u.pathname, key, body: parsed });
+        if (!m.byo.enabled) return json(res, 404, { detail: "Not Found" });
+        const st = () => m.byo.status.get(username) ?? m.byo.status.get("*") ?? { feature_enabled: true, configured: false };
+        if (rest === "/byo-llm/test") { const t = m.byo.nextTest ?? { status: 200, body: { ok: true, reason: "key accepted" } }; return json(res, t.status, t.body); }
+        if (req.method === "GET") return json(res, 200, st());
+        if (req.method === "PUT") {
+          if (m.byo.nextSave) return json(res, m.byo.nextSave.status, m.byo.nextSave.body);
+          if (!parsed?.base_url) return json(res, 422, { detail: "base_url required" });
+          const next = { feature_enabled: true, configured: true, provider: parsed.provider, base_url: parsed.base_url, model: parsed.model ?? null, key_last4: String(parsed.api_key ?? "").slice(-4) || null, updated_at: "2026-11-17T00:00:00Z" };
+          m.byo.status.set(username, next);
+          return json(res, 200, next);
+        }
+        if (req.method === "DELETE") { m.byo.status.delete(username); return json(res, 200, { ok: true, configured: false }); }
+        return json(res, 405, { detail: "method" });
+      }
+      if (rest === "/bridges" || rest.startsWith("/bridges/")) {
+        m.bridges.seen.push({ method: req.method ?? "GET", path: u.pathname, key, body: parsed });
+        if (!m.bridges.available) return rest === "/bridges" ? json(res, 200, { feature_available: false }) : json(res, 404, { detail: { error: "not_available", message: "Not available yet." } });
+        const payload = () => ({ feature_available: true, providers: [{ id: "openrouter", label: "OpenRouter", base_url: "https://openrouter.ai/api/v1" }], llm: { configured: false }, db: m.bridges.db.get(username) ?? { mode: "cloud", configured: false, routing: "cloud" } });
+        if (rest === "/bridges" && req.method === "GET") return json(res, 200, payload());
+        if (rest === "/bridges/db/test" && req.method === "POST") { const t = m.bridges.nextTest ?? { status: 200, body: { ok: true, latency_ms: 12, pgvector: true } }; return json(res, t.status, t.body); }
+        if (rest === "/bridges/db" && req.method === "PUT") {
+          m.bridges.db.set(username, { mode: "own", configured: true, host: parsed.host, port: parsed.port, database: parsed.database ?? null, user: parsed.user ?? null, ssl: parsed.ssl, password_set: !!parsed.password, verified_at: "2026-11-17T00:00:00Z", pgvector: true, bootstrapped_at: "2026-11-17T00:00:00Z", schema: "mind_user", routing: "stored_not_routed" });
+          return json(res, 200, { ...payload(), bootstrap: { schema: "mind_user", tables_created: ["entries"], vector_ready: true, skipped: [] } });
+        }
+        if (rest === "/bridges/db/bootstrap" && req.method === "POST") return json(res, 200, { ...payload(), bootstrap: { schema: "mind_user", tables_created: [], vector_ready: true, skipped: ["entries"] } });
+        if (rest === "/bridges/db/verify-routing" && req.method === "POST") return json(res, 200, { ...payload(), routing_check: { ok: true } });
+        if (rest === "/bridges/db" && req.method === "DELETE") { m.bridges.db.delete(username); return json(res, 200, payload()); }
+        return json(res, 405, { detail: "method" });
       }
       if (rest === "/llm/spend-caps") {
         const c = (m.spendCaps ??= new Map()).get(username) ?? { account: null, bots: {} as Record<string, unknown> };

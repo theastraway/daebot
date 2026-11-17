@@ -404,6 +404,8 @@ export interface Runtime {
   /** The user's thumbs on a lesson or learned skill: up = it helped, down = it hurt. Written to MIND. false = unknown session or key. */
   voteLesson?(id: string, key: string, up: boolean): Promise<boolean>;
   /** The model router's mode and policy table of this runtime. */
+  /** Desktop and self-host: look again for the local model server (after the Connections panel changed it) and refresh the router's local model. Hosted: undefined. */
+  refreshLocal?(): Promise<{ base: string; models: string[] } | undefined>;
   routing?(): { mode: "off" | "shadow" | "enforce"; tiers: { tier: ModelTier; model: string; use: string; effort?: Effort }[]; local?: string; frontierSpentUsd?: number; frontierCapUsd?: number; learned?: string[]; factGate?: string };
 }
 

@@ -1719,3 +1719,12 @@ button.st-chip { cursor: pointer; font-family: var(--sans); }
 .st-skills th { text-align: left; font: 700 10.5px var(--display); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); padding: 4px 8px; border-bottom: 1px solid var(--line); }
 .st-skills td { padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
 .st-skill-name { font-family: var(--mono); font-weight: 600; white-space: nowrap; }
+
+/* ---- Connections (LLM & database): three stacked sections in the apps-card shell */
+.conn-card { max-width: 600px; display: grid; gap: 18px; }
+.conn-card .dsec + .dsec { border-top: 1px solid var(--line); padding-top: 16px; }
+.conn-rows { display: grid; gap: 8px; }
+.conn-rows.two { grid-template-columns: 1fr 1fr; }
+.conn-rows label[hidden] { display: none; }
+.conn-switch { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 14px; font-weight: 550; }
+@media (max-width: 520px) { .conn-rows.two { grid-template-columns: 1fr; } }

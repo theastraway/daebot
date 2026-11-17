@@ -109,6 +109,7 @@
         <div class="am-update" id="upd" hidden><span id="upd-text"></span><button class="btn-primary sm" id="upd-btn" type="button" role="menuitem"></button></div>
         <button class="am-item" id="btn-perms" type="button" role="menuitem" hidden aria-haspopup="dialog" aria-expanded="false"><svg class="ic"><use href="#i-lock"/></svg><span>Permissions</span></button>
         <button class="am-item" id="am-caps" type="button" role="menuitem" aria-haspopup="dialog"><svg class="ic"><use href="#i-lock"/></svg><span>Spend caps</span></button>
+        <button class="am-item" id="am-conn" type="button" role="menuitem" aria-haspopup="dialog"><svg class="ic"><use href="#i-apps"/></svg><span>LLM &amp; database</span></button>
         <button class="am-item" id="am-keys" type="button" role="menuitem" aria-haspopup="dialog" aria-expanded="false"><svg class="ic"><use href="#i-keys"/></svg><span>Keyboard shortcuts</span></button>
         <button class="am-item am-screen" id="am-screen" type="button" role="menuitemcheckbox" aria-checked="false" hidden><svg class="ic"><use href="#i-eye"/></svg><span class="am-screen-text"><b>Let Daebot watch my screen</b><small>Off. Daebot cannot see your screen.</small></span><i class="u-switch" aria-hidden="true"><i></i></i></button>
         <button class="am-item" id="am-apps" type="button" role="menuitem" aria-haspopup="dialog"><svg class="ic"><use href="#i-apps"/></svg><span>Apps &amp; connectors</span></button>
@@ -442,6 +443,18 @@
     </div>
     <section class="dsec"><h3>Whole account</h3><div id="caps-body"></div></section>
     <p class="drawer-fine">Each bot can also have its own cap in that bot's settings.</p>
+  </div>
+</div>
+
+<div class="gate-token modal" id="conn-modal" hidden>
+  <div class="token-card bot-card apps-card conn-card" role="dialog" aria-modal="true" aria-labelledby="conn-title">
+    <div class="apps-head">
+      <div><h2 id="conn-title">LLM &amp; database</h2><p>Run Daebot on your own AI key, a model on this computer, or your own database. The same settings as MIND's.</p></div>
+      <button class="icon-btn" id="conn-close" type="button" aria-label="Close"><svg class="ic"><use href="#i-x"/></svg></button>
+    </div>
+    <section class="dsec"><h3>Your AI (LLM connectors)</h3><div id="conn-llm"></div></section>
+    <section class="dsec"><h3>Local model server</h3><div id="conn-local"></div></section>
+    <section class="dsec"><h3>Your database</h3><div id="conn-db"></div></section>
   </div>
 </div>
 

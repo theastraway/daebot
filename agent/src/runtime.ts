@@ -33,7 +33,7 @@ import { loadSkills, renderSkills, skillsPrompt } from "./skills/index.ts";
 import type { SkillFile } from "./skills/index.ts";
 import { daeBase } from "./bots/dae.ts";
 import { TierBudget, frontierBudgetUsd, routeTurn, routerMode } from "./provider/router.ts";
-import { createOllamaProvider, detectOllama, pickLocalModel, withLocal } from "./provider/local.ts";
+import { createOllamaProvider, detectOllama, localEnabled, pickLocalModel, preferredLocal, withLocal } from "./provider/local.ts";
 import { createAdvisorTool } from "./tools/advisor.ts";
 import { createStudioTools } from "./tools/studio.ts";
 import { StudioStore } from "./studio/store.ts";
@@ -428,9 +428,17 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
   // The local tier (provider/local.ts): a desktop or self-host runtime looks once for an Ollama on this machine; the hosted gateway never does.
   // Detection is async and off the boot path: until it answers (or when nothing is there) the router routes as if no local model existed.
   let localModel: string | undefined;
-  const localWanted = !hosted && !overrides.provider && !/^(0|off|false|no)$/i.test(((overrides.env ?? process.env).DAEBOT_LOCAL_LLM ?? "").trim());
-  const provider: Provider = localWanted ? withLocal(baseProvider, createOllamaProvider(cfg, overrides.fetchImpl ?? fetch)) : baseProvider;
-  if (localWanted) void detectOllama({ fetchImpl: overrides.fetchImpl }).then((r) => { if (r) localModel = pickLocalModel(r.models, (overrides.env ?? process.env).DAEBOT_TIER_LOCAL); });
+  // A desktop or self-host runtime can always reach a local model a person pinned (ollama/...); the router only sends work there
+  // once detection found a server and the switch (panel or DAEBOT_LOCAL_LLM) is on. refreshLocal() re-detects after the panel saves.
+  const localPossible = !hosted && !overrides.provider;
+  const provider: Provider = localPossible ? withLocal(baseProvider, createOllamaProvider(cfg, overrides.fetchImpl ?? fetch)) : baseProvider;
+  const refreshLocal = async (): Promise<{ base: string; models: string[] } | undefined> => {
+    if (!localPossible || !localEnabled(overrides.env ?? process.env)) { localModel = undefined; return undefined; }
+    const r = await detectOllama({ fetchImpl: overrides.fetchImpl });
+    localModel = r ? pickLocalModel(r.models, preferredLocal(overrides.env ?? process.env)) : undefined;
+    return r;
+  };
+  if (localPossible && localEnabled(overrides.env ?? process.env)) void refreshLocal();
   // The frontier tier's budget for this owner, per day: once spent, the router's ceiling drops to the reasoner until tomorrow.
   const frontierBudget = new TierBudget(frontierBudgetUsd(overrides.env ?? process.env), hosted?.now);
   // Agent Session sync may need a different key (chat:write); falls back to the main key.
@@ -1188,6 +1196,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         guards: g.rules.map((r) => ({ id: r.id, effect: r.effect, tool: r.tool, scope: r.scope })),
       };
     },
+    refreshLocal,
     routing() {
       return { mode: ROUTER_MODE, tiers: TIER_ORDER.map((t) => ({ tier: t, model: t === "local" && localModel ? localModel : ROUTER_POLICY[t].model, use: ROUTER_POLICY[t].use, ...(ROUTER_POLICY[t].effort ? { effort: ROUTER_POLICY[t].effort } : {}) })), ...(localModel ? { local: localModel } : {}), frontierSpentUsd: Number(frontierBudget.total().toFixed(4)), frontierCapUsd: frontierBudget.capUsd, learned: describeTable(learnedTable()), factGate: FACT_MODE };
     },

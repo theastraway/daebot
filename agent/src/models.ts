@@ -62,6 +62,8 @@ export function createModelCatalog(o: { cfg: Config; fetchImpl?: typeof fetch; n
   }
 
   return {
+    /** The Connections panel changed the local server: forget the cached local rows so the next list probes again. */
+    invalidateLocal() { localHit = undefined; },
     /** key: the MIND key the user is billed through (never returned to a client). freePlan: only free models are allowed. */
     async list(key: string | undefined, freePlan: boolean): Promise<Catalog> {
       const k = createHash("sha256").update(key ?? "").digest("hex").slice(0, 24);
