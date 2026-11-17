@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StudioStore, migrateAllLayouts } from "../../src/studio/store.ts";
 import { StudioBuilder } from "../../src/studio/builder.ts";
-import { LAYOUT_SCHEMA, RENDERER_VERSION, applyEdit, applyModelPlan, migrateLayout, rulesLayout, validLayout, findIsland, INNER_SLOTS } from "../../src/studio/layout.ts";
+import { SLOTS, LAYOUT_SCHEMA, RENDERER_VERSION, applyEdit, applyModelPlan, migrateLayout, rulesLayout, validLayout, findIsland, INNER_SLOTS } from "../../src/studio/layout.ts";
 import type { LayoutBot } from "../../src/studio/layout.ts";
 import { assembleStudio } from "../../src/studio/index.ts";
 
@@ -72,7 +72,7 @@ test("a new bot gets its desk without a manual step, a deleted bot's desk goes, 
 
 test("a schema or renderer bump migrates every stored layout by itself: on boot (the sweep) and on first read", async () => {
   const d = dir();
-  const old = { v: 1, renderer: "floor-0", builtAt: 1, updatedAt: 1, builtBy: "rules", islands: [{ slug: "manager-office", name: "Manager office", color: "green", slot: 0 }, { slug: "sales", name: "Sales", color: "pink", slot: 3, locked: { name: true } }], desks: {}, pinned: [], seen: ["b1"] };
+  const old = { v: 1, renderer: "floor-0", builtAt: 1, updatedAt: 1, builtBy: "rules", islands: [{ slug: "manager-office", name: "Manager office", color: "green", slot: 0 }, { slug: "sales", name: "Sales", color: "pink", slot: 3, locked: { name: true, slot: true } }, { slug: "ops", name: "Ops", color: "teal", slot: 1 }, { slug: "hr", name: "HR", color: "cyan", slot: 2 }], desks: {}, pinned: [], seen: ["b1"] };
   writeFileSync(join(d, "u3.json"), JSON.stringify({ v: 1, counters: {}, pipelines: {}, layout: old }));
   writeFileSync(join(d, "u4.json"), JSON.stringify({ v: 1, counters: {}, pipelines: {} }));
   const sweep = migrateAllLayouts(d, 5000);
@@ -82,7 +82,10 @@ test("a schema or renderer bump migrates every stored layout by itself: on boot 
   assert.equal(j.layout.renderer, RENDERER_VERSION);
   assert.equal(j.layout.rooms.length, 7, "v2 added the rooms list");
   assert.equal(j.layout.islands[1].stats.length, 2, "v2 added the card stats");
-  assert.equal(j.layout.islands[1].slot, 3, "the user's places are kept");
+  const at = (slug: string) => SLOTS[j.layout.islands.find((i: { slug: string }) => i.slug === slug).slot];
+  assert.deepEqual(at("sales"), { u: 1, v: -1 }, "a hand-placed island keeps its spot on the floor across the v3 slot reorder");
+  assert.deepEqual(at("manager-office"), { u: -1, v: -1 });
+  assert.deepEqual([at("ops"), at("hr")], [{ u: -1, v: 1 }, { u: 1, v: 1 }], "the rest are placed again around the Brain in their old order");
   assert.equal(migrateAllLayouts(d, 6000).migrated, 0, "a second sweep has nothing to do");
   // A future schema: the next deploy bumps the version and the stored layout follows on first read, keeping edits.
   const next = migrateLayout(j.layout, [B("b1", "Scout", "Sales")], 7000, LAYOUT_SCHEMA + 1);

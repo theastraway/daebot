@@ -124,6 +124,7 @@ test("Studio 4: stage marks and the counters line on the island card", () => {
 });
 
 import { readFileSync } from "node:fs";
+// @ts-expect-error plain browser module
 import { PILLS, deskGrid, dueText, hotIsland, iso, palOf, pillCounts, taskPill, worldBounds, brainNodes } from "../../web/studio.js";
 
 test("style.css is balanced: an unclosed block once swallowed every Studio rule above 760px (the unstyled Studio of 11/16)", () => {

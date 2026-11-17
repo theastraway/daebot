@@ -11,7 +11,7 @@
 //   - applyEdit: the user's words through Dae (studio_edit): rename, move next to the Brain, add a department, move a bot, recolour.
 // Every string is clipped to one line and every field is validated: nothing a model or a file says is trusted as is.
 
-export const LAYOUT_SCHEMA = 2;
+export const LAYOUT_SCHEMA = 3;
 export const RENDERER_VERSION = "office-1";
 export const PALETTE = ["green", "teal", "pink", "purple", "indigo", "yellow", "orange", "cyan"] as const;
 export type PaletteKey = (typeof PALETTE)[number];
@@ -27,10 +27,13 @@ export const MAX_NAME = 28;
 
 /** Island places on an isometric grid around the Brain at (0,0): the inner ring first (manager office on top), then the outer ring. */
 export const SLOTS: readonly { u: number; v: number }[] = [
-  { u: -1, v: -1 }, { u: 0, v: -1 }, { u: -1, v: 0 }, { u: 1, v: -1 }, { u: -1, v: 1 }, { u: 1, v: 0 }, { u: 0, v: 1 }, { u: 1, v: 1 },
+  // inner ring: top (the Manager office), then left, right and bottom so a small office sits balanced around the Brain, then the diagonals
+  { u: -1, v: -1 }, { u: -1, v: 1 }, { u: 1, v: -1 }, { u: 1, v: 1 }, { u: 0, v: -1 }, { u: -1, v: 0 }, { u: 1, v: 0 }, { u: 0, v: 1 },
   { u: -2, v: -2 }, { u: -1, v: -2 }, { u: 0, v: -2 }, { u: 1, v: -2 }, { u: 2, v: -2 }, { u: 2, v: -1 }, { u: 2, v: 0 }, { u: 2, v: 1 },
   { u: 2, v: 2 }, { u: 1, v: 2 }, { u: 0, v: 2 }, { u: -1, v: 2 }, { u: -2, v: 2 }, { u: -2, v: 1 }, { u: -2, v: 0 }, { u: -2, v: -1 },
 ];
+/** Schema 2's inner-ring order (kept to carry a hand-placed island to the same spot on the floor). */
+const SLOTS_V2_INNER: readonly { u: number; v: number }[] = [{ u: -1, v: -1 }, { u: 0, v: -1 }, { u: -1, v: 0 }, { u: 1, v: -1 }, { u: -1, v: 1 }, { u: 1, v: 0 }, { u: 0, v: 1 }, { u: 1, v: 1 }];
 export const INNER_SLOTS = 8;
 
 export type IslandSource = "manager" | "department" | "model" | "user" | "general";
@@ -208,6 +211,16 @@ export function migrateLayout(raw: unknown, bots: readonly LayoutBot[] | undefin
   // v1 -> v2: the rooms list and the per-island stats arrived; v1 layouts had neither.
   if (l.v < 2) { l = { ...l, rooms: l.rooms?.length ? l.rooms : [...ROOM_KEYS], islands: l.islands.map((i) => ({ ...i, stats: i.stats?.length === 2 ? i.stats : i.slug === MANAGER ? [...MANAGER_STATS] : [...DEFAULT_STATS] })), v: 2 }; migrated = true; }
   if (!l.rooms.length) { l = { ...l, rooms: [...ROOM_KEYS] }; migrated = true; }
+  // v2 -> v3: the inner ring's order changed (top, left, right, bottom first). A hand-placed island keeps its spot on the floor; the
+  // rest are placed again in their old order, so a four-island office now sits around the Brain instead of above it.
+  if (l.v < 3) {
+    const idx = (p: { u: number; v: number }) => SLOTS.findIndex((x) => x.u === p.u && x.v === p.v);
+    const used = new Set<number>();
+    const islands = l.islands.map((i) => ({ ...i }));
+    for (const i of islands) if (i.locked?.slot || i.slug === MANAGER) { const old = i.slot < 8 ? SLOTS_V2_INNER[i.slot] : SLOTS[i.slot]; i.slot = idx(old); used.add(i.slot); }
+    for (const i of islands.filter((x) => !(x.locked?.slot || x.slug === MANAGER)).sort((a, b) => a.slot - b.slot)) { const s2 = freeSlot(used); if (s2 >= 0) { i.slot = s2; used.add(s2); } }
+    l = { ...l, islands, v: 3 }; migrated = true;
+  }
   // Later schemas add a step here. A layout from a NEWER schema than this build knows is kept as is.
   if (l.v < target) { l = { ...l, v: target }; migrated = true; }
   if (l.renderer !== RENDERER_VERSION) { l = { ...l, renderer: RENDERER_VERSION }; migrated = true; }
