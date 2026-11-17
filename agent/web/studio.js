@@ -1,14 +1,16 @@
-// Daebot Studio: the user's bots as workers on an isometric floor (the view behind the Studio tab). One department is one island;
+// Daebot Studio: the user's bots as workers in a dark isometric office (the view behind the Studio tab). Studio 5: the floor is drawn
+// from the account's own layout (GET /studio .layout + each department's palette, slot and card stats), which the Studio Builder on the
+// server builds from the account's bots and keeps current; this file is the one renderer every account shares. One department is one island;
 // each bot is a desk on its island, drawn with its own face and LED colour; the main Daebot sits in the Manager office; MIND is the
-// Brain in the middle; dotted lines are bot_talk traffic between islands, and a dot walks the line when a new message went over it.
-// A yellow "N waiting approval" badge sits on any island where a bot needs the user (a question, an awaiting-decision item or a
-// permission card) and opens the task board, where the reply box is. Rooms above the floor: Overview (the floor), Manager office
-// (Dae's desk, last turn's proof, Dae's tasks), Meeting room (the exchanges, with a read-only transcript), Lounge (idle bots),
-// Workspaces (one island at a time). The left panel is the team at a glance with the "new task for the team" box; the right column
-// is the task status list or the agent communication log. Everything is built with createElement/createElementNS and textContent:
-// no innerHTML anywhere. Pure helpers are exported for tests; the DOM lives in initStudio.
+// Brain in the middle (THE BRAIN, a node graph on a grey platform, walkways to every island); dotted arcs are bot_talk traffic between
+// islands with dots walking them. A card floats over each island (name, N agents, the two stats its layout picked, doing · next · done,
+// a yellow "N waiting approval" pill that opens the task board). The top bar shows the workspace, the apps it is connected to, what it
+// runs headless on and a live clock; the rooms are tabs under it. The right column is the task status (a new-task box, six filter
+// pills with counts, cards with a progress pill) or the bot talk log. Everything is built with createElement/createElementNS and
+// textContent: no innerHTML anywhere. Pure helpers are exported for tests; the DOM lives in initStudio.
 import { faceSvg } from "./faces.js";
 import { proofChips } from "./board.js";
+import { markFor } from "./apps-icons.js";
 
 const NS = "http://www.w3.org/2000/svg";
 export const REFRESH_MS = 10000;
@@ -134,190 +136,419 @@ export function savingText(summary) {
 /** Progress of a project as a percent of tasks ready to test. */
 export const progressPct = (p) => (p && p.total > 0 ? Math.round((100 * p.done) / p.total) : 0);
 
+// ---- The office (Studio 5): one shared renderer for every account; the account's layout (islands, places, colours, card stats)
+// comes from GET /studio as data (src/studio/layout.ts), so the floor is built per user and kept up to date by the Studio Builder. ----
+
+/** Island colours by palette key: [top, left side, right side, glow]. */
+export const PAL = {
+  green: ["#34c27a", "#1f8a55", "#176b42", "#4dffa6"], teal: ["#3b9fe0", "#2470a8", "#1b5884", "#6cc8ff"],
+  pink: ["#e0679d", "#a8466f", "#863757", "#ff9cc7"], purple: ["#9161dc", "#6a43a8", "#543585", "#c39bff"],
+  indigo: ["#5d6ff0", "#4150b8", "#333f92", "#93a0ff"], yellow: ["#d8b53e", "#a2862a", "#7f6920", "#ffe27a"],
+  orange: ["#e8874a", "#ad6233", "#894d27", "#ffb27f"], cyan: ["#33c6c6", "#22918f", "#1a7271", "#7ff4f2"],
+};
+export const palOf = (k) => PAL[k] || PAL.indigo;
+/** Grid step of the iso floor (one slot), the island and the Brain sizes, in world units. */
+export const TW = 250, TH = 146, IW = 146, IH = 73, ID = 22, BW = 128, BH = 64, BD = 28;
+export const iso = (u, v) => ({ x: (u - v) * TW, y: (u + v) * TH });
+/** The six filter pills of the task column, with what each counts. */
+export const PILLS = [["all", "All"], ["scheduled", "Scheduled"], ["not_started", "Backlog"], ["in_progress", "In progress"], ["waiting", "Waiting"], ["ready_to_test", "Done"]];
+export function pillCounts(v) {
+  const t = (v && v.tasks) || [];
+  const live = t.filter((x) => x.status !== "cancelled");
+  return { all: live.length, scheduled: ((v && v.scheduled) || []).length, not_started: t.filter((x) => x.status === "not_started").length, in_progress: t.filter((x) => x.status === "in_progress").length, waiting: t.filter((x) => x.status === "stopped").length, ready_to_test: t.filter((x) => x.status === "ready_to_test").length };
+}
+/** Desk places on an island top, in island-local screen units: an iso grid as square as the count allows, and the desk scale. */
+export function deskGrid(k) {
+  if (k <= 0) return { slots: [], scale: 1 };
+  const cols = Math.ceil(Math.sqrt(k)), rows = Math.ceil(k / cols), n = Math.max(cols, rows);
+  const pitch = 1.45 / (n + 0.9);
+  const slots = [];
+  for (let i = 0; i < k; i++) {
+    const r = Math.floor(i / cols), c = i % cols;
+    const u = (c - (cols - 1) / 2) * pitch, w = (r - (rows - 1) / 2) * pitch;
+    slots.push({ x: Math.round((u - w) * IW), y: Math.round((u + w) * IH) });
+  }
+  return { slots, scale: Math.min(1.4, 3.5 / (n + 0.6)) };
+}
+/** The world box that holds every island and the Brain (cards float in screen space: padTop/padBottom are the pixels they need). */
+export function worldBounds(depts) {
+  let x0 = -BW - 30, x1 = BW + 30, y0 = -BH - 60, y1 = BH + BD + 30, below = false;
+  for (const d of depts || []) {
+    const p = iso(d.u, d.v);
+    if (p.y > 0) below = true;
+    x0 = Math.min(x0, p.x - IW - 30); x1 = Math.max(x1, p.x + IW + 30);
+    y0 = Math.min(y0, p.y - IH - 20); y1 = Math.max(y1, p.y + IH + ID + 24);
+  }
+  const minW = 900, minH = 560;
+  if (x1 - x0 < minW) { const g = (minW - (x1 - x0)) / 2; x0 -= g; x1 += g; }
+  if (y1 - y0 < minH) { const g = (minH - (y1 - y0)) / 2; y0 -= g; y1 += g; }
+  return { x: Math.floor(x0), y: Math.floor(y0), w: Math.ceil(x1 - x0), h: Math.ceil(y1 - y0), padTop: 150, padBottom: below ? 160 : 24 };
+}
+/** The island whose card glows: the one with the most work in flight, else the Manager office. */
+export function hotIsland(depts) {
+  let best = null;
+  for (const d of depts || []) if (d.counts && d.counts.working > 0 && (!best || d.counts.working > best.counts.working)) best = d;
+  return best ? best.slug : "manager-office";
+}
+/** A task's pill: a percent while it moves, a word when it is waiting or done. */
+export function taskPill(t) {
+  if (!t) return { text: "", cls: "" };
+  if (t.status === "ready_to_test") return { text: "DONE", cls: "done" };
+  if (t.status === "stopped") return { text: "WAIT", cls: "wait" };
+  if (t.status === "cancelled") return { text: "OFF", cls: "off" };
+  return { text: `${Math.max(0, Math.min(100, t.progress | 0))}%`, cls: t.status === "in_progress" ? "run" : "todo" };
+}
+/** "in 3h", "in 12m", "now": when a scheduled run is due. */
+export function dueText(at, now = Date.now()) {
+  const m = Math.round((at - now) / 60000);
+  if (m <= 0) return "due now";
+  if (m < 60) return `in ${m}m`;
+  if (m < 48 * 60) return `in ${Math.round(m / 60)}h`;
+  return `in ${Math.round(m / 1440)}d`;
+}
+/** A seeded scatter of node-graph points on the Brain's top face (the same every paint). */
+export function brainNodes(n = 16, seed = 7) {
+  let x = seed;
+  const rnd = () => { x = (x * 16807) % 2147483647; return x / 2147483647; };
+  const out = [];
+  for (let i = 0; i < n; i++) { const u = rnd() * 1.6 - 0.8, w = rnd() * 1.6 - 0.8; if (Math.abs(u) + Math.abs(w) > 1.1) { i--; continue; } out.push({ x: Math.round((u - w) * BW * 0.62), y: Math.round((u + w) * BH * 0.62) }); }
+  return out;
+}
+
 export function initStudio({ json, h, ago, app, els }) {
   if (!els || !els.section) return null;
-  const st = { open: false, view: null, prev: null, filter: "all", room: "overview", dept: "", right: "tasks", timer: 0, loading: false, error: "", meeting: null, log: [], logAt: 0, sendTo: "main", team: null, teamAt: 0, skills: null, skillsAt: 0, skillsError: "" };
+  const st = { open: false, view: null, prev: null, filter: "all", room: "overview", dept: "", right: "tasks", timer: 0, clockTimer: 0, loading: false, error: "", meeting: null, log: [], logAt: 0, sendTo: "main", team: null, teamAt: 0, skills: null, skillsAt: 0, skillsError: "", apps: null, appsAt: 0, zoom: { k: 1, x: 0, y: 0 }, sig: "", building: false };
   const S = (tag, attrs) => { const n = document.createElementNS(NS, tag); for (const k in attrs || {}) n.setAttribute(k, String(attrs[k])); return n; };
   const T = (x, y, cls, text, attrs) => { const t = S("text", { x, y, class: cls, ...(attrs || {}) }); t.textContent = text; return t; };
   const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const OFFICE_KEY = "daebot.studio.office";
+  const readTheme = () => { try { return localStorage.getItem(OFFICE_KEY) === "light" ? "light" : "dark"; } catch { return "dark"; } };
+  els.section.dataset.office = readTheme();
 
-  // ---- skeleton ----
-  const top = h("header", "st-top");
-  const title = h("div", "st-title"); const name = h("strong", "", "Daebot Studio"); const who = h("span", "st-sub", ""); title.append(name, who);
-  const rooms = h("div", "st-rooms"); rooms.setAttribute("role", "tablist"); rooms.setAttribute("aria-label", "Rooms");
+  // ---- the top bar: title, workspace, connected to, runs headless on, the clock; the rooms under it ----
+  const top = h("header", "oc-top");
+  const brand = h("div", "oc-brand");
+  const logo = h("img", "oc-logo"); logo.src = "/brand/daebot-head.webp"; logo.alt = ""; logo.width = 26; logo.height = 26;
+  const title = h("strong", "oc-title", "DAEBOT STUDIO");
+  const ver = h("span", "oc-ver", "");
+  const sep1 = h("span", "oc-sep", "·");
+  const who = h("span", "oc-ws", "");
+  brand.append(logo, title, ver, sep1, who);
+  const conn = h("div", "oc-conn"); conn.append(h("i", "oc-live"), h("span", "oc-label", "CONNECTED TO"));
+  const connIcons = h("div", "oc-icons"); conn.append(connIcons);
+  const runs = h("div", "oc-runs"); runs.append(h("i", "oc-live"), h("span", "oc-label", "RUNS HEADLESS ON"));
+  const chipModel = h("span", "oc-chip", ""); chipModel.title = "The model new turns run on, and the router's mode";
+  const chipHost = h("span", "oc-chip", "");
+  const chipNeeds = h("button", "oc-chip warn"); chipNeeds.type = "button"; chipNeeds.hidden = true; chipNeeds.title = "Open the task board to reply";
+  chipNeeds.addEventListener("click", () => app.openBoard());
+  runs.append(chipModel, chipHost, chipNeeds);
+  const clock = h("span", "oc-clock", ""); clock.setAttribute("aria-label", "Time");
+  top.append(brand, conn, runs, clock);
+  const bar = h("div", "oc-bar");
+  const rooms = h("div", "oc-rooms"); rooms.setAttribute("role", "tablist"); rooms.setAttribute("aria-label", "Rooms");
   for (const [key, label] of ROOMS) {
-    const b = h("button", "st-room", label); b.type = "button"; b.dataset.key = key; b.setAttribute("role", "tab"); b.setAttribute("aria-selected", String(key === st.room));
+    const b = h("button", "oc-room", label); b.type = "button"; b.dataset.key = key; b.setAttribute("role", "tab"); b.setAttribute("aria-selected", String(key === st.room));
     b.addEventListener("click", () => { st.room = key; paintRooms(); paintStage(); });
     rooms.append(b);
   }
-  const chips = h("div", "st-chips");
-  const chipModel = h("span", "st-chip", ""); chipModel.title = "The model new turns run on, and the router's mode";
-  const chipBots = h("span", "st-chip", "");
-  const chipNeeds = h("button", "st-chip warn"); chipNeeds.type = "button"; chipNeeds.hidden = true; chipNeeds.title = "Open the task board to reply";
-  chipNeeds.addEventListener("click", () => app.openBoard());
-  const clock = h("span", "st-clock", "");
-  chips.append(chipModel, chipBots, chipNeeds, clock);
-  top.append(title, rooms, chips);
-  const note = h("p", "st-note", ""); note.setAttribute("role", "status"); note.setAttribute("aria-live", "polite");
-  const body = h("div", "st-body");
-  // Left: the team at a glance and the new-task box.
-  const side = h("aside", "st-side"); side.setAttribute("aria-label", "Team");
-  const stats = h("div", "st-stats");
-  const statActive = stat("Active bots"), statRunning = stat("Running tasks"), statDone = stat("Completed today"), statWaiting = stat("Waiting on you");
-  stats.append(statActive.box, statRunning.box, statDone.box, statWaiting.box);
-  const projHead = h("h3", "st-h", "Project progress"); const projList = h("div", "st-projects");
-  const taskBox = h("form", "st-newtask"); taskBox.setAttribute("aria-label", "New task for the team");
-  const taskHead = h("h3", "st-h", "New task for the team");
-  const taskArea = h("textarea", "st-newtask-text"); taskArea.rows = 3; taskArea.placeholder = "e.g. Research three vendors and file a brief in MIND"; taskArea.setAttribute("aria-label", "The task"); taskArea.maxLength = 4000;
-  const taskRow = h("div", "st-newtask-row");
-  const taskTo = h("select", "st-newtask-to"); taskTo.setAttribute("aria-label", "Who gets it");
-  const taskSend = h("button", "btn-primary st-newtask-send", "Send"); taskSend.type = "submit";
-  taskRow.append(taskTo, taskSend);
-  const taskEx = h("div", "st-examples");
-  for (const ex of EXAMPLES) { const b = h("button", "st-example", ex); b.type = "button"; b.addEventListener("click", () => { taskArea.value = ex; taskArea.focus(); }); taskEx.append(b); }
-  const taskState = h("span", "st-newtask-state", ""); taskState.setAttribute("role", "status");
-  taskBox.append(taskHead, taskArea, taskRow, taskEx, taskState);
+  const tools = h("div", "oc-tools");
+  const rebuildBtn = h("button", "oc-tool", "Rebuild office"); rebuildBtn.type = "button"; rebuildBtn.title = "The Studio Builder plans your office again from your bots. Your own edits are kept.";
+  rebuildBtn.addEventListener("click", rebuild);
+  const themeBtn = h("button", "oc-tool icon"); themeBtn.type = "button";
+  const paintThemeBtn = () => { const dark = els.section.dataset.office !== "light"; themeBtn.textContent = dark ? "☾" : "☀"; themeBtn.title = dark ? "Office lights on (light floor)" : "Office lights off (dark floor)"; themeBtn.setAttribute("aria-label", themeBtn.title); };
+  themeBtn.addEventListener("click", () => { const next = els.section.dataset.office === "light" ? "dark" : "light"; els.section.dataset.office = next; try { localStorage.setItem(OFFICE_KEY, next); } catch { /* per-viewer only */ } paintThemeBtn(); });
+  paintThemeBtn();
+  tools.append(rebuildBtn, themeBtn);
+  bar.append(rooms, tools);
+  const note = h("p", "oc-note", ""); note.hidden = true; note.setAttribute("role", "status"); note.setAttribute("aria-live", "polite");
+  const body = h("div", "oc-body");
+
+  // ---- the stage: the floor (pan and zoom) or a room ----
+  const stage = h("div", "oc-stage");
+  const floor = h("div", "oc-floor");
+  const world = h("div", "oc-world");
+  const cardsLayer = h("div", "oc-cards-layer");
+  floor.append(world, cardsLayer);
+  const hud = h("div", "oc-hud");
+  const kpi = (label) => { const box = h("div", "oc-kpi"); const v = h("b", "", "–"); box.append(v, h("span", "", label)); hud.append(box); return v; };
+  const kActive = kpi("ACTIVE"), kRunning = kpi("RUNNING"), kDone = kpi("DONE TODAY"), kWaiting = kpi("WAITING ON YOU");
+  const zoomBox = h("div", "oc-zoom");
+  const zIn = h("button", "oc-zbtn", "+"), zOut = h("button", "oc-zbtn", "−"), zReset = h("button", "oc-zbtn", "⌂");
+  zIn.type = zOut.type = zReset.type = "button";
+  zIn.setAttribute("aria-label", "Zoom in"); zOut.setAttribute("aria-label", "Zoom out"); zReset.setAttribute("aria-label", "Reset the view");
+  zIn.addEventListener("click", () => zoomBy(1.2)); zOut.addEventListener("click", () => zoomBy(1 / 1.2)); zReset.addEventListener("click", () => { st.zoom = { k: 1, x: 0, y: 0 }; fit(); });
+  zoomBox.append(zIn, zOut, zReset);
+  const roomBox = h("div", "oc-roombox");
+  stage.append(floor, hud, zoomBox, roomBox);
+
+  // ---- the right column: a new task, the filters, the cards (or the agent communication log) ----
+  const aside = h("aside", "oc-col"); aside.setAttribute("aria-label", "Task status and agent communication");
+  const taskBox = h("form", "oc-add"); taskBox.setAttribute("aria-label", "New task for the team");
+  const taskArea = h("input", "oc-add-text"); taskArea.type = "text"; taskArea.placeholder = "Type a task for your team…"; taskArea.setAttribute("aria-label", "The task"); taskArea.maxLength = 4000;
+  const taskRow = h("div", "oc-add-row");
+  const taskDept = h("select", "oc-select"); taskDept.setAttribute("aria-label", "Department");
+  const taskTo = h("select", "oc-select"); taskTo.setAttribute("aria-label", "Who gets it");
+  const taskSend = h("button", "oc-add-btn", "ADD"); taskSend.type = "submit";
+  taskRow.append(taskDept, taskTo, taskSend);
+  const taskState = h("span", "oc-add-state", ""); taskState.setAttribute("role", "status");
+  taskBox.append(taskArea, taskRow, taskState);
+  taskDept.addEventListener("change", () => fillRecipients());
   taskBox.addEventListener("submit", async (e) => {
     e.preventDefault();
     const text = taskArea.value.trim();
     if (!text) { taskArea.focus(); return; }
     taskSend.disabled = true; taskState.textContent = "Sending…";
-    try { await app.sendTo(taskTo.value, text); taskArea.value = ""; taskState.textContent = ""; }
+    try { await app.sendTo(taskTo.value || "main", text); taskArea.value = ""; taskState.textContent = ""; }
     catch (err) { taskState.textContent = (err && err.message) || "Could not send it."; }
     finally { taskSend.disabled = false; }
   });
-  const actHead = h("h3", "st-h", "Agent activity"); const actList = h("ul", "st-activity");
-  side.append(stats, projHead, projList, taskBox, actHead, actList);
-  // Middle: the stage (the floor, or a room).
-  const stage = h("div", "st-stage");
-  // Right: tasks or the communication log.
-  const aside = h("aside", "st-tasks"); aside.setAttribute("aria-label", "Task status and agent communication");
-  const th = h("div", "st-tasks-head");
-  const rightTabs = h("div", "st-right-tabs"); rightTabs.setAttribute("role", "tablist");
-  const tabTasks = h("button", "st-right-tab", "Task status"); tabTasks.type = "button"; tabTasks.setAttribute("role", "tab");
-  const tabLog = h("button", "st-right-tab", "Agent communication"); tabLog.type = "button"; tabLog.setAttribute("role", "tab");
-  const pickRight = (k) => { st.right = k; tabTasks.setAttribute("aria-selected", String(k === "tasks")); tabLog.setAttribute("aria-selected", String(k === "log")); filters.hidden = k !== "tasks"; list.hidden = k !== "tasks"; logList.hidden = k !== "log"; if (k === "log") void loadLog(true); };
+  const colHead = h("div", "oc-col-head");
+  const colTitle = h("strong", "oc-col-title", "TASK STATUS");
+  const rightTabs = h("div", "oc-col-tabs"); rightTabs.setAttribute("role", "tablist");
+  const tabTasks = h("button", "oc-col-tab", "Tasks"); tabTasks.type = "button"; tabTasks.setAttribute("role", "tab");
+  const tabLog = h("button", "oc-col-tab", "Bot talk"); tabLog.type = "button"; tabLog.setAttribute("role", "tab");
+  rightTabs.append(tabTasks, tabLog);
+  colHead.append(colTitle, rightTabs);
+  const filters = h("div", "oc-pills"); filters.setAttribute("role", "group"); filters.setAttribute("aria-label", "Filter tasks");
+  const list = h("ul", "oc-cards");
+  const logList = h("ul", "oc-cards oc-log"); logList.hidden = true;
+  const pickRight = (k) => { st.right = k; colTitle.textContent = k === "log" ? "AGENT COMMUNICATION" : "TASK STATUS"; tabTasks.setAttribute("aria-selected", String(k === "tasks")); tabLog.setAttribute("aria-selected", String(k === "log")); filters.hidden = k !== "tasks"; list.hidden = k !== "tasks"; logList.hidden = k !== "log"; if (k === "log") void loadLog(true); };
   tabTasks.addEventListener("click", () => pickRight("tasks")); tabLog.addEventListener("click", () => pickRight("log"));
-  rightTabs.append(tabTasks, tabLog); th.append(rightTabs);
-  const filters = h("div", "st-filters"); filters.setAttribute("role", "group"); filters.setAttribute("aria-label", "Filter tasks");
-  const list = h("ul", "st-list");
-  const logList = h("ul", "st-list st-log"); logList.hidden = true;
-  aside.append(th, filters, list, logList);
-  body.append(side, stage, aside);
-  els.section.append(top, note, body);
+  aside.append(taskBox, colHead, filters, list, logList);
+  body.append(stage, aside);
+  els.section.replaceChildren(top, bar, note, body);
   pickRight("tasks");
-
-  for (const [key, label] of FILTERS) {
-    const b = h("button", "st-filter", label); b.type = "button"; b.dataset.key = key; b.setAttribute("aria-pressed", String(key === st.filter));
+  for (const [key, label] of PILLS) {
+    const b = h("button", "oc-pill"); b.type = "button"; b.dataset.key = key; b.setAttribute("aria-pressed", String(key === st.filter));
+    b.append(h("span", "", label), h("b", "", "0"));
     b.addEventListener("click", () => { st.filter = key; paintFilters(); paintTasks(); });
     filters.append(b);
   }
-  function paintFilters() { for (const b of filters.children) b.setAttribute("aria-pressed", String(b.dataset.key === st.filter)); }
-  function paintRooms() { for (const b of rooms.children) b.setAttribute("aria-selected", String(b.dataset.key === st.room)); }
-  function stat(label) { const box = h("div", "st-stat"); const v = h("strong", "", "–"); box.append(v, h("span", "", label)); return { box, v }; }
-  const statusChip = (bot) => { const c = h("span", `st-status ${bot.status}`, STATUS[bot.status] || bot.status); return c; };
+  function paintFilters() {
+    const c = pillCounts(st.view);
+    for (const b of filters.children) { b.setAttribute("aria-pressed", String(b.dataset.key === st.filter)); b.lastChild.textContent = String(c[b.dataset.key] ?? 0); }
+  }
+  function paintRooms() {
+    const allowed = st.view && st.view.layout && st.view.layout.rooms && st.view.layout.rooms.length ? st.view.layout.rooms : ROOMS.map((r) => r[0]);
+    for (const b of rooms.children) { b.hidden = !allowed.includes(b.dataset.key); b.setAttribute("aria-selected", String(b.dataset.key === st.room)); }
+  }
+  const statusChip = (bot) => h("span", `st-status ${bot.status}`, STATUS[bot.status] || bot.status);
 
-  // ---- the floor ----
-  function desk(bot, x, y, scale = 1) {
-    const g = S("g", { class: `st-desk ${bot.status}`, transform: `translate(${x} ${y}) scale(${scale})`, tabindex: "0", role: "button" });
-    g.style.color = safeColor(bot.color);
+  // ---- pan and zoom (one transform on the world: the floor, the lines and the cards move together) ----
+  let base = { s: 1, x: 0, y: 0 }, box = { x: 0, y: 0, w: 1000, h: 660, padTop: 150, padBottom: 24 };
+  function applyZoom() {
+    const z = st.zoom, s = base.s * z.k, ox = base.x + z.x, oy = base.y + z.y;
+    world.style.transform = `translate(${ox}px, ${oy}px) scale(${s})`;
+    // The cards float in screen space: they follow the floor but keep a readable size at any zoom.
+    const cs = Math.max(0.78, Math.min(1.08, s * 1.05));
+    for (const c of cardsLayer.children) {
+      const x = ox + (Number(c.dataset.x) - box.x) * s, y = oy + (Number(c.dataset.y) - box.y) * s;
+      c.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, ${c.dataset.anchor === "top" ? "0" : "-100%"}) scale(${cs.toFixed(3)})`;
+    }
+  }
+  function fit() {
+    const r = floor.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    const top = box.padTop + 8, bottom = box.padBottom + 8, availH = Math.max(120, r.height - top - bottom);
+    const s = Math.min((r.width - 32) / box.w, availH / box.h, 1.3);
+    base = { s, x: (r.width - box.w * s) / 2, y: top + (availH - box.h * s) / 2 };
+    applyZoom();
+  }
+  function zoomBy(f, cx, cy) {
+    const r = floor.getBoundingClientRect();
+    const px = cx ?? r.width / 2, py = cy ?? r.height / 2;
+    const z = st.zoom, k2 = Math.max(0.5, Math.min(4, z.k * f)), real = k2 / z.k;
+    const ox = base.x + z.x, oy = base.y + z.y;
+    st.zoom = { k: k2, x: px - (px - ox) * real - base.x, y: py - (py - oy) * real - base.y };
+    applyZoom();
+  }
+  floor.addEventListener("wheel", (e) => { e.preventDefault(); const r = floor.getBoundingClientRect(); zoomBy(Math.exp(-e.deltaY * 0.0016), e.clientX - r.left, e.clientY - r.top); }, { passive: false });
+  let drag = null;
+  floor.addEventListener("pointerdown", (e) => { if (e.button !== 0 || e.target.closest(".oc-card, .oc-desk, button")) return; drag = { x: e.clientX, y: e.clientY, zx: st.zoom.x, zy: st.zoom.y, id: e.pointerId }; floor.setPointerCapture(e.pointerId); floor.classList.add("dragging"); });
+  floor.addEventListener("pointermove", (e) => { if (!drag) return; st.zoom.x = drag.zx + e.clientX - drag.x; st.zoom.y = drag.zy + e.clientY - drag.y; applyZoom(); });
+  const endDrag = () => { if (!drag) return; try { floor.releasePointerCapture(drag.id); } catch { /* gone */ } drag = null; floor.classList.remove("dragging"); };
+  floor.addEventListener("pointerup", endDrag); floor.addEventListener("pointercancel", endDrag);
+  if (typeof ResizeObserver === "function") new ResizeObserver(() => fit()).observe(floor);
+
+  // ---- drawing ----
+  function slab(g, w, hh, d, top, left, right, cls) {
+    g.append(S("polygon", { class: `${cls}-l`, points: `${-w},0 0,${hh} 0,${hh + d} ${-w},${d}`, fill: left }));
+    g.append(S("polygon", { class: `${cls}-r`, points: `0,${hh} ${w},0 ${w},${d} 0,${hh + d}`, fill: right }));
+    g.append(S("polygon", { class: `${cls}-t`, points: `0,${-hh} ${w},0 0,${hh} ${-w},0`, fill: top }));
+  }
+  function desk(bot, x, y, s, showName) {
+    const g = S("g", { class: `oc-desk ${bot.status}`, transform: `translate(${x} ${y}) scale(${s})`, tabindex: "0", role: "button" });
     const label = `${bot.name}: ${STATUS[bot.status] || bot.status}${bot.task ? `, ${bot.task.title}` : ""}`;
     g.setAttribute("aria-label", label);
     const tip = S("title"); tip.textContent = label; g.append(tip);
-    g.append(S("polygon", { class: "st-desk-top", points: isoPoints(0, 10, 44, 22) }));
-    g.append(S("circle", { class: "st-ring", cx: 0, cy: -8, r: 15 }));
-    const face = faceSvg(bot.face);
-    if (face) { face.setAttribute("x", -11); face.setAttribute("y", -19); face.setAttribute("width", 22); face.setAttribute("height", 22); g.append(face); }
-    else g.append(T(0, -4, "st-initial", (bot.name || "?").slice(0, 1).toUpperCase(), { "text-anchor": "middle" }));
-    if (bot.needs > 0) { const w = S("g", { class: "st-warn", transform: "translate(12 -22)" }); w.append(S("polygon", { points: "0,-7 7,6 -7,6" })); w.append(T(0, 4.5, "st-warn-mark", "!", { "text-anchor": "middle" })); g.append(w); }
-    g.append(T(0, 30, "st-desk-name", bot.name.length > 12 ? bot.name.slice(0, 11) + "…" : bot.name, { "text-anchor": "middle" }));
+    const c = safeColor(bot.color);
+    g.append(S("ellipse", { class: "oc-desk-shadow", cx: 0, cy: 12, rx: 24, ry: 9 }));
+    // the desk: a small slab
+    g.append(S("polygon", { class: "oc-dk-l", points: "-20,0 0,10 0,16 -20,6" }));
+    g.append(S("polygon", { class: "oc-dk-r", points: "0,10 20,0 20,6 0,16" }));
+    g.append(S("polygon", { class: "oc-dk-t", points: "0,-10 20,0 0,10 -20,0" }));
+    // the monitor at the back edge, its screen lit by the bot's state
+    g.append(S("polygon", { class: "oc-mon", points: "-12,-6 6,-15 6,-29 -12,-20" }));
+    g.append(S("polygon", { class: "oc-scr", points: "-10.5,-7.6 4.6,-15.2 4.6,-27.4 -10.5,-19.8" }));
+    g.append(S("line", { class: "oc-stand", x1: -3, y1: -10.5, x2: -3, y2: -5 }));
+    // the worker: body and head in the bot's colour, seated at the front edge
+    const w = S("g", { class: "oc-worker", transform: "translate(7 3)" });
+    const body = S("path", { class: "oc-torso", d: "M-6,6 Q-6,-4 0,-4 Q6,-4 6,6 Z" }); body.style.fill = c;
+    const head = S("circle", { class: "oc-head", cx: 0, cy: -9, r: 4.6 }); head.style.fill = c;
+    w.append(body, head);
+    g.append(w);
+    if (bot.needs > 0) { const b = S("g", { class: "oc-need", transform: "translate(10 -38)" }); b.append(S("circle", { r: 7 })); b.append(T(0, 3.6, "oc-need-mark", "!", { "text-anchor": "middle" })); g.append(b); }
+    if (showName) g.append(T(0, 30, "oc-desk-name", bot.name.length > 14 ? bot.name.slice(0, 13) + "…" : bot.name, { "text-anchor": "middle" }));
     const open = () => { if (bot.task && bot.task.sessionId) app.openSession(bot.task.sessionId); else app.pickBot(bot.id); };
     g.addEventListener("click", open);
     g.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
     return g;
   }
-
-  function island(d, pos, bots, scale = 1) {
-    const w = 250, hh = 125, depth = 18;
-    const g = S("g", { class: "st-island", transform: `translate(${pos.x} ${pos.y}) scale(${scale})`, "data-dept": d.slug });
-    g.style.color = safeColor(d.color);
-    g.append(S("polygon", { class: "st-side", points: `${-w / 2},0 0,${hh / 2} 0,${hh / 2 + depth} ${-w / 2},${depth}` }));
-    g.append(S("polygon", { class: "st-side r", points: `0,${hh / 2} ${w / 2},0 ${w / 2},${depth} 0,${hh / 2 + depth}` }));
-    g.append(S("polygon", { class: "st-top-face", points: isoPoints(0, 0, w, hh) }));
-    const card = S("g", { class: "st-card", transform: `translate(0 ${-hh / 2 - 46})` });
-    const extra = (d.counters && d.counters.length ? 1 : 0) + (d.pipeline ? 1 : 0);
-    card.setAttribute("transform", `translate(0 ${-hh / 2 - 46 - extra * 13})`);
-    card.append(S("rect", { x: -92, y: -16, width: 184, height: 44 + extra * 13, rx: 8 }));
-    card.append(T(-84, 1, "st-dept", d.name.length > 22 ? d.name.slice(0, 21) + "…" : d.name));
-    card.append(T(84, 1, "st-count", `${bots.length} ${bots.length === 1 ? "bot" : "bots"}`, { "text-anchor": "end" }));
-    card.append(T(-84, 19, "st-kpi", `done ${d.counts.done} · working ${d.counts.working} · next ${d.counts.next}`));
-    let y = 32;
-    if (d.counters && d.counters.length) { const line = countersLine(d.counters); card.append(T(-84, y, "st-kpi strong", line.length > 34 ? line.slice(0, 33) + "…" : line)); y += 13; }
-    if (d.pipeline) { card.append(T(-84, y, "st-kpi", `stage ${d.pipeline.stage} of ${d.pipeline.of}${d.pipeline.current ? ` · ${d.pipeline.current}` : " · done"}`)); card.append(T(84, y, `st-marks ${d.pipeline.status}`, stageMarks(d.pipeline.marks), { "text-anchor": "end" })); }
-    g.append(card);
-    const slots = deskSlots(bots.length, 0, 0, w, hh);
-    bots.forEach((b, i) => g.append(desk(b, slots[i].x, slots[i].y)));
-    if (d.needsYou > 0) {
-      const text = badgeText(d.needsYou);
-      const bw = 14 + text.length * 6.6;
-      const badge = S("g", { class: "st-badge", transform: `translate(0 ${hh / 2 + 28})`, tabindex: "0", role: "button", "aria-label": `${d.name}: ${text}. Open the task board to reply.` });
-      badge.append(S("rect", { x: -bw / 2, y: -11, width: bw, height: 22, rx: 11 }));
-      badge.append(S("polygon", { class: "st-badge-mark", points: `${-bw / 2 + 11},-5 ${-bw / 2 + 16},4 ${-bw / 2 + 6},4` }));
-      badge.append(T(6, 4, "st-badge-text", text, { "text-anchor": "middle" }));
-      badge.addEventListener("click", () => app.openBoard());
-      badge.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); app.openBoard(); } });
-      g.append(badge);
-    }
+  function islandG(d, bots) {
+    const p = iso(d.u, d.v), pal = palOf(d.palette);
+    const g = S("g", { class: "oc-island", transform: `translate(${p.x} ${p.y})`, "data-dept": d.slug });
+    g.append(S("ellipse", { class: "oc-shadow", cx: 0, cy: ID + 14, rx: IW * 0.95, ry: IH * 0.75 }));
+    slab(g, IW, IH, ID, pal[0], pal[1], pal[2], "oc-is");
+    // the floor grid and a rim on the top face
+    const grid = S("g", { class: "oc-grid" });
+    for (let i = 1; i < 6; i++) { const f = i / 6; grid.append(S("line", { x1: -IW + IW * f, y1: -IH * f, x2: IW * f, y2: IH - IH * f })); grid.append(S("line", { x1: IW * f, y1: -IH + IH * f, x2: -IW + IW * f, y2: IH * f })); }
+    g.append(grid);
+    g.append(S("polygon", { class: "oc-rim", points: `0,${-IH + 5} ${IW - 10},0 0,${IH - 5} ${-IW + 10},0` }));
+    const { slots, scale } = deskGrid(bots.length);
+    const order = bots.map((b, i) => ({ b, s: slots[i] })).sort((a, z) => a.s.y - z.s.y);
+    for (const { b, s } of order) g.append(desk(b, s.x, s.y + 4, scale, bots.length <= 4));
+    if (!bots.length) g.append(T(0, 5, "oc-empty-isl", "no desks yet", { "text-anchor": "middle" }));
+    g.addEventListener("dblclick", () => { st.dept = d.slug; st.room = "workspaces"; paintRooms(); paintStage(); });
     return g;
   }
-
-  function brain(v, cx, cy) {
-    const g = S("g", { class: "st-brain", transform: `translate(${cx} ${cy})` });
-    g.append(S("circle", { class: "st-brain-ring", cx: 0, cy: 0, r: 58 }));
-    g.append(S("circle", { class: "st-brain-core", cx: 0, cy: 0, r: 44 }));
-    g.append(T(0, -8, "st-brain-name", "MIND", { "text-anchor": "middle" }));
-    g.append(T(0, 10, "st-brain-line", `${v.brain.inMind} ${v.brain.inMind === 1 ? "task" : "tasks"} filed`, { "text-anchor": "middle" }));
-    g.append(T(0, 24, "st-brain-line", `${v.brain.sessions} ${v.brain.sessions === 1 ? "session" : "sessions"}`, { "text-anchor": "middle" }));
+  function brainG(v) {
+    const g = S("g", { class: "oc-brain" });
+    g.append(S("ellipse", { class: "oc-shadow", cx: 0, cy: BD + 16, rx: BW, ry: BH * 0.8 }));
+    slab(g, BW, BH, BD, "var(--o-brain-t)", "var(--o-brain-l)", "var(--o-brain-r)", "oc-br");
+    const nodes = brainNodes(18);
+    const net = S("g", { class: "oc-net" });
+    for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) { const a = nodes[i], b = nodes[j]; if (Math.hypot(a.x - b.x, (a.y - b.y) * 2) < 62) net.append(S("line", { x1: a.x, y1: a.y, x2: b.x, y2: b.y })); }
+    nodes.forEach((n, i) => net.append(S("circle", { cx: n.x, cy: n.y, r: i % 5 === 0 ? 3.2 : 2, class: i % 5 === 0 ? "hub" : "" })));
+    g.append(net);
     const t = S("title"); t.textContent = `The Brain: your MIND. ${v.brain.inMind} tasks filed, ${v.brain.decisions} decisions, ${v.brain.sessions} sessions in the last two weeks.`; g.append(t);
     return g;
   }
-
-  /** A dot that walks from island a to island b (a bot carrying a bot_talk message). Removed when the walk ends. */
-  function walker(svg, a, b, color) {
-    if (reduced()) return;
-    const dot = S("circle", { class: "st-walker", r: 6 });
-    dot.style.color = safeColor(color);
-    const mv = S("animateMotion", { dur: "1.6s", repeatCount: "1", fill: "freeze", path: `M${a.x},${a.y} L${b.x},${b.y}` });
-    dot.append(mv);
-    dot.addEventListener("animationend", () => dot.remove());
-    setTimeout(() => dot.remove(), 1800);
-    svg.append(dot);
+  /** The floor's line layer: walkways from the Brain to every island, dotted lines to the cards, bot_talk arcs with walking dots. */
+  function linesG(v, pos) {
+    const g = S("g", { class: "oc-lines" });
+    for (const d of v.departments) { const p = pos.get(d.slug); g.append(S("line", { class: "oc-walk", x1: 0, y1: 0, x2: p.x, y2: p.y })); }
+    for (const d of v.departments) { const p = pos.get(d.slug); g.append(S("line", { class: "oc-walk-mid", x1: 0, y1: 0, x2: p.x, y2: p.y })); }
+    return g;
   }
-
-  function floorSvg(v, { only } = {}) {
-    const svg = S("svg", { viewBox: `0 0 ${VIEW_W} ${VIEW_H}`, preserveAspectRatio: "xMidYMid meet", class: "st-svg", role: "img", "aria-label": only ? `The ${only.name} island` : "Your bots on the studio floor" });
+  function wiresG(v, pos) {
+    const g = S("g", { class: "oc-wires" });
+    for (const d of v.departments) { const p = pos.get(d.slug); if (p.y > 0) g.append(S("path", { class: "oc-wire", d: `M0,${BH + BD} Q${p.x * 0.5},${p.y + IH + 60} ${p.x},${p.y + IH + ID + 18}` })); else g.append(S("path", { class: "oc-wire", d: `M0,${-BH - 30} Q${p.x * 0.5},${Math.min(p.y, 0) - 120} ${p.x},${p.y - IH - 26}` })); }
+    let dots = 0;
     const bots = new Map(v.bots.map((b) => [b.id, b]));
-    if (only) { svg.append(island(only, { x: VIEW_W / 2, y: VIEW_H / 2 + 20 }, only.bots.map((id) => bots.get(id)).filter(Boolean), 2)); return { svg, by: new Map() }; }
-    const pos = layoutIslands(v.departments.length);
-    const by = new Map(v.departments.map((d, i) => [d.slug, pos[i]]));
-    const center = { x: VIEW_W / 2, y: VIEW_H / 2 + 10 };
-    const links = S("g", { class: "st-links" });
-    for (const d of v.departments) { const p = by.get(d.slug); links.append(S("line", { class: "st-spoke", x1: center.x, y1: center.y, x2: p.x, y2: p.y })); }
     for (const l of v.links) {
       if (l.a === l.b) continue;
-      const a = by.get(l.a), b = by.get(l.b);
+      const a = pos.get(l.a), b = pos.get(l.b);
       if (!a || !b) continue;
-      const ln = S("line", { class: "st-link", x1: a.x, y1: a.y, x2: b.x, y2: b.y, "stroke-width": Math.min(4, 1 + Math.log2(1 + l.count)) });
-      const t = S("title"); t.textContent = `${l.count} bot_talk ${l.count === 1 ? "message" : "messages"}, last ${ago(l.at)}`; ln.append(t);
-      links.append(ln);
+      const mx = (a.x + b.x) / 2, my = Math.min(a.y, b.y) - 90 - Math.abs(a.x - b.x) * 0.12;
+      const d = `M${a.x},${a.y - IH - 6} Q${mx},${my} ${b.x},${b.y - IH - 6}`;
+      const path = S("path", { class: "oc-talk", d, "stroke-width": Math.min(3, 1.2 + Math.log2(1 + l.count) * 0.4) });
+      const tt = S("title"); tt.textContent = `${l.count} bot_talk ${l.count === 1 ? "message" : "messages"}, last ${ago(l.at)}`; path.append(tt);
+      g.append(path);
+      if (reduced() || dots >= 24) continue;
+      const dept = v.departments.find((x) => x.slug === l.a);
+      const color = dept ? palOf(dept.palette)[3] : "#ffd25a";
+      const len = Math.hypot(b.x - a.x, b.y - a.y) + 120;
+      const n = Math.min(3, 1 + Math.floor(Math.log2(1 + l.count)));
+      for (let i = 0; i < n && dots < 24; i++, dots++) {
+        const dot = S("circle", { class: "oc-dot", r: 4.2 }); dot.style.fill = color;
+        const dur = Math.max(2.6, len / 95);
+        const mv = S("animateMotion", { dur: `${dur.toFixed(1)}s`, repeatCount: "indefinite", path: d, begin: `${(-(dur * i) / n).toFixed(2)}s`, keyPoints: i % 2 ? "1;0" : "0;1", keyTimes: "0;1", calcMode: "linear" });
+        dot.append(mv); g.append(dot);
+      }
+      void bots;
     }
-    svg.append(links);
-    svg.append(brain(v, center.x, center.y));
-    const order = v.departments.map((d, i) => ({ d, p: pos[i] })).sort((p, q) => p.p.y - q.p.y);
-    for (const { d, p } of order) svg.append(island(d, p, d.bots.map((id) => bots.get(id)).filter(Boolean)));
-    return { svg, by };
+    return g;
+  }
+  function card(d, v, p, hot) {
+    const pal = palOf(d.palette);
+    const c = h("div", `oc-card${hot ? " hot" : ""}`);
+    // Islands above or level with the Brain carry their card above; islands below it carry it underneath, so no card hides the Brain.
+    const below = p.y > 0;
+    c.classList.toggle("below", below);
+    c.dataset.x = String(p.x); c.dataset.y = String(below ? p.y + IH + ID + 18 : p.y - IH - 22); c.dataset.anchor = below ? "top" : "bottom";
+    c.style.setProperty("--isl", pal[3]);
+    const head = h("div", "oc-card-head");
+    const dot = h("i", `oc-sdot ${d.counts.working ? "on" : d.needsYou ? "warn" : ""}`);
+    head.append(dot, h("span", "oc-card-name", d.name.toUpperCase()));
+    const agents = h("div", "oc-agents"); agents.append(h("b", "", String(d.bots.length)), h("span", "", d.bots.length === 1 ? "AGENT" : "AGENTS"));
+    const stats = h("div", "oc-stats");
+    for (const s of d.stats || []) { const row = h("div", "oc-stat"); row.append(h("span", "", s.label.toUpperCase()), h("b", "", fmtNum(s.value))); stats.append(row); }
+    const flow = h("div", "oc-flow");
+    for (const [k, n] of [["DOING", d.counts.working], ["NEXT", d.counts.next], ["DONE", d.counts.done]]) { const x = h("span", ""); x.append(document.createTextNode(`${k} `), h("b", "", String(n))); flow.append(x); }
+    c.append(head, agents, stats, flow);
+    if (d.pipeline) c.append(h("div", "oc-pipe", `STAGE ${d.pipeline.stage}/${d.pipeline.of} ${stageMarks(d.pipeline.marks)}`));
+    if (d.needsYou > 0) {
+      const wb = h("button", "oc-wait"); wb.type = "button";
+      wb.append(h("i", "oc-wait-mark", "▲"), document.createTextNode(` ${badgeText(d.needsYou).toUpperCase()}`));
+      wb.setAttribute("aria-label", `${d.name}: ${badgeText(d.needsYou)}. Open the task board to reply.`);
+      wb.addEventListener("click", () => app.openBoard());
+      c.append(wb);
+    }
+    c.title = `${d.name}: double-click the island to open its workspace`;
+    c.addEventListener("dblclick", () => { st.dept = d.slug; st.room = "workspaces"; paintRooms(); paintStage(); });
+    return c;
+  }
+  function paintFloor(v) {
+    box = worldBounds(v.departments);
+    world.replaceChildren();
+    world.style.width = `${box.w}px`; world.style.height = `${box.h}px`;
+    const svg = S("svg", { viewBox: `${box.x} ${box.y} ${box.w} ${box.h}`, width: box.w, height: box.h, class: "oc-svg", role: "img", "aria-label": `${v.name}'s office: ${v.departments.length} islands around the Brain` });
+    const pos = new Map(v.departments.map((d) => [d.slug, iso(d.u, d.v)]));
+    const bots = new Map(v.bots.map((b) => [b.id, b]));
+    svg.append(linesG(v, pos));
+    // Back to front: islands behind the Brain, the Brain, then the rest.
+    const order = [...v.departments].sort((a, b) => pos.get(a.slug).y - pos.get(b.slug).y);
+    for (const d of order) if (pos.get(d.slug).y < 0) svg.append(islandG(d, d.bots.map((id) => bots.get(id)).filter(Boolean)));
+    svg.append(brainG(v));
+    for (const d of order) if (pos.get(d.slug).y >= 0) svg.append(islandG(d, d.bots.map((id) => bots.get(id)).filter(Boolean)));
+    svg.append(wiresG(v, pos));
+    world.append(svg);
+    const cards = document.createDocumentFragment();
+    const hot = hotIsland(v.departments);
+    for (const d of v.departments) cards.append(card(d, v, pos.get(d.slug), d.slug === hot));
+    const pill = h("div", "oc-brain-pill");
+    pill.dataset.x = "0"; pill.dataset.y = String(-BH - 30);
+    const mark = h("img", "oc-mind"); mark.src = "/brand/mind-flame.png"; mark.alt = ""; mark.width = 14; mark.height = 14;
+    pill.append(mark, h("span", "", "THE BRAIN"), h("b", "", String(v.brain.inMind)), h("span", "dim", v.brain.inMind === 1 ? "FILED" : "FILED"), h("b", "", String(v.brain.sessions)), h("span", "dim", "SESSIONS"));
+    cards.append(pill);
+    cardsLayer.replaceChildren(...cards.childNodes);
+    fit();
+  }
+  function islandSolo(d, v) {
+    const bots = new Map(v.bots.map((b) => [b.id, b]));
+    const svg = S("svg", { viewBox: `${-IW - 20} ${-IH - 60} ${2 * IW + 40} ${2 * IH + ID + 90}`, class: "oc-svg oc-solo", role: "img", "aria-label": `The ${d.name} island` });
+    const g = islandG({ ...d, u: 0, v: 0 }, d.bots.map((id) => bots.get(id)).filter(Boolean));
+    svg.append(g);
+    return svg;
   }
 
+  async function rebuild() {
+    if (st.building) return;
+    st.building = true; rebuildBtn.disabled = true; rebuildBtn.textContent = "Rebuilding…";
+    try {
+      const r = await json("/studio/rebuild", { method: "POST", body: "{}" });
+      note.textContent = r && r.note ? r.note : `Office rebuilt: ${r && r.islands} islands.`; note.hidden = false;
+      st.sig = ""; await load();
+    } catch (e) { note.textContent = `Could not rebuild the office: ${(e && e.message) || "error"}`; note.hidden = false; }
+    finally { st.building = false; rebuildBtn.disabled = false; rebuildBtn.textContent = "Rebuild office"; }
+  }
+  async function loadApps() {
+    if (st.apps && Date.now() - st.appsAt < 5 * 60_000) return;
+    st.appsAt = Date.now();
+    try { const r = await json("/apps/integrations"); st.apps = (Array.isArray(r && r.providers) ? r.providers : []).filter((p) => p && p.connected).map((p) => ({ key: String(p.provider || ""), name: String(p.name || p.provider || "") })); }
+    catch { st.apps = []; }
+    paintTop();
+  }
   // ---- rooms ----
   function botCard(bot, v) {
     const card = h("div", `st-botcard ${bot.status}`);
@@ -343,21 +574,47 @@ export function initStudio({ json, h, ago, app, els }) {
     const wrap = h("div", "st-room-wrap");
     const dae = v.bots.find((b) => b.id === "main");
     if (!dae) return wrap;
-    const svg = S("svg", { viewBox: "0 0 300 200", class: "st-svg st-svg-small", role: "img", "aria-label": `${dae.name}'s desk` });
-    const office = v.departments.find((d) => d.slug === "manager-office") || { slug: "manager-office", name: "Manager office", color: dae.color, bots: ["main"], counts: { done: 0, working: 0, next: 0, waiting: 0 }, needsYou: 0 };
-    svg.append(island(office, { x: 150, y: 110 }, [dae], 1));
-    wrap.append(svg);
-    const col = h("div", "st-room-col");
-    col.append(botCard(dae, v));
+    const office = v.departments.find((d) => d.slug === "manager-office");
+    const left = h("div", "st-room-col");
+    if (office) left.append(islandSolo(office, v));
+    left.append(botCard(dae, v));
     const proofBox = h("div", "st-proof"); proofBox.append(h("h3", "st-h", "Last turn"));
     const chipsRow = h("div", "st-proof-chips");
     const pc = proofChips(dae.proof);
     if (!pc.length) chipsRow.append(h("span", "st-muted", "No turn yet."));
     for (const c of pc) { const s = h("span", `bd-chip ${c.cls || ""}`.trim(), c.text); if (c.title) s.title = c.title; chipsRow.append(s); }
-    proofBox.append(chipsRow); col.append(proofBox);
+    proofBox.append(chipsRow); left.append(proofBox);
     const mine = v.tasks.filter((t) => t.bot === "main");
-    col.append(h("h3", "st-h", `${dae.name}'s tasks`), taskList(mine, v, "Nothing on the board for the main Daebot."));
-    wrap.append(col);
+    left.append(h("h3", "st-h", `${dae.name}'s tasks`), taskList(mine, v, "Nothing on the board for the main Daebot."));
+    const right = h("div", "st-room-col");
+    right.append(h("h3", "st-h", "Project progress"));
+    if (!v.projects.length) right.append(h("p", "st-muted", "No project yet. Tasks filed to a MIND project show their progress here."));
+    for (const p of v.projects) {
+      const row = h("div", "st-proj");
+      const head = h("div", "st-proj-head"); head.append(h("span", "st-proj-name", p.name), h("span", "st-proj-pct", `${progressPct(p)}%`));
+      const bar = h("div", "st-proj-bar"); bar.setAttribute("role", "progressbar"); bar.setAttribute("aria-valuemin", "0"); bar.setAttribute("aria-valuemax", "100"); bar.setAttribute("aria-valuenow", String(progressPct(p))); bar.setAttribute("aria-label", `${p.name} progress`);
+      const fill = h("i", ""); fill.style.width = `${progressPct(p)}%`; bar.append(fill);
+      row.append(head, bar, h("div", "st-proj-meta", `${p.done} done · ${p.working} working · ${p.next} next${p.waiting ? ` · ${p.waiting} waiting on you` : ""}`));
+      right.append(row);
+    }
+    right.append(h("h3", "st-h", "Agent activity"));
+    const act = h("ul", "st-activity");
+    for (const b of v.bots) {
+      const li = h("li", `st-act ${b.status}`);
+      const btn = h("button", "st-act-btn"); btn.type = "button";
+      const av = h("span", "st-act-face"); av.style.color = safeColor(b.color); const f = faceSvg(b.face); if (f) av.append(f); else av.textContent = (b.name || "?").slice(0, 1).toUpperCase();
+      const txt = h("div", "st-act-text"); const nm = h("div", "st-act-name"); nm.append(h("strong", "", b.name), statusChip(b)); txt.append(nm);
+      txt.append(h("div", "st-act-task", b.task ? b.task.title : b.status === "idle" ? loungeLine(b.id, new Date().getHours()) : "working"));
+      btn.append(av, txt);
+      btn.addEventListener("click", () => { if (b.task) app.openSession(b.task.sessionId); else app.pickBot(b.id); });
+      li.append(btn); act.append(li);
+    }
+    right.append(act);
+    right.append(h("h3", "st-h", "Ideas for the team"));
+    const ex = h("div", "st-examples");
+    for (const e of EXAMPLES) { const b = h("button", "st-example", e); b.type = "button"; b.addEventListener("click", () => { taskArea.value = e; taskArea.focus(); }); ex.append(b); }
+    right.append(ex);
+    wrap.append(left, right);
     return wrap;
   }
 
@@ -410,12 +667,12 @@ export function initStudio({ json, h, ago, app, els }) {
     const d = v.departments.find((x) => x.slug === st.dept);
     if (!d) return wrap;
     const row = h("div", "st-room-wrap");
-    row.append(floorSvg(v, { only: d }).svg);
+    row.append(islandSolo(d, v));
     const col = h("div", "st-room-col");
     col.append(h("h3", "st-h", `${d.name}: ${d.bots.length} ${d.bots.length === 1 ? "bot" : "bots"}, done ${d.counts.done}, working ${d.counts.working}, next ${d.counts.next}, waiting ${d.counts.waiting}`));
     col.append(taskList(v.tasks.filter((t) => t.department === d.slug), v, "No tasks on this island yet."));
     const lead = v.bots.find((b) => b.id === d.lead);
-    if (lead) { const b = h("button", "btn-quiet st-task-for", `Type a task for ${d.name} (goes to ${lead.name})`); b.type = "button"; b.addEventListener("click", () => { taskTo.value = lead.id; taskArea.focus(); }); col.append(b); }
+    if (lead) { const b = h("button", "btn-quiet st-task-for", `Type a task for ${d.name} (goes to ${lead.name})`); b.type = "button"; b.addEventListener("click", () => { taskDept.value = d.slug; fillRecipients(); taskTo.value = lead.id; taskArea.focus(); }); col.append(b); }
     row.append(col);
     wrap.append(row);
     return wrap;
@@ -578,69 +835,101 @@ export function initStudio({ json, h, ago, app, els }) {
 
   function paintStage() {
     const v = st.view;
-    stage.replaceChildren();
     if (!v) return;
-    if (st.room === "overview") {
-      const { svg, by } = floorSvg(v);
-      stage.append(svg);
-      const bots = new Map(v.bots.map((b) => [b.id, b]));
-      for (const w of walks(st.prev, v)) { const a = by.get(w.a), b = by.get(w.b); if (a && b) { const d = v.departments.find((x) => x.slug === w.a); const lead = d && bots.get(d.lead); walker(svg, a, b, lead ? lead.color : ""); } }
+    const onFloor = st.room === "overview";
+    floor.hidden = !onFloor; hud.hidden = !onFloor; zoomBox.hidden = !onFloor; roomBox.hidden = onFloor;
+    stage.classList.toggle("room", !onFloor);
+    if (onFloor) {
+      // Redraw the floor only when something on it changed, so the walking dots keep walking between refreshes.
+      const sig = JSON.stringify([v.departments, v.links, v.bots.map((b) => [b.id, b.status, b.needs, b.name, b.color]), v.brain]);
+      if (sig !== st.sig) { st.sig = sig; paintFloor(v); }
+      return;
     }
-    else if (st.room === "office") stage.append(roomOffice(v));
-    else if (st.room === "meeting") stage.append(roomMeeting(v));
-    else if (st.room === "lounge") stage.append(roomLounge(v));
-    else if (st.room === "workspaces") stage.append(roomWorkspaces(v));
-    else if (st.room === "team") { stage.append(roomTeam(v)); if (!st.team || Date.now() - st.teamAt > REFRESH_MS) void loadTeam(); }
-    else if (st.room === "pipelines") { stage.append(roomPipelines(v)); if (st.skills && Date.now() - st.skillsAt > 60_000) void loadSkills(); }
+    roomBox.replaceChildren();
+    if (st.room === "office") roomBox.append(roomOffice(v));
+    else if (st.room === "meeting") roomBox.append(roomMeeting(v));
+    else if (st.room === "lounge") roomBox.append(roomLounge(v));
+    else if (st.room === "workspaces") roomBox.append(roomWorkspaces(v));
+    else if (st.room === "team") { roomBox.append(roomTeam(v)); if (!st.team || Date.now() - st.teamAt > REFRESH_MS) void loadTeam(); }
+    else if (st.room === "pipelines") { roomBox.append(roomPipelines(v)); if (st.skills && Date.now() - st.skillsAt > 60_000) void loadSkills(); }
   }
 
-  // ---- the side panel ----
-  function paintSide() {
+  function paintHud() {
     const v = st.view;
     if (!v) return;
-    const team = v.bots;
-    const active = team.filter((b) => b.status !== "idle").length;
-    statActive.v.textContent = `${active} / ${team.length}`;
-    statRunning.v.textContent = String(v.tasks.filter((t) => t.status === "in_progress").length);
-    statDone.v.textContent = String(v.today.completed);
-    statWaiting.v.textContent = String(v.needsYou.length);
-    projList.replaceChildren();
-    if (!v.projects.length) projList.append(h("p", "st-muted", "No project yet. Tasks filed to a MIND project show their progress here."));
-    for (const p of v.projects) {
-      const row = h("div", "st-proj");
-      const head = h("div", "st-proj-head"); head.append(h("span", "st-proj-name", p.name), h("span", "st-proj-pct", `${progressPct(p)}%`));
-      const bar = h("div", "st-proj-bar"); bar.setAttribute("role", "progressbar"); bar.setAttribute("aria-valuemin", "0"); bar.setAttribute("aria-valuemax", "100"); bar.setAttribute("aria-valuenow", String(progressPct(p))); bar.setAttribute("aria-label", `${p.name} progress`);
-      const fill = h("i", ""); fill.style.width = `${progressPct(p)}%`; bar.append(fill);
-      row.append(head, bar, h("div", "st-proj-meta", `${p.done} done · ${p.working} working · ${p.next} next${p.waiting ? ` · ${p.waiting} waiting on you` : ""}`));
-      projList.append(row);
-    }
-    // Who can get a task: the main Daebot, then every island's lead bot.
+    kActive.textContent = `${v.bots.filter((b) => b.status !== "idle").length}/${v.bots.length}`;
+    kRunning.textContent = String(v.tasks.filter((t) => t.status === "in_progress").length);
+    kDone.textContent = String(v.today.completed);
+    kWaiting.textContent = String(v.needsYou.length);
+    kWaiting.parentElement.classList.toggle("warn", v.needsYou.length > 0);
+  }
+
+  // The new-task box: a department (or the whole office), then who gets it (the main Daebot or that island's bots).
+  function fillDepts() {
+    const v = st.view;
+    if (!v) return;
+    const prev = taskDept.value;
+    taskDept.replaceChildren();
+    const all = h("option", "", "Whole office"); all.value = ""; taskDept.append(all);
+    for (const d of v.departments) { const o = h("option", "", d.name); o.value = d.slug; taskDept.append(o); }
+    taskDept.value = [...taskDept.options].some((o) => o.value === prev) ? prev : "";
+    fillRecipients();
+  }
+  function fillRecipients() {
+    const v = st.view;
+    if (!v) return;
     const prev = taskTo.value || st.sendTo;
     taskTo.replaceChildren();
-    const optMain = h("option", "", `${v.name} (main)`); optMain.value = "main"; taskTo.append(optMain);
-    for (const d of v.departments) { if (d.slug === "manager-office") continue; const lead = team.find((b) => b.id === d.lead); if (!lead) continue; const o = h("option", "", `${lead.name} · ${d.name}`); o.value = lead.id; taskTo.append(o); }
-    taskTo.value = [...taskTo.options].some((o) => o.value === prev) ? prev : "main";
-    actList.replaceChildren();
-    for (const b of team) {
-      const li = h("li", `st-act ${b.status}`);
-      const btn = h("button", "st-act-btn"); btn.type = "button";
-      const av = h("span", "st-act-face"); av.style.color = safeColor(b.color); const f = faceSvg(b.face); if (f) av.append(f); else av.textContent = (b.name || "?").slice(0, 1).toUpperCase();
-      const txt = h("div", "st-act-text"); const nm = h("div", "st-act-name"); nm.append(h("strong", "", b.name), statusChip(b)); txt.append(nm);
-      txt.append(h("div", "st-act-task", b.task ? b.task.title : b.status === "idle" ? loungeLine(b.id, new Date().getHours()) : "working"));
-      btn.append(av, txt);
-      btn.addEventListener("click", () => { if (b.task) app.openSession(b.task.sessionId); else app.pickBot(b.id); });
-      li.append(btn); actList.append(li);
+    const d = v.departments.find((x) => x.slug === taskDept.value);
+    const ids = d ? d.bots : ["main", ...v.departments.filter((x) => x.slug !== "manager-office").map((x) => x.lead).filter(Boolean)];
+    for (const id of ids) {
+      const b = v.bots.find((x) => x.id === id);
+      if (!b) continue;
+      const o = h("option", "", id === "main" ? `${b.name} (main)` : b.name); o.value = b.id; taskTo.append(o);
     }
+    if (!taskTo.options.length) { const o = h("option", "", `${v.name} (main)`); o.value = "main"; taskTo.append(o); }
+    taskTo.value = [...taskTo.options].some((o) => o.value === prev) ? prev : taskTo.options[0].value;
   }
 
   // ---- the right column ----
+  function cardOf(t, v) {
+    const li = h("li", `oc-tcard ${t.status}`);
+    const btn = h("button", "oc-tcard-btn"); btn.type = "button"; btn.setAttribute("aria-label", `${t.title}, ${t.botName}, open the session`);
+    const p = taskPill(t);
+    const top = h("div", "oc-tcard-top");
+    top.append(h("span", `oc-tpill ${p.cls}`, p.text), h("span", "oc-tcard-title", t.title), h("span", "oc-tcard-time", ago(t.updatedAt)));
+    const dept = (v.departments.find((d) => d.slug === t.department) || {}).name || t.department;
+    const meta = h("div", "oc-tcard-meta", `${dept} · ${t.botName}${t.project ? ` · ${t.project}` : ""}`.toUpperCase());
+    btn.append(top, meta);
+    if (t.status === "stopped" && t.question) btn.append(h("div", "oc-tcard-q", t.question));
+    btn.addEventListener("click", () => app.openSession(t.sessionId));
+    li.append(btn);
+    return li;
+  }
+  function schedCard(r, v) {
+    const li = h("li", "oc-tcard scheduled");
+    const btn = h("button", "oc-tcard-btn"); btn.type = "button";
+    const top = h("div", "oc-tcard-top");
+    top.append(h("span", "oc-tpill sched", "⏱"), h("span", "oc-tcard-title", r.name), h("span", "oc-tcard-time", dueText(r.nextDueAt)));
+    const dept = (v.departments.find((d) => d.slug === r.department) || {}).name || r.department;
+    btn.append(top, h("div", "oc-tcard-meta", `${dept} · ${r.botName} · ${new Date(r.nextDueAt).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}`.toUpperCase()));
+    btn.addEventListener("click", () => app.pickBot(r.bot));
+    li.append(btn);
+    return li;
+  }
   function paintTasks() {
     const v = st.view;
     list.replaceChildren();
     if (!v) return;
-    const rows = filterTasks(v.tasks, st.filter);
-    if (!rows.length) { list.append(h("li", "st-empty", st.filter === "all" ? "No tasks yet. Ask Dae for something and it lands here." : "Nothing under this filter.")); return; }
-    for (const t of rows) list.append(taskItem(t, v));
+    paintFilters();
+    if (st.filter === "scheduled") {
+      if (!v.scheduled.length) { list.append(h("li", "oc-empty", "Nothing scheduled. Ask Dae to run something every morning and it shows here.")); return; }
+      for (const r of v.scheduled) list.append(schedCard(r, v));
+      return;
+    }
+    const rows = filterTasks(v.tasks, st.filter === "waiting" ? "waiting" : st.filter);
+    if (!rows.length) { list.append(h("li", "oc-empty", st.filter === "all" ? "No tasks yet. Type one above and your team picks it up." : "Nothing under this filter.")); return; }
+    for (const t of rows) list.append(cardOf(t, v));
   }
   async function loadLog(force) {
     const v = st.view;
@@ -656,26 +945,37 @@ export function initStudio({ json, h, ago, app, els }) {
   }
   function paintLog() {
     logList.replaceChildren();
-    if (!st.log.length) { logList.append(h("li", "st-empty", "No agent communication yet. bot_talk messages between your bots show here with who said what to whom.")); return; }
+    if (!st.log.length) { logList.append(h("li", "oc-empty", "No bot talk yet. When your bots message each other, who said what to whom shows here and a dot walks the line between their islands.")); return; }
     for (const m of st.log) {
-      const li = h("li", `st-logmsg ${m.kind}`);
-      const head = h("div", "st-log-head"); const w = h("strong", "", m.from); w.style.color = safeColor(m.fromColor);
-      head.append(w, h("span", "st-muted", ` → ${m.to} · ${ago(m.at)}`));
-      li.append(head, h("p", "st-log-text", m.text.length > 400 ? m.text.slice(0, 399) + "…" : m.text));
+      const li = h("li", `oc-tcard log ${m.kind}`);
+      const head = h("div", "oc-tcard-top"); const w = h("strong", "oc-log-from", m.from); w.style.color = safeColor(m.fromColor);
+      head.append(w, h("span", "oc-tcard-title dim", `→ ${m.to}`), h("span", "oc-tcard-time", ago(m.at)));
+      li.append(head, h("p", "oc-log-text", m.text.length > 400 ? m.text.slice(0, 399) + "…" : m.text));
       logList.append(li);
     }
   }
 
+  function tickClock() { clock.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }).toLowerCase(); }
   function paintTop() {
     const v = st.view;
     if (!v) return;
-    who.textContent = `${v.name}'s team`;
-    chipModel.textContent = `runs on ${v.chip.model}${v.chip.mode && v.chip.mode !== "off" ? ` · router ${v.chip.mode}` : ""}`;
-    const n = v.bots.length - 1;
-    chipBots.textContent = `${n} ${n === 1 ? "bot" : "bots"} · ${v.brain.working} working`;
+    who.textContent = `${v.name}'s office`;
+    ver.textContent = `v${(v.layout && v.layout.v) || 1}`;
+    ver.title = v.layout ? `Layout schema ${v.layout.v} · renderer ${v.layout.renderer} · built by ${v.layout.builtBy}` : "";
+    chipModel.textContent = v.chip.model.split("/").pop();
+    chipModel.title = `New turns run on ${v.chip.model}${v.chip.mode && v.chip.mode !== "off" ? ` · router ${v.chip.mode}` : ""}`;
+    chipHost.textContent = /^(localhost|127\.|\[::1\])/.test(location.hostname) ? "this computer" : "Daebot cloud";
     chipNeeds.hidden = !v.needsYou.length;
-    chipNeeds.textContent = v.needsYou.length ? `${v.needsYou.length} need${v.needsYou.length === 1 ? "s" : ""} you` : "";
-    clock.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    chipNeeds.textContent = v.needsYou.length ? `${v.needsYou.length} NEED${v.needsYou.length === 1 ? "S" : ""} YOU` : "";
+    connIcons.replaceChildren();
+    const mind = h("span", "oc-app mind"); const mi = h("img", ""); mi.src = "/brand/mind-flame.png"; mi.alt = ""; mi.width = 16; mi.height = 16; mind.append(mi); mind.title = "MIND: the Brain"; connIcons.append(mind);
+    for (const a of (st.apps || []).slice(0, 9)) {
+      const s = h("span", "oc-app"); s.title = a.name;
+      const img = markFor(a.key, () => { s.textContent = (a.name || "?").slice(0, 1).toUpperCase(); });
+      if (img) { img.width = 16; img.height = 16; s.append(img); } else s.textContent = (a.name || "?").slice(0, 1).toUpperCase();
+      connIcons.append(s);
+    }
+    tickClock();
   }
 
   async function load() {
@@ -685,12 +985,13 @@ export function initStudio({ json, h, ago, app, els }) {
       const v = await json("/studio");
       st.prev = st.view; st.view = v;
       st.error = "";
-      note.textContent = v.needsYou.length ? `${v.needsYou.length} ${v.needsYou.length === 1 ? "item waits" : "items wait"} on you. A yellow badge marks the island; the task board has the reply box.` : "Islands are departments (set one in a bot's settings). Click a desk to open what that bot is on.";
-      paintTop(); paintSide(); paintStage(); paintTasks();
+      if (!st.building) { note.textContent = ""; note.hidden = true; }
+      paintTop(); paintRooms(); paintHud(); fillDepts(); paintStage(); paintTasks();
       if (st.right === "log") void loadLog(false);
+      void loadApps();
     } catch (e) {
       st.error = (e && e.message) || "Could not load the studio.";
-      note.textContent = `Could not load the studio: ${st.error}`;
+      note.textContent = `Could not load the studio: ${st.error}`; note.hidden = false;
     } finally { st.loading = false; }
   }
 
@@ -699,8 +1000,8 @@ export function initStudio({ json, h, ago, app, els }) {
     st.open = !!on;
     els.section.hidden = !st.open;
     document.body.classList.toggle("studio-on", st.open);
-    clearInterval(st.timer); st.timer = 0;
-    if (st.open) { void load(); st.timer = setInterval(tick, REFRESH_MS); }
+    clearInterval(st.timer); st.timer = 0; clearInterval(st.clockTimer); st.clockTimer = 0;
+    if (st.open) { void load(); st.timer = setInterval(tick, REFRESH_MS); st.clockTimer = setInterval(tickClock, 1000); requestAnimationFrame(fit); }
   }
   document.addEventListener("visibilitychange", () => { if (st.open && document.visibilityState === "visible") void load(); });
 

@@ -37,6 +37,8 @@ import { createOllamaProvider, detectOllama, localEnabled, pickLocalModel, prefe
 import { createAdvisorTool } from "./tools/advisor.ts";
 import { createStudioTools } from "./tools/studio.ts";
 import { StudioStore } from "./studio/store.ts";
+import { StudioBuilder } from "./studio/builder.ts";
+import type { PlannerCall } from "./studio/builder.ts";
 import { TIER_ORDER, loadPolicy } from "./provider/policy.ts";
 import { adviseTier, appendRouteLog, classOf, costSummary, describeTable, loadTable, routeLogPath, rowFor } from "./provider/learned.ts";
 import { consultBeforeDone } from "./provider/router.ts";
@@ -468,7 +470,28 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
   // advisor: one frontier-model call for a stuck point (tools/advisor.ts); same billing path as web_search. Offered when a model endpoint exists.
   // The Studio's own state (counters, pipelines) and the tools that write it. A session's caller is its bot, or "main".
   const studioStore = stateDir ? new StudioStore({ dir: joinPath(stateDir, "studio"), owner: ownerKey, now: hosted?.now ? () => hosted.now!().getTime() : undefined }) : undefined;
-  const studioTools = studioStore ? createStudioTools({ store: studioStore, botOf: (sid) => sessions.get(sid)?.bot ?? "main", nameOf: (id) => (id === "main" ? (settings?.get().main?.name || "Dae") : botStore?.get(id)?.name) }) : [];
+  // The Studio Builder: keeps this account's office layout true to its bots (studio/builder.ts). Its model plan runs on the account's
+  // own endpoint and default model (the same billing as the chat), once per build, never per read.
+  const studioPlanner: PlannerCall | undefined = (() => {
+    const ep = llmEndpoint(cfg, billingKey);
+    if (!ep) return undefined;
+    const f = overrides.fetchImpl ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
+    return async (messages) => {
+      const model = settings?.get().defaultModel ?? cfg.models.default;
+      const res = await f(ep.url, { method: "POST", headers: ep.headers(), body: JSON.stringify({ model, messages, temperature: 0.2, max_tokens: 1200 }), signal: AbortSignal.timeout(30_000) });
+      const text = await res.text();
+      if (!res.ok) throw new Error(`plan call HTTP ${res.status}`);
+      const j = JSON.parse(text);
+      return String(j?.choices?.[0]?.message?.content ?? "");
+    };
+  })();
+  const studioBuilder = studioStore ? new StudioBuilder({
+    store: studioStore,
+    bots: async () => (botStore ? await botStore.list() : []).map((b) => ({ id: b.id, name: b.name, ...(b.department ? { department: b.department } : {}), purpose: b.purpose })),
+    planner: studioPlanner,
+    now: hosted?.now ? () => hosted.now!().getTime() : undefined,
+  }) : undefined;
+  const studioTools = studioStore ? createStudioTools({ store: studioStore, builder: studioBuilder, botOf: (sid) => sessions.get(sid)?.bot ?? "main", nameOf: (id) => (id === "main" ? (settings?.get().main?.name || "Dae") : botStore?.get(id)?.name) }) : [];
   const advisorTool = createAdvisorTool({ endpoint: (sid) => { const bid = sid ? sessions.get(sid)?.bot : undefined; return llmEndpoint(cfg, billingKey, bid ? botStore?.get(bid)?.slug : undefined); }, fetchImpl: overrides.fetchImpl, model: () => ({ model: ROUTER_POLICY.frontier.model, ...(ROUTER_POLICY.frontier.effort ? { effort: ROUTER_POLICY.frontier.effort } : {}) }), now: hosted?.now ? () => hosted.now!().getTime() : undefined });
   // A handoff card goes to MIND as a private entry (best effort, never awaited by the turn), so the next session can start from it.
   const fileHandoff = async (e: Entry, c: HandoffCard): Promise<void> => {
@@ -1167,7 +1190,13 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       for (const b of bots) for (const r of this.botBoardRows!(b.id)) rows.push({ ...r, bot: b.id });
       const pending = permissions?.pendingList().map((p) => ({ id: p.id, sessionId: p.sessionId, tool: (p.event as { tool?: string }).tool })) ?? [];
       const main = settings?.get().main ?? {};
+      const layout = studioBuilder ? await studioBuilder.current() : undefined;
+      const scheduled: { id: string; name: string; bot: string; nextDueAt?: number; enabled: boolean }[] = [];
+      if (botsCtx?.routines) for (const id of ["main", ...bots.map((b) => b.id)]) {
+        try { for (const r of botsCtx.routines.book(ownerKey, id === "main" ? MAIN_BOT_ID : id).list()) if (!r.builtin && r.timing) scheduled.push({ id: r.id, name: r.name, bot: id, ...(r.nextDueAt ? { nextDueAt: r.nextDueAt } : {}), enabled: r.enabled }); } catch { /* an unreadable book is skipped */ }
+      }
       return assembleStudio({
+        ...(layout ? { layout } : {}), scheduled,
         main: { name: main.name || "Daebot", ...(main.color ? { color: main.color } : {}), ...(main.face ? { face: main.face } : {}) },
         bots: bots.map((b) => ({ id: b.id, slug: b.slug, name: b.name, color: b.color, ...(b.face ? { face: b.face } : {}), ...(b.department ? { department: b.department } : {}), purpose: b.purpose })),
         sessions: [...sess.values()], rows, pending, exchanges: extra.exchanges,
@@ -1175,6 +1204,11 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         now: Date.now(),
         ...(studioStore ? { counters: studioStore.allCounters(), pipelines: studioStore.pipelines() } : {}),
       });
+    },
+    async studioRebuild() {
+      if (!studioBuilder) throw new Error("the studio is not available on this deployment");
+      const l = await studioBuilder.rebuild();
+      return { builtBy: l.builtBy, islands: l.islands.length, ...(studioBuilder.lastError ? { note: `Built by the rules; the model plan was skipped: ${studioBuilder.lastError}` } : {}) };
     },
     team(sessionId) {
       let text = "";

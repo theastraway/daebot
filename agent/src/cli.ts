@@ -138,6 +138,8 @@ async function serve(cfg: ReturnType<typeof loadConfig>, argv: string[]): Promis
   const credits = cfg.billing === "mind" ? new (await import("./provider/mind.ts")).MindCredits({ mindBaseUrl: cfg.mindBaseUrl }) : undefined;
   // Bots: one data dir + one late-bound bus shared by the owner runtime, every user runtime and the gateway (which sets bus.current).
   const bots = { dir: dataDir(), bus: {}, manage: {} };
+  // The Studio's office layouts move to this build's schema and renderer now, in-process, before any user opens the Studio.
+  try { const { migrateAllLayouts } = await import("./studio/store.ts"); const p = await import("node:path"); const m = migrateAllLayouts(p.join(dataDir(), "studio")); if (m.migrated) console.error(`studio: ${m.migrated} of ${m.files} office layouts migrated`); } catch { /* the next read migrates instead */ }
   // Connected MCP servers: sealed per-user store under DATA_DIR/mcp. Hosted: sealed with DAEBOT_SECRET_KEY. Desktop/CLI: sealed with a
   // random per-install secret kept next to the data (0600), so the 60-connector Apps list works there too.
   let mcpConnect: import("./mcpconnect/service.ts").McpConnectService | undefined;

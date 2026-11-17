@@ -397,6 +397,8 @@ export interface Runtime {
   botBoardRows?(botId: string): import("./board/board.ts").BoardRow[];
   /** Daebot Studio: the user's bots as workers on the floor (studio/index.ts), from this owner's bots, sessions, board rows and pending permission cards. */
   studio?(extra: { exchanges: readonly import("./studio/index.ts").StudioExchangeIn[] }): Promise<import("./studio/index.ts").StudioView>;
+  /** "Rebuild office": a fresh layout plan from the account's bots (the model's when one is offered), keeping the user's edits. */
+  studioRebuild?(): Promise<{ builtBy: string; islands: number; note?: string }>;
   /** The token team (Studio): the route log's bill per tier today, all time and for one session, with the all-frontier counterfactual, plus the rules in play. */
   team?(sessionId?: string): import("./studio/index.ts").TeamView;
   /** The lessons and learned skills in play for a session (the lesson drawer), with their counters. Undefined = unknown session or no learning there. */

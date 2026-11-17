@@ -1912,7 +1912,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path === "/settings/daebot/guards" || path === "/settings/daebot/coder" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/byo-llm" || path === "/byo-llm/test" || path === "/bridges" || path.startsWith("/bridges/") || path === "/settings/local-llm" || path === "/settings/local-llm/detect" || path === "/board" || path.startsWith("/board/") || path === "/routing" || path === "/studio" || path === "/studio/team" || path === "/studio/skills" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/devices" || path === "/devices/pty" || path.startsWith("/browser/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
+    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path === "/settings/daebot/guards" || path === "/settings/daebot/coder" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/byo-llm" || path === "/byo-llm/test" || path === "/bridges" || path.startsWith("/bridges/") || path === "/settings/local-llm" || path === "/settings/local-llm/detect" || path === "/board" || path.startsWith("/board/") || path === "/routing" || path === "/studio" || path === "/studio/rebuild" || path === "/studio/team" || path === "/studio/skills" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/devices" || path === "/devices/pty" || path.startsWith("/browser/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -2753,6 +2753,12 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
       const r = loadSkills();
       return sendJson(res, 200, { skills: r.skills.map((s) => ({ name: s.name, description: s.description, group: s.group, tools: s.tools, needs: s.needs, priority: s.priority, license: s.license ?? null, source: s.source ?? null, origin: s.origin.startsWith("embedded:") ? "embedded" : "file", chars: s.body.length })), problems: r.problems });
+    }
+    if (path === "/studio/rebuild") {
+      if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+      const rt = manager.runtimeOf(me.id);
+      if (!rt.studioRebuild) return sendJson(res, 404, { error: "the studio is not available on this deployment" });
+      try { return sendJson(res, 200, await rt.studioRebuild()); } catch (e) { return sendJson(res, 500, { error: String((e as Error)?.message ?? e).slice(0, 200) }); }
     }
     if (path === "/studio/team") {
       // The token team: the route log's bill per tier (today, all time, one session) with the all-frontier counterfactual, and the rules in play.

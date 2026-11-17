@@ -4,6 +4,9 @@
 // instructions. One JSON file per owner under DATA_DIR/studio, 0600, read once and rewritten on every change.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { readdirSync } from "node:fs";
+import { migrateLayout } from "./layout.ts";
+import type { StudioLayout } from "./layout.ts";
 
 export const MAX_COUNTERS = 3;
 export const MAX_STAGES = 8;
@@ -15,7 +18,7 @@ export interface Counter { name: string; value: number; note?: string; at: numbe
 export interface Stage { name: string; skill?: string; bot?: string; status: StageStatus; at: number; note?: string }
 export interface LogEntry { at: number; stage: string; status: StageStatus; by: string; skill?: string; note?: string }
 export interface Pipeline { department: string; stages: Stage[]; log: LogEntry[]; createdAt: number; updatedAt: number }
-interface File { v: 1; counters: Record<string, Counter[]>; pipelines: Record<string, Pipeline> }
+interface File { v: 1; counters: Record<string, Counter[]>; pipelines: Record<string, Pipeline>; layout?: unknown }
 
 // eslint-disable-next-line no-control-regex
 const oneLine = (v: unknown, max: number): string => String(v ?? "").replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
@@ -36,7 +39,7 @@ export class StudioStore {
   private read(): File {
     try {
       const j = JSON.parse(readFileSync(this.file, "utf8"));
-      if (j && j.v === 1 && typeof j === "object") return { v: 1, counters: j.counters && typeof j.counters === "object" ? j.counters : {}, pipelines: j.pipelines && typeof j.pipelines === "object" ? j.pipelines : {} };
+      if (j && j.v === 1 && typeof j === "object") return { v: 1, counters: j.counters && typeof j.counters === "object" ? j.counters : {}, pipelines: j.pipelines && typeof j.pipelines === "object" ? j.pipelines : {}, ...(j.layout ? { layout: j.layout } : {}) };
     } catch { /* fresh */ }
     return { v: 1, counters: {}, pipelines: {} };
   }
@@ -47,6 +50,10 @@ export class StudioStore {
     writeFileSync(tmp, JSON.stringify(this.data), { mode: 0o600 });
     renameSync(tmp, this.file);
   }
+
+  // ---- the office layout (layout.ts): raw here, validated and migrated by the caller ----
+  rawLayout(): unknown { return this.data.layout ? structuredClone(this.data.layout) : undefined; }
+  setLayout(l: StudioLayout | undefined): void { if (l) this.data.layout = structuredClone(l); else delete this.data.layout; this.save(); }
 
   // ---- counters ----
   counters(botId: string): Counter[] { return [...(this.data.counters[botId] ?? [])]; }
@@ -130,4 +137,29 @@ export function pipelineSummary(p: Pipeline): { stage: number; of: number; done:
   const cur = p.stages.findIndex((s) => s.status !== "done");
   const current = cur >= 0 ? p.stages[cur] : undefined;
   return { stage: cur >= 0 ? cur + 1 : p.stages.length, of: p.stages.length, done, ...(current ? { current: current.name } : {}), status: current ? current.status : "done", marks: p.stages.map((s) => s.status) };
+}
+
+/**
+ * Boot sweep (runs in-process when the gateway starts, never on a schedule): carries every stored office layout under `dir` forward to
+ * this build's schema and renderer. Desks are placed again on each account's next read, when its bots are at hand.
+ */
+export function migrateAllLayouts(dir: string, now = Date.now()): { files: number; migrated: number } {
+  let names: string[] = [];
+  try { names = readdirSync(dir).filter((n) => n.endsWith(".json")); } catch { return { files: 0, migrated: 0 }; }
+  let migrated = 0;
+  for (const n of names) {
+    const file = join(dir, n);
+    try {
+      const j = JSON.parse(readFileSync(file, "utf8"));
+      if (!j || j.v !== 1 || !j.layout) continue;
+      const r = migrateLayout(j.layout, undefined, now);
+      if (!r.migrated) continue;
+      j.layout = r.layout;
+      const tmp = `${file}.tmp`;
+      writeFileSync(tmp, JSON.stringify(j), { mode: 0o600 });
+      renameSync(tmp, file);
+      migrated++;
+    } catch { /* an unreadable file is left alone */ }
+  }
+  return { files: names.length, migrated };
 }
