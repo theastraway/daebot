@@ -52,3 +52,35 @@ test("picking a local model for a MIND Cloud session moves the session onto this
     await desk.close(); await hosted.close(); await oll.close();
   }
 });
+
+test("a new session started on a local model (the remembered pick) lives on this computer from its first turn", async () => {
+  const oll = await fakeOllama(["qwen3:14b"]);
+  const hosted = await hostedRig({ script: [{ text: "CLOUD SHOULD NOT RUN" }] });
+  const desk = await deskRig(hosted, hosted.keys.alice, { script: [{ text: "answered on this computer" }] });
+  try {
+    assert.equal((await desk.api("PUT", "/settings/local-llm", { base: oll.base })).status, 200);
+    // the web app sends the remembered model with POST /sessions (models.defaultForNew)
+    const made = await desk.api("POST", "/sessions", { surface: "desktop", title: "new chat on a local model", model: "ollama/qwen3:14b" });
+    assert.equal(made.status, 200, made.body);
+    const body = JSON.parse(made.body);
+    assert.equal(body.home, "local", "the new session was homed on this computer, not in MIND Cloud");
+    assert.equal(body.env.kind, "machine");
+    const sid = body.sessionId;
+
+    const res = await desk.api("POST", `/sessions/${sid}/send`, { text: "first message" });
+    assert.equal(res.status, 200, res.body);
+    assert.equal(res.headers["x-daebot-cloud"], undefined, "not forwarded to the cloud");
+    await until(() => desk.provider.requests.length === 1);
+    assert.equal(hosted.provider.requests.length, 0, "the cloud model never ran it");
+    const rec = (await until(() => desk.store.load(sid)))!;
+    assert.equal(rec.env!.kind, "machine");
+    assert.equal(rec.model, "ollama/qwen3:14b", "the session keeps the local model");
+
+    // a new session on a cloud model still starts in MIND Cloud
+    const plain = JSON.parse((await desk.api("POST", "/sessions", { surface: "desktop", title: "cloud by default" })).body);
+    assert.equal(plain.home, undefined);
+  } finally {
+    applyLocalLlm({});
+    await desk.close(); await hosted.close(); await oll.close();
+  }
+});

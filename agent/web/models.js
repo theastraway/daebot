@@ -1,11 +1,16 @@
 // Model picker for Daebot (web). The header badge is a button; it opens a small menu built from GET /models.
-// Locked models (not on the user's plan) show a lock and "Plus and up" and cannot be chosen. Choosing sets the current
-// session's model (PATCH /sessions/:id) or, with no session yet, the default for new sessions (kept in this browser).
+// Locked models (not on the user's plan) show a lock and "Plus and up" and cannot be chosen. One rule for a pick: it is
+// used for this chat (PATCH /sessions/:id) and for new chats (remembered in this browser, sent with POST /sessions).
+// Models served on this computer (ollama/...) sit in their own group, "This computer", first and always open.
 // The badge always shows the model actually in use: the one that served the last answer, or the one just chosen.
 // DOM is built with createElement + textContent only; no innerHTML; same-origin requests go through the app's own helpers.
 
 export const MODEL_KEY = "mc_model";
 export const LOCKED_NOTE = "Plus and up";
+/** Models a server on this computer serves (Ollama, LM Studio, llama.cpp): their ids start with this, their group is LOCAL_GROUP. */
+export const LOCAL_PREFIX = "ollama/";
+export const LOCAL_GROUP = "This computer";
+export const isLocalModel = (id) => typeof id === "string" && id.startsWith(LOCAL_PREFIX);
 
 const titleCase = (s) => s.replace(/\b([a-z])/g, (m) => m.toUpperCase());
 
@@ -24,7 +29,7 @@ export function prettyModel(id, name) {
 
 // Provider grouping, mirroring the MIND app's picker (frontend/src/lib/llmProviders.ts): raw provider strings are
 // canonicalised, groups follow a curated order, and anything unlisted goes last, alphabetically.
-export const PROVIDER_ORDER = ["Auto", "OpenAI", "Anthropic", "Google", "xAI", "DeepSeek", "MiniMax", "Z.ai", "Qwen", "Meta", "Perplexity"];
+export const PROVIDER_ORDER = [LOCAL_GROUP, "Auto", "OpenAI", "Anthropic", "Google", "xAI", "DeepSeek", "MiniMax", "Z.ai", "Qwen", "Meta", "Perplexity"];
 const PROVIDER_CANONICAL = {
   openai: "OpenAI", anthropic: "Anthropic", google: "Google", googlegemini: "Google", gemini: "Google", xai: "xAI", grok: "xAI",
   meta: "Meta", metallama: "Meta", llama: "Meta", deepseek: "DeepSeek", minimax: "MiniMax", zai: "Z.ai", perplexity: "Perplexity",
@@ -44,6 +49,7 @@ export function canonicalProvider(raw) {
 /** The LLM company behind a model: the "Provider: Model" name prefix when the server gives one, else the id prefix
  *  ("meta-llama/llama-4-scout" -> Meta). A name prefix wins because it is what the user reads. */
 export function providerOf(id, name) {
+  if (isLocalModel(id)) return LOCAL_GROUP; // served on this computer: not a company, its own group
   if (typeof name === "string") {
     const c = name.indexOf(":");
     if (c > 0 && c <= 30) return canonicalProvider(name.slice(0, c));
@@ -58,6 +64,7 @@ export function providerOf(id, name) {
 /** The row's name with its "Provider: " prefix dropped, since the group header already says it. */
 export function shortName(name, provider) {
   if (typeof name !== "string") return "";
+  if (provider === LOCAL_GROUP) return name.replace(/\s*\(this computer\)\s*$/i, "") || name; // the group header already says where it runs
   const c = name.indexOf(":");
   if (c > 0 && c <= 30 && canonicalProvider(name.slice(0, c)) === provider) return name.slice(c + 1).trim() || name;
   return name;
@@ -194,9 +201,10 @@ export function initModels({ json, store, notify, icon, getSessionId, onPicked, 
     const list = document.createElement("div"); list.className = "mm-list"; list.setAttribute("role", "none");
     const groups = groupModels(st.rows);
     for (const g of groups) {
-      // The group holding the chosen model stays open (the active model is always visible); a lone group is always open.
+      // The group holding the chosen model stays open (the active model is always visible); a lone group is always open;
+      // the models on this computer are always in view (the point of having them is to pick one).
       const hasCur = g.models.some((r) => r.id === cur);
-      const pinned = hasCur || groups.length === 1;
+      const pinned = hasCur || groups.length === 1 || g.provider === LOCAL_GROUP;
       const open = pinned || st.expanded.has(g.provider);
       const gh = document.createElement("button");
       gh.type = "button"; gh.className = "mm-group"; gh.dataset.provider = g.provider;
@@ -230,6 +238,7 @@ export function initModels({ json, store, notify, icon, getSessionId, onPicked, 
         const sub = document.createElement("span"); sub.className = "mm-sub";
         const bits = [];
         if (!r.allowed) bits.push(LOCKED_NOTE);
+        else if (isLocalModel(r.id)) { bits.push("Runs here, free"); if (r.id === def) bits.push("Default"); }
         else { if (r.free) bits.push("Free"); if (r.priceHint) bits.push(r.priceHint); if (r.id === def) bits.push("Default"); }
         sub.textContent = bits.join(" \u00b7 ");
         main.append(nm); if (bits.length) main.append(sub);
@@ -245,35 +254,31 @@ export function initModels({ json, store, notify, icon, getSessionId, onPicked, 
     menu.append(list);
     const foot = document.createElement("div"); foot.className = "mm-foot";
     const note = document.createElement("span");
-    note.textContent = getSessionId() ? "Applies to this session." : "Applies to new sessions.";
+    note.textContent = getSessionId() ? "Used for this chat and new chats." : "Used for new chats.";
     foot.append(note);
-    if (getSessionId() && cur && cur !== def) {
-      const mk = document.createElement("button"); mk.type = "button"; mk.className = "mm-link"; mk.textContent = "Use for new sessions";
-      mk.addEventListener("click", () => { store.set("localStorage", MODEL_KEY, cur); paint(); render(); });
-      foot.append(mk);
-    }
     if (onConnectors) {
-      const lc = document.createElement("button"); lc.type = "button"; lc.className = "mm-link"; lc.textContent = "LLM connectors";
-      lc.title = "Run Daebot on your own AI key, a model on this computer, or your own database";
+      const lc = document.createElement("button"); lc.type = "button"; lc.className = "mm-link"; lc.textContent = "Local models and your own key";
+      lc.title = "Find the models served on this computer, or run Daebot on your own AI key or database";
       lc.addEventListener("click", () => { setOpen(false); onConnectors(); });
       foot.append(lc);
     }
     menu.append(foot);
   }
 
+  // One rule: the pick is used for this chat (when one is open) and for new chats. No second step, no "use for new sessions".
   async function choose(r) {
     const sid = getSessionId();
     let resp = null;
     if (sid) {
       try { resp = await json(`/sessions/${encodeURIComponent(sid)}`, { method: "PATCH", body: JSON.stringify({ model: r.id }) }); }
-      catch (e) { setOpen(false); return notify(`Could not switch model: ${e.message}`); }
+      catch (e) { setOpen(false); notify(`Could not switch model: ${e.message}`); return false; }
       st.chosen.set(sid, r.id);
-    } else {
-      store.set("localStorage", MODEL_KEY, r.id);
     }
+    store.set("localStorage", MODEL_KEY, r.id);
     paint(); setOpen(false); btn.focus();
     // A local model moved the session onto this computer (the server says so with home: "local"); the caller updates the session's place.
     if (onPicked) onPicked(r.id, resp && resp.home === "local" ? { home: "local", env: resp.env || null } : null);
+    return true;
   }
 
   async function setOpen(open) {
@@ -326,6 +331,13 @@ export function initModels({ json, store, notify, icon, getSessionId, onPicked, 
     labelOf,
     /** Sent with POST /sessions so a new session starts on the chosen default ("" lets the server decide). */
     defaultForNew() { return stored(); },
+    /** Pick a model by id from elsewhere (the Connections panel's "Use" buttons): same rule as a click in the menu. False when it is not in the list or locked. */
+    async pick(id) {
+      await load();
+      const r = rowOf(id);
+      if (!r || !r.allowed) { notify(r ? `${r.name} is not on your plan.` : `${prettyModel(id)} is not in the model list right now.`); return false; }
+      return choose(r);
+    },
     close() { setOpen(false); },
   };
 }
