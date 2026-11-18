@@ -263,15 +263,17 @@ export function initModels({ json, store, notify, icon, getSessionId, onPicked, 
 
   async function choose(r) {
     const sid = getSessionId();
+    let resp = null;
     if (sid) {
-      try { await json(`/sessions/${encodeURIComponent(sid)}`, { method: "PATCH", body: JSON.stringify({ model: r.id }) }); }
+      try { resp = await json(`/sessions/${encodeURIComponent(sid)}`, { method: "PATCH", body: JSON.stringify({ model: r.id }) }); }
       catch (e) { setOpen(false); return notify(`Could not switch model: ${e.message}`); }
       st.chosen.set(sid, r.id);
     } else {
       store.set("localStorage", MODEL_KEY, r.id);
     }
     paint(); setOpen(false); btn.focus();
-    if (onPicked) onPicked(r.id);
+    // A local model moved the session onto this computer (the server says so with home: "local"); the caller updates the session's place.
+    if (onPicked) onPicked(r.id, resp && resp.home === "local" ? { home: "local", env: resp.env || null } : null);
   }
 
   async function setOpen(open) {
