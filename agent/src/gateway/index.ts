@@ -37,7 +37,7 @@ import type { BotRecord, BotsContext } from "../bots/types.ts";
 import { botsEnabled } from "../bots/flag.ts";
 import { versionInfo } from "../bots/versions.ts";
 import { createModelCatalog } from "../models.ts";
-import { detectOllama, localEnabled } from "../provider/local.ts";
+import { LOCAL_PREFIX, detectOllama, localEnabled } from "../provider/local.ts";
 import { createByoLlmHandler } from "./byo-llm.ts";
 import { createBridgesHandler } from "./bridges.ts";
 import { createLocalLlmApi, loadLocalLlm } from "./local-llm.ts";
@@ -1368,6 +1368,10 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
   function pinnedHereOf(owner: string, b: { remoteDevice?: { id: string; name: string; kind?: "machine" | "server" } }): boolean {
     if (!b.remoteDevice) return true;
     return canon(owner, { id: b.remoteDevice.id, kind: b.remoteDevice.kind ?? "machine", name: b.remoteDevice.name })?.id === ownEnvOf(owner).id;
+  }
+  /** True when a model pick must first move the session onto this computer: a local model (ollama/...) chosen for a session that runs in MIND Cloud. Never hosted (no local models there). */
+  function localModelNeedsThisComputer(model: string, o: { hosted: boolean; inCloud: boolean }): boolean {
+    return !o.hosted && o.inCloud && model.startsWith(LOCAL_PREFIX);
   }
   function runsInCloud(owner: string, ls: { id: string; bot?: string; peer?: string }): boolean {
     if (hosted || !syncAgent || ls.peer) return false;
@@ -2980,7 +2984,16 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       // A bot thread whose bot has its own model is pinned to it: change it in Bot settings (it would be ignored here anyway).
       const brec = target.bot ? manager.runtimeOf(me.id).bots?.get(target.bot) : undefined;
       if (brec?.model) return sendJson(res, 409, { error: "model_set_by_bot", message: "This thread uses the model set in its bot's settings. Change it there.", model: brec.model });
-      return sendJson(res, manager.setModel(id, model || undefined) ? 200 : 409, { ok: true, model: model || null });
+      // A local model (ollama/...) only exists on this computer. Picked for a session that runs in MIND Cloud, the cloud could not serve it and
+      // would answer on the free model while the window says otherwise (seen Nov 18 2026). So the pick moves the session here first; if no
+      // computer can take it, the pick is refused with the reason instead of being honoured in name only.
+      let moved: { home: "local"; env: unknown } | undefined;
+      if (model && localModelNeedsThisComputer(model, { hosted: !!hosted, inCloud: runsInCloud(me.id, { id, bot: target.bot, peer: target.peer }) })) {
+        const r = await setHomeApi(me, id, "local", undefined);
+        if (r.status !== 200) return sendJson(res, r.status, { ...r.body, message: `${(r.body as { message?: string }).message ?? "This session cannot run on a computer right now."} A local model (${model}) only runs on a computer.` });
+        moved = { home: "local", env: r.body.env };
+      }
+      return sendJson(res, manager.setModel(id, model || undefined) ? 200 : 409, { ok: true, model: model || null, ...(moved ?? {}) });
     }
 
     if (!action) {

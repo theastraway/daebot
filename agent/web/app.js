@@ -1875,7 +1875,14 @@ if (state.online !== null) account.setOnline(!!state.online);
 const models = initModels({
   json, store, notify, icon,
   getSessionId: () => state.currentId,
-  onPicked: () => renderHeader(),
+  onPicked: (_id, moved) => {
+    if (moved && moved.env) {
+      for (const x of [state.sessions, bots.threads(), ...bots.cached()]) for (const row of x) if (row.id === state.currentId) row.env = moved.env;
+      renderSessions(); bots.renderList();
+      notify(`A local model runs on this computer, so this session now runs on ${moved.env.name || "this computer"}.`);
+    }
+    renderHeader();
+  },
   onPinnedClick: () => { if (state.curBot) bots.openSettings(state.curBot); },
   onConnectors: () => connections.open(),
 });
