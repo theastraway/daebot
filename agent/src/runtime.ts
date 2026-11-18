@@ -29,6 +29,7 @@ import type { ThreadView } from "./bots/self-tool.ts";
 import { botRecall, recordBotLesson } from "./bots/lessons.ts";
 import { MAIN_BOT_ID, RoutineHub } from "./routines/store.ts";
 import { focusedContextOn, relevantFromMind, type Group, type TurnFocus } from "./focus.ts";
+import { MIND_GROUND_TRUTH, withOriginTag } from "./mind/origin.ts";
 import { loadSkills, renderSkills, skillsPrompt } from "./skills/index.ts";
 import type { SkillFile } from "./skills/index.ts";
 import { daeBase } from "./bots/dae.ts";
@@ -177,6 +178,12 @@ const FOCUSED_PEER_RULES: string[] = [
 const SURFACE_LINE = (o: { surface: string; cwd: string; now?: Date }): string =>
   `Surface: ${o.surface}. Working directory: ${o.cwd}. Date: ${(o.now ?? new Date()).toLocaleDateString("en-US", { timeZone: "America/New_York", weekday: "long", year: "numeric", month: "long", day: "numeric" })} (America/New_York).`;
 
+/** The private entry a handoff card is filed as. origin:tool, one tag, so the next session can tell a machine record from a user fact. */
+export function handoffMemoryArgs(title: string, c: HandoffCard): { type: "entry"; title: string; content: string; tags: string[]; source: string; origin: "tool" } {
+  const body = [`Objective: ${c.objective}`, "Evidence:", ...c.evidence.map((x) => `- ${x}`), "What is left:", ...c.left.map((x) => `- ${x}`), `Next action: ${c.next}`, ...(c.verify ? [`How to verify: ${c.verify}`] : [])].join("\n");
+  return { type: "entry", title, content: body, tags: withOriginTag(["daebot-handoff"], "tool"), source: "daebot", origin: "tool" };
+}
+
 export function composeSystemPrompt(o: {
   identity?: string; tier?: Tier; bootContext: string; surface: string; cwd: string; now?: Date; model?: string; via?: string;
   /** Set for a bot session: the DAEBOT.md text and the bot's own slug (the roster marks it as you). */
@@ -324,6 +331,8 @@ export function composeSystemPrompt(o: {
   }
   if (o.connectedApps?.length && (on("connect") || on("mail") || on("docs"))) lines.push("", ...o.connectedApps);
   if (o.permissions?.trim()) lines.push("", o.permissions.trim());
+  // Beside the boot block, including a failed or degraded boot. Outside the boot text so the boot cap is unchanged. The date line stays last.
+  lines.push("", MIND_GROUND_TRUTH);
   if (o.bootContext.trim()) lines.push("", "## MIND context (booted this session)", o.bootContext.trim());
   // Focused: the volatile line (date) goes last so everything above it is identical turn to turn (prompt-cache prefix).
   if (F) lines.push("", SURFACE_LINE(o));
@@ -499,8 +508,8 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
   // A handoff card goes to MIND as a private entry (best effort, never awaited by the turn), so the next session can start from it.
   const fileHandoff = async (e: Entry, c: HandoffCard): Promise<void> => {
     try {
-      const body = [`Objective: ${c.objective}`, "Evidence:", ...c.evidence.map((x) => `- ${x}`), "What is left:", ...c.left.map((x) => `- ${x}`), `Next action: ${c.next}`, ...(c.verify ? [`How to verify: ${c.verify}`] : [])].join("\n");
-      await client.remember({ type: "entry", title: `Handoff card - ${cleanTitle(e.title) ?? "chat"} - ${new Date(c.at).toISOString().slice(0, 10)}`, content: body, tags: ["daebot-handoff"], source: "daebot" });
+      const title = `Handoff card - ${cleanTitle(e.title) ?? "chat"} - ${new Date(c.at).toISOString().slice(0, 10)}`;
+      await client.remember(handoffMemoryArgs(title, c));
     } catch { /* MIND unreachable: the card is still on the session and the board */ }
   };
   // read_document: the text of a PDF the user attached. Pure local extraction (src/pdf.ts): no model, no cost, no write.

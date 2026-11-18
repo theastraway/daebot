@@ -700,7 +700,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
   let currentSignal: AbortSignal | undefined;
   async function execute(tool: Tool, args: Record<string, unknown>): Promise<ToolResult> {
     try {
-      const r = await tool.run(args, { cwd, signal: currentSignal, sessionId: id, origin: turnOrigin, capabilities: turnCaps, device: turnDevice, decisions: turnDecisions, ...(turnPeerReceipt ? { peerReceipt: turnPeerReceipt } : {}) });
+      const r = await tool.run(args, { cwd, signal: currentSignal, sessionId: id, origin: turnOrigin, capabilities: turnCaps, device: turnDevice, decisions: turnDecisions, calls: state.calls, ...(turnPeerReceipt ? { peerReceipt: turnPeerReceipt } : {}) });
       return r && typeof r.output === "string" ? r : { ok: false, output: "tool returned an invalid result" };
     } catch (e) {
       return { ok: false, output: `${tool.spec.name}: ${String((e as Error)?.message ?? e).split("\n")[0].slice(0, 300)}` };
