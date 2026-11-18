@@ -7,6 +7,7 @@
 // Everything is PRIVATE (document / entry), never a feed post. It writes with the server's owner MIND key (Anthony's own MIND), never a client tenant.
 // Writes fail open: a MIND outage must never stop the ledger from recording.
 import type { MindClient } from "../types.ts";
+import { withOriginTag } from "../mind/origin.ts";
 import type { AdminLedger, Occurrence, Task } from "./mistakes.ts";
 import { etDay } from "./mistakes.ts";
 
@@ -93,7 +94,7 @@ export class MindFeed {
       const old = L.mindId("types", typeId);
       const t = L.typeSummary(typeId);
       if (!t) { if (old) { await this.del("document", old); L.setMindId("types", typeId, undefined); } return undefined; }
-      const res = await this.client.remember({ type: "document", title: `Daebot Mistake - ${cleanTitlePart(t.name)}`, content: typeDocBody(t), tags: ["daebot-mistake", "daebot-mistake-type"], source: SOURCE });
+      const res = await this.client.remember({ type: "document", title: `Daebot Mistake - ${cleanTitlePart(t.name)}`, content: typeDocBody(t), tags: withOriginTag(["daebot-mistake", "daebot-mistake-type"], "tool"), source: SOURCE, origin: "tool" });
       const id = idOf(res);
       if (!id) throw new Error("no id returned for type document");
       L.setMindId("types", typeId, id);
@@ -103,7 +104,7 @@ export class MindFeed {
   }
   async occurrence(o: Occurrence, typeName: string): Promise<void> {
     await this.run("occurrence", async () => {
-      const res = await this.client.remember({ type: "entry", title: `Lesson - Failure - ${cleanTitlePart(typeName, 60)}`, content: occurrenceBody(o, typeName), tags: ["daebot-mistake-occurrence", "failure"], source: SOURCE });
+      const res = await this.client.remember({ type: "entry", title: `Lesson - Failure - ${cleanTitlePart(typeName, 60)}`, content: occurrenceBody(o, typeName), tags: withOriginTag(["daebot-mistake-occurrence", "failure"], "tool"), source: SOURCE, origin: "tool" });
       const id = idOf(res);
       if (id) this.ledger().setOccurrenceMindId(o.id, id);
     });
@@ -119,7 +120,7 @@ export class MindFeed {
   }
   async onTask(verb: "Opened" | "Closed", t: Task): Promise<void> {
     await this.run("task", async () => {
-      await this.client.remember({ type: "entry", title: `Daebot Task - ${verb} - ${cleanTitlePart(t.title, 90)}`, content: taskBody(t, verb), tags: ["daebot-task", verb.toLowerCase()], source: SOURCE });
+      await this.client.remember({ type: "entry", title: `Daebot Task - ${verb} - ${cleanTitlePart(t.title, 90)}`, content: taskBody(t, verb), tags: withOriginTag(["daebot-task", verb.toLowerCase()], "tool"), source: SOURCE, origin: "tool" });
     });
   }
   async snapshot(final = false): Promise<{ day: string; id?: string }> {
@@ -128,7 +129,7 @@ export class MindFeed {
       const L = this.ledger();
       const k = L.kpiSnapshot();
       const old = L.mindId("snaps", k.day);
-      const res = await this.client.remember({ type: "document", title: `Daebot KPIs - ${k.day}`, content: kpiBody(k), tags: ["daebot-kpis"], source: SOURCE });
+      const res = await this.client.remember({ type: "document", title: `Daebot KPIs - ${k.day}`, content: kpiBody(k), tags: withOriginTag(["daebot-kpis"], "tool"), source: SOURCE, origin: "tool" });
       const nid = idOf(res);
       if (!nid) throw new Error("no id returned for KPI snapshot");
       L.setMindId("snaps", k.day, nid);
