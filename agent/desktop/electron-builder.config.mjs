@@ -93,7 +93,23 @@ export default {
     mergeASARs: true,
     binaries: macPtyBinaries(false),
   },
-  dmg: { title: "Daebot", sign },
+  // The disk image window people see first (Nov 18 2026, same treatment as the MIND DMG): the dark Daebot artwork in
+  // build-resources/dmg (background.tiff is a 760x480 Retina pair; source background.html, rendered by render-bg.mjs with
+  // Playwright and joined with `tiffutil -cathidpicheck background.png background@2x.png -out background.tiff`), no toolbar
+  // or sidebar, 128 px icons with Daebot.app on the left and Applications on the right of the arrow in the artwork.
+  // Coordinates are icon centres in window points, matching the artwork.
+  dmg: {
+    title: "Daebot",
+    sign,
+    background: "build-resources/dmg/background.tiff",
+    window: { x: 200, y: 120, width: 760, height: 480 },
+    iconSize: 128,
+    iconTextSize: 13,
+    contents: [
+      { x: 190, y: 262, type: "file" },
+      { x: 570, y: 262, type: "link", path: "/Applications" },
+    ],
+  },
   afterSign: sign ? "scripts/notarize.cjs" : undefined,
   afterPack: (context) => signPtyWindows(context),
   win: {

@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@1,700&family=Permanent+Marker&family=Inter+Tight:wght@500;700;800&display=swap" rel="stylesheet">
+<style>
+  /* The Daebot disk image window: 760 x 480 CSS px, rendered at 2x.
+     Same language as the landing page bands: near-black ink, grain, the
+     red #F43F3F, the lockup, a street-marker word, a Playfair italic line. */
+  html, body { margin: 0; width: 760px; height: 480px; overflow: hidden; background: #0a0a0a; }
+  body { position: relative; font-family: "Inter Tight", -apple-system, system-ui, sans-serif; color: #fff; -webkit-font-smoothing: antialiased; }
+  .vignette { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 0%, transparent 35%, rgba(0,0,0,0.85) 100%); }
+  .glow { position: absolute; left: 90px; top: 150px; width: 580px; height: 260px; background: radial-gradient(ellipse at 50% 50%, rgba(244,63,63,0.20), transparent 62%); }
+  .grain { position: absolute; inset: 0; opacity: 0.07; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 .55 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>"); }
+  .topo { position: absolute; inset: 0; opacity: 0.35; }
+  .lockup { position: absolute; left: 36px; top: 30px; display: flex; flex-direction: column; line-height: 0.85; }
+  .lockup img { height: 34px; width: auto; display: block; }
+  .lockup span { margin-top: 7px; font-size: 9px; letter-spacing: 0.42em; text-transform: uppercase; font-weight: 800; color: rgba(255,255,255,0.85); }
+  .eyebrow { position: absolute; right: 36px; top: 36px; font-size: 10px; letter-spacing: 0.3em; text-transform: uppercase; font-weight: 800; color: #F43F3F; }
+  .marker { position: absolute; left: 0; right: 0; top: 150px; text-align: center; font-family: "Permanent Marker", cursive; font-size: 46px; color: #F43F3F; transform: rotate(-3deg); text-shadow: 0 0 28px rgba(244,63,63,0.55), 0 0 3px rgba(244,63,63,0.5); letter-spacing: 0.01em; }
+  .arrow { position: absolute; left: 290px; top: 232px; width: 180px; height: 64px; }
+  .foot { position: absolute; left: 36px; bottom: 34px; font-size: 22px; font-weight: 800; letter-spacing: -0.02em; text-transform: uppercase; }
+  .foot em { font-family: "Playfair Display", serif; font-style: italic; font-weight: 700; text-transform: none; letter-spacing: 0; color: #F43F3F; margin-left: 6px; }
+  .foot small { display: block; margin-top: 8px; font-size: 10px; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: rgba(255,255,255,0.45); }
+  .strip { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: #F43F3F; }
+  .hint { position: absolute; right: 36px; bottom: 36px; font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; font-weight: 700; color: rgba(255,255,255,0.45); text-align: right; line-height: 1.6; }
+  .dae { display:flex; align-items:center; gap:10px; } .dae img { height:38px; width:38px; object-fit:contain; display:block; } .dae .word { font-size:30px; font-weight:800; letter-spacing:-0.03em; line-height:1; color:#fff; }
+</style>
+</head>
+<body>
+  <div class="vignette"></div>
+  <div class="glow"></div>
+  <svg class="topo" viewBox="0 0 160 96" preserveAspectRatio="xMidYMid slice" width="760" height="480" aria-hidden="true">
+    <g fill="none" stroke="#F43F3F" stroke-width="0.24" opacity="0.5">
+      <path d="M -20 -2 C 30 2.6 60 -5.2 100 1.4 S 170 0.8 200 -3.2"/><path d="M -20 6.7 C 30 4.4 60 -1.1 100 3 S 170 7.1 200 1"/><path d="M -20 10.2 C 30 11.3 60 8.4 100 9.5 S 170 12 200 8.1"/><path d="M -20 15.9 C 30 20.1 60 13.5 100 17.9 S 170 15.8 200 14.9"/><path d="M -20 21.7 C 30 24.6 60 19.9 100 22.7 S 170 25.2 200 20.7"/><path d="M -20 28 C 30 25.1 60 30.9 100 27.4 S 170 27.6 200 29.3"/><path d="M -20 34 C 30 31.6 60 36.4 100 33.3 S 170 32.7 200 35.4"/><path d="M -20 38.4 C 30 42.7 60 36.1 100 40.3 S 170 38.9 200 37.1"/><path d="M -20 45.6 C 30 46.8 60 43.2 100 45.1 S 170 48.7 200 43.9"/><path d="M -20 51.2 C 30 48.8 60 53.6 100 50.1 S 170 50.3 200 52.6"/><path d="M -20 55.8 C 30 59.9 60 53.4 100 57.7 S 170 55.4 200 54.9"/><path d="M -20 62.6 C 30 62.9 60 60.1 100 62.4 S 170 65.8 200 61.2"/><path d="M -20 68.3 C 30 65.4 60 70.8 100 67.2 S 170 67.7 200 69.4"/><path d="M -20 73 C 30 77 60 70.6 100 74.8 S 170 72.6 200 71.9"/><path d="M -20 79.6 C 30 79.7 60 77.2 100 79.1 S 170 82.9 200 78.1"/><path d="M -20 85.3 C 30 82.3 60 87.8 100 84.2 S 170 84.4 200 86.5"/><path d="M -20 90 C 30 94.1 60 87.6 100 91.9 S 170 89.8 200 89"/><path d="M -20 96.5 C 30 96.4 60 94.1 100 95.9 S 170 99.9 200 94.9"/>
+    </g>
+  </svg>
+  <div class="strip"></div>
+  <div class="lockup">
+    <div class="dae"><img src="daebot-head.webp" alt=""><span class="word">Daebot</span></div>
+    <span>by MIND &middot; Astra AI</span>
+  </div>
+  <div class="eyebrow">Daebot &middot; Your private agent &middot; macOS</div>
+  <div class="marker">drag it in</div>
+  <svg class="arrow" viewBox="0 0 180 64" fill="none" stroke="#F43F3F" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M6 40 C 50 10, 110 10, 166 34" />
+    <path d="M146 20 L 168 35 L 142 44" />
+  </svg>
+  <div class="foot">Your private agent.<em>Every claim checked.</em><small>Sign in with MIND</small></div>
+  <div class="hint">Notarized by Apple<br>Updates itself</div>
+</body>
+</html>
