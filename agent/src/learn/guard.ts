@@ -33,19 +33,43 @@ const MONEY = /\$\s?\d[\d,]*(?:\.\d+)?/;
 const PHONE = /\(?\b\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b/;
 
 // A lesson may never teach the agent to get around the kernel or to act on a third party without a go-ahead.
-const KERNEL_OVERRIDE: RegExp[] = [
-  /\b(?:skip|bypass|disable|ignore|override|circumvent|turn off|switch off|work around|get around)\b[^.\n]{0,40}\b(?:kernel|gates?|receipts?|guard\w*|safety|owner[_ ]check|confirmations?|isolation|boot|danger|rules?)\b/i,
-  /\bwithout (?:asking|confirm\w*|approval|permission|a go[- ]ahead|a receipt|receipts|checking)\b/i,
-  /\b(?:ignore|disregard|forget) (?:all |any |the )?(?:previous|prior|above|earlier|system) (?:instructions?|rules?|prompts?)\b/i,
-  /\byou (?:are|were) now\b|\bnew instructions?\b|\bact as\b|\bjailbreak\b/i,
-  /<\/?(?:system|assistant|user|tool|memory-context|learned)\b|\[kernel:|\[learned\]|^\s*(?:system|assistant)\s*:/im,
-  /\b(?:always|just) (?:send|post|publish|deploy|delete|merge|email)\b/i,
-];
+// "act as" is its own rule so the page screen can skip it: ordinary pages say "act as a server".
+const BYPASS_KERNEL = /\b(?:skip|bypass|disable|ignore|override|circumvent|turn off|switch off|work around|get around)\b[^.\n]{0,40}\b(?:kernel|gates?|receipts?|guard\w*|safety|owner[_ ]check|confirmations?|isolation|boot|danger|rules?)\b/i;
+const WITHOUT_ASKING = /\bwithout (?:asking|confirm\w*|approval|permission|a go[- ]ahead|a receipt|receipts|checking)\b/i;
+const IGNORE_PREVIOUS = /\b(?:ignore|disregard|forget) (?:all |any |the )?(?:previous|prior|above|earlier|system) (?:instructions?|rules?|prompts?)\b/i;
+const YOU_ARE_NOW = /\byou (?:are|were) now\b|\bnew instructions?\b|\bjailbreak\b/i;
+const ACT_AS = /\bact as\b/i;
+const ROLE_TAGS = /<\/?(?:system|assistant|user|tool|memory-context|learned)\b|\[kernel:|\[learned\]|^\s*(?:system|assistant)\s*:/im;
+const ALWAYS_SEND = /\b(?:always|just) (?:send|post|publish|deploy|delete|merge|email)\b/i;
+const KERNEL_OVERRIDE: RegExp[] = [BYPASS_KERNEL, WITHOUT_ASKING, IGNORE_PREVIOUS, YOU_ARE_NOW, ACT_AS, ROLE_TAGS, ALWAYS_SEND];
+
+// Fillers a page puts between "ignore" and "previous instructions" ("all of the previous"). The lesson regex above stays exact.
+const IGNORE_LOOSE = /\b(?:ignore|disregard|forget)(?:\s+(?:all|any|of|the|your|my|these))*\s+(?:previous|prior|above|earlier|system|original)\s+(?:instructions?|prompts?|rules?)\b|\b(?:ignore|disregard|forget) (?:all |any )(?:the )?(?:instructions?|prompts?|rules?)\b/i;
+// Chat-template markers and a JSON tool call. A docs page that shows a real function-call payload is withheld on purpose.
+const TOOL_OR_TEMPLATE = /<\|(?:im_start|im_end)\|>|\b(?:tool_calls?|function_call)\b|<(?:tool_call|function_call|invoke)\b|\{\s*"(?:name|function)"\s*:\s*"[^"]{1,80}"[^}]{0,240}"(?:arguments|parameters|args)"\s*:/i;
+const EXFIL = /\b(?:exfiltrate|steal)\b[^.\n]{0,60}\b(?:secret|key|token|password|credential)s?\b|\b(?:send|email|post|forward|upload|give|print|dump|cat)\b[^.\n]{0,80}\b(?:api[ _-]?key|secrets?|passwords?|tokens?|credentials?|\.env|id_rsa|~\/\.ssh)\b/i;
+// Characters that hide words. ZWJ (U+200D) and ZWNJ (U+200C) are real emoji and Arabic spelling, so they are not in this class.
+const HIDDEN_TEXT = /[\u180e\u200b\u2060\ufeff\u202a-\u202e\u2066-\u2069\u{e0000}-\u{e007f}]/u;
+// Page text reuses the lesson rules that are specific, and not "act as" / "just email us" / "without asking", which normal pages say.
+const PAGE_RULES: RegExp[] = [BYPASS_KERNEL, IGNORE_PREVIOUS, IGNORE_LOOSE, YOU_ARE_NOW, ROLE_TAGS, TOOL_OR_TEMPLATE, EXFIL];
 
 // "never skip the receipt" and "do not act without asking" are the kernel's own rules restated, not overrides.
 function negated(text: string, at: number): boolean {
   const before = text.slice(Math.max(0, at - 24), at).toLowerCase();
   return /\b(?:never|don'?t|do not|must not|should not|shouldn'?t|not|no|stop|avoid|refuse to)\s+(?:\w+\s+)?$/.test(before);
+}
+
+/** True when any rule matches at a spot that is not a negation ("do not ignore…"). A later hit still counts. */
+function ruleHit(text: string, rules: RegExp[]): boolean {
+  for (const re of rules) {
+    const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`);
+    let m: RegExpExecArray | null;
+    while ((m = g.exec(text))) {
+      if (!negated(text, m.index)) return true;
+      if (m.index === g.lastIndex) g.lastIndex++;
+    }
+  }
+  return false;
 }
 
 export interface ScrubOpts { clientNames?: string[] }
@@ -56,10 +80,19 @@ export interface ScrubOpts { clientNames?: string[] }
  */
 export function promptInjectionProblem(text: string): string | null {
   if (SECRET.test(text)) return "contains a secret-looking token";
-  for (const re of KERNEL_OVERRIDE) {
-    const m = re.exec(text);
-    if (m && !negated(text, m.index)) return "tries to override the kernel or its rules";
-  }
+  if (ruleHit(text, KERNEL_OVERRIDE)) return "tries to override the kernel or its rules";
+  return null;
+}
+
+/**
+ * A block of outside text (a fetched page, later a recalled MIND note) that is trying to instruct the assistant.
+ * Reuses the lesson guard's specific rules and adds page patterns (chat templates, fake tool calls, hidden text,
+ * "send the api key"). "act as", "just email us" and "without asking" are normal prose and are not flagged.
+ * Returns a reason, else null. A secret-looking example on a docs page is redacted later, not withheld here.
+ */
+export function fetchedInstructionProblem(text: string): string | null {
+  if (HIDDEN_TEXT.test(text)) return "contains hidden or zero-width text";
+  if (ruleHit(text, PAGE_RULES)) return "looks like instructions to the assistant";
   return null;
 }
 
@@ -71,10 +104,7 @@ export function contentProblem(text: string, o: ScrubOpts = {}): string | null {
   if (LONG_ID.test(text)) return "contains a long id";
   if (MONEY.test(text)) return "contains a dollar amount";
   if (PHONE.test(text)) return "contains a phone number";
-  for (const re of KERNEL_OVERRIDE) {
-    const m = re.exec(text);
-    if (m && !negated(text, m.index)) return "tries to override the kernel or its rules";
-  }
+  if (ruleHit(text, KERNEL_OVERRIDE)) return "tries to override the kernel or its rules";
   const lower = text.toLowerCase();
   for (const n of o.clientNames ?? []) {
     const name = n.trim().toLowerCase();

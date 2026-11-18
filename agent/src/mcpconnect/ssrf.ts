@@ -1,10 +1,10 @@
 // SSRF guard + a fetch that cannot be talked into reaching the inside of our network. Zero deps.
 //
 // Every URL a user (or the model, or a remote server's metadata) hands us goes through here:
-//   - https only, no credentials in the URL
+//   - https only by default (web_fetch opts into http, still public addresses only), no credentials in the URL
 //   - the host name is resolved by US, every answer must be a public address, and the connection is PINNED to the address we
 //     checked (a second DNS lookup by the HTTP stack can never return a different, private one: DNS rebinding)
-//   - redirects are followed by hand, up to 3 hops, and each hop is re-checked from scratch (https, host, resolved addresses)
+//   - redirects are followed by hand, up to 3 hops by default (web_fetch asks for 5), and each hop is re-checked from scratch
 //   - a timeout and a response-size cap, so a hostile server can neither hang a turn nor fill memory
 import { lookup as dnsLookup } from "node:dns/promises";
 import { request as httpRequest } from "node:http";
@@ -124,9 +124,11 @@ export const systemResolver: Resolver = async (hostname) => {
   return rows.map((r) => ({ address: r.address, family: r.family }));
 };
 
-/** Validates a URL and returns the one address the connection must use. Every answer from DNS must be public. */
-export async function resolvePublic(url: URL, resolve: Resolver): Promise<{ address: string; family: 4 | 6 }> {
-  if (url.protocol !== "https:") throw new SsrfError("only https URLs are allowed");
+/** Validates a URL and returns the one address the connection must use. Every answer from DNS must be public.
+ *  allowHttp is for web_fetch: http is accepted only when the address is still public. MCP leaves it off. */
+export async function resolvePublic(url: URL, resolve: Resolver, o: { allowHttp?: boolean } = {}): Promise<{ address: string; family: 4 | 6 }> {
+  const httpOk = o.allowHttp === true && url.protocol === "http:";
+  if (url.protocol !== "https:" && !httpOk) throw new SsrfError(o.allowHttp ? "only http and https URLs are allowed" : "only https URLs are allowed");
   if (url.username || url.password) throw new SsrfError("a URL with a user name or password in it is not allowed");
   const host = checkHostName(url.hostname);
   if (isIP(host)) return { address: host, family: isIP(host) as 4 | 6 };
@@ -163,17 +165,19 @@ export function pinnedLookup(ip: string, family: 4 | 6) {
   };
 }
 
-/** Default transport. scheme "http" exists only so tests can exercise the timeout and the size cap against a local server. */
+/** Default transport. scheme "http" exists only so tests can exercise the timeout and the size cap against a local server.
+ *  With no scheme, the URL's own protocol picks http or https (web_fetch follows an http redirect to a public host). */
 export function createNodeTransport(o: { scheme?: "https" | "http" } = {}): Transport {
-  const mod = o.scheme === "http" ? httpRequest : httpsRequest;
   return (r) => new Promise<RawResponse>((resolve, reject) => {
+    const scheme = o.scheme ?? (r.url.protocol === "http:" ? "http" : "https");
+    const mod = scheme === "http" ? httpRequest : httpsRequest;
     let done = false;
     const finish = (fn: () => void) => { if (done) return; done = true; clearTimeout(timer); r.signal?.removeEventListener("abort", onAbort); fn(); };
     const host = r.url.hostname.startsWith("[") ? r.url.hostname.slice(1, -1) : r.url.hostname;
     const headers: Record<string, string> = { "accept-encoding": "identity", ...r.headers };
     if (r.body !== undefined) headers["content-length"] = String(Buffer.byteLength(r.body));
     const req = mod({
-      hostname: host, port: r.url.port || (o.scheme === "http" ? 80 : 443), path: r.url.pathname + r.url.search, method: r.method, headers,
+      hostname: host, port: r.url.port || (scheme === "http" ? 80 : 443), path: r.url.pathname + r.url.search, method: r.method, headers,
       lookup: pinnedLookup(r.ip, r.family) as never,
       servername: isIP(host) ? undefined : host,
     }, (res) => {
@@ -216,6 +220,15 @@ export interface SafeFetchOptions {
   timeoutMs?: number;
   maxBytes?: number;
   maxRedirects?: number;
+  /** web_fetch: allow http as well as https. Every address is still checked. Default false, so MCP stays https-only. */
+  allowHttp?: boolean;
+}
+
+const responseFinalUrls = new WeakMap<Response, string>();
+
+/** The URL the safe fetch actually read, after redirects. Empty when `res` did not come from createSafeFetch. */
+export function responseFinalUrl(res: Response): string {
+  return responseFinalUrls.get(res) ?? "";
 }
 
 function headerRecord(h: SafeInit["headers"]): Record<string, string> {
@@ -232,6 +245,7 @@ export function createSafeFetch(o: SafeFetchOptions = {}): SafeFetch {
   const timeoutMs = o.timeoutMs ?? 15_000;
   const maxBytes = o.maxBytes ?? 1_000_000;
   const maxRedirects = o.maxRedirects ?? 3;
+  const allowHttp = o.allowHttp === true;
   return async (input, init = {}) => {
     let url = new URL(String(input));
     let method = (init.method ?? "GET").toUpperCase();
@@ -241,17 +255,20 @@ export function createSafeFetch(o: SafeFetchOptions = {}): SafeFetch {
     const startHost = url.host;
     const deadline = Date.now() + timeoutMs;
     for (let hop = 0; ; hop++) {
-      const pin = await resolvePublic(url, resolve); // https, no creds, public host, every DNS answer public
+      if (init.signal?.aborted) throw new SsrfError("aborted");
+      const pin = await resolvePublic(url, resolve, { allowHttp }); // scheme, no creds, public host, every DNS answer public
+      if (init.signal?.aborted) throw new SsrfError("aborted");
       const left = deadline - Date.now();
       if (left <= 0) throw new SsrfError("timed out");
       const raw = await transport({ url, ip: pin.address, family: pin.family, method, headers, body, timeoutMs: left, maxBytes, signal: init.signal ?? undefined });
+      if (raw.body.length > maxBytes) throw new SsrfError("the response was too large and was cut off");
       const loc = raw.headers["location"];
       const locStr = Array.isArray(loc) ? loc[0] : loc;
       if (raw.status >= 300 && raw.status < 400 && locStr && policy !== "none") {
         if (hop >= maxRedirects) throw new SsrfError("too many redirects");
         let next: URL;
         try { next = new URL(locStr, url); } catch { throw new SsrfError("the server sent a bad redirect"); }
-        if (next.protocol !== "https:") throw new SsrfError("a redirect to a non-https URL was refused");
+        if (next.protocol !== "https:" && !(allowHttp && next.protocol === "http:")) throw new SsrfError(allowHttp ? "a redirect to a non-http URL was refused" : "a redirect to a non-https URL was refused");
         if (policy === "same-host" && next.host !== startHost) throw new SsrfError(`a redirect to a different host (${next.hostname}) was refused`);
         if (next.host !== url.host) { delete headers["authorization"]; delete headers["cookie"]; }
         if (raw.status === 303 || ((raw.status === 301 || raw.status === 302) && method === "POST")) { method = "GET"; body = undefined; delete headers["content-type"]; }
@@ -261,7 +278,9 @@ export function createSafeFetch(o: SafeFetchOptions = {}): SafeFetch {
       const h = new Headers();
       for (const [k, v] of Object.entries(raw.headers)) if (v !== undefined) h.set(k, Array.isArray(v) ? v.join(", ") : String(v));
       const nullBody = raw.status === 204 || raw.status === 205 || raw.status === 304;
-      return new Response(nullBody ? null : new Uint8Array(raw.body), { status: raw.status >= 200 && raw.status <= 599 ? raw.status : 502, headers: h });
+      const res = new Response(nullBody ? null : new Uint8Array(raw.body), { status: raw.status >= 200 && raw.status <= 599 ? raw.status : 502, headers: h });
+      responseFinalUrls.set(res, url.href);
+      return res;
     }
   };
 }
