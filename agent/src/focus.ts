@@ -4,6 +4,8 @@
 // an "agent sessions first" lesson) on greetings like "Hello, how are you?".
 import type { MindClient, Tool } from "./types.ts";
 import { clip, tokenSet } from "./learn/text.ts";
+import { MIND_RECALL_HEADER } from "./mind/origin.ts";
+import { screenUntrustedText, withScreenNotice } from "./tools/text-screen.ts";
 
 /** DAEBOT_FOCUSED_CONTEXT: on unless explicitly 0 / off / false / no. */
 export function focusedContextOn(env: Record<string, string | undefined> = process.env): boolean {
@@ -235,7 +237,14 @@ export async function relevantFromMind(client: MindClient, message: string, time
       client.query(clip(String(message).replace(/\s+/g, " ").trim(), 400), { mode: "hybrid", maxContextTokens: 1500 }),
       new Promise<undefined>((r) => { timer = setTimeout(() => r(undefined), timeoutMs); }),
     ]);
-    return text ? selectRelevant(message, text) : undefined;
+    if (!text) return undefined;
+    // Screen the retrieved text, then select. A clean answer uses the original text so the block stays byte-identical apart from the header.
+    const screened = screenUntrustedText(text);
+    const source = screened.withheld ? screened.text : text;
+    const block = selectRelevant(message, source);
+    if (!block && !screened.withheld) return undefined;
+    if (!screened.withheld) return `${MIND_RECALL_HEADER}\n${block}`;
+    return `${MIND_RECALL_HEADER}\n${withScreenNotice({ text: block ?? "", withheld: screened.withheld })}`;
   } catch { return undefined; }
   finally { if (timer) clearTimeout(timer); }
 }

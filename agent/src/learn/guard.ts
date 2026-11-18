@@ -9,6 +9,11 @@ const UNTRUSTED_TOOLS = new Set(["web_fetch", "web_search"]);
 
 export interface Trust { ok: boolean; why?: string }
 
+/** True when this turn already ran web_fetch or web_search. The same signal writeTrust uses to refuse a lesson. */
+export function turnFetchedWeb(calls: readonly { tool: string }[]): boolean {
+  return calls.some((c) => UNTRUSTED_TOOLS.has(c.tool));
+}
+
 /** Only the owner's own admin sessions may cause a write. Public/staff tiers, non-admin channel senders and turns that read web content never do. */
 export function writeTrust(tier: Tier, calls: CallRecord[], o: { tenant?: boolean } = {}): Trust {
   // A tenant runtime (a hosted user on their own MIND key) learns into its own MIND as staff; a public identity never does.

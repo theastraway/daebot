@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
-import type { MindClient, Tool, ToolClass, ToolResult, ToolSpec } from "../types.ts";
+import type { MindClient, Tool, ToolClass, ToolContext, ToolResult, ToolSpec } from "../types.ts";
 import { redactSecrets } from "../learn/guard.ts";
+import { MIND_RECALL_HEADER, withOriginTag } from "./origin.ts";
+import { resolveModelOrigin } from "./trust.ts";
+import { screenUntrustedText, withheldNotice } from "../tools/text-screen.ts";
 
 const MAX_OUT = 24_000;
 export const MIND_QUERY_MIN_TOKENS = 4000;
@@ -54,6 +57,17 @@ const MIND_PROP = {
 
 function cap(s: string): string {
   return s.length > MAX_OUT ? s.slice(0, MAX_OUT) + `\n[truncated ${s.length - MAX_OUT} chars]` : s;
+}
+
+/** Trust header plus the query text. Instruction-bearing lines are withheld; the notice and the header stay inside the output cap. */
+function labelRecall(raw: string): { text: string; meta: { withheld: number } } {
+  const screened = screenUntrustedText(raw);
+  const notice = screened.withheld > 0 ? `\n\n${withheldNotice(screened.withheld)}` : "";
+  const head = `${MIND_RECALL_HEADER}\n`;
+  const body = screened.withheld === 0 ? raw : screened.text;
+  const budget = Math.max(0, MAX_OUT - head.length - notice.length);
+  const clipped = body.length > budget ? body.slice(0, budget) : body;
+  return { text: `${head}${clipped}${notice}`, meta: { withheld: screened.withheld } };
 }
 
 function fail(msg: string): ToolResult {
@@ -133,7 +147,7 @@ interface Def {
   ownerGate?: boolean;
   actions?: string[];                 // allowed actions (enforced in run); undefined = no action arg
   classFor?: (args: Record<string, unknown>) => ToolClass;
-  run: (client: MindClient, args: Record<string, unknown>) => Promise<string | { text: string; meta?: Record<string, unknown> }>;
+  run: (client: MindClient, args: Record<string, unknown>, ctx?: ToolContext) => Promise<string | { text: string; meta?: Record<string, unknown> }>;
 }
 
 function build(t: TenantResolver, user: string, cross: Semaphore, d: Def): Tool {
@@ -180,7 +194,7 @@ function build(t: TenantResolver, user: string, cross: Semaphore, d: Def): Tool 
       const crossRead = d.cls === "read" && target !== t.home;
       const release = crossRead ? await cross.acquire() : undefined;
       try {
-        const out = await d.run(withSignal(t.clientFor(target), ctx?.signal), stripLocal(args));
+        const out = await d.run(withSignal(t.clientFor(target), ctx?.signal), stripLocal(args), ctx);
         if (typeof out === "string") return { ok: true, output: cap(out) };
         return { ok: true, output: cap(out.text), ...(out.meta ? { meta: out.meta } : {}) };
       } catch (e) {
@@ -401,8 +415,10 @@ async function rememberSearch(c: MindClient, a: Record<string, unknown>, type: s
   return c.call("remember", args);
 }
 
-async function rememberCreate(c: MindClient, a: Record<string, unknown>, type: "entry" | "document"): Promise<string> {
+async function rememberCreate(c: MindClient, a: Record<string, unknown>, type: "entry" | "document", calls?: readonly { tool: string }[]): Promise<string> {
   if (typeof a.title !== "string" || typeof a.content !== "string" || !a.title || !a.content) throw new Error("mind_remember needs title and content");
+  // Invalid origin is a refusal: nothing is written. A blank origin is omitted, not invalid.
+  const origin = resolveModelOrigin(a.origin, calls);
   const ids = supersedeIds(a.supersedes);
   let content = a.content;
   let tags = a.tags as string[] | undefined;
@@ -412,6 +428,7 @@ async function rememberCreate(c: MindClient, a: Record<string, unknown>, type: "
     content = withSupersedeNote(content, ids, reason);
     tags = withSupersedeTags(tags, ids);
   }
+  tags = withOriginTag(tags, origin);
   // Documents: the tag and the reason line are the trail. The old document is not deleted (MIND supersede is entries-only).
   return c.remember({
     type,
@@ -419,6 +436,7 @@ async function rememberCreate(c: MindClient, a: Record<string, unknown>, type: "
     content,
     tags,
     source: a.source as string | undefined,
+    origin,
     ...(ids && type === "entry" ? { supersedes: ids } : {}),
   });
 }
@@ -460,8 +478,9 @@ async function rememberDelete(c: MindClient, a: Record<string, unknown>, user: s
       type: "entry",
       title: `Memory deleted - ${safeTitle}`,
       content: body,
-      tags: ["daebot-memory-audit", "deleted"],
+      tags: withOriginTag(["daebot-memory-audit", "deleted"], "tool"),
       source: "daebot",
+      origin: "tool",
     });
     return `${head}\naudit: ${saved}`;
   } catch (e) {
@@ -471,7 +490,7 @@ async function rememberDelete(c: MindClient, a: Record<string, unknown>, user: s
   }
 }
 
-async function runRemember(c: MindClient, a: Record<string, unknown>, user: string): Promise<string> {
+async function runRemember(c: MindClient, a: Record<string, unknown>, user: string, calls?: readonly { tool: string }[]): Promise<string> {
   const type = memoryType(a.type, "entry");
   if (type === "feed_post" || type === "thought") throw new Error("mind_remember is private only. Public posts go through mind_feed_post.");
   if (type !== "entry" && type !== "document") throw new Error(`mind_remember: unknown type '${type}'`);
@@ -481,7 +500,7 @@ async function runRemember(c: MindClient, a: Record<string, unknown>, user: stri
   if (action === "search") return rememberSearch(c, a, type);
   if (action === "delete") return rememberDelete(c, a, user);
   if (action !== "create") throw new Error(`mind_remember: unknown action '${action}'. Allowed: create, get, list, search, delete.`);
-  return rememberCreate(c, a, type);
+  return rememberCreate(c, a, type, calls);
 }
 
 export function createMindTools(source: MindClient | TenantResolver, opts: MindToolsOptions = {}): Tool[] {
@@ -513,22 +532,24 @@ export function createMindTools(source: MindClient | TenantResolver, opts: MindT
       max_context_tokens: { type: "integer", minimum: 4000, description: "Context budget (default and minimum 4000; raise it for broad questions, never lower)" },
     },
     required: ["query"], cls: "read", receipt: "mind",
-    run: (c, a) => {
+    run: async (c, a) => {
       if (typeof a.query !== "string" || !a.query.trim()) throw new Error("mind_query needs a non-empty query");
       // The model may raise the budget, never shrink it below the default (it was choosing 2500 on its own).
       const asked = typeof a.max_context_tokens === "number" ? a.max_context_tokens : 0;
-      return c.query(a.query, { mode: a.mode as string | undefined, maxContextTokens: Math.max(MIND_QUERY_MIN_TOKENS, asked) });
+      const raw = await c.query(a.query, { mode: a.mode as string | undefined, maxContextTokens: Math.max(MIND_QUERY_MIN_TOKENS, asked) });
+      return labelRecall(raw);
     },
   });
 
   defs.push({
     name: "mind_remember",
-    description: "Private MIND memory: create (default), get, list, search, or delete an entry or document. Correct a wrong fact by superseding — create again with supersedes (up to 10 ids or exact titles) and a reason of a few words. MIND marks the old entries superseded and does not delete them; a document gets a supersedes:<id> tag and the reason line, and the old document stays. Prefer supersede over delete. delete needs item_id, type and reason, asks first, and writes an audit entry. Public posts use mind_feed_post. Writes and deletes need owner_check.",
+    description: "Private MIND memory: create (default), get, list, search, or delete an entry or document. Correct a wrong fact by superseding — create again with supersedes (up to 10 ids or exact titles) and a reason of a few words. MIND marks the old entries superseded and does not delete them; a document gets a supersedes:<id> tag and the reason line, and the old document stays. Prefer supersede over delete. Raise a memory to confirmed by creating again with origin confirmed, supersedes set to the old id, and a reason. delete needs item_id, type and reason, asks first, and writes an audit entry. Public posts use mind_feed_post. Writes and deletes need owner_check.",
     properties: {
       action: actionProp(["create", "get", "list", "search", "delete"], "create"),
       type: { type: "string", enum: ["entry", "document"], default: "entry" },
       title: { type: "string", description: "Required for create" },
       content: { type: "string", description: "Required for create" },
+      origin: { type: "string", enum: ["user_said", "agent_inferred", "confirmed", "web"], description: "Where this memory came from. Default agent_inferred. user_said restates the user; confirmed means they said it is right; web came from a page or a search. Omitted on a turn that already called web_fetch or web_search is stored as web." },
       tags: { type: "array", items: { type: "string" } },
       source: { type: "string" },
       supersedes: { type: "array", items: { type: "string" }, description: "Ids or exact titles this new memory replaces (max 10). Requires reason. Entries are passed to MIND; documents are tagged only. Nothing is deleted." },
@@ -541,7 +562,7 @@ export function createMindTools(source: MindClient | TenantResolver, opts: MindT
     // title and content are checked in run for create only. Required here would force get, list, search and delete to send them.
     cls: "write", ownerGate: true,
     classFor: mindRememberClass,
-    run: (c, a) => runRemember(c, a, user),
+    run: (c, a, ctx) => runRemember(c, a, user, ctx?.calls),
   });
 
   defs.push({
@@ -570,7 +591,7 @@ export function createMindTools(source: MindClient | TenantResolver, opts: MindT
       const body = renderDecision(a, date) + (declined ? "\n\nStance: DECLINED" : "");
       let text: string;
       try {
-        text = await c.remember({ type: "document", title: decisionTitle(a.subject, date), content: body, tags: ["decision", "oocemr"], source: "daebot" });
+        text = await c.remember({ type: "document", title: decisionTitle(a.subject, date), content: body, tags: withOriginTag(["decision", "oocemr"], "agent_inferred"), source: "daebot", origin: "agent_inferred" });
       } catch (e) {
         // MIND unreachable: the decision still gets a local receipt id (clearly marked, NOT in MIND) so the work is not blocked on an outage.
         const local = "local-" + createHash("sha256").update(`${a.subject}|${a.decision}|${Date.now()}`).digest("hex").slice(0, 12);

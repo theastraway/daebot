@@ -42,7 +42,8 @@ test("remember: entry -> /entries, document -> /documents, default source", asyn
   assert.equal(await c.remember({ type: "document", title: "t", content: "c" }), "saved document abc");
   assert.equal(seen[0].url, "https://m-i-n-d.ai/developer/v1/entries");
   assert.equal(seen[1].url, "https://m-i-n-d.ai/developer/v1/documents");
-  assert.deepEqual(seen[0].body, { title: "t", content: "c", tags: ["a"], source: "mindclaw" });
+  assert.deepEqual(seen[0].body, { title: "t", content: "c", tags: ["a", "origin:tool"], source: "mindclaw" });
+  assert.deepEqual(seen[1].body.tags, ["origin:tool"]);
 });
 
 test("call: resource routes (life get, crm create, sense state, agents admin root)", async () => {

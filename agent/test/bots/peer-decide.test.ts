@@ -240,7 +240,7 @@ test("mind_decision_record files a PRIVATE document (never the feed) and tags it
   const t = realRecord(fakeMind({ remember: async (a) => { seen.push(a); return "saved document q1"; } }));
   await t.run(dargs, ctx());
   assert.equal(seen[0].type, "document");
-  assert.deepEqual(seen[0].tags, ["decision", "oocemr"]);
+  assert.deepEqual(seen[0].tags, ["decision", "oocemr", "origin:agent_inferred"]);
 });
 
 test("mind_decision_record with MIND down still returns a clearly-marked local receipt id", async () => {

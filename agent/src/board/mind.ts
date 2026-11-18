@@ -3,6 +3,7 @@
 // (their key or OAuth key; the owner login falls back to the server key exactly as billing does). A task never lands in anyone else's MIND.
 import { createHash } from "node:crypto";
 import type { MindClient } from "../types.ts";
+import { withOriginTag } from "../mind/origin.ts";
 import type { BoardMind, BoardScope, BoardStatus, BoardTask, ProjectLite } from "./board.ts";
 
 /** Board status -> LIFE column. LIFE has thought / ready / action / active_mind / completed and no "cancelled". */
@@ -42,7 +43,7 @@ async function json(c: MindClient, tool: string, args: Record<string, unknown>):
 
 export function createBoardMind(c: MindClient, o: { clientNames?: string[] } = {}): BoardMind {
   const describe = (t: BoardTask): string => `Declared by Daebot. Board status: ${STATUS_WORDS[t.status]}.${t.decision ? ` Decision: ${t.decision.winner}.` : ""}`;
-  const tags = (t: BoardTask, extra: string[] = []): string[] => ["daebot", ...(t.scope ? [t.scope] : []), ...extra];
+  const tags = (t: BoardTask, extra: string[] = []): string[] => withOriginTag(["daebot", ...(t.scope ? [t.scope] : []), ...extra], "tool");
   return {
     async projects() {
       const [f, p] = await Promise.all([
@@ -65,7 +66,7 @@ export function createBoardMind(c: MindClient, o: { clientNames?: string[] } = {
       let focusId: string | undefined = (Array.isArray(f?.focuses) ? f.focuses : []).find((x: any) => String(x?.name ?? "").trim().toLowerCase() === want)?.focus_id;
       if (!focusId) focusId = (await json(c, "focuses", { action: "create", name: FOCUS_NAME[scope] }))?.focus_id;
       if (!focusId) throw new Error("MIND did not create the Focus");
-      const made = await json(c, "life", { action: "create", item_type: "project", title: name, focus_id: focusId, status: "active_mind", tags: ["daebot", scope] });
+      const made = await json(c, "life", { action: "create", item_type: "project", title: name, focus_id: focusId, status: "active_mind", tags: withOriginTag(["daebot", scope], "tool") });
       if (!made?.item_id) throw new Error("MIND did not create the project");
       return { id: String(made.item_id), name, focusId: String(focusId), focus: FOCUS_NAME[scope], scope };
     },
@@ -97,7 +98,7 @@ export function createBoardMind(c: MindClient, o: { clientNames?: string[] } = {
     },
     async saveDecision(title, body) {
       try {
-        const text = await c.remember({ type: "document", title, content: body, tags: ["decision", "oocemr", "daebot-task"], source: "daebot" });
+        const text = await c.remember({ type: "document", title, content: body, tags: withOriginTag(["decision", "oocemr", "daebot-task"], "tool"), source: "daebot", origin: "tool" });
         const id = /^saved \w+ (\S+)/.exec(text)?.[1];
         if (id && id !== "document:") return { id };
         return { id: "local-" + createHash("sha256").update(`${title}|${text}|${Date.now()}`).digest("hex").slice(0, 12), local: true };

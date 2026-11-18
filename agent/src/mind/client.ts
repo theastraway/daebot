@@ -1,4 +1,5 @@
 import type { Config, MindClient } from "../types.ts";
+import { ensureOriginTags } from "./origin.ts";
 import { routeFor } from "./routes.ts";
 import type { Route } from "./routes.ts";
 import { edgeFallbackFetch } from "../provider/edge-fallback.ts";
@@ -185,7 +186,9 @@ export function createMindClient(cfg: Config, fetchImpl?: typeof fetch, opts: Mi
     },
     async remember(a, signal) {
       const type = a.type ?? "entry";
-      const args: Record<string, unknown> = { type, title: a.title, content: a.content, tags: a.tags, source: a.source ?? "mindclaw" };
+      // Exactly one origin:* tag. Explicit origin wins; a single valid tag already on the list is kept; otherwise origin:tool.
+      const tags = ensureOriginTags(a.tags, a.origin);
+      const args: Record<string, unknown> = { type, title: a.title, content: a.content, tags, source: a.source ?? "mindclaw" };
       // Passed through on POST /entries only. Documents are not superseded by the API.
       if (type === "entry" && a.supersedes && a.supersedes.length) args.supersedes = a.supersedes;
       const route = routeFor("remember", args);

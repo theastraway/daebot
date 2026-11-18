@@ -165,7 +165,7 @@ test("delete: GET title, DELETE, audit entry with redacted preview; missing reas
   assert.equal(seen[2].method, "POST");
   assert.equal(seen[2].url, "https://m-i-n-d.ai/developer/v1/entries");
   assert.equal(seen[2].body.title, "Memory deleted - Old note");
-  assert.deepEqual(seen[2].body.tags, ["daebot-memory-audit", "deleted"]);
+  assert.deepEqual(seen[2].body.tags, ["daebot-memory-audit", "deleted", "origin:tool"]);
   assert.match(seen[2].body.content, /Item: e1/);
   assert.match(seen[2].body.content, /Type: entry/);
   assert.match(seen[2].body.content, new RegExp(`Reason: ${REASON}`));
@@ -288,7 +288,7 @@ test("document search filters listed pages on title and tags and does not call a
   }
 });
 
-test("plain create with no action still posts exactly the old body", async () => {
+test("plain create with no action posts the entry and tags origin:agent_inferred", async () => {
   const { by, seen } = tools(() => json(200, { id: "abc" }));
   const r = await by("mind_remember").run({ title: "t", content: "c", tags: ["a"], owner_check: OWNER }, ctx);
   assert.equal(r.ok, true, r.output);
@@ -296,7 +296,7 @@ test("plain create with no action still posts exactly the old body", async () =>
   assert.equal(seen.length, 1);
   assert.equal(seen[0].method, "POST");
   assert.equal(seen[0].url, "https://m-i-n-d.ai/developer/v1/entries");
-  assert.deepEqual(seen[0].body, { title: "t", content: "c", tags: ["a"], source: "mindclaw" });
+  assert.deepEqual(seen[0].body, { title: "t", content: "c", tags: ["a", "origin:agent_inferred"], source: "mindclaw" });
 });
 
 test("entry search and list hit the entry routes; feed_post is still refused", async () => {
