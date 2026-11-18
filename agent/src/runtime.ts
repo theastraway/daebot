@@ -2,7 +2,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join as joinPath } from "node:path";
-import { DailyCostCap, filterHostedTools } from "./hosted.ts";
+import { DailyCostCap, filterHostedTools, hostedToolAllowed } from "./hosted.ts";
 import { createKernel, parseTier } from "./kernel/index.ts";
 import type { Tier } from "./kernel/index.ts";
 import { tierAllows } from "./kernel/tier.ts";
@@ -30,6 +30,10 @@ import { botRecall, recordBotLesson } from "./bots/lessons.ts";
 import { MAIN_BOT_ID, RoutineHub } from "./routines/store.ts";
 import { focusedContextOn, relevantFromMind, type Group, type TurnFocus } from "./focus.ts";
 import { MIND_GROUND_TRUTH, withOriginTag } from "./mind/origin.ts";
+import { RECALL_POLICY } from "./recall/policy.ts";
+import { formatSpans } from "./recall/archive.ts";
+import { blobStoreFor } from "./recall/blobs.ts";
+import { createSessionRecallTool } from "./tools/session-recall.ts";
 import { loadSkills, renderSkills, skillsPrompt } from "./skills/index.ts";
 import type { SkillFile } from "./skills/index.ts";
 import { daeBase } from "./bots/dae.ts";
@@ -180,7 +184,7 @@ const SURFACE_LINE = (o: { surface: string; cwd: string; now?: Date }): string =
 
 /** The private entry a handoff card is filed as. origin:tool, one tag, so the next session can tell a machine record from a user fact. */
 export function handoffMemoryArgs(title: string, c: HandoffCard): { type: "entry"; title: string; content: string; tags: string[]; source: string; origin: "tool" } {
-  const body = [`Objective: ${c.objective}`, "Evidence:", ...c.evidence.map((x) => `- ${x}`), "What is left:", ...c.left.map((x) => `- ${x}`), `Next action: ${c.next}`, ...(c.verify ? [`How to verify: ${c.verify}`] : [])].join("\n");
+  const body = [`Objective: ${c.objective}`, "Evidence:", ...c.evidence.map((x) => `- ${x}`), "What is left:", ...c.left.map((x) => `- ${x}`), `Next action: ${c.next}`, ...(c.verify ? [`How to verify: ${c.verify}`] : []), ...(c.spans?.length ? [`Source turns: ${formatSpans(c.spans)}`] : [])].join("\n");
   return { type: "entry", title, content: body, tags: withOriginTag(["daebot-handoff"], "tool"), source: "daebot", origin: "tool" };
 }
 
@@ -331,6 +335,8 @@ export function composeSystemPrompt(o: {
   }
   if (o.connectedApps?.length && (on("connect") || on("mail") || on("docs"))) lines.push("", ...o.connectedApps);
   if (o.permissions?.trim()) lines.push("", o.permissions.trim());
+  // Before the ground-truth paragraph, so it stays outside the boot block. The date line stays last.
+  lines.push("", RECALL_POLICY);
   // Beside the boot block, including a failed or degraded boot. Outside the boot text so the boot cap is unchanged. The date line stays last.
   lines.push("", MIND_GROUND_TRUTH);
   if (o.bootContext.trim()) lines.push("", "## MIND context (booted this session)", o.bootContext.trim());
@@ -757,6 +763,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
   const learnCfg = resolveLearnConfig(overrides.env ?? process.env, { hosted: !!hosted });
   const store = overrides.store;
   const ownerId = overrides.owner ?? "owner";
+  const blobs = blobStoreFor(dataDir());
   const mine = (rec: { owner?: string } | undefined): boolean => !rec || (rec.owner ?? "owner") === ownerId;
   const bootCache = overrides.bootCache ?? new BootCache();
   // Remote MCP tools (operator-configured). Added after the hosted filter on purpose: the operator chose them,
@@ -844,7 +851,32 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       // what bots say to each other never lands in MAIN, which every other agent of the user can read.
       const sync: SessionSync = peer ? noSync : createSessionSync(sessionClient, sourceKey, { append: !sessionLog });
       // Tools a tier may not use are neither offered nor executable (the loop only knows this list).
-      const sessionTools = toolsFor(home, botRec?.id, !botRec && !!peer, !peer); // a bot's message to the main Daebot runs without bot_manage, mcp_connect and the board: a peer can ask, never reconfigure
+      const recallTool = createSessionRecallTool({
+        owner: ownerId,
+        blobs,
+        load(sid) {
+          const live = sessions.get(sid);
+          if (live) {
+            const st = live.session.exportState?.();
+            if (st) return { id: sid, owner: ownerId, updatedAt: live.updatedAt, state: st, history: live.recorder.events() };
+          }
+          const rec = store?.load(sid);
+          if (!rec || (rec.owner ?? "owner") !== ownerId) return undefined;
+          return { id: rec.id, owner: rec.owner ?? "owner", updatedAt: rec.updatedAt, state: rec.state, history: rec.history ?? [] };
+        },
+        list() {
+          const out = new Map<string, { id: string; owner: string; updatedAt: number }>();
+          for (const m of store?.list() ?? []) {
+            const who = m.owner ?? "owner";
+            if (who !== ownerId) continue;
+            out.set(m.id, { id: m.id, owner: who, updatedAt: m.updatedAt });
+          }
+          for (const [sid, e] of sessions) out.set(sid, { id: sid, owner: ownerId, updatedAt: e.updatedAt });
+          return [...out.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+        },
+      });
+      // Appended after toolsFor so a hosted session still only offers it when the allowlist says so. Read class, so public and staff keep it.
+      const sessionTools = [...toolsFor(home, botRec?.id, !botRec && !!peer, !peer), ...(hosted && !hostedToolAllowed("session_recall") ? [] : [recallTool])]; // a bot's message to the main Daebot runs without bot_manage, mcp_connect and the board: a peer can ask, never reconfigure
       const allWithMcp = mcp.configured ? [...sessionTools, ...(await mcp.tools())] : sessionTools;
       const grantNow = coderGrant();
       const tools = tier === "admin" ? allWithMcp : allWithMcp.filter((t) => tierAllows(tier, t, undefined, grantNow));
@@ -888,7 +920,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         : undefined;
       const wasInterrupted = stored?.run?.status === "running"; // a process died with this turn in flight
       const inner = createAgentSession({
-        id, surface: opts.surface, provider: botRec ? withBot(provider, botRec.slug) : provider, kernel: kernelFor(tier), tools, sync, cfg, cwd, bootContext, learn,
+        id, surface: opts.surface, provider: botRec ? withBot(provider, botRec.slug) : provider, kernel: kernelFor(tier), tools, sync, cfg, cwd, bootContext, learn, blobs,
         // Bots take their orders from their owner's rules too; a bot's turns are never interactive, so they keep the typed confirmation.
         permissions,
         permMode: () => curPerm,
