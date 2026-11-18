@@ -109,7 +109,8 @@ test("clipToolOutputs clips old oversized tool results only", () => {
   for (let i = 0; i < 8; i++) m.push({ role: "user", content: "u" });
   m.push({ role: "tool", toolCallId: "b", content: "y".repeat(9000) });
   assert.equal(clipToolOutputs(m, 4000, 6), 1);
-  assert.ok(m[1].content.length < 4100);
+  assert.ok(m[1].content.startsWith("x".repeat(4000)));
+  assert.match(m[1].content, /\[clipped to save context\]\n\[ref:[0-9a-f]{64} · 9000 chars · session_recall expand ref=[0-9a-f]{64}\]$/);
   assert.equal(m.at(-1)!.content.length, 9000, "the newest messages are protected");
 });
 

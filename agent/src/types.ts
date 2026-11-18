@@ -99,6 +99,8 @@ export interface HandoffCard {
   verify?: string;
   /** The tier the piece should run on (delegation). */
   tier?: ModelTier;
+  /** User-turn spans this card's summary covers. Earlier spans stay reachable after a later compaction. */
+  spans?: RecallSpan[];
   at: number;
 }
 
@@ -334,7 +336,16 @@ export interface AgentSession {
   exportState?(): SessionState;
 }
 
-export interface SessionState { messages: Message[]; receiptCounter: number; totalCostUsd: number; userMessageIndex: number }
+/** Inclusive user-turn range a compaction summary covers. Turn numbers count user messages, starting at 1. */
+export interface RecallSpan { from: number; to: number }
+
+/** One raw turn kept after it left the model context. Turn 0 is a compaction summary. */
+export interface RecallMsg { id: string; turn: number; role: Role; text: string; name?: string }
+
+/** Append-only archive of compacted turns. `nextTurn` is the first user turn still in the model context. */
+export interface RecallArchive { dropped: RecallMsg[]; spans: RecallSpan[]; nextTurn: number }
+
+export interface SessionState { messages: Message[]; receiptCounter: number; totalCostUsd: number; userMessageIndex: number; recall?: RecallArchive }
 
 export interface Runtime {
   // boot: runs mind_context before returning; throws only if tools are unreachable.
