@@ -2,7 +2,10 @@
 // turns are summarized by the cheap model into ONE system note. The last N turns stay verbatim and every
 // receipt line (MIND✓ / SURFACE✓) from the compacted turns is carried over word for word, so the receipt
 // trail survives. Summarization failure never fails the chat: a mechanical digest takes its place.
-import type { HandoffCard, Message, Provider, Usage } from "./types.ts";
+import type { HandoffCard, Message, Provider, RecallSpan, Usage } from "./types.ts";
+import type { BlobStore } from "./recall/blobs.ts";
+import { externalize, memoryBlobs } from "./recall/blobs.ts";
+import { formatSpans, mergeSpans, openingTurn, spansIn } from "./recall/archive.ts";
 
 export const SUMMARY_TAG = "[context summary: earlier turns were compacted to save context]";
 export const KEEP_TURNS = 8;
@@ -94,7 +97,22 @@ async function summarize(older: Message[], provider: Provider, model: string, si
   return { text: text.trim(), usage };
 }
 
-export interface CompactResult { messages: Message[]; compacted: number; usage?: Usage; mechanical: boolean; /** The handoff card, when the summary came in that shape. */ card?: HandoffCard }
+export interface CompactResult {
+  messages: Message[];
+  compacted: number;
+  usage?: Usage;
+  mechanical: boolean;
+  /** The handoff card, when the summary came in that shape. */
+  card?: HandoffCard;
+  /** The messages replaced by the summary (not the kept tail, not the live system prompt). */
+  dropped: Message[];
+  /** The span this summary covers, including earlier spans folded in. */
+  span: RecallSpan;
+  /** This span plus every earlier span still named in the note. */
+  spans: RecallSpan[];
+  /** The first user turn inside `dropped`. Summaries stay turn 0 when archived. */
+  firstTurn: number;
+}
 
 /**
  * Replaces everything before the last `keepTurns` user messages with one summary note.
@@ -102,7 +120,7 @@ export interface CompactResult { messages: Message[]; compacted: number; usage?:
  */
 export async function compactMessages(
   messages: Message[],
-  o: { provider: Provider; model: string; keepTurns?: number; signal?: AbortSignal },
+  o: { provider: Provider; model: string; keepTurns?: number; signal?: AbortSignal; /** First user turn if the dropped slice has no earlier span. */ turnHint?: number },
 ): Promise<CompactResult | undefined> {
   const keep = o.keepTurns ?? KEEP_TURNS;
   const userIdx: number[] = [];
@@ -111,6 +129,21 @@ export async function compactMessages(
   const cut = userIdx[userIdx.length - keep]; // a user-message boundary: tool-call/result pairs stay intact
   const older = messages.slice(1, cut);
   if (older.length === 0) return undefined;
+  const prior: RecallSpan[] = [];
+  for (const m of older) if (m.role === "system" && m.content.startsWith(SUMMARY_TAG)) prior.push(...spansIn(m.content));
+  const start = openingTurn(older, o.turnHint);
+  let turn = start;
+  let firstTurn = 0;
+  let lastTurn = 0;
+  for (const m of older) {
+    if (m.role !== "user") continue;
+    if (!firstTurn) firstTurn = turn;
+    lastTurn = turn;
+    turn++;
+  }
+  const coveredFrom = Math.min(firstTurn || start, ...(prior.length ? prior.map((s) => s.from) : [firstTurn || start]));
+  const span: RecallSpan = { from: coveredFrom, to: lastTurn || coveredFrom };
+  const spans = mergeSpans([span], prior);
 
   let summary = "";
   let usage: Usage | undefined;
@@ -125,19 +158,28 @@ export async function compactMessages(
   if (!summary) { mechanical = true; summary = mechanicalDigest(older); }
 
   const receipts = receiptLines(older);
-  const note = [SUMMARY_TAG, summary, receipts.length ? `Receipt lines from the compacted turns (verbatim):\n${receipts.join("\n")}` : ""].filter(Boolean).join("\n\n");
+  const note = [SUMMARY_TAG, formatSpans(spans), summary, receipts.length ? `Receipt lines from the compacted turns (verbatim):\n${receipts.join("\n")}` : ""].filter(Boolean).join("\n\n");
   const card = mechanical ? undefined : parseHandoff(summary);
-  return { messages: [messages[0], { role: "system", content: note }, ...messages.slice(cut)], compacted: older.length, usage, mechanical, ...(card ? { card } : {}) };
+  if (card) card.spans = spans.map((s) => ({ from: s.from, to: s.to }));
+  return {
+    messages: [messages[0], { role: "system", content: note }, ...messages.slice(cut)],
+    compacted: older.length, usage, mechanical, dropped: older, span, spans, firstTurn: firstTurn || start,
+    ...(card ? { card } : {}),
+  };
 }
 
-/** Last resort when even the verbatim tail is too big: clip old tool outputs (never the newest `protect` messages). */
-export function clipToolOutputs(messages: Message[], maxChars = 4000, protect = 6): number {
+/** Last resort when even the verbatim tail is too big: clip old tool outputs (never the newest `protect` messages). The full redacted text is stored and named on a [ref:…] line. */
+export function clipToolOutputs(messages: Message[], maxChars = 4000, protect = 6, blobs?: BlobStore): number {
+  const store = blobs ?? memoryBlobs();
   let clipped = 0;
   for (let i = 1; i < messages.length - protect; i++) {
     const m = messages[i];
     if (m.role === "tool" && m.content.length > maxChars) {
-      messages[i] = { ...m, content: `${m.content.slice(0, maxChars)}\n[clipped to save context]` };
-      clipped++;
+      const next = externalize(m.content, maxChars, store, "[clipped to save context]");
+      if (next !== m.content) {
+        messages[i] = { ...m, content: next };
+        clipped++;
+      }
     }
   }
   return clipped;

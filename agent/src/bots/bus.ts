@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { TurnRateLimiter } from "../gateway/agent-api.ts";
 import { BusyError } from "../gateway/sessions.ts";
 import type { AgentEvent, ExchangeParty, HandoffCard, ModelTier } from "../types.ts";
+import { formatSpans } from "../recall/archive.ts";
 import { MAIN, type ExTool, type ExchangeHub } from "./exchanges.ts";
 import type { BotBus, BotsApi } from "./types.ts";
 
@@ -79,6 +80,7 @@ export function renderHandoffCard(c: HandoffCard): string {
     `What is left:\n${list(c.left)}`,
     `Next action: ${one(c.next)}`,
     ...(c.verify ? [`How to verify: ${one(c.verify)}`] : []),
+    ...(c.spans?.length ? [`Source turns: ${formatSpans(c.spans)}`] : []),
     "[end of card. Do the next action, verify it the way the card says, and reply with what you did, what you verified and what is left.]",
   ].join("\n");
 }
