@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { MindClient, Tool, ToolClass, ToolResult, ToolSpec } from "../types.ts";
+import { redactSecrets } from "../learn/guard.ts";
 
 const MAX_OUT = 24_000;
 export const MIND_QUERY_MIN_TOKENS = 4000;
@@ -77,6 +78,21 @@ export function isDeleteCall(args: Record<string, unknown>): boolean {
   return a === "delete" || m === "delete" || fa === "delete";
 }
 
+const REMEMBER_READS = new Set(["get", "list", "search"]);
+
+/** mind_remember's per-call class: reads stay read (no owner gate, no card); delete stays irreversible via isDeleteCall; create and supersede stay write. */
+export function mindRememberClass(args: Record<string, unknown>): ToolClass {
+  if (isDeleteCall(args)) return "irreversible";
+  const action = typeof args.action === "string" ? args.action.trim().toLowerCase() : "";
+  return REMEMBER_READS.has(action) ? "read" : "write";
+}
+
+function rememberActionName(args: Record<string, unknown>): string {
+  if (isDeleteCall(args)) return "delete";
+  const action = typeof args.action === "string" ? args.action.trim().toLowerCase() : "";
+  return action || "create";
+}
+
 // Arguments that steer the tool locally and never reach MIND: the owner check and the `mind` (tenant) choice.
 // Removed at EVERY depth (a model may tuck them inside fields, arrays of fields, nested objects), before any body is built.
 const LOCAL_ARG_KEYS = new Set(["owner_check", "mind"]);
@@ -116,6 +132,7 @@ interface Def {
   receipt?: "mind";
   ownerGate?: boolean;
   actions?: string[];                 // allowed actions (enforced in run); undefined = no action arg
+  classFor?: (args: Record<string, unknown>) => ToolClass;
   run: (client: MindClient, args: Record<string, unknown>) => Promise<string | { text: string; meta?: Record<string, unknown> }>;
 }
 
@@ -136,7 +153,8 @@ function build(t: TenantResolver, user: string, cross: Semaphore, d: Def): Tool 
     spec,
     class: d.cls,
     async run(args, ctx) {
-      if (d.ownerGate) {
+      // mind_remember get/list/search are reads: no owner gate. Writes and deletes still require owner_check.
+      if (d.ownerGate && !(d.name === "mind_remember" && mindRememberClass(args) === "read")) {
         const p = ownerProblem(args, user);
         if (p) return fail(p);
       }
@@ -181,9 +199,8 @@ function build(t: TenantResolver, user: string, cross: Semaphore, d: Def): Tool 
     },
   };
   if (d.receipt) tool.receipt = d.receipt;
-  if (d.cls === "write") {
-    tool.classFor = (args) => (isDeleteCall(args) ? "irreversible" : "write");
-  }
+  if (d.classFor) tool.classFor = d.classFor;
+  else if (d.cls === "write") tool.classFor = (args) => (isDeleteCall(args) ? "irreversible" : "write");
   return tool;
 }
 
@@ -254,6 +271,219 @@ export function renderDecision(a: Record<string, unknown>, date: string): string
   ).trimEnd();
 }
 
+const SUPERSEDE_MAX = 10;
+const REASON_WORDS = 3;
+const PREVIEW_MAX = 200;
+// No verified document search endpoint: list this many pages and match title/tags in the client.
+const DOC_SEARCH_PAGES = 2;
+const DOC_SEARCH_PAGE_MAX = 50;
+
+function clampInt(v: unknown, dflt: number, min: number, max: number): number {
+  const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
+  if (!Number.isFinite(n)) return dflt;
+  return Math.min(max, Math.max(min, Math.trunc(n)));
+}
+
+function asObj(text: string): Record<string, unknown> {
+  try {
+    const v = JSON.parse(text);
+    if (v && typeof v === "object" && !Array.isArray(v)) return v as Record<string, unknown>;
+  } catch { /* MIND sometimes returns plain text; the caller treats that as no fields */ }
+  return {};
+}
+
+function nestedItem(data: Record<string, unknown>): Record<string, unknown> | undefined {
+  for (const key of ["entry", "document", "item"]) {
+    const v = data[key];
+    if (v && typeof v === "object" && !Array.isArray(v)) return v as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+function firstString(...vals: unknown[]): string | undefined {
+  for (const v of vals) if (typeof v === "string" && v.trim()) return v.trim();
+  return undefined;
+}
+
+function itemTitle(data: Record<string, unknown>): string | undefined {
+  return firstString(data.title, nestedItem(data)?.title);
+}
+
+function itemContent(data: Record<string, unknown>): string {
+  const nested = nestedItem(data);
+  return firstString(data.content, data.text, data.content_preview, nested?.content, nested?.text) ?? "";
+}
+
+function docRows(data: Record<string, unknown>): Record<string, unknown>[] {
+  const raw = data.documents ?? data.items ?? data.results;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((x) => x && typeof x === "object") as Record<string, unknown>[];
+}
+
+function memoryType(v: unknown, dflt: string): string {
+  if (typeof v !== "string" || !v.trim()) return dflt;
+  return v.trim().toLowerCase();
+}
+
+/** Ids or exact titles. Empty input is "not a supersede". More than 10 is refused. */
+function supersedeIds(v: unknown): string[] | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (!Array.isArray(v)) throw new Error("mind_remember supersedes must be an array of ids or exact titles (max 10)");
+  if (v.some((x) => typeof x !== "string")) throw new Error("mind_remember supersedes must be ids or exact titles");
+  const ids = [...new Set(v.map((x) => x.trim()).filter(Boolean))];
+  if (v.length > 0 && ids.length === 0) throw new Error("mind_remember supersedes must be ids or exact titles");
+  if (ids.length > SUPERSEDE_MAX) throw new Error(`mind_remember supersedes accepts at most ${SUPERSEDE_MAX} ids or exact titles`);
+  return ids.length ? ids : undefined;
+}
+
+function fewWordReason(v: unknown): string | undefined {
+  if (typeof v !== "string") return undefined;
+  const t = v.trim();
+  const words = t.split(/\s+/).filter(Boolean);
+  return words.length >= REASON_WORDS ? t : undefined;
+}
+
+function reasonLine(ids: string[], reason: string): string {
+  return `Supersedes ${ids.join(", ")}: ${reason}`;
+}
+
+function withSupersedeNote(content: string, ids: string[], reason: string): string {
+  return `${content.replace(/\s+$/, "")}\n\n${reasonLine(ids, reason)}`;
+}
+
+function withSupersedeTags(tags: unknown, ids: string[]): string[] {
+  const base = Array.isArray(tags) ? tags.filter((x): x is string => typeof x === "string" && x.trim() !== "") : [];
+  return [...new Set([...base, ...ids.map((id) => `supersedes:${id}`)])];
+}
+
+async function rememberGet(c: MindClient, a: Record<string, unknown>, type: string): Promise<string> {
+  const itemId = typeof a.item_id === "string" ? a.item_id.trim() : "";
+  if (!itemId) throw new Error("mind_remember get needs item_id");
+  return c.call("remember", { action: "get", type, item_id: itemId });
+}
+
+async function rememberList(c: MindClient, a: Record<string, unknown>, type: string): Promise<string> {
+  const args: Record<string, unknown> = { action: "list", type };
+  if (a.limit !== undefined) args.limit = a.limit;
+  if (a.page !== undefined) args.page = a.page;
+  return c.call("remember", args);
+}
+
+// MIND has no verified document search endpoint. List a couple of pages and match title/tags here.
+async function searchDocuments(c: MindClient, a: Record<string, unknown>, query: string): Promise<string> {
+  const size = clampInt(a.limit, 20, 1, DOC_SEARCH_PAGE_MAX);
+  const start = clampInt(a.page, 1, 1, 10_000);
+  const rows: Record<string, unknown>[] = [];
+  for (let i = 0; i < DOC_SEARCH_PAGES; i++) {
+    const text = await c.call("remember", { action: "search", type: "document", query, page: start + i, limit: size });
+    const page = docRows(asObj(text));
+    rows.push(...page);
+    if (page.length < size) break;
+  }
+  const needle = query.toLowerCase();
+  const documents = rows.filter((d) => {
+    const title = String(d.title ?? "").toLowerCase();
+    const tags = Array.isArray(d.tags) ? d.tags.map((t) => String(t).toLowerCase()) : [];
+    return title.includes(needle) || tags.some((t) => t.includes(needle));
+  });
+  return JSON.stringify({
+    documents,
+    note: "document search matches title and tags locally; MIND has no document search endpoint",
+  });
+}
+
+async function rememberSearch(c: MindClient, a: Record<string, unknown>, type: string): Promise<string> {
+  const query = typeof a.query === "string" ? a.query.trim() : "";
+  if (!query) throw new Error("mind_remember search needs a query");
+  if (type === "document") return searchDocuments(c, a, query);
+  const args: Record<string, unknown> = { action: "search", type: "entry", query };
+  if (a.limit !== undefined) args.limit = a.limit;
+  return c.call("remember", args);
+}
+
+async function rememberCreate(c: MindClient, a: Record<string, unknown>, type: "entry" | "document"): Promise<string> {
+  if (typeof a.title !== "string" || typeof a.content !== "string" || !a.title || !a.content) throw new Error("mind_remember needs title and content");
+  const ids = supersedeIds(a.supersedes);
+  let content = a.content;
+  let tags = a.tags as string[] | undefined;
+  if (ids) {
+    const reason = fewWordReason(a.reason);
+    if (!reason) throw new Error("mind_remember supersede needs a reason of a few words (why the old memory is wrong)");
+    content = withSupersedeNote(content, ids, reason);
+    tags = withSupersedeTags(tags, ids);
+  }
+  // Documents: the tag and the reason line are the trail. The old document is not deleted (MIND supersede is entries-only).
+  return c.remember({
+    type,
+    title: a.title,
+    content,
+    tags,
+    source: a.source as string | undefined,
+    ...(ids && type === "entry" ? { supersedes: ids } : {}),
+  });
+}
+
+async function rememberDelete(c: MindClient, a: Record<string, unknown>, user: string): Promise<string> {
+  const type = typeof a.type === "string" ? a.type.trim().toLowerCase() : "";
+  if (type !== "entry" && type !== "document") throw new Error("mind_remember delete needs type (entry or document)");
+  const itemId = typeof a.item_id === "string" ? a.item_id.trim() : "";
+  if (!itemId) throw new Error("mind_remember delete needs item_id");
+  const reason = typeof a.reason === "string" ? a.reason.trim() : "";
+  if (!reason) throw new Error("mind_remember delete needs a reason");
+
+  let title = "title unknown";
+  let preview = "";
+  try {
+    const raw = await c.call("remember", { action: "get", type, item_id: itemId });
+    const data = asObj(raw);
+    title = itemTitle(data) ?? "title unknown";
+    preview = redactSecrets(itemContent(data)).slice(0, PREVIEW_MAX);
+  } catch {
+    title = "title unknown";
+    preview = "";
+  }
+
+  const deleted = await c.call("remember", { action: "delete", type, item_id: itemId });
+  const safeTitle = redactSecrets(title).replace(/\s+/g, " ").trim().slice(0, 160) || "title unknown";
+  const body = redactSecrets([
+    `Item: ${itemId}`,
+    `Type: ${type}`,
+    `Reason: ${reason}`,
+    `Asked by: ${user}`,
+    `Time: ${new Date().toISOString()}`,
+    `Preview: ${preview}`,
+  ].join("\n"));
+  const named = safeTitle === "title unknown" ? "title unknown" : `"${safeTitle}"`;
+  const head = `deleted ${type} ${itemId} (${named})\n${deleted}`;
+  try {
+    const saved = await c.remember({
+      type: "entry",
+      title: `Memory deleted - ${safeTitle}`,
+      content: body,
+      tags: ["daebot-memory-audit", "deleted"],
+      source: "daebot",
+    });
+    return `${head}\naudit: ${saved}`;
+  } catch (e) {
+    const msg = String((e as Error)?.message ?? e).split("\n")[0].slice(0, 200);
+    // The delete already happened. A failed audit must not look like a failed delete.
+    return `${head}\nwarning: delete succeeded but the audit entry was not saved: ${msg}`;
+  }
+}
+
+async function runRemember(c: MindClient, a: Record<string, unknown>, user: string): Promise<string> {
+  const type = memoryType(a.type, "entry");
+  if (type === "feed_post" || type === "thought") throw new Error("mind_remember is private only. Public posts go through mind_feed_post.");
+  if (type !== "entry" && type !== "document") throw new Error(`mind_remember: unknown type '${type}'`);
+  const action = rememberActionName(a);
+  if (action === "get") return rememberGet(c, a, type);
+  if (action === "list") return rememberList(c, a, type);
+  if (action === "search") return rememberSearch(c, a, type);
+  if (action === "delete") return rememberDelete(c, a, user);
+  if (action !== "create") throw new Error(`mind_remember: unknown action '${action}'. Allowed: create, get, list, search, delete.`);
+  return rememberCreate(c, a, type);
+}
+
 export function createMindTools(source: MindClient | TenantResolver, opts: MindToolsOptions = {}): Tool[] {
   // Back-compat: a plain client is a single-MIND tool set (home "main", no bots).
   const t: TenantResolver = isResolver(source)
@@ -293,22 +523,25 @@ export function createMindTools(source: MindClient | TenantResolver, opts: MindT
 
   defs.push({
     name: "mind_remember",
-    description: "Write a PRIVATE entry (outcome, decision, log) or document (knowledge) to MIND. Public posts use mind_feed_post. Every call needs owner_check.",
+    description: "Private MIND memory: create (default), get, list, search, or delete an entry or document. Correct a wrong fact by superseding — create again with supersedes (up to 10 ids or exact titles) and a reason of a few words. MIND marks the old entries superseded and does not delete them; a document gets a supersedes:<id> tag and the reason line, and the old document stays. Prefer supersede over delete. delete needs item_id, type and reason, asks first, and writes an audit entry. Public posts use mind_feed_post. Writes and deletes need owner_check.",
     properties: {
+      action: actionProp(["create", "get", "list", "search", "delete"], "create"),
       type: { type: "string", enum: ["entry", "document"], default: "entry" },
-      title: { type: "string" },
-      content: { type: "string" },
+      title: { type: "string", description: "Required for create" },
+      content: { type: "string", description: "Required for create" },
       tags: { type: "array", items: { type: "string" } },
       source: { type: "string" },
+      supersedes: { type: "array", items: { type: "string" }, description: "Ids or exact titles this new memory replaces (max 10). Requires reason. Entries are passed to MIND; documents are tagged only. Nothing is deleted." },
+      reason: { type: "string", description: "Why this corrects or deletes a memory. Required for supersede (a few words) and for delete." },
+      item_id: { type: "string", description: "Id for get or delete" },
+      query: { type: "string", description: "Search text. Entries use MIND search. Documents match title and tags locally." },
+      limit: { type: "integer", description: "Max items for list/search. Document list uses this as page_size." },
+      page: { type: "integer", description: "Document list page (1-based)" },
     },
-    required: ["title", "content"], cls: "write", ownerGate: true,
-    run: (c, a) => {
-      const type = String(a.type ?? "entry");
-      if (type === "feed_post" || type === "thought") throw new Error("mind_remember is private only. Public posts go through mind_feed_post.");
-      if (type !== "entry" && type !== "document") throw new Error(`mind_remember: unknown type '${type}'`);
-      if (typeof a.title !== "string" || typeof a.content !== "string" || !a.title || !a.content) throw new Error("mind_remember needs title and content");
-      return c.remember({ type, title: a.title, content: a.content, tags: a.tags as string[] | undefined, source: a.source as string | undefined });
-    },
+    // title and content are checked in run for create only. Required here would force get, list, search and delete to send them.
+    cls: "write", ownerGate: true,
+    classFor: mindRememberClass,
+    run: (c, a) => runRemember(c, a, user),
   });
 
   defs.push({

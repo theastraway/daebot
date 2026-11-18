@@ -213,7 +213,7 @@ export interface Violation {
 export interface MindClient {
   context(sections?: string[], forTask?: string, signal?: AbortSignal): Promise<string>;
   query(query: string, opts?: { mode?: string; maxContextTokens?: number; signal?: AbortSignal }): Promise<string>;
-  remember(a: { type?: "entry" | "document"; title: string; content: string; tags?: string[]; source?: string }, signal?: AbortSignal): Promise<string>;
+  remember(a: { type?: "entry" | "document"; title: string; content: string; tags?: string[]; source?: string; supersedes?: string[] }, signal?: AbortSignal): Promise<string>;
   call(tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string>; // generic /developer/v1/<tool>; signal aborts the HTTP request
 }
 
