@@ -185,7 +185,10 @@ export function createMindClient(cfg: Config, fetchImpl?: typeof fetch, opts: Mi
     },
     async remember(a, signal) {
       const type = a.type ?? "entry";
-      const route = routeFor("remember", { type, title: a.title, content: a.content, tags: a.tags, source: a.source ?? "mindclaw" });
+      const args: Record<string, unknown> = { type, title: a.title, content: a.content, tags: a.tags, source: a.source ?? "mindclaw" };
+      // Passed through on POST /entries only. Documents are not superseded by the API.
+      if (type === "entry" && a.supersedes && a.supersedes.length) args.supersedes = a.supersedes;
+      const route = routeFor("remember", args);
       const data = parse(await request(`remember ${type}`, route, signal)) as any;
       const id = data?.id ?? data?.entry_id ?? data?.document_id ?? data?.doc_id;
       return id ? `saved ${type} ${id}` : `saved ${type}: ${JSON.stringify(data).slice(0, 300)}`;

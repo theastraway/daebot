@@ -76,12 +76,50 @@ export function routeFor(toolIn: string, args: Record<string, unknown>): Route {
     case "query":
       return { method: "POST", path: "/query", body: clean(args) };
     case "remember": {
+      // get/list/search/delete plus create. `supersedes` is entries-only (MIND tags those entries superseded; it never deletes them).
+      const act = String(args.action ?? "").trim().toLowerCase();
       const type = String(args.type ?? "entry");
+      const isDoc = type === "document";
+      const base = isDoc ? "/documents" : "/entries";
+      if (act === "delete") return { method: "DELETE", path: `${base}/${need(args, "item_id", tool, act)}` };
+      if (act === "get" || act === "list" || act === "search") {
+        if (type === "feed_post" || type === "thought") throw new Error(`remember ${act} does not support ${type}`);
+        if (act === "get") {
+          const id = need(args, "item_id", tool, act);
+          // Documents return their text only when include_content is set.
+          return isDoc
+            ? { method: "GET", path: `${base}/${id}`, query: { include_content: "true" } }
+            : { method: "GET", path: `${base}/${id}` };
+        }
+        if (isDoc) {
+          // No verified document search endpoint. search is this list (a couple of pages, bounded);
+          // the caller matches title and tags locally. `query` is not sent.
+          const q: Record<string, string> = {};
+          if (args.page !== undefined && args.page !== null && args.page !== "") q.page = String(args.page);
+          const size = args.page_size !== undefined && args.page_size !== null && args.page_size !== "" ? args.page_size : args.limit;
+          if (size !== undefined && size !== null && size !== "") q.page_size = String(size);
+          return { method: "GET", path: base, query: q };
+        }
+        if (act === "search") {
+          const q: Record<string, string> = {};
+          if (args.query !== undefined && args.query !== null && args.query !== "") q.query = String(args.query);
+          if (args.limit !== undefined && args.limit !== null && args.limit !== "") q.limit = String(args.limit);
+          return { method: "GET", path: "/entries/search", query: q };
+        }
+        const q: Record<string, string> = {};
+        if (args.limit !== undefined && args.limit !== null && args.limit !== "") q.limit = String(args.limit);
+        return { method: "GET", path: "/entries", query: q };
+      }
       // Removing something this client wrote itself (the admin ledger feed replaces its own documents). Never the public feed.
-      if (action === "delete") return { method: "DELETE", path: `${type === "document" ? "/documents" : "/entries"}/${need(args, "item_id", tool, action)}` };
       if (type === "feed_post" || type === "thought") return { method: "POST", path: "/thoughts", body: { content: args.content } };
-      const body = clean(args, ["type"]);
-      return { method: "POST", path: type === "document" ? "/documents" : "/entries", body };
+      const body = clean(args, ["type", "item_id", "query", "limit", "page", "page_size", "reason"]);
+      if (isDoc) delete body.supersedes; // MIND supersede is entries-only
+      else if (Array.isArray(body.supersedes)) {
+        const ids = (body.supersedes as unknown[]).map((x) => (typeof x === "string" ? x.trim() : "")).filter(Boolean).slice(0, 10);
+        if (ids.length) body.supersedes = ids;
+        else delete body.supersedes;
+      }
+      return { method: "POST", path: base, body };
     }
     case "documents":
       // One document by id (title, tags, and with include_content its text). Without an id: the list.
