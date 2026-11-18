@@ -2862,7 +2862,15 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
           throw e;
         }
         const notice = b.resumeId ? await enforceModel(me, ls.id).catch(() => undefined) : undefined;
-        return sendJson(res, 200, { sessionId: ls.id, ...(notice ? { notice } : {}) });
+        // A new session starts in MIND Cloud, but a local model (ollama/...) only exists on this computer: a chat started on one
+        // lives here from its first turn (Nov 18 2026: it started in the cloud, which answered on another model). Same path as PATCH.
+        let moved: { home: "local"; env: unknown } | undefined;
+        if (model && !b.resumeId && localModelNeedsThisComputer(model, { hosted: !!hosted, inCloud: runsInCloud(me.id, { id: ls.id, bot: ls.bot, peer: ls.peer }) })) {
+          const r = await setHomeApi(me, ls.id, "local", undefined);
+          if (r.status !== 200) return sendJson(res, r.status, { ...r.body, message: `${(r.body as { message?: string }).message ?? "This session cannot run on a computer right now."} A local model (${model}) only runs on a computer.` });
+          moved = { home: "local", env: r.body.env };
+        }
+        return sendJson(res, 200, { sessionId: ls.id, ...(notice ? { notice } : {}), ...(moved ?? {}) });
       }
       return sendJson(res, 405, { error: "method not allowed" });
     }

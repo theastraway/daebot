@@ -113,6 +113,10 @@ test("providerOf/shortName/groupModels: groups by LLM company from the name pref
   assert.equal(models.providerOf("steady-1", "Steady 1"), "Other");
   assert.equal(models.shortName("Meta: Llama 4 Scout", "Meta"), "Llama 4 Scout");
   assert.equal(models.shortName("Meta: Llama 4 Scout", "Qwen"), "Meta: Llama 4 Scout");
+  // A model served on this computer is its own group, first, whatever its name says; the "(this computer)" tail is dropped inside the group.
+  assert.equal(models.providerOf("ollama/qwen3.8-flash-next:125b-mlx", "qwen3.8-flash-next:125b-mlx (this computer)"), models.LOCAL_GROUP);
+  assert.equal(models.LOCAL_GROUP, "This computer");
+  assert.equal(models.shortName("qwen3:14b (this computer)", models.LOCAL_GROUP), "qwen3:14b");
   const n = models.normalizeModels({ models: [
     { id: "perplexity/sonar", name: "Perplexity: Sonar" },
     { id: "zzz/x", name: "Zed: X" },
@@ -121,10 +125,11 @@ test("providerOf/shortName/groupModels: groups by LLM company from the name pref
     { id: "openai/gpt", name: "OpenAI: GPT" },
     { id: "meta-llama/b", name: "Meta: B" },
     { id: "anthropic/c", name: "Anthropic: C" },
+    { id: "ollama/qwen3:14b", name: "qwen3:14b (this computer)", free: true, price_hint: "free, runs on this computer" },
   ] });
   const g = models.groupModels(n.rows);
-  assert.deepEqual(g.map((x: any) => x.provider), ["OpenAI", "Anthropic", "Meta", "Perplexity", "Zed", "Other"]);
-  assert.deepEqual(g[2].models.map((r: any) => r.id), ["meta-llama/b", "meta-llama/a"]);
+  assert.deepEqual(g.map((x: any) => x.provider), ["This computer", "OpenAI", "Anthropic", "Meta", "Perplexity", "Zed", "Other"]);
+  assert.deepEqual(g[3].models.map((r: any) => r.id), ["meta-llama/b", "meta-llama/a"]);
 });
 
 test("model picker: groups collapse with a count, the group holding the chosen model stays open, no innerHTML", () => {
@@ -132,7 +137,10 @@ test("model picker: groups collapse with a count, the group holding the chosen m
   assert.match(src, /aria-expanded/);
   assert.match(src, /mm-group/);
   assert.match(src, /mm-gcount/);
-  assert.match(src, /Applies to this session\./);
+  // One rule for a pick (this chat and new chats): no second "use for new sessions" step, and the models on this computer are always in view.
+  assert.match(src, /Used for this chat and new chats\./);
+  assert.doesNotMatch(src, /Use for new sessions/);
+  assert.match(src, /g\.provider === LOCAL_GROUP/);
   assert.doesNotMatch(src, /innerHTML|insertAdjacentHTML|eval\(|new Function|document\.write/);
   assert.match(web("index.html"), /id="i-minus"/);
 });

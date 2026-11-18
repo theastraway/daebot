@@ -51,7 +51,7 @@ export function localLine(v) {
   if (!v.enabled) return `Off. Daebot will not use a model on this computer${where ? ` (${where})` : ""}.`;
   if (!n) return `Nothing served at ${where} yet. Start Ollama, LM Studio or llama.cpp and pull a chat model, then Detect.`;
   const first = String(v.served[0]).replace(/^ollama\//, "");
-  return `${n === 1 ? first : `${first} and ${n - 1} more`} served at ${where}. Light work goes there for free when the router is enforced; pick one in the model menu to run a chat on it.`;
+  return `${n === 1 ? first : `${first} and ${n - 1} more`} served at ${where}. Press Use next to one and your chats run on it, on this computer, for free.`;
 }
 
 /** "Your own Postgres at db.example.com:5432/mind · set up, routing pending" or the cloud line. */
@@ -82,7 +82,7 @@ export function dbFromForm({ host, port, database, user, password, ssl, password
   return { body };
 }
 
-export function initConnections({ json, h, notify, isHosted }) {
+export function initConnections({ json, h, notify, isHosted, onPick }) {
   const $ = (id) => document.getElementById(id);
   const modal = $("conn-modal"), closeBtn = $("conn-close"), open = $("am-conn");
   const hosts = { llm: $("conn-llm"), local: $("conn-local"), db: $("conn-db") };
@@ -163,18 +163,35 @@ export function initConnections({ json, h, notify, isHosted }) {
     const swRow = h("div", "conn-switch"); swRow.append(h("span", "", "Use a model on this computer"), sw);
     const base = input("url", "http://127.0.0.1:11434", { label: "Server address", value: v.source === "panel" ? v.base : "" });
     base.placeholder = v.base || "http://127.0.0.1:11434";
-    const model = h("select", "fld"); model.setAttribute("aria-label", "Preferred model");
+    const model = h("select", "fld"); model.setAttribute("aria-label", "Model for light work");
     const o0 = h("option", "", "First served model"); o0.value = ""; model.append(o0);
     for (const id of v.served || []) { const n = String(id).replace(/^ollama\//, ""); const o = h("option", "", n); o.value = n; model.append(o); }
     if (v.model && !(v.served || []).some((id) => String(id).replace(/^ollama\//, "") === v.model)) { const o = h("option", "", `${v.model} (not served now)`); o.value = v.model; model.append(o); }
     model.value = v.model || "";
-    const rows = h("div", "conn-rows"); rows.append(fld("Server address (Ollama, LM Studio, llama.cpp)", base), fld("Preferred model for light work", model));
+    const rows = h("div", "conn-rows"); rows.append(fld("Server address (Ollama, LM Studio, llama.cpp)", base), fld("Model the router sends light work to (automatic)", model));
     const detect = h("button", "btn-quiet sm", "Detect"); detect.type = "button";
     const save = h("button", "btn-primary sm", "Save"); save.type = "button";
     const state = status();
     const acts = h("div", "cap-acts"); acts.append(detect, save, state);
-    const srv = h("p", "drawer-fine", (v.served || []).length ? `Served now: ${(v.served || []).map((id) => String(id).replace(/^ollama\//, "")).join(", ")}.` : "");
-    host.replaceChildren(line, swRow, rows, acts, srv, fine("Leave the address empty for the default (OLLAMA_HOST, else 127.0.0.1:11434). LM Studio's server is usually 127.0.0.1:1234. Served models appear in the model menu as \"(this computer)\"."));
+    // The models served right now, each with a Use button: one press and this chat and new chats run on it (the same rule as the model menu).
+    const srv = h("div", "conn-served");
+    if ((v.served || []).length && v.enabled) {
+      srv.append(h("p", "fld-label", "Chat on a model on this computer"));
+      for (const id of v.served) {
+        const row = h("div", "conn-served-row");
+        const use = h("button", "btn-quiet sm", "Use"); use.type = "button"; use.dataset.model = String(id); use.setAttribute("aria-label", `Use ${String(id).replace(/^ollama\//, "")} for your chats`);
+        use.addEventListener("click", async () => {
+          if (!onPick) return;
+          use.disabled = true; state.textContent = "Switching…";
+          try { if (await onPick(String(id))) { state.textContent = ""; setOpen(false); } else state.textContent = "Could not switch. Press Detect, then try again."; }
+          catch (e) { state.textContent = errText(e); }
+          use.disabled = false;
+        });
+        row.append(h("span", "conn-served-name", String(id).replace(/^ollama\//, "")), use);
+        srv.append(row);
+      }
+    }
+    host.replaceChildren(line, swRow, srv, rows, acts, fine("Leave the address empty for the default (OLLAMA_HOST, else 127.0.0.1:11434). LM Studio's server is usually 127.0.0.1:1234. Served models are also in the model menu, under \"This computer\"."));
     const busy = (on) => { detect.disabled = save.disabled = sw.disabled = on; };
     async function put(body) {
       busy(true); state.textContent = "Saving…";
