@@ -3,6 +3,7 @@
 // no parameter properties, no namespaces) so Node strips types natively.
 
 import type { BotsApi } from "./bots/types.ts";
+import type { MemoryOrigin } from "./mind/origin.ts";
 import type { SessionPermMode } from "./permissions/store.ts";
 
 // ---------- messages ----------
@@ -147,6 +148,8 @@ export interface ToolContext {
   capabilities?: string[];
   /** The relay to that client, present only on a turn that listed a capability. */
   device?: DeviceBridge;
+  /** Calls already finished this turn. The call in flight is not included yet. mind_remember reads this for a prior web_fetch or web_search. */
+  calls?: readonly { tool: string }[];
 }
 
 // One executed tool call this turn, with a kernel-assigned short id used in receipts.
@@ -213,7 +216,7 @@ export interface Violation {
 export interface MindClient {
   context(sections?: string[], forTask?: string, signal?: AbortSignal): Promise<string>;
   query(query: string, opts?: { mode?: string; maxContextTokens?: number; signal?: AbortSignal }): Promise<string>;
-  remember(a: { type?: "entry" | "document"; title: string; content: string; tags?: string[]; source?: string; supersedes?: string[] }, signal?: AbortSignal): Promise<string>;
+  remember(a: { type?: "entry" | "document"; title: string; content: string; tags?: string[]; source?: string; supersedes?: string[]; origin?: MemoryOrigin }, signal?: AbortSignal): Promise<string>;
   call(tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string>; // generic /developer/v1/<tool>; signal aborts the HTTP request
 }
 
