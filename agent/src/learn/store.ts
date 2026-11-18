@@ -2,6 +2,7 @@
 // Everything goes through the MindClient (query / remember). Records are append-only revisions (see records.ts).
 // Counter changes (uses/helped/hurt) are kept as local deltas and written as a new revision on flush.
 import type { MindClient } from "../types.ts";
+import { withOriginTag } from "../mind/origin.ts";
 import type { LearnConfig } from "./config.ts";
 import { contentProblem } from "./guard.ts";
 import { latestByKey, latestUserModel, parseRecords, serializeLesson, serializeSkill, serializeUserModel } from "./records.ts";
@@ -167,9 +168,10 @@ export class LearnStore {
     this.writes++;
     const tags = i.type === "lesson" ? ["daebot-lesson", i.kind] : ["daebot-skill"];
     if (i.supersedes) tags.push(`supersedes:${i.supersedes}`);
+    const stamped = withOriginTag(tags, "tool");
     const res = i.type === "lesson"
-      ? await this.client.remember({ type: "entry", title: i.title, content: serializeLesson(i), tags, source: "daebot-learning" })
-      : await this.client.remember({ type: "document", title: i.title, content: serializeSkill(i), tags, source: "daebot-learning" });
+      ? await this.client.remember({ type: "entry", title: i.title, content: serializeLesson(i), tags: stamped, source: "daebot-learning", origin: "tool" })
+      : await this.client.remember({ type: "document", title: i.title, content: serializeSkill(i), tags: stamped, source: "daebot-learning", origin: "tool" });
     return savedId(res);
   }
 
@@ -274,7 +276,7 @@ export class LearnStore {
     const model: UserModel = { user: this.cfg.user, rev: (cur?.rev ?? 0) + 1, prefs: prefs.slice(-25), updated: today(this.now()) };
     this.writes++;
     const res = await this.client.remember({
-      type: "document", title: `Daebot - User Model - ${this.cfg.user}`, content: serializeUserModel(model), tags: ["daebot-user-model"], source: "daebot-learning",
+      type: "document", title: `Daebot - User Model - ${this.cfg.user}`, content: serializeUserModel(model), tags: withOriginTag(["daebot-user-model"], "tool"), source: "daebot-learning", origin: "tool",
     });
     model.mindId = savedId(res);
     this.userModel = model;

@@ -233,7 +233,7 @@ test("mind_decision_record: files a PRIVATE document through the existing client
   assert.match(b.content, /1\. Keep trust/);
   assert.match(b.content, /Rollback is one env flip/);
   assert.match(b.content, /2\. Verify live, owner Dae/);
-  assert.deepEqual(b.tags, ["decision", "oocemr"]);
+  assert.deepEqual(b.tags, ["decision", "oocemr", "origin:agent_inferred"]);
 });
 
 test("mind_decision_record: defaults the date to today and rejects an empty decision", async () => {
