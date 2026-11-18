@@ -6,6 +6,7 @@ import { rename, writeFile, mkdir, unlink } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { daebotHome } from "./home.ts";
+import { redactSecrets } from "./learn/guard.ts";
 import type { HistoryEvent, Message, MessageMeta, SessionState, Violation, TurnProof, HandoffCard } from "./types.ts";
 import type { BoardTask } from "./board/board.ts";
 import type { EnvTag } from "./env.ts";
@@ -139,7 +140,11 @@ export function createFileStore(dir: string): SessionStore {
     save(rec, opts) {
       const file = join(root, fileNameFor(rec.id));
       // Screenshots are sent to the model once and never written to disk (size, and they can show anything on screen).
-      const data = JSON.stringify(rec, (k, v) => (k === "images" ? undefined : v));
+      // Secrets are stripped from the file only. The in-memory record (and sync listeners) stay as the caller handed them in.
+      const data = JSON.stringify(rec, (k, v) => {
+        if (k === "images") return undefined;
+        return typeof v === "string" ? redactSecrets(v) : v;
+      });
       const prev = queues.get(rec.id) ?? Promise.resolve();
       const next = prev.catch(() => {}).then(async () => {
         await mkdir(root, { recursive: true, mode: 0o700 });

@@ -9,8 +9,11 @@ import type { TurnDigest } from "./provider/router.ts";
 import type { LearnHooks } from "./learn/types.ts";
 import type {
   AgentEvent, AgentSession, CallRecord, Config, DecisionReceipt, GateVerdict, Kernel, Message, Provider,
-  DeviceBridge, SessionState, SessionSync, StreamEvent, Tool, ToolCall, ToolResult, TurnState, Usage, Violation, Effort, RouteDecision, TurnProof, ModelTier } from "./types.ts";
+  DeviceBridge, RecallArchive, SessionState, SessionSync, StreamEvent, Tool, ToolCall, ToolResult, TurnState, Usage, Violation, Effort, RouteDecision, TurnProof, ModelTier } from "./types.ts";
 import { clipToolOutputs, compactMessages, estimateTokens, needsCompaction } from "./compact.ts";
+import type { BlobStore } from "./recall/blobs.ts";
+import { externalize, memoryBlobs } from "./recall/blobs.ts";
+import { rememberCompaction } from "./recall/archive.ts";
 import { describeCall, factsOf } from "./permissions/rules.ts";
 import type { CallFacts } from "./permissions/rules.ts";
 import type { PermissionService, SessionPermMode } from "./permissions/index.ts";
@@ -89,6 +92,8 @@ export interface SessionDeps {
   peerAwaiting?: (item: PeerAwaiting) => void;
   /** Wall clock in ms (tests inject a fake one). Default Date.now. */
   now?: () => number;
+  /** Full tool outputs that were shortened before they entered the model context. Absent = an in-memory store (tests never write DATA_DIR). */
+  blobs?: BlobStore;
 }
 
 /** How many identical tool calls in a row (same tool, same args) before the model is told to change approach. */
@@ -114,6 +119,7 @@ const isAbort = (e: unknown, signal?: AbortSignal) => signal?.aborted === true |
 
 export function createAgentSession(deps: SessionDeps): AgentSession {
   const { id, surface, provider, kernel, tools, sync, cfg, cwd } = deps;
+  const blobs = deps.blobs ?? memoryBlobs();
   const byName = new Map(tools.map((t) => [t.spec.name, t]));
   const staticNames = new Set(byName.keys());
   // Dynamic tools (connected MCP servers) are re-read each round; the static set always wins a name clash.
@@ -169,6 +175,15 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     totalCost = deps.restore.totalCostUsd ?? 0;
     state.userMessageIndex = deps.restore.userMessageIndex ?? 0;
     localViolations.push(...(deps.restore.violations ?? []));
+  }
+  let recall: RecallArchive | undefined;
+  if (deps.restore?.recall && ((deps.restore.recall.dropped?.length ?? 0) > 0 || (deps.restore.recall.spans?.length ?? 0) > 0)) {
+    const src = deps.restore.recall;
+    recall = {
+      dropped: (src.dropped ?? []).map((m) => ({ ...m })),
+      spans: (src.spans ?? []).map((s) => ({ from: s.from, to: s.to })),
+      nextTurn: src.nextTurn || 1,
+    };
   }
 
   if (deps.bootContext.trim() !== "") {
@@ -500,13 +515,15 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
       r = undefined;
     }
     if (r) {
+      recall = rememberCompaction(recall, r);
       messages.splice(0, messages.length, ...r.messages);
       yield { type: "notice", level: "info", text: `Compacted ${r.compacted} earlier messages into a summary to keep the chat within the context window${r.mechanical ? " (summary model unavailable; used a plain digest)" : ""}.` };
       if (r.card) yield { type: "handoff", card: r.card };
       if (r.usage) { totalCost += r.usage.costUsd; yield { type: "usage", usage: r.usage, totalCostUsd: totalCost, model: cfg.models.cheap }; }
     }
     // The verbatim tail can itself be too big (huge tool outputs): clip old ones rather than fail the request.
-    if (estimateTokens(messages) > window * 0.85) clipToolOutputs(messages);
+    // Archive first, so a turn that is about to leave context is stored in full, then the tail is shortened.
+    if (estimateTokens(messages) > window * 0.85) clipToolOutputs(messages, 4000, 6, blobs);
   }
 
   // Runs one tool call through pre_tool. Yields events; returns "confirm" when the turn must end.
@@ -674,10 +691,11 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     // A secret that a tool read (an env dump, a config file, a page) is redacted before it reaches the model, the transcript or a preview.
     const shownOutput = redactSecrets(result.output);
     yield { type: "toolEnd", receiptId, tool: tool.spec.name, ok: result.ok, preview: shownOutput.replace(/\s+/g, " ").slice(0, 200), ...(decisionId ? { decisionId } : {}) };
+    const modelOutput = shownOutput.length > MAX_TOOL_OUTPUT ? externalize(shownOutput, MAX_TOOL_OUTPUT, blobs, "[truncated]") : shownOutput;
     // bot_talk leaves a card in the chat: "Messaged <agent>" with the message and the reply, opening the pair's exchange.
     const ex = result.meta?.exchange as Extract<AgentEvent, { type: "exchange" }> | undefined;
     if (ex && tool.spec.name === "bot_talk" && ex.type === "exchange") yield ex;
-    const msg = toolMsg(call, `[#${receiptId} ${tool.spec.name}${result.ok ? "" : " FAILED"}] ${shownOutput.length > MAX_TOOL_OUTPUT ? shownOutput.slice(0, MAX_TOOL_OUTPUT) + "\n[truncated]" : shownOutput}`);
+    const msg = toolMsg(call, `[#${receiptId} ${tool.spec.name}${result.ok ? "" : " FAILED"}] ${modelOutput}`);
     // Two images by default; a tool that returns a short clip (screen clip) asks for more with meta.imageCap, never above 6.
     if (result.images?.length) msg.images = result.images.slice(0, Math.min(6, Math.max(2, Math.floor(Number(result.meta?.imageCap)) || 2)));
     messages.push(msg);
@@ -725,7 +743,11 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     },
     exportState() {
       // The recalled-lessons note is derived state (rebuilt each turn from MIND), so it is never persisted.
-      return { messages: messages.slice(1).filter((m) => m !== learnedNote).map((m) => ({ ...m })), receiptCounter, totalCostUsd: totalCost, userMessageIndex: state.userMessageIndex };
+      const out: SessionState = { messages: messages.slice(1).filter((m) => m !== learnedNote).map((m) => ({ ...m })), receiptCounter, totalCostUsd: totalCost, userMessageIndex: state.userMessageIndex };
+      if (recall && (recall.dropped.length > 0 || recall.spans.length > 0)) {
+        out.recall = { dropped: recall.dropped.map((m) => ({ ...m })), spans: recall.spans.map((s) => ({ from: s.from, to: s.to })), nextTurn: recall.nextTurn };
+      }
+      return out;
     },
   };
 }
