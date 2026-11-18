@@ -3,8 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createServer } from "node:http";
-import { createBuiltinTools, htmlToText } from "../../src/tools/index.ts";
+import { createBuiltinTools, createWebFetchTool, htmlToText } from "../../src/tools/index.ts";
 import { grepJs } from "../../src/tools/fs.ts";
 
 const tools = Object.fromEntries(createBuiltinTools().map((t) => [t.spec.name, t]));
@@ -106,26 +105,35 @@ test("bash: output, cwd, exit code, timeout, cap, abort", async () => {
   assert.match(ab.output, /aborted/);
 });
 
-test("htmlToText and web_fetch (local server)", async () => {
+test("htmlToText and web_fetch (public page, private addresses refused)", async () => {
   assert.equal(htmlToText("<html><head><title>t</title></head><body><script>x()</script><p>Hello &amp; <b>world</b></p><p>two</p></body></html>"), "Hello & world\ntwo");
-  const srv = createServer((req, res) => {
-    if (req.url === "/big") { res.setHeader("content-type", "text/plain"); res.end("a".repeat(80_000)); }
-    else if (req.url === "/404") { res.statusCode = 404; res.end("gone"); }
-    else { res.setHeader("content-type", "text/html"); res.end("<h1>Title</h1><p>Body</p>"); }
+  const blocked = await tools.web_fetch.run({ url: "http://127.0.0.1/" }, ctx());
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.output, /private|internal|not allowed/);
+  const pages: Record<string, { status: number; type: string; body: string }> = {
+    "/": { status: 200, type: "text/html", body: "<h1>Title</h1><p>Body</p>" },
+    "/big": { status: 200, type: "text/plain", body: "a".repeat(80_000) },
+    "/404": { status: 404, type: "text/plain", body: "gone" },
+  };
+  const tool = createWebFetchTool({
+    resolve: async () => [{ address: "93.184.216.34", family: 4 }],
+    transport: async (r) => {
+      const page = pages[r.url.pathname] ?? { status: 404, type: "text/plain", body: "missing" };
+      return { status: page.status, headers: { "content-type": page.type }, body: Buffer.from(page.body) };
+    },
   });
-  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
-  const port = (srv.address() as any).port;
-  try {
-    const ok = await tools.web_fetch.run({ url: `http://127.0.0.1:${port}/` }, ctx());
-    assert.ok(ok.ok);
-    assert.equal(ok.output, "Title\nBody");
-    const big = await tools.web_fetch.run({ url: `http://127.0.0.1:${port}/big` }, ctx());
-    assert.ok(big.output.length <= 50_100);
-    const nf = await tools.web_fetch.run({ url: `http://127.0.0.1:${port}/404` }, ctx());
-    assert.equal(nf.ok, false);
-    assert.match(nf.output, /404/);
-    assert.equal((await tools.web_fetch.run({ url: "file:///etc/passwd" }, ctx())).ok, false);
-  } finally {
-    srv.close();
-  }
+  const ok = await tool.run({ url: "https://example.com/" }, ctx());
+  assert.ok(ok.ok);
+  assert.match(ok.output, /UNTRUSTED/);
+  assert.match(ok.output, /> Title/);
+  assert.match(ok.output, /> Body/);
+  const big = await tool.run({ url: "https://example.com/big" }, ctx());
+  assert.ok(big.ok);
+  assert.match(big.output, /truncated/);
+  assert.ok(big.output.length < 60_000);
+  const nf = await tool.run({ url: "https://example.com/404" }, ctx());
+  assert.equal(nf.ok, false);
+  assert.match(nf.output, /404/);
+  assert.match(nf.output, /UNTRUSTED/);
+  assert.equal((await tool.run({ url: "file:///etc/passwd" }, ctx())).ok, false);
 });
