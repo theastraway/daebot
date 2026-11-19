@@ -12,7 +12,7 @@ test("desktop: GET/PUT /settings/engineer and POST /stop; signed out (no MIND ke
   const dir = mkdtempSync(join(tmpdir(), "daebot-eng-gw-"));
   const st = tmpStatic();
   let fetched = 0;
-  const gw = await startGateway({ runtime: fakeRuntime(), port: 0, staticDir: st.dir, tokenPath: join(dir, "tok"), engineer: { enabled: true, dir: join(dir, "engineer"), fetchImpl: (async () => { fetched++; return new Response("{}"); }) as unknown as typeof fetch } });
+  const gw = await startGateway({ runtime: fakeRuntime(), port: 0, staticDir: st.dir, tokenPath: join(dir, "tok"), engineer: { enabled: true, dir: join(dir, "engineer"), accounts: () => [], fetchImpl: (async () => { fetched++; return new Response("{}"); }) as unknown as typeof fetch } });
   const A = { authorization: `Bearer ${readFileSync(join(dir, "tok"), "utf8").trim()}` };
   try {
     const g = JSON.parse((await http(gw.url, "GET", "/settings/engineer", { headers: A })).body);
