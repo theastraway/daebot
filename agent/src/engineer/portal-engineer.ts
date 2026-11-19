@@ -106,8 +106,9 @@ export function incomingText(job: Dispatch): string {
   const body = one(t.body ?? t.notes ?? t.description, 1500);
   if (body) lines.push(`Notes: ${body}`);
   for (const k of ["repo", "path", "service", "done_when", "deliverable"]) { const v = one(t[k], 300); if (v) lines.push(`${k.replace("_", " ")}: ${v}`); }
-  const note = one(p.note?.text ?? p.note ?? p.correction, 1500);
-  if (note && /note/.test(String(p.event ?? ""))) lines.push(`Correction note: ${note}`);
+  const ln = p.latest_note ?? p.note ?? p.correction;
+  const note = one(typeof ln === "object" && ln ? ln.text ?? ln.body : ln, 1500);
+  if (note) lines.push(`Correction note (sent back by the reviewer): ${note}`);
   return lines.join("\n");
 }
 
@@ -328,7 +329,12 @@ export class PortalEngineer {
       try { r = await this.req("GET", "/api/portal/engineer-runner/next", key); }
       catch (e) { this.st.state = "error"; this.st.lastError = `Could not reach the portal: ${one((e as Error).message, 160)}`; return next; }
       this.st.lastPollAt = this.now();
-      if (r.status === 401 || r.status === 403 || r.status === 404) {
+      if (r.status === 401) {
+        this.st.state = "error";
+        this.st.lastError = "The portal did not accept this MIND sign-in. Sign in with MIND again.";
+        return (next = IDLE_BACKOFF_MS);
+      }
+      if (r.status === 403 || r.status === 404) {
         this.st.state = "not_engineer";
         this.st.lastError = r.status === 404 ? "The portal does not offer Daebot engineering yet." : "This MIND account is not set as a Daebot engineer on any portal project.";
         return (next = IDLE_BACKOFF_MS);

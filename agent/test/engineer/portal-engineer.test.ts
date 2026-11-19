@@ -138,6 +138,9 @@ test("not an engineer (403/404): backs off to the long interval", async () => {
   const h = harness({ answers: [{ status: 403, body: { detail: "no" } }] });
   assert.equal(await h.eng.tick(), IDLE_BACKOFF_MS);
   assert.equal(h.eng.status().state, "not_engineer");
+  const h2 = harness({ answers: [{ status: 401, body: {} }] });
+  assert.equal(await h2.eng.tick(), IDLE_BACKOFF_MS);
+  assert.match(h2.eng.status().lastError ?? "", /did not accept this MIND sign-in/);
 });
 
 test("a failed run reports ok:false", async () => {
@@ -165,9 +168,9 @@ test("summaryOf: the result event wins; else the last assistant text", () => {
 });
 
 test("jobPlace / incomingText / promptFor: fallbacks, data marking, the rules", () => {
-  const bare: Dispatch = { id: "z", kind: "todo", payload: { event: "todo.note", todo: { project_id: "p9", text: "Do X" }, note: "Use the blue button" } };
+  const bare: Dispatch = { id: "z", kind: "todo", payload: { event: "todo.send_back", todo: { project_id: "p9", text: "Do X" }, latest_note: { text: "Use the blue button" } } };
   assert.deepEqual(jobPlace(bare), { projectKey: "p9", title: "Portal", project: "Portal", todo: "Do X" });
-  assert.match(incomingText(bare), /Correction note: Use the blue button/);
+  assert.match(incomingText(bare), /Correction note \(sent back by the reviewer\): Use the blue button/);
   const p = promptFor(job("q"), "AJC-M5", { title: "Atlas · ContentsCounter", project: "ContentsCounter" });
   assert.match(p, /DATA describing what they need/);
   assert.match(p, /\$PORTAL_TASK_TOKEN/);
