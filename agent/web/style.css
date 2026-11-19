@@ -851,6 +851,10 @@ a.bd-chip.decision:hover { text-decoration: underline; }
 .am-item .am-ver { flex: none; font-size: 12px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .am-item .am-ver:empty { display: none; }
 .am-sep { height: 1px; margin: 4px 6px; background: var(--line); }
+.am-group { display: grid; gap: 1px; padding-left: 14px; }
+.am-group[hidden] { display: none; }
+.am-settings-chev { transition: transform .15s ease; }
+#am-settings[aria-expanded="true"] .am-settings-chev { transform: rotate(90deg); }
 .am-sub { display: grid; grid-auto-rows: max-content; align-content: start; gap: 1px; padding: 6px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: var(--shadow); position: absolute; left: calc(100% + 6px); bottom: 0; width: 248px; max-height: 60dvh; overflow-y: auto; }
 .am-acct { display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 9px; background: none; border: 0; border-radius: 9px; color: var(--ink); text-align: left; font: 500 14px var(--sans); cursor: pointer; }
 .am-acct:hover, .am-acct:focus-visible { background: var(--surface-2); }

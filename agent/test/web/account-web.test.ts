@@ -17,7 +17,7 @@ test("sidebar bottom bar: avatar + name, connection dot, Apps icon; the old Sign
   assert.ok(bar.indexOf('id="acct-btn"') < bar.indexOf('id="conn-dot"') && bar.indexOf('id="conn-dot"') < bar.indexOf('id="btn-apps"'), "order: avatar, dot, Apps");
   assert.doesNotMatch(html, /class="side-who"|class="side-apps"|class="side-update"|class="side-foot"|Signed in as/);
   const menu = html.slice(html.indexOf('id="acct-menu"'), html.indexOf('id="acct-btn"'));
-  for (const id of ["btn-logout", "btn-perms", "am-apps", "am-mobile", "am-desktop", "am-switch", "am-accounts", "upd"]) assert.match(menu, new RegExp(`id="${id}"`), id);
+  for (const id of ["btn-logout", "btn-perms", "am-apps", "am-mobile", "am-desktop", "am-switch", "am-accounts", "upd", "am-settings", "am-settings-list"]) assert.match(menu, new RegExp(`id="${id}"`), id);
   assert.match(menu, /role="menu"/);
   assert.match(html, /id="acct-btn"[^>]*aria-haspopup="menu"/);
   assert.match(html, /id="acct-btn"[^>]*aria-expanded="false"/);
@@ -46,9 +46,11 @@ test("account menu: apps links are device-aware and hidden inside the apps", () 
   assert.equal(deviceKind(android), "android");
   assert.equal(deviceKind("Mozilla/5.0 (Windows NT 10.0; Win64; x64)"), "windows");
   assert.equal(deviceKind(mac, "MacIntel", 5), "ios", "an iPad that reports as a Mac");
-  assert.deepEqual(appLinks({ desktopShell: false, mobileShell: false, kind: "mac" }), { mobile: true, desktop: true });
-  assert.deepEqual(appLinks({ desktopShell: true, mobileShell: false, kind: "mac" }), { mobile: true, desktop: false });
+  // mobile app only to a phone browser; desktop app only to a computer browser; nothing inside either app (Nov 18 2026)
+  assert.deepEqual(appLinks({ desktopShell: false, mobileShell: false, kind: "mac" }), { mobile: false, desktop: true });
+  assert.deepEqual(appLinks({ desktopShell: true, mobileShell: false, kind: "mac" }), { mobile: false, desktop: false });
   assert.deepEqual(appLinks({ desktopShell: false, mobileShell: false, kind: "ios" }), { mobile: true, desktop: false });
+  assert.deepEqual(appLinks({ desktopShell: false, mobileShell: false, kind: "android" }), { mobile: true, desktop: false });
   assert.deepEqual(appLinks({ desktopShell: false, mobileShell: true, kind: "android" }), { mobile: false, desktop: false });
 });
 
@@ -81,4 +83,13 @@ test("web wiring: account.js and the waiver build DOM with textContent only, sig
   assert.match(perms, /snap\.waiver\.accepted && snap\.waiver\.dontShowAgain/, "asks every time until Don't show this again was ticked");
   const preload = readFileSync(fileURLToPath(new URL("../../desktop/src/preload.cjs", import.meta.url)), "utf8");
   assert.match(preload, /accounts: Object\.freeze/); assert.match(preload, /desktop:account-switch/);
+});
+
+test("account menu: Permissions, Spend caps, LLM & database and Keyboard shortcuts live inside the Settings group", async () => {
+  const { readFileSync } = await import("node:fs");
+  const html = readFileSync(new URL("../../web/index.html", import.meta.url), "utf8");
+  const start = html.indexOf('id="am-settings-list"'), end = html.indexOf("</div>", start);
+  const group = html.slice(start, end);
+  for (const id of ["btn-perms", "am-caps", "am-conn", "am-keys"]) assert.ok(group.includes(`id="${id}"`), `${id} is in Settings`);
+  assert.ok(!group.includes('id="am-apps"') && !group.includes('id="am-mobile"'));
 });
