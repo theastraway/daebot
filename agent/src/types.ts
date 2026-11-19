@@ -387,6 +387,8 @@ export interface Runtime {
   /** Task board rows of this owner: only the tasks Daebot declared (task_board). Most recent sessions first. */
   boardRows?(): import("./board/board.ts").BoardRow[];
   /** Cancel a task: it stays on the board as cancelled and its MIND LIFE item is tagged. */
+  /** Runtime-owned card write (the portal engineer): creates or updates one card with the portal link and progress the model cannot set. false = no such session. */
+  boardPut?(sessionId: string, task: { id: string; title?: string; status?: import("./board/board.ts").BoardStatus; question?: string; portal?: import("./board/board.ts").BoardPortal; progress?: string | null }): Promise<boolean>;
   boardCancel?(sessionId: string, taskId: string): Promise<"ok" | "notask" | "nosession">;
   /** Delete a task from the board and from MIND LIFE. "mind" = the LIFE item could not be deleted, so the card is still there. */
   boardDelete?(sessionId: string, taskId: string): Promise<"ok" | "nosession" | { error: "notask" | "mind"; message?: string }>;

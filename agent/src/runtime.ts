@@ -74,7 +74,7 @@ import { PhotoStore, messageWithPhotos } from "./photos.ts";
 import { HistoryRecorder, messageWithQuote, withMessageIds } from "./events.ts";
 import { createMcpLoader, parseMcpServers } from "./mcp/client.ts";
 import { createMcpConnectTool } from "./mcpconnect/tool.ts";
-import { BOARD_PROMPT, DECISION_PROMPT, cancelTask, checkTask, createTaskBoardTool, deleteLinked, loadTasks, pushTask, resumeStopped, rowsFor } from "./board/board.ts";
+import { BOARD_PROMPT, DECISION_PROMPT, MAX_TASKS, cancelTask, checkTask, createTaskBoardTool, deleteLinked, loadTasks, pushTask, resumeStopped, rowsFor } from "./board/board.ts";
 import type { BoardRow, BoardTask } from "./board/board.ts";
 import { boardStatusOf, createBoardMind } from "./board/mind.ts";
 import { createTaskDecisionTool } from "./board/decision.ts";
@@ -91,6 +91,7 @@ import type { RunMark, SessionStore, StoredSession } from "./persist.ts";
 import { routingSection } from "./routing.ts";
 import { screenFeed } from "./screen/feed.ts";
 import type { AgentEvent, AgentSession, Config, HandoffCard, HistoryEvent, LessonView, Message, MessageMeta, MindClient, ModelTier, Provider, Runtime, SessionSync, Tool, TurnProof } from "./types.ts";
+import { createClaudeCodeTool } from "./engineer/claude-code.ts";
 
 const noSync: SessionSync = { async open() {}, async append() {}, async pendingReplies() { return []; }, async close() {} };
 
@@ -117,7 +118,7 @@ const noKernelSpoof = (s: string): string => s.replace(/\[kernel/gi, "[ kernel")
  * goes through the kernel's confirm gates). Hosted multi-tenant deployments and bot-to-bot (peer) turns never set it, so they never get a shell or the browser pane.
  */
 export function botSessionTools(tools: Tool[], opts: { localTools?: boolean } = {}): Tool[] {
-  const drop = opts.localTools ? ["apple_calendar"] : ["bash", "process", "terminal", "simulator", "browser", "write_file", "edit_file", "apple_calendar"];
+  const drop = opts.localTools ? ["apple_calendar"] : ["bash", "process", "terminal", "simulator", "browser", "write_file", "edit_file", "apple_calendar", "claude_code"];
   return tools
     .filter((t) => !drop.includes(t.spec.name))
     .map((t) => (t.spec.name !== "web_fetch" ? t : {
@@ -457,6 +458,8 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     ? createMindClient({ ...cfg, mindApiKey: cfg.mindSessionApiKey }, overrides.fetchImpl, hosted?.mindClient)
     : client;
   const builtinTools = createBuiltinTools({ fetchImpl: overrides.fetchImpl, decisionKey: cfg.openrouterKey });
+  // claude_code: Claude Code as a visible sub-worker (engineer/claude-code.ts). Local gateways only: the hosted server has no user CLI.
+  const claudeCodeTool = hosted ? undefined : createClaudeCodeTool();
   // Bots: this owner's store (MIND is the source of truth for existence) and settings. Only when the host gave a data dir.
   const botsCtx = overrides.bots;
   const ownerKey = overrides.owner ?? "owner";
@@ -714,7 +717,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         return r;
       },
     })] : [];
-    const every = [...builtinTools, searchTool, advisorTool, ...studioTools, ...(photoTool ? [photoTool] : []), ...(documentTool ? [documentTool] : []), ...(imageTool ? [imageTool] : []), ...createMindTools({
+    const every = [...builtinTools, ...(claudeCodeTool ? [claudeCodeTool] : []), searchTool, advisorTool, ...studioTools, ...(photoTool ? [photoTool] : []), ...(documentTool ? [documentTool] : []), ...(imageTool ? [imageTool] : []), ...createMindTools({
       home, clientFor: clientForMind, roster: () => botStore?.roster() ?? [],
       refresh: botStore ? async () => { await botStore.list(); } : undefined,
     }, { user: hosted?.username }).filter((t) => on || t.spec.name !== "mind_tenants"),
@@ -1375,6 +1378,20 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       if (live) return { bot: live.bot, peer: live.peer, model: live.model, ...(live.permMode ? { permMode: live.permMode } : {}), ...(live.env ? { env: live.env } : {}) };
       const m = store?.meta?.(id);
       return m && mine(m) ? { bot: m.bot, peer: m.peer, model: m.model, ...(m.permMode ? { permMode: m.permMode } : {}), ...(m.env ? { env: m.env } : {}) } : undefined;
+    },
+    async boardPut(sid, t) {
+      const r = await editBoard(sid, async (tasks) => {
+        const prev = tasks.find((x) => x.id === t.id);
+        const trusted: Record<string, unknown> = { ...(prev ?? {}) };
+        if (t.portal) trusted.portal = t.portal;
+        if (t.progress === null) delete trusted.progress; else if (typeof t.progress === "string") trusted.progress = t.progress;
+        const raw = { id: t.id, ...(t.title !== undefined ? { title: t.title } : {}), ...(t.status !== undefined ? { status: t.status } : {}), ...(t.question !== undefined ? { question: t.question } : {}) };
+        const c = checkTask(raw, Date.now(), prev, undefined, trusted);
+        if (!c.ok) return { result: false };
+        const next = prev ? tasks.map((x) => (x.id === t.id ? c.value : x)) : [...tasks, c.value].slice(-MAX_TASKS);
+        return { tasks: next, result: true };
+      });
+      return r.found && r.result;
     },
     async appendVoiceTranscript(id, lines) {
       const e = sessions.get(id);
