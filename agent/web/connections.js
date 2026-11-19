@@ -2,6 +2,7 @@
 //   Your AI        GET/POST/DELETE /byo-llm, POST /byo-llm/test   -> your own provider key (MIND stores it; one setting for MIND and Daebot)
 //   Local model    GET/PUT /settings/local-llm, POST /settings/local-llm/detect -> the server on this computer (desktop and self-host)
 //   Your database  GET /bridges, PUT/DELETE /bridges/db, POST /bridges/db/test|bootstrap|verify-routing -> your own Postgres (MIND's bridge)
+//   Portal to-dos  GET/PUT /settings/engineer, POST /settings/engineer/stop -> this computer works the Astra AI portal to-dos routed to your MIND account
 // DOM is built with createElement + textContent only. Keys and passwords are sent once and never shown again. Pure helpers are exported for tests.
 
 export const FALLBACK_PROVIDERS = [
@@ -54,6 +55,19 @@ export function localLine(v) {
   return `${n === 1 ? first : `${first} and ${n - 1} more`} served at ${where}. Press Use next to one and your chats run on it, on this computer, for free.`;
 }
 
+/** The portal engineer's status as one line: "Idle", "Working on <to-do> in <project>", the last error. */
+export function engineerLine(v) {
+  if (!v) return "";
+  if (!v.available) return "Portal to-dos are worked by the Daebot desktop app.";
+  if (!v.enabled) return "Off. This computer does not pick up portal to-dos.";
+  if (!v.signedIn) return "Sign in with MIND to pick up the portal to-dos routed to your account.";
+  if (v.state === "working" && v.job) return `Working on "${v.job.todo}" in ${v.job.project}.`;
+  if (v.state === "not_engineer") return v.lastError || "This MIND account is not set as a Daebot engineer on any portal project.";
+  if (v.state === "error") return `Idle. Last error: ${v.lastError || "unknown"}`;
+  const last = v.lastResult ? ` Last: "${v.lastResult.todo}" ${v.lastResult.ok ? "finished" : "not finished"}.` : "";
+  return `Idle. Waiting for portal to-dos routed to your MIND account.${last}`;
+}
+
 /** "Your own Postgres at db.example.com:5432/mind · set up, routing pending" or the cloud line. */
 export function dbLine(p) {
   if (!p) return "";
@@ -85,9 +99,9 @@ export function dbFromForm({ host, port, database, user, password, ssl, password
 export function initConnections({ json, h, notify, isHosted, onPick, currentModel }) {
   const $ = (id) => document.getElementById(id);
   const modal = $("conn-modal"), closeBtn = $("conn-close"), open = $("am-conn");
-  const hosts = { llm: $("conn-llm"), local: $("conn-local"), db: $("conn-db") };
+  const hosts = { llm: $("conn-llm"), local: $("conn-local"), db: $("conn-db"), eng: $("conn-eng") };
   let isOpen = false, lastFocus = null;
-  const gens = { llm: 0, local: 0, db: 0 }; // one in-flight generation per section: a close or a re-mount makes the older paint a no-op
+  const gens = { llm: 0, local: 0, db: 0, eng: 0 }; // one in-flight generation per section: a close or a re-mount makes the older paint a no-op
   const fine = (t) => h("p", "drawer-fine", t);
   const fld = (label, el) => { const l = h("label", "cap-f"); l.append(h("span", "fld-label", label), el); return l; };
   const input = (type, placeholder, extra = {}) => { const i = h("input", "fld"); i.type = type; i.placeholder = placeholder; i.autocomplete = extra.autocomplete || "off"; i.spellcheck = false; if (extra.value !== undefined) i.value = extra.value; if (extra.label) i.setAttribute("aria-label", extra.label); return i; };
@@ -268,11 +282,43 @@ export function initConnections({ json, h, notify, isHosted, onPick, currentMode
     });
   }
 
+  // ---- Portal to-dos (the portal engineer)
+  async function mountEng(host) {
+    if (!host) return;
+    const my = ++gens.eng;
+    host.replaceChildren(fine("Loading…"));
+    let v;
+    try { v = await json("/settings/engineer"); } catch (e) { host.replaceChildren(fine(`Could not load: ${errText(e)}`)); return; }
+    if (my !== gens.eng || !isOpen) return;
+    const line = h("p", "cap-line", engineerLine(v));
+    line.dataset.engState = v.state || (v.available ? "" : "unavailable");
+    const sec = host.closest ? host.closest("section") : null;
+    if (!v.available) { if (sec) sec.hidden = true; host.replaceChildren(line); return; }
+    if (sec) sec.hidden = false;
+    const sw = h("button", `u-switch${v.enabled ? " on" : ""}`); sw.type = "button"; sw.setAttribute("role", "switch"); sw.setAttribute("aria-checked", String(!!v.enabled)); sw.setAttribute("aria-label", "Work portal to-dos on this computer"); sw.append(h("i"));
+    const swRow = h("div", "conn-switch"); swRow.append(h("span", "", "Work portal to-dos on this computer"), sw);
+    const state = status();
+    const acts = h("div", "cap-acts");
+    const stop = h("button", "btn-quiet sm", "Stop this job"); stop.type = "button"; stop.hidden = v.state !== "working";
+    acts.append(stop, state);
+    host.replaceChildren(line, swRow, acts, fine("When a to-do in an Astra AI portal project is routed to your MIND account, Daebot opens that project's thread here and Claude Code on this computer builds, tests, merges and verifies it, then marks it Ready to test for a person. Your own Claude Code and GitHub logins are used."));
+    sw.addEventListener("click", async () => {
+      sw.disabled = true; state.textContent = "Saving…";
+      try { await json("/settings/engineer", { method: "PUT", body: JSON.stringify({ enabled: sw.getAttribute("aria-checked") !== "true" }) }); await mountEng(host); }
+      catch (e) { state.textContent = errText(e); sw.disabled = false; }
+    });
+    stop.addEventListener("click", async () => {
+      stop.disabled = true; state.textContent = "Stopping…";
+      try { await json("/settings/engineer/stop", { method: "POST", body: "{}" }); notify("The portal job is stopping."); await mountEng(host); }
+      catch (e) { state.textContent = errText(e); stop.disabled = false; }
+    });
+  }
+
   function setOpen(on) {
     if (!modal) return;
     isOpen = on; modal.hidden = !on;
-    if (on) { lastFocus = document.activeElement; void mountLlm(hosts.llm); void mountLocal(hosts.local); void mountDb(hosts.db); if (closeBtn) closeBtn.focus(); }
-    else { gens.llm++; gens.local++; gens.db++; if (lastFocus && lastFocus.focus) lastFocus.focus(); }
+    if (on) { lastFocus = document.activeElement; void mountLlm(hosts.llm); void mountLocal(hosts.local); void mountDb(hosts.db); void mountEng(hosts.eng); if (closeBtn) closeBtn.focus(); }
+    else { gens.llm++; gens.local++; gens.db++; gens.eng++; if (lastFocus && lastFocus.focus) lastFocus.focus(); }
   }
   if (open) open.addEventListener("click", () => setOpen(true));
   if (closeBtn) closeBtn.addEventListener("click", () => setOpen(false));
