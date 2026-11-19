@@ -61,11 +61,17 @@ export function engineerLine(v) {
   if (!v.available) return "Portal to-dos are worked by the Daebot desktop app.";
   if (!v.enabled) return "Off. This computer does not pick up portal to-dos.";
   if (!v.signedIn) return "Sign in with MIND to pick up the portal to-dos routed to your account.";
-  if (v.state === "working" && v.job) return `Working on "${v.job.todo}" in ${v.job.project}.`;
+  if (v.state === "working" && v.job) return `Working on "${v.job.todo}" in ${v.job.project}${v.job.account ? ` for ${v.job.account}` : ""}.`;
   if (v.state === "not_engineer") return v.lastError || "This MIND account is not set as a Daebot engineer on any portal project.";
   if (v.state === "error") return `Idle. Last error: ${v.lastError || "unknown"}`;
   const last = v.lastResult ? ` Last: "${v.lastResult.todo}" ${v.lastResult.ok ? "finished" : "not finished"}.` : "";
   return `Idle. Waiting for portal to-dos routed to your MIND account.${last}`;
+}
+
+/** One account per item: "anthonyjconti: engineer · atlas_adjustments: not an engineer". */
+export function engineerAccountsLine(v) {
+  const words = { engineer: "engineer", not_engineer: "not an engineer", rejected: "sign-in rejected", error: "cannot reach the portal", checking: "checking" };
+  return (v && Array.isArray(v.accounts) ? v.accounts : []).map((a) => `${a.account}: ${words[a.state] || a.state}`).join(" · ");
 }
 
 /** "Your own Postgres at db.example.com:5432/mind · set up, routing pending" or the cloud line. */
@@ -301,7 +307,9 @@ export function initConnections({ json, h, notify, isHosted, onPick, currentMode
     const acts = h("div", "cap-acts");
     const stop = h("button", "btn-quiet sm", "Stop this job"); stop.type = "button"; stop.hidden = v.state !== "working";
     acts.append(stop, state);
-    host.replaceChildren(line, swRow, acts, fine("When a to-do in an Astra AI portal project is routed to your MIND account, Daebot opens that project's thread here and Claude Code on this computer builds, tests, merges and verifies it, then marks it Ready to test for a person. Your own Claude Code and GitHub logins are used."));
+    const per = engineerAccountsLine(v);
+    const perLine = h("p", "drawer-fine", per); perLine.hidden = !per || !v.enabled;
+    host.replaceChildren(line, perLine, swRow, acts, fine("Every MIND account signed in on this computer is checked with its own sign-in. When a to-do in an Astra AI portal project is routed to your MIND account, Daebot opens that project's thread here and Claude Code on this computer builds, tests, merges and verifies it, then marks it Ready to test for a person. Your own Claude Code and GitHub logins are used."));
     sw.addEventListener("click", async () => {
       sw.disabled = true; state.textContent = "Saving…";
       try { await json("/settings/engineer", { method: "PUT", body: JSON.stringify({ enabled: sw.getAttribute("aria-checked") !== "true" }) }); await mountEng(host); }

@@ -33,12 +33,27 @@ export interface Dispatch {
   payload?: Record<string, any>;
 }
 
+/** One signed-in MIND account the desktop polls for (accounts.json). The key is read on every poll and never stored here. */
+export interface EngineerAccount { account: string; key: string; active?: boolean }
+
+/** What the portal last said about one account. */
+export interface AccountStatus {
+  account: string;
+  active?: boolean;
+  /** engineer = jobs route to it; not_engineer = nothing routes to it (polled every 15 min); rejected = MIND refused the key; checking = not asked yet. */
+  state: "checking" | "engineer" | "not_engineer" | "rejected" | "error";
+  hint?: string;
+  lastPollAt?: number;
+  lastError?: string;
+}
+
 export interface EngineerStatus {
   enabled: boolean;
   signedIn: boolean;
+  accounts?: AccountStatus[];
   state: "off" | "signed_out" | "idle" | "working" | "not_engineer" | "error";
   /** "Working on <to-do> in <project>" while a job runs. */
-  job?: { id: string; todo: string; project: string; threadId?: string; startedAt: number };
+  job?: { id: string; todo: string; project: string; account?: string; threadId?: string; startedAt: number };
   lastError?: string;
   lastPollAt?: number;
   lastResult?: { ok: boolean; todo: string; at: number };
@@ -54,8 +69,8 @@ export interface ThreadOps {
 export interface ClaudeRun { ok: boolean; summary: string }
 
 export interface EngineerDeps {
-  /** The signed-in user's MIND key (undefined = signed out: no polling). Read on every poll, never stored. */
-  getKey(): string | undefined;
+  /** Every signed-in MIND account with its own key (empty = signed out: no polling). Read on every poll, never stored. */
+  getAccounts(): EngineerAccount[];
   /** ASTRA_PORTAL_URL or the default portal API origin. */
   portalUrl?: string;
   fetchImpl?: typeof fetch;
@@ -69,6 +84,8 @@ export interface EngineerDeps {
   pollMs?: number;
   jobTimeoutMs?: number;
   log?: (msg: string) => void;
+  /** Timer functions (tests count the live timers). Default setTimeout / clearTimeout. */
+  timers?: { set(fn: () => void, ms: number): unknown; clear(t: unknown): void };
 }
 
 interface Saved { enabled?: boolean; threads?: Record<string, string> }
@@ -233,7 +250,8 @@ export async function spawnClaude(a: { bin: string; job: Dispatch; dir: string; 
 export class PortalEngineer {
   private d: EngineerDeps;
   private saved: Saved;
-  private timer: NodeJS.Timeout | undefined;
+  private timer: unknown;
+  private acct = new Map<string, AccountStatus & { nextAt: number }>();
   private running = false;
   private stopped = true;
   private abort: AbortController | undefined;
@@ -263,17 +281,19 @@ export class PortalEngineer {
   private base(): string { return portalOrigin(this.d.portalUrl); }
 
   status(): EngineerStatus {
-    const signedIn = !!this.d.getKey();
+    const list = this.accounts();
+    const signedIn = list.length > 0;
     const enabled = this.saved.enabled !== false;
     const state: EngineerStatus["state"] = !enabled ? "off" : !signedIn ? "signed_out" : this.st.job ? "working" : this.st.state === "off" || this.st.state === "signed_out" ? "idle" : this.st.state;
-    return { ...this.st, enabled, signedIn, state, ...(this.st.job ? { job: { ...this.st.job } } : {}) };
+    const accounts = list.map((a) => { const s = this.acct.get(a.account); const { nextAt: _n, ...pub } = s ?? { account: a.account, state: "checking" as const, nextAt: 0 }; return { ...pub, account: a.account, ...(a.active ? { active: true } : {}) }; });
+    return { ...this.st, enabled, signedIn, state, accounts, ...(this.st.job ? { job: { ...this.st.job } } : {}) };
   }
 
   setEnabled(on: boolean): void {
     this.saved.enabled = on;
     this.save();
     if (!on) this.stopJob("turned off in Settings");
-    else if (!this.stopped) this.schedule(0);
+    else if (!this.stopped && !this.running) { for (const a of this.acct.values()) a.nextAt = 0; this.schedule(0); } // schedule() replaces any pending timer: one loop only
   }
 
   /** Stops the running job (the Stop button / the switch). false = nothing was running. */
@@ -291,16 +311,38 @@ export class PortalEngineer {
 
   stop(): void {
     this.stopped = true;
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = undefined;
+    this.clearTimer();
     this.stopJob("Daebot is closing");
   }
 
+  private clearTimer(): void {
+    if (this.timer !== undefined) (this.d.timers?.clear ?? ((t: unknown) => clearTimeout(t as NodeJS.Timeout)))(this.timer);
+    this.timer = undefined;
+  }
+
+  /** The ONE pending poll: any earlier timer is cleared first, so two loops can never run side by side. */
   private schedule(ms: number): void {
+    this.clearTimer();
     if (this.stopped) return;
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(() => { void this.tick(); }, ms);
-    this.timer.unref?.();
+    const fire = (): void => { this.timer = undefined; void this.tick(); };
+    if (this.d.timers) { this.timer = this.d.timers.set(fire, ms); return; }
+    const t = setTimeout(fire, ms);
+    t.unref?.();
+    this.timer = t;
+  }
+
+  /** Signed-in accounts, deduped by name, keys that do not look like MIND keys dropped. */
+  private accounts(): EngineerAccount[] {
+    const out: EngineerAccount[] = [];
+    let list: EngineerAccount[] = [];
+    try { list = this.d.getAccounts() ?? []; } catch { list = []; }
+    for (const a of list) {
+      if (!a || typeof a.key !== "string" || !a.key.startsWith("mind_")) continue;
+      const account = one(a.account, 80) || "account";
+      if (out.some((x) => x.account === account)) continue;
+      out.push({ account, key: a.key, ...(a.active ? { active: true } : {}) });
+    }
+    return out;
   }
 
   private async req(method: "GET" | "POST", path: string, key: string, body?: unknown): Promise<{ status: number; json: any }> {
@@ -316,54 +358,71 @@ export class PortalEngineer {
     return { status: r.status, json };
   }
 
-  /** One poll (and the job it claims). Returns the delay before the next poll. Exposed for tests. */
+  /** One round: polls every signed-in account that is due (each with its own key), runs the first job found. Returns the delay before the next round. Exposed for tests. */
   async tick(): Promise<number> {
-    let next = this.d.pollMs ?? POLL_MS;
-    if (this.running) return next;
+    const poll = this.d.pollMs ?? POLL_MS;
+    if (this.running) return poll; // a round is already in flight: it schedules the next one itself
     this.running = true;
+    let next = poll;
     try {
       if (this.saved.enabled === false) { this.st.state = "off"; return next; }
-      const key = this.d.getKey();
-      if (!key) { this.st.state = "signed_out"; return next; }
-      let r;
-      try { r = await this.req("GET", "/api/portal/engineer-runner/next", key); }
-      catch (e) { this.st.state = "error"; this.st.lastError = `Could not reach the portal: ${one((e as Error).message, 160)}`; return next; }
-      this.st.lastPollAt = this.now();
-      if (r.status === 401) {
-        this.st.state = "error";
-        this.st.lastError = "The portal did not accept this MIND sign-in. Sign in with MIND again.";
-        return (next = IDLE_BACKOFF_MS);
-      }
-      if (r.status === 403 || r.status === 404) {
-        this.st.state = "not_engineer";
-        this.st.lastError = r.status === 404 ? "The portal does not offer Daebot engineering yet." : "This MIND account is not set as a Daebot engineer on any portal project.";
-        return (next = IDLE_BACKOFF_MS);
-      }
-      if (r.status >= 400) { this.st.state = "error"; this.st.lastError = `Portal answered ${r.status}`; return next; }
+      const list = this.accounts();
+      if (!list.length) { this.st.state = "signed_out"; return next; }
       this.st.state = "idle";
-      this.st.lastError = undefined;
-      const job: Dispatch | null = r.json?.dispatch ?? null;
-      if (!job || typeof job.id !== "string") return next;
-      await this.work(job, key);
-      return (next = 0); // look for the next job right away
+      for (const a of list) {
+        const s = this.acct.get(a.account) ?? { account: a.account, state: "checking" as const, nextAt: 0 };
+        this.acct.set(a.account, s);
+        if (s.nextAt > this.now()) continue;
+        const job = await this.pollOne(a, s);
+        if (job) { await this.work(job, a); next = 0; break; } // one job at a time across all accounts; look again right away
+      }
+      return next;
     } finally {
       this.running = false;
       if (!this.stopped) this.schedule(next);
     }
   }
 
-  private async work(job: Dispatch, key: string): Promise<void> {
+  private async pollOne(a: EngineerAccount, s: AccountStatus & { nextAt: number }): Promise<Dispatch | null> {
+    const poll = this.d.pollMs ?? POLL_MS;
+    let r;
+    try { r = await this.req("GET", "/api/portal/engineer-runner/next", a.key); }
+    catch (e) { s.state = "error"; s.lastError = `Could not reach the portal: ${one((e as Error).message, 160)}`; s.nextAt = this.now() + poll; return null; }
+    s.lastPollAt = this.now();
+    this.st.lastPollAt = s.lastPollAt;
+    delete s.lastError; delete s.hint;
+    if (r.status === 401) { s.state = "rejected"; s.lastError = "The portal did not accept this MIND sign-in. Sign in with MIND again."; s.nextAt = this.now() + IDLE_BACKOFF_MS; return null; }
+    if (r.status === 403 || r.status === 404) { s.state = "not_engineer"; s.hint = r.status === 404 ? "The portal does not offer Daebot engineering yet." : "This MIND account is not set as a Daebot engineer on any portal project."; s.nextAt = this.now() + IDLE_BACKOFF_MS; return null; }
+    if (r.status >= 400) { s.state = "error"; s.lastError = `Portal answered ${r.status}`; s.nextAt = this.now() + poll; return null; }
+    const job: Dispatch | null = r.json?.dispatch ?? null;
+    if (job && typeof job.id === "string") { s.state = "engineer"; s.nextAt = 0; return job; } // after a job, this account is asked again right away
+    if (r.json?.routed === false) {
+      s.state = "not_engineer";
+      if (r.json?.hint) s.hint = one(r.json.hint, 240);
+      s.nextAt = this.now() + IDLE_BACKOFF_MS;
+      return null;
+    }
+    s.state = "engineer";
+    s.nextAt = this.now() + poll;
+    return null;
+  }
+
+  private async work(job: Dispatch, acct: EngineerAccount): Promise<void> {
+    const key = acct.key;
     const place = jobPlace(job);
     const threads = (this.saved.threads ??= {});
+    // Threads live in the account that is active in the app (its data directory); a job for another signed-in account names that account in the title.
+    const tkey = `${acct.account}|${place.projectKey}`;
+    const title = acct.active ? place.title : `${place.title} (${acct.account})`.slice(0, 120);
     let threadId: string | undefined;
     try {
-      threadId = await this.d.threads.ensure(threads[place.projectKey], place.title);
-      if (threads[place.projectKey] !== threadId) { threads[place.projectKey] = threadId; this.save(); }
+      threadId = await this.d.threads.ensure(threads[tkey] ?? (acct.active ? threads[place.projectKey] : undefined), title);
+      if (threads[tkey] !== threadId) { threads[tkey] = threadId; this.save(); }
       await this.d.threads.say(threadId, "user", incomingText(job));
     } catch (e) { this.log(`thread for ${place.title}: ${(e as Error).message}`); }
     const say = (t: string): void => { if (threadId) void this.d.threads.say(threadId, "agent", t).catch(() => {}); };
 
-    this.st.job = { id: job.id, todo: place.todo, project: place.title, ...(threadId ? { threadId } : {}), startedAt: this.now() };
+    this.st.job = { id: job.id, todo: place.todo, project: place.title, account: acct.account, ...(threadId ? { threadId } : {}), startedAt: this.now() };
     this.st.state = "working";
     const ac = new AbortController();
     this.abort = ac;
@@ -413,3 +472,19 @@ export class PortalEngineer {
 }
 
 export function defaultEngineerDir(home: string): string { return join(home, "engineer"); }
+
+/** Every signed-in desktop account from <home>/accounts.json (the desktop app's remembered accounts: {active, accounts:[{id,key,name}]}).
+ *  No file, or no usable account in it: the one key this gateway runs with (the active account), when there is one. */
+export function readDesktopAccounts(home: string, fallback?: { key?: string; name?: string }): EngineerAccount[] {
+  const out: EngineerAccount[] = [];
+  try {
+    const j = JSON.parse(readFileSync(join(home, "accounts.json"), "utf8"));
+    for (const a of Array.isArray(j?.accounts) ? j.accounts : []) {
+      if (!a || typeof a.key !== "string" || !a.key.trim().startsWith("mind_")) continue;
+      out.push({ account: one(a.name, 80) || one(a.id, 40) || "account", key: a.key.trim(), ...(a.id && a.id === j.active ? { active: true } : {}) });
+    }
+  } catch { /* no accounts file */ }
+  if (!out.length && fallback?.key && fallback.key.startsWith("mind_")) out.push({ account: one(fallback.name, 80) || "this account", key: fallback.key, active: true });
+  if (out.length && !out.some((a) => a.active)) out[0] = { ...out[0], active: true };
+  return out;
+}

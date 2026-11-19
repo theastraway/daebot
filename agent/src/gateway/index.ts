@@ -110,8 +110,8 @@ import { RemoteHub } from "../remote/hub.ts";
 import type { DeviceInfo, RemoteJob } from "../remote/hub.ts";
 import { daebotHome } from "../home.ts";
 import { hostname } from "node:os";
-import { PortalEngineer, defaultEngineerDir } from "../engineer/portal-engineer.ts";
-import type { EngineerDeps } from "../engineer/portal-engineer.ts";
+import { PortalEngineer, defaultEngineerDir, readDesktopAccounts } from "../engineer/portal-engineer.ts";
+import type { EngineerAccount, EngineerDeps } from "../engineer/portal-engineer.ts";
 
 // ---------- inbound webhooks (channel adapters register here) ----------
 export interface WebhookRequest {
@@ -187,7 +187,7 @@ export interface GatewayOptions {
   sync?: { enabled?: boolean; stateFile?: string; url?: string; key?: string; intervalMs?: number; fetchImpl?: typeof fetch; deviceId?: string; deviceName?: string; remoteWaitSec?: number; botEveryMs?: number };
   /** Portal engineer (engineer/portal-engineer.ts): works the Astra AI portal to-dos routed to the signed-in MIND account. Local gateways only, and only when
    *  `enabled` is true (the CLI sets it). Tests inject the rest. */
-  engineer?: { enabled?: boolean; dir?: string; portalUrl?: string; fetchImpl?: typeof fetch; runClaude?: EngineerDeps["runClaude"]; pollMs?: number };
+  engineer?: { enabled?: boolean; dir?: string; portalUrl?: string; fetchImpl?: typeof fetch; runClaude?: EngineerDeps["runClaude"]; pollMs?: number; accounts?: () => EngineerAccount[] };
   /** MIND Voice (/voice/stt, /voice/tts). Defaults from cfg + auth; pass to override (tests). */
   /** Where the local model server setting is kept (default DATA_DIR) and the fetch the probe uses. Tests. */
   localLlmDir?: string;
@@ -803,7 +803,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         fetchImpl: opts.engineer.fetchImpl ?? opts.fetchImpl,
         runClaude: opts.engineer.runClaude,
         pollMs: opts.engineer.pollMs,
-        getKey: () => { const k = appsKeyFor(OWNER); return k && k.startsWith("mind_") ? k : undefined; },
+        // Every signed-in desktop account polls with its own key (accounts.json), so a client account signed in here works its own projects too.
+        getAccounts: () => opts.engineer?.accounts ? opts.engineer.accounts() : readDesktopAccounts(daebotHome(), { key: appsKeyFor(OWNER) }),
         threads: {
           ensure: async (existing, title) => {
             const rt = manager.runtimeOf(OWNER.id);
