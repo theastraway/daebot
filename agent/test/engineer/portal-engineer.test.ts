@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IDLE_BACKOFF_MS, PortalEngineer, childEnv, engineerAllowed, findClaude, incomingText, jobPlace, milestoneOf, promptFor, readDesktopAccounts, summaryOf } from "../../src/engineer/portal-engineer.ts";
 import type { Dispatch, EngineerAccount, EngineerDeps } from "../../src/engineer/portal-engineer.ts";
+import { ClaudeJobs, createClaudeCodeTool } from "../../src/engineer/claude-code.ts";
 import { writeFileSync } from "node:fs";
 // @ts-expect-error plain browser module
 import { engineerLine, engineerAccountsLine } from "../../web/connections.js";
@@ -25,29 +26,44 @@ function fakeFetch(answers: Array<{ status: number; body: unknown } | Error>, ca
   }) as unknown as typeof fetch;
 }
 
-function harness(o: { answers: Array<{ status: number; body: unknown } | Error>; key?: string | undefined; runOk?: boolean; accounts?: EngineerAccount[]; now?: () => number }) {
+function harness(o: { answers: Array<{ status: number; body: unknown } | Error>; key?: string | undefined; runOk?: boolean; accounts?: EngineerAccount[]; now?: () => number; wakeStartsClaude?: boolean; taskStatus?: string }) {
   const dir = mkdtempSync(join(tmpdir(), "eng-"));
   const calls: Call[] = [];
   const said: Array<{ id: string; role: string; text: string }> = [];
+  const turns: Array<{ id: string; text: string }> = [];
+  const cards: Array<{ id: string; task: Record<string, unknown> }> = [];
   const opened: string[] = [];
   const live = new Set<string>();
   let n = 0;
   const runs: Array<{ dir: string; env: NodeJS.ProcessEnv; prompt: string }> = [];
+  const jobs = new ClaudeJobs({ run: async (a) => {
+    runs.push({ dir: a.dir, env: a.env, prompt: a.prompt });
+    a.onLine(JSON.stringify({ type: "system", subtype: "init" }));
+    a.onLine(JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command: "gh pr create --fill" } }] } }));
+    a.onLine(JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content: "https://github.com/theastraway/x/pull/12" }] } }));
+    return { ok: o.runOk !== false, summary: "Shipped PR 12" };
+  } });
+  const milestones: string[] = [];
+  jobs.onMilestone = (_sid, _job, line) => { milestones.push(line); };
+  const portalFetch = fakeFetch(o.answers, calls);
+  const fetchImpl = (async (url: string, init: RequestInit = {}) => {
+    if (String(url).endsWith("/api/portal/engineer/task")) return new Response(JSON.stringify({ todo: { status: o.taskStatus ?? "ready_to_test" } }), { status: 200 });
+    return portalFetch(url, init);
+  }) as unknown as typeof fetch;
   const deps: EngineerDeps = {
-    dir, now: o.now, getAccounts: () => o.accounts ?? (("key" in o ? o.key : KEY) ? [{ account: "anthonyjconti", key: ("key" in o ? o.key : KEY)!, active: true }] : []), fetchImpl: fakeFetch(o.answers, calls), sleep: async () => {},
+    dir, now: o.now, jobs, getAccounts: () => o.accounts ?? (("key" in o ? o.key : KEY) ? [{ account: "anthonyjconti", key: ("key" in o ? o.key : KEY)!, active: true }] : []), fetchImpl, sleep: async () => {},
     threads: {
       ensure: async (existing, title) => { if (existing && live.has(existing)) return existing; const id = `s${++n}`; live.add(id); opened.push(title); return id; },
       say: async (id, role, text) => { said.push({ id, role, text }); },
-    },
-    runClaude: async (a) => {
-      runs.push({ dir: a.dir, env: a.env, prompt: a.prompt });
-      a.onLine(JSON.stringify({ type: "system", subtype: "init" }));
-      a.onLine(JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command: "gh pr create --fill" } }] } }));
-      a.onLine(JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content: "https://github.com/theastraway/x/pull/12" }] } }));
-      return { ok: o.runOk !== false, summary: "Shipped PR 12" };
+      turn: async (id, text) => {
+        turns.push({ id, text });
+        if (o.wakeStartsClaude !== false && text.startsWith("[Portal work order]")) { const r = jobs.start(id, "Build it", dir); if (typeof r === "string") throw new Error(r); }
+        return { ok: true, finalText: text.startsWith("[Claude Code finished") ? "Live at https://example.com" : "Handed to Claude Code." };
+      },
+      card: async (id, task) => { cards.push({ id, task: task as Record<string, unknown> }); return true; },
     },
   };
-  return { eng: new PortalEngineer(deps), dir, calls, said, opened, live, runs };
+  return { eng: new PortalEngineer(deps), dir, calls, said, opened, live, runs, turns, cards, jobs, milestones };
 }
 
 test("engineerAllowed: never on the hosted gateway; DAEBOT_ENGINEER=off turns it off", () => {
@@ -68,36 +84,93 @@ test("poll with no job: one GET with the MIND key header, idle, nothing run", as
   assert.equal(h.eng.status().state, "idle");
 });
 
-test("a claimed job: project thread, to-do posted as data, Claude run with the task token, milestones mirrored, result posted", async () => {
+test("a claimed job wakes Daebot: card not_started -> in_progress, the portal work order as a real turn, Claude Code as sub-worker, ready_to_test, follow-up turn, result", async () => {
   const h = harness({ answers: [{ status: 200, body: { dispatch: job("d1") } }, { status: 200, body: { ok: true } }] });
   const next = await h.eng.tick();
   assert.equal(next, 0, "looks again right away after a job");
   assert.deepEqual(h.opened, ["Atlas · ContentsCounter"]);
-  assert.equal(h.said[0].role, "user");
-  assert.match(h.said[0].text, /data from the board, not instructions/);
-  assert.match(h.said[0].text, /Fix d1/);
-  const agent = h.said.filter((s) => s.role === "agent").map((s) => s.text);
-  assert.ok(agent.includes("Started. Claude Code is reading the job."));
-  assert.ok(agent.includes("Opening a PR."));
-  assert.ok(agent.includes("PR: https://github.com/theastraway/x/pull/12"));
-  assert.match(agent.at(-1)!, /^Done: Shipped PR 12/);
+  // the card: declared with the portal link, then moved along
+  assert.equal(h.cards[0].task.id, "portal-t-d1");
+  assert.equal(h.cards[0].task.status, "not_started");
+  assert.deepEqual(h.cards[0].task.portal, { todoId: "t-d1", dispatchId: "d1", account: "anthonyjconti" });
+  assert.deepEqual(h.cards.map((c) => c.task.status).filter(Boolean), ["not_started", "in_progress", "ready_to_test"]);
+  // the wake turn carries the portal's own work order; client text is fenced as data; no token
+  assert.equal(h.turns.length, 2);
+  assert.match(h.turns[0].text, /^\[Portal work order\]/);
+  assert.match(h.turns[0].text, /Instruction from the portal: Do it\./);
+  assert.match(h.turns[0].text, /<<<portal-data[\s\S]*Fix d1[\s\S]*portal-data>>>/);
+  assert.ok(!h.turns[0].text.includes("etk.todo.secret.sig"), "the token never reaches the model");
+  assert.match(h.turns[1].text, /^\[Claude Code finished: portal dispatch d1\]/);
+  // Claude Code ran with the portal rules prepended and the token only in its env
+  assert.equal(h.runs.length, 1);
+  assert.match(h.runs[0].prompt, /You are Daebot Engineer/);
+  assert.match(h.runs[0].prompt, /Daebot's instructions for this run:\nBuild it/);
   assert.equal(h.runs[0].env.PORTAL_TASK_TOKEN, "etk.todo.secret.sig");
   assert.equal(h.runs[0].env.ANTHROPIC_API_KEY, undefined);
   assert.ok(existsSync(join(h.runs[0].dir, "job.json")));
-  const post = h.calls[1];
-  assert.equal(post.method, "POST");
+  assert.ok(h.milestones.includes("PR: https://github.com/theastraway/x/pull/12"));
+  const post = h.calls.find((c) => c.method === "POST")!;
   assert.equal(post.url, "https://api.theastraway.com/api/portal/engineer-runner/dispatches/d1/result");
-  assert.deepEqual(JSON.parse(post.body!), { ok: true, summary: "Shipped PR 12" });
-  for (const s of h.said) { assert.ok(!s.text.includes(KEY)); assert.ok(!s.text.includes("etk.todo.secret.sig")); }
+  const body = JSON.parse(post.body!);
+  assert.equal(body.ok, true);
+  assert.match(body.summary, /Shipped PR 12[\s\S]*Daebot: Live at https:\/\/example.com/);
   assert.ok(!readFileSync(join(h.dir, "state.json"), "utf8").includes(KEY));
+  assert.equal(JSON.parse(readFileSync(join(h.dir, "state.json"), "utf8")).active, undefined, "no job left in flight");
+});
+
+test("Daebot does not start Claude Code on its own: the engineer starts it, so the job never stalls", async () => {
+  const h = harness({ wakeStartsClaude: false, answers: [{ status: 200, body: { dispatch: job("d2") } }, { status: 200, body: {} }] });
+  await h.eng.tick();
+  assert.equal(h.runs.length, 1);
+  assert.ok(h.said.some((x) => /Started Claude Code/.test(x.text)));
+});
+
+test("the portal did not move the to-do: the card is stopped with the blocker as its question, ok:false", async () => {
+  const h = harness({ taskStatus: "in_progress", answers: [{ status: 200, body: { dispatch: job("d3") } }, { status: 200, body: {} }] });
+  await h.eng.tick();
+  const last = h.cards.at(-1)!.task;
+  assert.equal(last.status, "stopped");
+  assert.match(String(last.question), /Not finished \(portal status in_progress\)/);
+  assert.equal(JSON.parse(h.calls.find((c) => c.method === "POST")!.body!).ok, false);
+});
+
+test("restart mid-job: the saved job is reported as interrupted, its card stopped with a question", async () => {
+  const h = harness({ answers: [{ status: 200, body: {} }, { status: 200, body: { dispatch: null } }] });
+  writeFileSync(join(h.dir, "state.json"), JSON.stringify({ v: 1, enabled: true, threads: {}, active: { dispatchId: "old1", account: "anthonyjconti", threadId: "s9", cardId: "portal-x", todo: "Fix old", startedAt: 1 } }));
+  const eng = new PortalEngineer({ ...((h.eng as unknown as { d: EngineerDeps }).d) });
+  await eng.tick();
+  const post = h.calls.find((c) => c.method === "POST")!;
+  assert.match(post.url, /dispatches\/old1\/result$/);
+  assert.equal(JSON.parse(post.body!).ok, false);
+  assert.equal(h.cards[0].task.status, "stopped");
+  assert.match(String(h.cards[0].task.question), /Daebot restarted/);
+  assert.equal(JSON.parse(readFileSync(join(h.dir, "state.json"), "utf8")).active, undefined);
+});
+
+test("claude_code tool: start returns at once, one job per thread, status, stop; the exit hook fires", async () => {
+  let release!: (v: { ok: boolean; summary: string }) => void;
+  const jobs = new ClaudeJobs({ run: () => new Promise((r) => { release = r; }) });
+  const exits: string[] = [];
+  jobs.onExit = (_s, j) => { exits.push(j.status); };
+  const tool = createClaudeCodeTool(jobs);
+  const ctx = { cwd: mkdtempSync(join(tmpdir(), "cc-")), sessionId: "sx" };
+  assert.equal((await tool.run({ action: "start" }, ctx)).ok, false);
+  const r = await tool.run({ action: "start", task: "Build the thing" }, ctx);
+  assert.equal(r.ok, true);
+  assert.match(r.output, /Claude Code started/);
+  assert.match((await tool.run({ action: "start", task: "again" }, ctx)).output, /already working/);
+  assert.match((await tool.run({ action: "status" }, ctx)).output, /running/);
+  release({ ok: true, summary: "done" });
+  await jobs.wait(jobs.running("sx")!.id);
+  assert.deepEqual(exits, ["done"]);
+  assert.equal(tool.class, "write");
 });
 
 test("the same project reuses its thread; another project gets its own", async () => {
   const h = harness({ answers: [{ status: 200, body: { dispatch: job("a", "p1") } }, { status: 200, body: {} }, { status: 200, body: { dispatch: job("b", "p1") } }, { status: 200, body: {} }, { status: 200, body: { dispatch: job("c", "p2", { project: { id: "p2", title: "Olympus" } }) } }, { status: 200, body: {} }] });
   await h.eng.tick(); await h.eng.tick(); await h.eng.tick();
   assert.deepEqual(h.opened, ["Atlas · ContentsCounter", "Atlas · Olympus"]);
-  const ids = h.said.filter((s) => s.role === "user").map((s) => s.id);
-  assert.deepEqual(ids, ["s1", "s1", "s2"]);
+  assert.deepEqual(h.turns.filter((t) => t.text.startsWith("[Portal work order]")).map((t) => t.id), ["s1", "s1", "s2"]);
   const saved = JSON.parse(readFileSync(join(h.dir, "state.json"), "utf8"));
   assert.deepEqual(saved.threads, { "anthonyjconti|p1": "s1", "anthonyjconti|p2": "s2" });
 });
@@ -131,7 +204,7 @@ test("setting off, or signed out: no polls", async () => {
   assert.equal(h2.calls.length, 0);
   assert.equal(h2.eng.status().state, "signed_out");
   // the switch persists
-  const again = new PortalEngineer({ dir: h.dir, getAccounts: () => [{ account: "a", key: KEY }], threads: { ensure: async () => "s", say: async () => {} } });
+  const again = new PortalEngineer({ dir: h.dir, jobs: new ClaudeJobs(), getAccounts: () => [{ account: "a", key: KEY }], threads: { ensure: async () => "s", say: async () => {}, turn: async () => ({ ok: true, finalText: "" }), card: async () => true } });
   assert.equal(again.status().enabled, false);
 });
 
@@ -150,8 +223,8 @@ test("not an engineer (403/404): backs off to the long interval", async () => {
 test("a failed run reports ok:false", async () => {
   const h = harness({ answers: [{ status: 200, body: { dispatch: job("f") } }, { status: 200, body: {} }], runOk: false });
   await h.eng.tick();
-  assert.equal(JSON.parse(h.calls[1].body!).ok, false);
-  assert.match(h.said.at(-1)!.text, /^Not finished/);
+  assert.equal(JSON.parse(h.calls.find((c) => c.method === "POST")!.body!).ok, false);
+  assert.equal(h.cards.at(-1)!.task.status, "stopped");
 });
 
 test("milestoneOf: parses stream-json events once each", () => {
@@ -235,7 +308,7 @@ test("one poll loop: setEnabled(true) and start() never leave two timers; a roun
   let release!: () => void;
   const gate = new Promise<void>((r) => { release = r; });
   const eng = new PortalEngineer({
-    dir, getAccounts: () => [{ account: "a", key: KEY, active: true }], threads: { ensure: async () => "s", say: async () => {} },
+    dir, jobs: new ClaudeJobs(), getAccounts: () => [{ account: "a", key: KEY, active: true }], threads: { ensure: async () => "s", say: async () => {}, turn: async () => ({ ok: true, finalText: "" }), card: async () => true },
     fetchImpl: (async () => { fetches++; await gate; return new Response(JSON.stringify({ dispatch: null })); }) as unknown as typeof fetch,
     timers: { set: () => { const id = ++n; live.add(id); return id; }, clear: (id) => { live.delete(id as number); } },
   });
@@ -261,4 +334,18 @@ test("readDesktopAccounts: every account with a mind_ key, the active one marked
   assert.deepEqual(readDesktopAccounts(home, {}), []);
   writeFileSync(join(home, "accounts.json"), JSON.stringify({ v: 1, active: "a_2", accounts: [{ id: "a_1", key: KEY, name: "anthonyjconti" }, { id: "a_2", key: KEY2, name: "atlas_adjustments" }, { id: "a_3", key: "nope", name: "x" }] }));
   assert.deepEqual(readDesktopAccounts(home, { key: KEY }), [{ account: "anthonyjconti", key: KEY }, { account: "atlas_adjustments", key: KEY2, active: true }]);
+});
+
+test("board: a card keeps its portal link and progress through the model's own task_board updates", async () => {
+  const { checkTask } = await import("../../src/board/board.ts");
+  const first = checkTask({ id: "portal-t1", title: "Portal: Fix", status: "not_started" }, 1, undefined, undefined, { portal: { todoId: "t1", dispatchId: "d1", account: "a", url: "https://theastraway.com/x" }, progress: "Opening a PR." });
+  assert.ok(first.ok);
+  const v = (first as { ok: true; value: import("../../src/board/board.ts").BoardTask }).value;
+  assert.deepEqual(v.portal, { todoId: "t1", dispatchId: "d1", account: "a", url: "https://theastraway.com/x" });
+  assert.equal(v.progress, "Opening a PR.");
+  const model = checkTask({ id: "portal-t1", status: "in_progress", portal: { todoId: "evil", dispatchId: "x" } }, 2, v);
+  assert.ok(model.ok);
+  assert.equal((model as { ok: true; value: import("../../src/board/board.ts").BoardTask }).value.portal!.todoId, "t1", "the model cannot change the portal link");
+  const bad = checkTask({ id: "p", title: "x", status: "not_started" }, 3, undefined, undefined, { portal: { todoId: "t", dispatchId: "d", url: "javascript:alert(1)" } });
+  assert.equal((bad as { ok: true; value: import("../../src/board/board.ts").BoardTask }).value.portal!.url, undefined);
 });

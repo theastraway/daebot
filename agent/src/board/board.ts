@@ -34,7 +34,13 @@ export interface BoardTask {
   /** Why the MIND side is not in step ("Not saved to MIND: ..."), shown on the card. */
   sync?: string;
   decision?: BoardDecision;
+  /** A portal job: the Astra AI portal to-do this card works (set by the portal engineer, never by the model). */
+  portal?: BoardPortal;
+  /** Live progress of the sub-worker (Claude Code) on this card: the latest milestone. Set by the runtime. */
+  progress?: string;
 }
+/** The portal to-do a card belongs to: its id, the dispatch, the account it was routed to and a link to it. */
+export interface BoardPortal { todoId: string; dispatchId: string; account?: string; url?: string }
 
 /** One row of GET /board. proof: the session's last human turn (what ran, what was blocked, verified or not, the model), the same on every row of the session. */
 export interface BoardRow extends BoardTask { sessionId: string; sessionTitle: string; proof?: TurnProof; /** The session's last handoff card (compaction), the same on every row. */ handoff?: HandoffCard }
@@ -64,6 +70,12 @@ function extrasOf(src: unknown): Partial<BoardTask> {
   if (typeof r.lifeStatus === "string" && r.lifeStatus.trim()) out.lifeStatus = oneLine(r.lifeStatus, 30);
   if (typeof r.sync === "string" && r.sync.trim()) out.sync = oneLine(r.sync, 200);
   const d = r.decision as Record<string, unknown> | undefined;
+  const pt = r.portal as Record<string, unknown> | undefined;
+  if (pt && typeof pt === "object" && oneLine(pt.todoId, 80) && oneLine(pt.dispatchId, 80)) {
+    const url = oneLine(pt.url, 400);
+    out.portal = { todoId: oneLine(pt.todoId, 80), dispatchId: oneLine(pt.dispatchId, 80), ...(oneLine(pt.account, 80) ? { account: oneLine(pt.account, 80) } : {}), ...(/^https:\/\//.test(url) ? { url } : {}) };
+  }
+  if (typeof r.progress === "string" && r.progress.trim()) out.progress = oneLine(r.progress, 200);
   if (d && typeof d === "object" && oneLine(d.id, 120) && oneLine(d.winner, 200)) out.decision = { id: oneLine(d.id, 120), subject: oneLine(d.subject, 120), winner: oneLine(d.winner, 200), ...(d.local === true ? { local: true } : {}) };
   return out;
 }

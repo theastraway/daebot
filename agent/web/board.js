@@ -179,6 +179,13 @@ export function initBoard({ json, h, els, app }) {
       }
     }
     if (r.sync) { const c = h("span", "bd-chip warn", r.sync); wrap.append(c); }
+    // A portal job: the Astra AI portal to-do it works, and the sub-worker's live progress (Claude Code).
+    if (r.portal && r.portal.todoId) {
+      const label = `Portal to-do ${String(r.portal.todoId).slice(0, 8)}${r.portal.account ? ` · ${r.portal.account}` : ""}`;
+      if (r.portal.url && /^https:\/\//.test(r.portal.url)) { const a = h("a", "bd-chip portal", label); a.href = r.portal.url; a.target = "_blank"; a.rel = "noopener noreferrer"; a.title = "Open the to-do in the Astra AI portal"; wrap.append(a); }
+      else { const c = h("span", "bd-chip portal", label); c.title = `Astra AI portal to-do ${r.portal.todoId} (dispatch ${r.portal.dispatchId})`; wrap.append(c); }
+    }
+    if (r.progress) { const c = h("span", "bd-chip progress", `Claude Code: ${r.progress}`); wrap.append(c); }
     return wrap.childNodes.length ? wrap : null;
   }
 
