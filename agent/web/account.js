@@ -16,11 +16,12 @@ export function deviceKind(ua, platform = "", touchPoints = 0) {
   return "unknown";
 }
 
-/** Which "Get the app" rows to show. Nothing inside a Daebot app of that kind; no desktop app offered on a phone. */
+/** Which "Get the app" rows to show. Nothing inside a Daebot app; the mobile app only to a phone or tablet browser;
+ *  the desktop app only to a computer's browser (Anthony, Nov 18 2026: "Get Daebot for mobile" belongs on mobile web only). */
 export function appLinks({ desktopShell, mobileShell, kind }) {
-  if (mobileShell) return { mobile: false, desktop: false };
+  if (mobileShell || desktopShell) return { mobile: false, desktop: false };
   const phone = kind === "ios" || kind === "android";
-  return { mobile: true, desktop: !desktopShell && !phone };
+  return { mobile: phone, desktop: !phone };
 }
 
 /** First letter for the avatar. */
@@ -40,6 +41,10 @@ export function updateBanner(s) {
 export function initAccount({ json, h, icon, notify, desktop, isHosted, closeSidebar, openApps, openPermissions, onOpen }) {
   const $ = (id) => document.getElementById(id);
   const bar = $("side-bar"), btn = $("acct-btn"), menu = $("acct-menu"), sub = $("am-accounts"), switchBtn = $("am-switch");
+  // Settings: Permissions, Spend caps, LLM & database and Keyboard shortcuts sit in one group that opens in place (the menu was crowded).
+  const setBtn = $("am-settings"), setList = $("am-settings-list");
+  function toggleSettings(on) { if (!setBtn || !setList) return; setList.hidden = !on; setBtn.setAttribute("aria-expanded", String(on)); }
+  if (setBtn) setBtn.addEventListener("click", () => { const on = setList.hidden; toggleSettings(on); if (on) setList.querySelector(".am-item:not([hidden])")?.focus(); });
   if (!bar || !btn || !menu) return { setIdentity() {}, setOnline() {}, setUpdate() {} };
   let open = false, subOpen = false;
   let me = { name: "", owner: false };
@@ -104,7 +109,7 @@ export function initAccount({ json, h, icon, notify, desktop, isHosted, closeSid
     open = on;
     menu.hidden = !on;
     btn.setAttribute("aria-expanded", String(on));
-    if (!on) toggleSub(false);
+    if (!on) { toggleSub(false); toggleSettings(false); }
     if (on) {
       paintLinks();
       if (onOpen) onOpen();
@@ -127,6 +132,8 @@ export function initAccount({ json, h, icon, notify, desktop, isHosted, closeSid
       const i = list.indexOf(document.activeElement);
       list[(i + (e.key === "ArrowDown" ? 1 : list.length - 1) + (i < 0 ? 1 : 0)) % list.length].focus();
     }
+    if (e.key === "ArrowRight" && setBtn && document.activeElement === setBtn) { e.preventDefault(); toggleSettings(true); setList.querySelector(".am-item:not([hidden])")?.focus(); }
+    if (e.key === "ArrowLeft" && setList && !setList.hidden && setList.contains(document.activeElement)) { e.preventDefault(); toggleSettings(false); setBtn.focus(); }
     if (e.key === "ArrowRight" && document.activeElement === switchBtn) { e.preventDefault(); toggleSub(true); sub.querySelector(".am-acct")?.focus(); }
     if (e.key === "ArrowLeft" && subOpen) { e.preventDefault(); toggleSub(false); switchBtn.focus(); }
     if (e.key === "Tab") toggleMenu(false, false);
@@ -134,7 +141,7 @@ export function initAccount({ json, h, icon, notify, desktop, isHosted, closeSid
   // Any plain menu action closes the menu (the Switch account row opens its list instead).
   menu.addEventListener("click", (e) => {
     const t = e.target.closest(".am-item");
-    if (t && t !== switchBtn && t.id !== "am-check") { toggleMenu(false, false); if (closeSidebar) closeSidebar(); }
+    if (t && t !== switchBtn && t !== setBtn && t.id !== "am-check") { toggleMenu(false, false); if (closeSidebar) closeSidebar(); }
   });
   $("btn-apps").addEventListener("click", () => { toggleMenu(false, false); });
   $("am-apps").addEventListener("click", () => { if (openApps) openApps(); });
