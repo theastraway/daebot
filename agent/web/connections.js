@@ -82,7 +82,7 @@ export function dbFromForm({ host, port, database, user, password, ssl, password
   return { body };
 }
 
-export function initConnections({ json, h, notify, isHosted, onPick }) {
+export function initConnections({ json, h, notify, isHosted, onPick, currentModel }) {
   const $ = (id) => document.getElementById(id);
   const modal = $("conn-modal"), closeBtn = $("conn-close"), open = $("am-conn");
   const hosts = { llm: $("conn-llm"), local: $("conn-local"), db: $("conn-db") };
@@ -177,8 +177,10 @@ export function initConnections({ json, h, notify, isHosted, onPick }) {
     const srv = h("div", "conn-served");
     if ((v.served || []).length && v.enabled) {
       srv.append(h("p", "fld-label", "Chat on a model on this computer"));
+      const cur = currentModel ? currentModel() : "";
       for (const id of v.served) {
         const row = h("div", "conn-served-row");
+        if (String(id) === cur) { row.dataset.current = "1"; row.append(h("span", "conn-served-name", String(id).replace(/^ollama\//, "")), h("span", "conn-in-use", "In use")); srv.append(row); continue; }
         const use = h("button", "btn-quiet sm", "Use"); use.type = "button"; use.dataset.model = String(id); use.setAttribute("aria-label", `Use ${String(id).replace(/^ollama\//, "")} for your chats`);
         use.addEventListener("click", async () => {
           if (!onPick) return;
