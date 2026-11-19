@@ -1910,8 +1910,10 @@ button.oc-chip { cursor: pointer; border: 0; }
 .conn-rows.two { grid-template-columns: 1fr 1fr; }
 .conn-rows label[hidden] { display: none; }
 .conn-switch { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 14px; font-weight: 550; }
-.conn-served { display: grid; gap: 6px; }
+.conn-served { display: grid; gap: 4px; margin-top: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
 .conn-served:empty { display: none; }
-.conn-served-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 14px; }
+.conn-served-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 14px; min-height: 30px; }
+.conn-served-row[data-current="1"] .conn-served-name { font-weight: 650; }
+.conn-in-use { flex: none; font-size: 12px; font-weight: 600; color: var(--ok, #2f7d4f); }
 .conn-served-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono, ui-monospace, monospace); font-size: 13px; }
 @media (max-width: 520px) { .conn-rows.two { grid-template-columns: 1fr; } }

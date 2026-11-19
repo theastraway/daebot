@@ -1858,7 +1858,7 @@ chatMode = initChatMode({
 });
 const usage = initUsage({ json, notify });
 const caps = initSpendCaps({ json, h, notify });
-const connections = initConnections({ json, h, notify, isHosted: () => state.hosted, onPick: (id) => models.pick(id) }); // models is assigned below; Use is only pressed later
+const connections = initConnections({ json, h, notify, isHosted: () => state.hosted, onPick: (id) => models.pick(id), currentModel: () => (models ? models.current() : "") }); // models is assigned below; Use is only pressed later
 void caps.refresh();
 setInterval(() => { if (!document.hidden) void caps.refresh(); }, 120_000);
 account = initAccount({

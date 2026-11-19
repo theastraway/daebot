@@ -331,6 +331,8 @@ export function initModels({ json, store, notify, icon, getSessionId, onPicked, 
     labelOf,
     /** Sent with POST /sessions so a new session starts on the chosen default ("" lets the server decide). */
     defaultForNew() { return stored(); },
+    /** The model the badge shows right now (a bot's own model, the pending pick, the last answer, then the default). */
+    current() { return currentId(); },
     /** Pick a model by id from elsewhere (the Connections panel's "Use" buttons): same rule as a click in the menu. False when it is not in the list or locked. */
     async pick(id) {
       await load();
