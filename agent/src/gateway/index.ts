@@ -110,6 +110,8 @@ import { RemoteHub } from "../remote/hub.ts";
 import type { DeviceInfo, RemoteJob } from "../remote/hub.ts";
 import { daebotHome } from "../home.ts";
 import { hostname } from "node:os";
+import { PortalEngineer, defaultEngineerDir } from "../engineer/portal-engineer.ts";
+import type { EngineerDeps } from "../engineer/portal-engineer.ts";
 
 // ---------- inbound webhooks (channel adapters register here) ----------
 export interface WebhookRequest {
@@ -183,6 +185,9 @@ export interface GatewayOptions {
   remoteOnlineMs?: number;
   /** Device sync (desktop <-> daebot.live). Local gateways start it only when `enabled` is true (the CLI sets it); tests inject `fetchImpl`/`url`/`key`. */
   sync?: { enabled?: boolean; stateFile?: string; url?: string; key?: string; intervalMs?: number; fetchImpl?: typeof fetch; deviceId?: string; deviceName?: string; remoteWaitSec?: number; botEveryMs?: number };
+  /** Portal engineer (engineer/portal-engineer.ts): works the Astra AI portal to-dos routed to the signed-in MIND account. Local gateways only, and only when
+   *  `enabled` is true (the CLI sets it). Tests inject the rest. */
+  engineer?: { enabled?: boolean; dir?: string; portalUrl?: string; fetchImpl?: typeof fetch; runClaude?: EngineerDeps["runClaude"]; pollMs?: number };
   /** MIND Voice (/voice/stt, /voice/tts). Defaults from cfg + auth; pass to override (tests). */
   /** Where the local model server setting is kept (default DATA_DIR) and the fetch the probe uses. Tests. */
   localLlmDir?: string;
@@ -788,6 +793,34 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
               return createMindClient(opts.cfg!, opts.fetchImpl, { getKey: () => appsKeyFor(p) ?? key }).call(tool, args, signal);
             }
           : undefined,
+      })
+    : undefined;
+  // ---- Portal engineer (desktop only): one Daebot thread per portal project, Claude Code does the work, milestones are appended with no model turn.
+  const engineer = !hosted && opts.engineer?.enabled
+    ? new PortalEngineer({
+        dir: opts.engineer.dir ?? defaultEngineerDir(daebotHome()),
+        portalUrl: opts.engineer.portalUrl ?? process.env.ASTRA_PORTAL_URL,
+        fetchImpl: opts.engineer.fetchImpl ?? opts.fetchImpl,
+        runClaude: opts.engineer.runClaude,
+        pollMs: opts.engineer.pollMs,
+        getKey: () => { const k = appsKeyFor(OWNER); return k && k.startsWith("mind_") ? k : undefined; },
+        threads: {
+          ensure: async (existing, title) => {
+            const rt = manager.runtimeOf(OWNER.id);
+            if (existing && rt.history?.(existing)) return existing;
+            const ls = await manager.open({ surface: "desktop", title, owner: OWNER.id });
+            await rt.renameSession?.(ls.id, title).catch(() => false);
+            return ls.id;
+          },
+          say: async (id, role, text) => {
+            const rt = manager.runtimeOf(OWNER.id);
+            if (!rt.history?.(id)) throw new Error("thread is gone");
+            await manager.open({ surface: "desktop", resumeId: id, owner: OWNER.id });
+            const line = role === "agent" ? `\n\n${text}` : text;
+            if (!(await rt.appendVoiceTranscript?.(id, [{ role, text: line }]))) throw new Error("could not append");
+            if (role === "agent") broadcast(id, { type: "text", delta: line });
+          },
+        },
       })
     : undefined;
   // Hosted: the routines of every user are exchanged with their devices (definitions + run records), deletes as tombstones.
@@ -1916,7 +1949,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path === "/settings/daebot/guards" || path === "/settings/daebot/coder" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/byo-llm" || path === "/byo-llm/test" || path === "/bridges" || path.startsWith("/bridges/") || path === "/settings/local-llm" || path === "/settings/local-llm/detect" || path === "/board" || path.startsWith("/board/") || path === "/routing" || path === "/studio" || path === "/studio/rebuild" || path === "/studio/team" || path === "/studio/skills" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/devices" || path === "/devices/pty" || path.startsWith("/browser/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
+    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path === "/settings/daebot/guards" || path === "/settings/daebot/coder" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/byo-llm" || path === "/byo-llm/test" || path === "/bridges" || path.startsWith("/bridges/") || path === "/settings/local-llm" || path === "/settings/local-llm/detect" || path === "/settings/engineer" || path === "/settings/engineer/stop" || path === "/board" || path.startsWith("/board/") || path === "/routing" || path === "/studio" || path === "/studio/rebuild" || path === "/studio/team" || path === "/studio/skills" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/devices" || path === "/devices/pty" || path.startsWith("/browser/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -2055,6 +2088,28 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     hosted: !!hosted, dir: opts.localLlmDir ?? dataDir(), fetchImpl: opts.localFetch, readJson, sendJson,
     onChange: async () => { catalog.invalidateLocal(); await opts.runtime.refreshLocal?.(); },
   });
+
+  // GET /settings/engineer -> the portal engineer's status; PUT {enabled} turns it on or off; POST /settings/engineer/stop stops the running job.
+  // Desktop owner only (the hosted gateway has no engineer and answers available:false).
+  async function engineerApi(req: IncomingMessage, res: ServerResponse, path: string, method: string, me: Principal): Promise<void> {
+    if (!engineer || me.id !== OWNER.id) {
+      if (method === "GET" && path === "/settings/engineer") return sendJson(res, 200, { available: false });
+      return sendJson(res, 404, { error: "the portal engineer runs only in the desktop app" });
+    }
+    if (path === "/settings/engineer/stop") {
+      if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+      return sendJson(res, 200, { ok: engineer.stopJob() });
+    }
+    if (method === "GET") return sendJson(res, 200, { available: true, ...engineer.status() });
+    if (method === "PUT") {
+      let b: Record<string, unknown>;
+      try { b = await readJson(req); } catch { return sendJson(res, 400, { error: "bad json" }); }
+      if (typeof b.enabled !== "boolean") return sendJson(res, 400, { error: "enabled must be true or false" });
+      engineer.setEnabled(b.enabled);
+      return sendJson(res, 200, { available: true, ...engineer.status() });
+    }
+    return sendJson(res, 405, { error: "method not allowed" });
+  }
 
   async function spendCapsApi(req: IncomingMessage, res: ServerResponse, method: string, me: Principal, q: URLSearchParams): Promise<void> {
     if (method !== "GET" && method !== "PUT") return sendJson(res, 405, { error: "method not allowed" });
@@ -2832,6 +2887,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (path === "/byo-llm" || path === "/byo-llm/test") return byoLlm(req, res, path, me);
     if (path === "/bridges" || path.startsWith("/bridges/")) return bridges(req, res, path, me);
     if (path === "/settings/local-llm" || path === "/settings/local-llm/detect") return localLlmApi(req, res, path, method);
+    if (path === "/settings/engineer" || path === "/settings/engineer/stop") return engineerApi(req, res, path, method, me);
     if (path === "/settings/daebot") return mainProfileApi(req, res, method, me);
     if (path === "/settings/daebot/instructions") return mainInstructionsApi(req, res, method, me);
     if (path === "/settings/daebot/guards") return guardsApi(req, res, method, me);
@@ -3519,6 +3575,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     server.listen(opts.port ?? 7777, host, () => resolve());
   });
   routines?.runner.start(); // the one timer loop (unref'd; stopped in close)
+  engineer?.start();
   syncAgent?.start();
   remoteAgent?.start();
   const addr = server.address() as AddressInfo;
@@ -3551,6 +3608,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     async close() {
       clearInterval(pinger);
       routines?.runner.stop();
+      engineer?.stop();
       syncAgent?.stop();
       remoteAgent?.stop();
       if (remoteSweep) clearInterval(remoteSweep);
