@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { IDLE_BACKOFF_MS, PortalEngineer, childEnv, engineerAllowed, findClaude, incomingText, jobPlace, milestoneOf, promptFor, readDesktopAccounts, summaryOf } from "../../src/engineer/portal-engineer.ts";
+import { ELIGIBILITY_RECHECK_MS, IDLE_BACKOFF_MS, PortalEngineer, checkEligible, checkPreflight, childEnv, engineerAllowed, findClaude, incomingText, jobPlace, milestoneOf, promptFor, readDesktopAccounts, summaryOf } from "../../src/engineer/portal-engineer.ts";
 import type { Dispatch, EngineerAccount, EngineerDeps } from "../../src/engineer/portal-engineer.ts";
 import { ClaudeJobs, createClaudeCodeTool } from "../../src/engineer/claude-code.ts";
 import { writeFileSync } from "node:fs";
@@ -26,7 +26,7 @@ function fakeFetch(answers: Array<{ status: number; body: unknown } | Error>, ca
   }) as unknown as typeof fetch;
 }
 
-function harness(o: { answers: Array<{ status: number; body: unknown } | Error>; key?: string | undefined; runOk?: boolean; accounts?: EngineerAccount[]; now?: () => number; wakeStartsClaude?: boolean; taskStatus?: string; gate?: Promise<void> }) {
+function harness(o: { answers: Array<{ status: number; body: unknown } | Error>; key?: string | undefined; runOk?: boolean; accounts?: EngineerAccount[]; now?: () => number; wakeStartsClaude?: boolean; taskStatus?: string; gate?: Promise<void>; eligible?: () => Promise<{ ok: boolean; reason?: string }>; preflight?: () => Promise<{ ok: boolean; reason?: string }> }) {
   const dir = mkdtempSync(join(tmpdir(), "eng-"));
   const calls: Call[] = [];
   const said: Array<{ id: string; role: string; text: string }> = [];
@@ -52,7 +52,7 @@ function harness(o: { answers: Array<{ status: number; body: unknown } | Error>;
     return portalFetch(url, init);
   }) as unknown as typeof fetch;
   const deps: EngineerDeps = {
-    dir, now: o.now, jobs, getAccounts: () => o.accounts ?? (("key" in o ? o.key : KEY) ? [{ account: "anthonyjconti", key: ("key" in o ? o.key : KEY)!, active: true }] : []), fetchImpl, sleep: async () => {},
+    dir, now: o.now, jobs, eligibility: o.eligible ?? (async () => ({ ok: true })), preflight: o.preflight ?? (async () => ({ ok: true })), getAccounts: () => o.accounts ?? (("key" in o ? o.key : KEY) ? [{ account: "anthonyjconti", key: ("key" in o ? o.key : KEY)!, active: true }] : []), fetchImpl, sleep: async () => {},
     threads: {
       ensure: async (existing, title) => { if (existing && live.has(existing)) return existing; const id = `s${++n}`; live.add(id); opened.push(title); return id; },
       say: async (id, role, text) => { said.push({ id, role, text }); },
@@ -205,7 +205,7 @@ test("setting off, or signed out: no polls", async () => {
   assert.equal(h2.calls.length, 0);
   assert.equal(h2.eng.status().state, "signed_out");
   // the switch persists
-  const again = new PortalEngineer({ dir: h.dir, jobs: new ClaudeJobs(), getAccounts: () => [{ account: "a", key: KEY }], threads: { ensure: async () => "s", say: async () => {}, turn: async () => ({ ok: true, finalText: "" }), card: async () => true } });
+  const again = new PortalEngineer({ dir: h.dir, jobs: new ClaudeJobs(), eligibility: async () => ({ ok: true }), getAccounts: () => [{ account: "a", key: KEY }], threads: { ensure: async () => "s", say: async () => {}, turn: async () => ({ ok: true, finalText: "" }), card: async () => true } });
   assert.equal(again.status().enabled, false);
 });
 
@@ -309,7 +309,7 @@ test("one poll loop: setEnabled(true) and start() never leave two timers; a roun
   let release!: () => void;
   const gate = new Promise<void>((r) => { release = r; });
   const eng = new PortalEngineer({
-    dir, jobs: new ClaudeJobs(), getAccounts: () => [{ account: "a", key: KEY, active: true }], threads: { ensure: async () => "s", say: async () => {}, turn: async () => ({ ok: true, finalText: "" }), card: async () => true },
+    dir, jobs: new ClaudeJobs(), eligibility: async () => ({ ok: true }), getAccounts: () => [{ account: "a", key: KEY, active: true }], threads: { ensure: async () => "s", say: async () => {}, turn: async () => ({ ok: true, finalText: "" }), card: async () => true },
     fetchImpl: (async () => { fetches++; await gate; return new Response(JSON.stringify({ dispatch: null })); }) as unknown as typeof fetch,
     timers: { set: () => { const id = ++n; live.add(id); return id; }, clear: (id) => { live.delete(id as number); } },
   });
@@ -408,4 +408,49 @@ test("every /next names the device so the portal can tell which computer claimed
   const h = harness({ answers: [{ status: 200, body: { dispatch: null } }] });
   await h.eng.tick();
   assert.ok(String(h.calls[0].headers["X-Daebot-Device"] ?? "").length > 0);
+});
+
+test("eligibility gate: a computer without a working Claude Code never calls /next; it checks again every 10 minutes", async () => {
+  let t = 5_000_000, checks = 0, ok = false;
+  const h = harness({ now: () => t, eligible: async () => { checks++; return ok ? { ok: true } : { ok: false, reason: "Claude Code not installed" }; }, answers: [{ status: 200, body: { dispatch: null } }] });
+  await h.eng.tick(); await h.eng.tick();
+  assert.equal(h.calls.length, 0, "no /next at all");
+  assert.equal(checks, 1, "cached between rechecks");
+  const st = h.eng.status();
+  assert.equal(st.state, "not_eligible");
+  assert.equal(st.eligible!.reason, "Claude Code not installed");
+  assert.equal(engineerLine({ available: true, ...st }), "Can't take portal jobs on this computer: Claude Code not installed.");
+  ok = true; t += ELIGIBILITY_RECHECK_MS;
+  await h.eng.tick();
+  assert.equal(checks, 2);
+  assert.equal(h.calls.length, 1, "eligible again: it polls");
+});
+
+test("claimed but cannot start (preflight fails): handed straight back ok:false with the reason; no thread, card, turn or question", async () => {
+  const h = harness({ preflight: async () => ({ ok: false, reason: "Claude Code not installed" }), answers: [{ status: 200, body: { dispatch: job("nc1") } }, { status: 200, body: {} }] });
+  await h.eng.tick();
+  const post = h.calls.find((c) => c.method === "POST")!;
+  assert.match(post.url, /dispatches\/nc1\/result$/);
+  const body = JSON.parse(post.body!);
+  assert.equal(body.ok, false);
+  assert.match(body.summary, /Cannot start on .*: Claude Code not installed\. Handing it back/);
+  assert.equal(h.turns.length, 0);
+  assert.equal(h.cards.length, 0);
+  assert.equal(h.opened.length, 0);
+  assert.equal(h.runs.length, 0);
+  const st = JSON.parse(readFileSync(join(h.dir, "state.json"), "utf8"));
+  assert.equal(st.active, undefined);
+  assert.equal(st.queue, undefined);
+  assert.equal(h.eng.status().state, "not_eligible");
+});
+
+test("checkEligible / checkPreflight: phones and missing or broken tools are refused with a plain reason", async () => {
+  const yes = async () => true;
+  assert.deepEqual(await checkEligible({ platform: "ios", find: () => "/x/claude", runs: yes }), { ok: false, reason: "this device is not a computer" });
+  assert.deepEqual(await checkEligible({ platform: "darwin", find: () => undefined, runs: yes }), { ok: false, reason: "Claude Code not installed" });
+  assert.match(String((await checkEligible({ platform: "darwin", find: () => "/x/claude", runs: async () => false })).reason), /does not run/);
+  assert.deepEqual(await checkEligible({ platform: "darwin", find: () => "/x/claude", runs: yes }), { ok: true });
+  assert.match(String((await checkPreflight({ find: () => "/x/claude", runs: async (bin) => bin !== "gh" })).reason), /gh/);
+  assert.match(String((await checkPreflight({ find: () => "/x/claude", runs: async (bin) => bin !== "git" })).reason), /git is not installed/);
+  assert.deepEqual(await checkPreflight({ find: () => "/x/claude", runs: yes }), { ok: true });
 });

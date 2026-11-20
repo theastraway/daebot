@@ -53,12 +53,14 @@ export interface EngineerStatus {
   enabled: boolean;
   signedIn: boolean;
   accounts?: AccountStatus[];
-  state: "off" | "signed_out" | "idle" | "working" | "not_engineer" | "error";
+  state: "off" | "signed_out" | "idle" | "working" | "not_engineer" | "not_eligible" | "error";
   /** "Working on <to-do> in <project>" while a job runs. */
   job?: { id: string; todo: string; project: string; account?: string; threadId?: string; startedAt: number };
   lastError?: string;
   lastPollAt?: number;
   lastResult?: { ok: boolean; todo: string; at: number };
+  /** Can this computer take portal jobs at all (Claude Code installed and running)? Not eligible = it never asks the portal for work. */
+  eligible?: { ok: boolean; reason?: string; checkedAt: number };
 }
 
 export interface ThreadOps {
@@ -92,6 +94,10 @@ export interface EngineerDeps {
   log?: (msg: string) => void;
   /** Timer functions (tests count the live timers). Default setTimeout / clearTimeout. */
   timers?: { set(fn: () => void, ms: number): unknown; clear(t: unknown): void };
+  /** Can this computer do the work: the claude CLI found and `claude --version` exits 0. Checked before polling, again every 10 minutes. */
+  eligibility?: () => Promise<Eligibility>;
+  /** Right before a claimed job starts: claude, git and gh auth. A failure is reported to the portal at once (ok:false), never asked on the board. */
+  preflight?: () => Promise<Eligibility>;
 }
 
 /** The job in flight, saved so a restart can report it cleanly. */
@@ -230,6 +236,45 @@ export function childEnv(base: NodeJS.ProcessEnv, api: string, taskToken: string
 }
 
 /** Runs `claude -p` with stream-json output. Kills the process group on abort (SIGTERM, then SIGKILL after 10 s). */
+export interface Eligibility { ok: boolean; reason?: string }
+export const ELIGIBILITY_RECHECK_MS = 10 * 60_000;
+export const CLAUDE_INSTALL_HINT = "curl -fsSL https://claude.ai/install.sh | bash";
+
+/** Runs a command briefly; exit 0 = true. Never throws. */
+export async function runsOk(bin: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs = 20_000): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    try {
+      const c = spawn(bin, args, { env, stdio: "ignore" });
+      const t = setTimeout(() => { try { c.kill("SIGKILL"); } catch { /* gone */ } resolve(false); }, timeoutMs);
+      t.unref?.();
+      c.on("error", () => { clearTimeout(t); resolve(false); });
+      c.on("close", (code) => { clearTimeout(t); resolve(code === 0); });
+    } catch { resolve(false); }
+  });
+}
+
+/** The eligibility gate: a phone or the hosted server never takes jobs; a computer needs a working Claude Code. */
+export async function checkEligible(o: { platform?: string; env?: NodeJS.ProcessEnv; find?: () => string | undefined; runs?: (bin: string, args: string[], env: NodeJS.ProcessEnv) => Promise<boolean> } = {}): Promise<Eligibility> {
+  const platform = o.platform ?? process.platform;
+  if (!["darwin", "linux", "win32"].includes(platform)) return { ok: false, reason: "this device is not a computer" };
+  const env = childEnv(o.env ?? process.env, "", "");
+  const bin = (o.find ?? (() => findClaude(env)))();
+  if (!bin) return { ok: false, reason: "Claude Code not installed" };
+  if (!(await (o.runs ?? runsOk)(bin, ["--version"], env))) return { ok: false, reason: "Claude Code is installed but does not run (`claude --version` failed)" };
+  return { ok: true };
+}
+
+/** Right before a job: Claude Code runs, git is there, and gh is logged in (PRs and merges need it). */
+export async function checkPreflight(o: { env?: NodeJS.ProcessEnv; runs?: (bin: string, args: string[], env: NodeJS.ProcessEnv) => Promise<boolean>; find?: () => string | undefined } = {}): Promise<Eligibility> {
+  const base = await checkEligible({ env: o.env, runs: o.runs, find: o.find });
+  if (!base.ok) return base;
+  const env = childEnv(o.env ?? process.env, "", "");
+  const runs = o.runs ?? runsOk;
+  if (!(await runs("git", ["--version"], env))) return { ok: false, reason: "git is not installed on this computer" };
+  if (!(await runs("gh", ["auth", "status"], env))) return { ok: false, reason: "GitHub CLI (gh) is not installed or not logged in on this computer" };
+  return { ok: true };
+}
+
 export async function spawnClaude(a: { bin: string; job: Dispatch; dir: string; prompt: string; env: NodeJS.ProcessEnv; signal: AbortSignal; onLine(line: string): void; tools?: string }): Promise<ClaudeRun> {
   const args = ["-p", a.prompt, "--output-format", "stream-json", "--verbose", "--allowed-tools", a.tools ?? DEFAULT_TOOLS];
   return await new Promise<ClaudeRun>((resolve) => {
@@ -434,6 +479,14 @@ export class PortalEngineer {
       if (this.saved.enabled === false) { this.st.state = "off"; return next; }
       const list = this.accounts();
       if (!list.length) { this.st.state = "signed_out"; return next; }
+      // Eligibility gate: a computer that cannot do the work never asks the portal for it (checked again every 10 minutes).
+      const el = this.st.eligible;
+      if (!el || this.now() - el.checkedAt >= ELIGIBILITY_RECHECK_MS) {
+        let r: Eligibility;
+        try { r = await (this.d.eligibility ?? (() => checkEligible()))(); } catch (e) { r = { ok: false, reason: one((e as Error).message, 160) }; }
+        this.st.eligible = { ...r, checkedAt: this.now() };
+      }
+      if (!this.st.eligible!.ok && !this.saved.queue?.length && !this.saved.active) { this.st.state = "not_eligible"; return next; }
       this.st.state = "idle";
       if (this.saved.active && !this.st.job) await this.reportInterrupted(list);
       // A job already claimed and not started yet runs first, before any new claim.
@@ -546,6 +599,18 @@ export class PortalEngineer {
     const cardId = cardIdFor(todoId);
     const url = one(p.todo?.url ?? p.links?.todo ?? p.portal?.todo_url, 400);
     const portal = { todoId, dispatchId: job.id, account: acct.account, ...(/^https:\/\//.test(url) ? { url } : {}) };
+    // Claimed but this computer cannot start it: hand it straight back (ok:false with the reason) so the portal gives it to the next
+    // eligible engineer. No thread, no card, no question to the person.
+    let pre: Eligibility;
+    try { pre = await (this.d.preflight ?? (() => checkPreflight()))(); } catch (e) { pre = { ok: false, reason: one((e as Error).message, 160) }; }
+    if (!pre.ok) {
+      if (fromQueue && this.saved.queue) { this.saved.queue = this.saved.queue.filter((q) => q.job.id !== job.id); this.save(); }
+      this.st.eligible = { ok: false, reason: pre.reason, checkedAt: this.now() };
+      await this.report(job.id, key, false, `Cannot start on ${one(hostname(), 60)}: ${pre.reason}. Handing it back so another engineer can take it.`);
+      this.st.lastResult = { ok: false, todo: place.todo, at: this.now() };
+      this.st.state = "not_eligible";
+      return;
+    }
     let threadId: string | undefined;
     try {
       threadId = await this.d.threads.ensure(threads[tkey] ?? (acct.active ? threads[place.projectKey] : undefined), title);
