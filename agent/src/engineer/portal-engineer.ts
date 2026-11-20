@@ -96,7 +96,10 @@ export interface EngineerDeps {
 
 /** The job in flight, saved so a restart can report it cleanly. */
 interface ActiveJob { dispatchId: string; account: string; threadId?: string; cardId: string; todo: string; startedAt: number }
-interface Saved { enabled?: boolean; threads?: Record<string, string>; active?: ActiveJob }
+/** A claimed job that has not started yet (claimed while busy, or before a restart). Kept in state.json (0600) until it runs: never dropped. */
+interface QueuedJob { account: string; job: Dispatch; claimedAt: number }
+interface Saved { enabled?: boolean; threads?: Record<string, string>; active?: ActiveJob; queue?: QueuedJob[] }
+const MAX_QUEUE = 20;
 
 const one = (v: unknown, n = 200): string => String(v ?? "").replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, n);
 const redact = (s: string): string => s.replace(/mind_[A-Za-z0-9_-]{8,}/g, "mind_[redacted]").replace(/etk\.[A-Za-z0-9._-]+/g, "etk.[redacted]").replace(/aek_[A-Za-z0-9_-]+/g, "aek_[redacted]");
@@ -329,14 +332,15 @@ export class PortalEngineer {
       if (!j || typeof j !== "object") return {};
       const a = j.active;
       const active = a && typeof a === "object" && typeof a.dispatchId === "string" && typeof a.account === "string" && typeof a.cardId === "string" ? { dispatchId: a.dispatchId, account: a.account, cardId: a.cardId, todo: one(a.todo, 140), startedAt: Number(a.startedAt) || 0, ...(typeof a.threadId === "string" ? { threadId: a.threadId } : {}) } : undefined;
-      return { enabled: j.enabled !== false, threads: j.threads && typeof j.threads === "object" ? j.threads : {}, ...(active ? { active } : {}) };
+      const queue: QueuedJob[] = (Array.isArray(j.queue) ? j.queue : []).filter((q: any) => q && typeof q.account === "string" && q.job && typeof q.job.id === "string").slice(0, MAX_QUEUE).map((q: any) => ({ account: q.account, job: q.job, claimedAt: Number(q.claimedAt) || 0 }));
+      return { enabled: j.enabled !== false, threads: j.threads && typeof j.threads === "object" ? j.threads : {}, ...(active ? { active } : {}), ...(queue.length ? { queue } : {}) };
     } catch { return {}; }
   }
   private save(): void {
     try {
       mkdirSync(this.d.dir, { recursive: true, mode: 0o700 });
       const tmp = `${this.file}.${process.pid}.tmp`;
-      writeFileSync(tmp, JSON.stringify({ v: 1, enabled: this.saved.enabled !== false, threads: this.saved.threads ?? {}, ...(this.saved.active ? { active: this.saved.active } : {}) }), { mode: 0o600 });
+      writeFileSync(tmp, JSON.stringify({ v: 1, enabled: this.saved.enabled !== false, threads: this.saved.threads ?? {}, ...(this.saved.active ? { active: this.saved.active } : {}), ...(this.saved.queue?.length ? { queue: this.saved.queue } : {}) }), { mode: 0o600 });
       renameSync(tmp, this.file);
     } catch (e) { this.log(`could not save state: ${(e as Error).message}`); }
   }
@@ -411,7 +415,7 @@ export class PortalEngineer {
     const f = this.d.fetchImpl ?? fetch;
     const r = await f(`${this.base()}${path}`, {
       method,
-      headers: { "X-MIND-Key": key, "Content-Type": "application/json", "User-Agent": "daebot-engineer/1" },
+      headers: { "X-MIND-Key": key, "Content-Type": "application/json", "User-Agent": "daebot-engineer/1", "X-Daebot-Device": one(hostname(), 80) },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       signal: AbortSignal.timeout(30_000),
     });
@@ -432,18 +436,44 @@ export class PortalEngineer {
       if (!list.length) { this.st.state = "signed_out"; return next; }
       this.st.state = "idle";
       if (this.saved.active && !this.st.job) await this.reportInterrupted(list);
+      // A job already claimed and not started yet runs first, before any new claim.
+      if (this.saved.queue?.length) {
+        const q = this.saved.queue[0];
+        const acct = list.find((a) => a.account === q.account);
+        if (acct) { await this.work(q.job, acct, true); next = 0; return next; }
+        // its account is no longer signed in here, so it cannot run or be reported with that account's key: log it loudly (the portal re-offers it)
+        this.saved.queue.shift(); this.save();
+        this.log(`queued job ${q.job.id} belongs to ${q.account}, which is not signed in; it was not run`);
+        next = 0;
+        return next;
+      }
       for (const a of list) {
+        if (this.busy()) break; // never claim while a job is active, its follow-up included
         const s = this.acct.get(a.account) ?? { account: a.account, state: "checking" as const, nextAt: 0 };
         this.acct.set(a.account, s);
         if (s.nextAt > this.now()) continue;
         const job = await this.pollOne(a, s);
-        if (job) { await this.work(job, a); next = 0; break; } // one job at a time across all accounts; look again right away
+        if (!job) continue;
+        this.enqueue(a, job); // persisted BEFORE anything else, so a claim survives a crash or a busy engineer
+        if (!this.busy()) { await this.work(job, a, true); next = 0; }
+        break; // one job at a time across all accounts; look again right away
       }
       return next;
     } finally {
       this.running = false;
       if (!this.stopped) this.schedule(next);
     }
+  }
+
+  /** A job is in flight (claimed, working, following up or posting its result). */
+  busy(): boolean { return !!this.st.job || !!this.saved.active || this.working; }
+  private working = false;
+
+  private enqueue(a: EngineerAccount, job: Dispatch): void {
+    const q = (this.saved.queue ??= []);
+    if (!q.some((x) => x.job.id === job.id)) q.push({ account: a.account, job, claimedAt: this.now() });
+    if (q.length > MAX_QUEUE) q.splice(0, q.length - MAX_QUEUE);
+    this.save();
   }
 
   private async pollOne(a: EngineerAccount, s: AccountStatus & { nextAt: number }): Promise<Dispatch | null> {
@@ -499,7 +529,12 @@ export class PortalEngineer {
     } catch { return undefined; }
   }
 
-  private async work(job: Dispatch, acct: EngineerAccount): Promise<void> {
+  private async work(job: Dispatch, acct: EngineerAccount, fromQueue = false): Promise<void> {
+    this.working = true;
+    try { await this.workInner(job, acct, fromQueue); } finally { this.working = false; }
+  }
+
+  private async workInner(job: Dispatch, acct: EngineerAccount, fromQueue: boolean): Promise<void> {
     const key = acct.key;
     const p = job.payload ?? {};
     const place = jobPlace(job);
@@ -517,6 +552,7 @@ export class PortalEngineer {
       if (threads[tkey] !== threadId) { threads[tkey] = threadId; this.save(); }
     } catch (e) { this.log(`thread for ${place.title}: ${(e as Error).message}`); }
     this.saved.active = { dispatchId: job.id, account: acct.account, cardId, todo: place.todo, startedAt: this.now(), ...(threadId ? { threadId } : {}) };
+    if (fromQueue && this.saved.queue) this.saved.queue = this.saved.queue.filter((q) => q.job.id !== job.id); // active and dequeued in ONE write
     this.save();
     this.st.job = { id: job.id, todo: place.todo, project: place.title, account: acct.account, ...(threadId ? { threadId } : {}), startedAt: this.now() };
     this.st.state = "working";

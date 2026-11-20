@@ -26,7 +26,7 @@ function fakeFetch(answers: Array<{ status: number; body: unknown } | Error>, ca
   }) as unknown as typeof fetch;
 }
 
-function harness(o: { answers: Array<{ status: number; body: unknown } | Error>; key?: string | undefined; runOk?: boolean; accounts?: EngineerAccount[]; now?: () => number; wakeStartsClaude?: boolean; taskStatus?: string }) {
+function harness(o: { answers: Array<{ status: number; body: unknown } | Error>; key?: string | undefined; runOk?: boolean; accounts?: EngineerAccount[]; now?: () => number; wakeStartsClaude?: boolean; taskStatus?: string; gate?: Promise<void> }) {
   const dir = mkdtempSync(join(tmpdir(), "eng-"));
   const calls: Call[] = [];
   const said: Array<{ id: string; role: string; text: string }> = [];
@@ -38,6 +38,7 @@ function harness(o: { answers: Array<{ status: number; body: unknown } | Error>;
   const runs: Array<{ dir: string; env: NodeJS.ProcessEnv; prompt: string }> = [];
   const jobs = new ClaudeJobs({ run: async (a) => {
     runs.push({ dir: a.dir, env: a.env, prompt: a.prompt });
+    if (o.gate) await o.gate;
     a.onLine(JSON.stringify({ type: "system", subtype: "init" }));
     a.onLine(JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command: "gh pr create --fill" } }] } }));
     a.onLine(JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content: "https://github.com/theastraway/x/pull/12" }] } }));
@@ -348,4 +349,63 @@ test("board: a card keeps its portal link and progress through the model's own t
   assert.equal((model as { ok: true; value: import("../../src/board/board.ts").BoardTask }).value.portal!.todoId, "t1", "the model cannot change the portal link");
   const bad = checkTask({ id: "p", title: "x", status: "not_started" }, 3, undefined, undefined, { portal: { todoId: "t", dispatchId: "d", url: "javascript:alert(1)" } });
   assert.equal((bad as { ok: true; value: import("../../src/board/board.ts").BoardTask }).value.portal!.url, undefined);
+});
+
+test("never claims while a job is active (working, follow-up, result): repeated ticks during a job make no /next call", async () => {
+  let open!: () => void;
+  const gate = new Promise<void>((r) => { open = r; });
+  const h = harness({ gate, answers: [{ status: 200, body: { dispatch: job("busy1") } }, { status: 200, body: { dispatch: job("never") } }] });
+  const first = h.eng.tick();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(h.eng.busy(), true);
+  for (let i = 0; i < 5; i++) await h.eng.tick();
+  assert.equal(h.calls.filter((c) => c.method === "GET").length, 1, "no claim while busy");
+  open();
+  await first;
+  assert.equal(h.eng.busy(), false);
+});
+
+test("finish-then-claim race: the job claimed right after one finishes is run, not dropped", async () => {
+  const h = harness({ answers: [{ status: 200, body: { dispatch: job("r1") } }, { status: 200, body: {} }, { status: 200, body: { dispatch: job("r2", "p1") } }, { status: 200, body: {} }, { status: 200, body: { dispatch: null } }] });
+  assert.equal(await h.eng.tick(), 0);
+  assert.equal(await h.eng.tick(), 0, "the next round claims at once");
+  const posts = h.calls.filter((c) => c.method === "POST").map((c) => c.url.split("/dispatches/")[1]);
+  assert.deepEqual(posts, ["r1/result", "r2/result"]);
+  assert.ok(existsSync(join(h.dir, "work", "r2", "job.json")));
+  const st = JSON.parse(readFileSync(join(h.dir, "state.json"), "utf8"));
+  assert.equal(st.queue, undefined);
+  assert.equal(st.active, undefined);
+});
+
+test("a claimed job is persisted before it starts; a queued job (claimed while busy or before a restart) runs first, without a new claim", async () => {
+  const h = harness({ answers: [{ status: 200, body: {} }, { status: 200, body: { dispatch: null } }] });
+  writeFileSync(join(h.dir, "state.json"), JSON.stringify({ v: 1, enabled: true, threads: {}, queue: [{ account: "anthonyjconti", job: job("q1"), claimedAt: 1 }] }));
+  const eng = new PortalEngineer({ ...((h.eng as unknown as { d: EngineerDeps }).d) });
+  assert.equal(await eng.tick(), 0);
+  assert.equal(h.calls[0].method, "POST", "the queued job ran before any new /next");
+  assert.match(h.calls[0].url, /dispatches\/q1\/result$/);
+  const st = JSON.parse(readFileSync(join(h.dir, "state.json"), "utf8"));
+  assert.equal(st.queue, undefined, "dequeued once it ran");
+});
+
+test("claim while busy (a response that lands during a job): it goes to the persisted queue and runs next", async () => {
+  let open!: () => void;
+  const gate = new Promise<void>((r) => { open = r; });
+  const h = harness({ gate, answers: [{ status: 200, body: { dispatch: job("b1") } }, { status: 200, body: {} }, { status: 200, body: {} }] });
+  const first = h.eng.tick();
+  await new Promise((r) => setTimeout(r, 20));
+  // the portal hands this engineer a claim while it is busy (e.g. an in-flight poll from before)
+  (h.eng as unknown as { enqueue(a: EngineerAccount, j: Dispatch): void }).enqueue({ account: "anthonyjconti", key: KEY, active: true }, job("b2"));
+  assert.equal(JSON.parse(readFileSync(join(h.dir, "state.json"), "utf8")).queue[0].job.id, "b2");
+  open();
+  await first;
+  await h.eng.tick();
+  const posts = h.calls.filter((c) => c.method === "POST").map((c) => c.url.split("/dispatches/")[1]);
+  assert.deepEqual(posts, ["b1/result", "b2/result"]);
+});
+
+test("every /next names the device so the portal can tell which computer claimed a job", async () => {
+  const h = harness({ answers: [{ status: 200, body: { dispatch: null } }] });
+  await h.eng.tick();
+  assert.ok(String(h.calls[0].headers["X-Daebot-Device"] ?? "").length > 0);
 });
