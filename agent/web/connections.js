@@ -61,6 +61,7 @@ export function engineerLine(v) {
   if (!v.available) return "Portal to-dos are worked by the Daebot desktop app.";
   if (!v.enabled) return "Off. This computer does not pick up portal to-dos.";
   if (!v.signedIn) return "Sign in with MIND to pick up the portal to-dos routed to your account.";
+  if (v.state === "not_eligible") return `Can't take portal jobs on this computer: ${(v.eligible && v.eligible.reason) || "Claude Code not installed"}.`;
   if (v.state === "working" && v.job) return `Working on "${v.job.todo}" in ${v.job.project}${v.job.account ? ` for ${v.job.account}` : ""}.`;
   if (v.state === "not_engineer") return v.lastError || "This MIND account is not set as a Daebot engineer on any portal project.";
   if (v.state === "error") return `Idle. Last error: ${v.lastError || "unknown"}`;
@@ -308,8 +309,18 @@ export function initConnections({ json, h, notify, isHosted, onPick, currentMode
     const stop = h("button", "btn-quiet sm", "Stop this job"); stop.type = "button"; stop.hidden = v.state !== "working";
     acts.append(stop, state);
     const per = engineerAccountsLine(v);
-    const perLine = h("p", "drawer-fine", per); perLine.hidden = !per || !v.enabled;
-    host.replaceChildren(line, perLine, swRow, acts, fine("Every MIND account signed in on this computer is checked with its own sign-in. When a to-do in an Astra AI portal project is routed to your MIND account, Daebot opens that project's thread here and Claude Code on this computer builds, tests, merges and verifies it, then marks it Ready to test for a person. Your own Claude Code and GitHub logins are used."));
+    const perLine = h("p", "drawer-fine", per); perLine.hidden = !per || !v.enabled || v.state === "not_eligible";
+    // Not eligible: one-click install hint for Claude Code (the engineer checks again every 10 minutes).
+    const fix = h("div", "cap-acts");
+    if (v.state === "not_eligible") {
+      const cmd = "curl -fsSL https://claude.ai/install.sh | bash";
+      const copy = h("button", "btn-primary sm", "Copy install command"); copy.type = "button";
+      copy.title = cmd;
+      copy.addEventListener("click", async () => { try { await navigator.clipboard.writeText(cmd); state.textContent = "Copied. Paste it in Terminal, then sign in with `claude`."; } catch { state.textContent = cmd; } });
+      const docs = h("a", "btn-quiet sm", "How to install"); docs.href = "https://docs.claude.com/en/docs/claude-code/setup"; docs.target = "_blank"; docs.rel = "noopener";
+      fix.append(copy, docs);
+    }
+    host.replaceChildren(line, fix, perLine, swRow, acts, fine("Every MIND account signed in on this computer is checked with its own sign-in. When a to-do in an Astra AI portal project is routed to your MIND account, Daebot opens that project's thread here and Claude Code on this computer builds, tests, merges and verifies it, then marks it Ready to test for a person. Your own Claude Code and GitHub logins are used."));
     sw.addEventListener("click", async () => {
       sw.disabled = true; state.textContent = "Saving…";
       try { await json("/settings/engineer", { method: "PUT", body: JSON.stringify({ enabled: sw.getAttribute("aria-checked") !== "true" }) }); await mountEng(host); }
