@@ -397,16 +397,19 @@ export function initChatMode({ json, h, icon, notify, ids, ensureSession, getSes
   }
 
   async function choose(mode) {
+    // The waiver is account-wide (POST /permissions/waiver needs no chat), so it opens the moment Bypass is picked, BEFORE the chat is
+    // opened: opening one can wait on MIND (plan + model checks, a retry, a saved chat coming back), which held the waiver up to 30 s (Nov 22 2026).
+    // Ask every time until the waiver is accepted AND "Don't show this again" was ticked once.
+    if (mode === "bypass" && snap && !(snap.waiver && snap.waiver.accepted && snap.waiver.dontShowAgain)) {
+      const ok = await askWaiver({ json, h, icon, notify, info: snap.waiver });
+      if (!ok) return;
+      snap.waiver = { ...(snap.waiver || {}), accepted: true, dontShowAgain: ok.dontShowAgain === true };
+      render();
+    }
     let id;
     try { id = await ensureSession(); } catch (e) { notify(`Could not start a chat: ${e.message}`); return; }
     if (!id) return;
     try {
-      // Ask every time until the waiver is accepted AND "Don't show this again" was ticked once.
-      if (mode === "bypass" && !(snap.waiver && snap.waiver.accepted && snap.waiver.dontShowAgain)) {
-        const ok = await askWaiver({ json, h, icon, notify, info: snap.waiver });
-        if (!ok) return;
-        snap.waiver = { ...(snap.waiver || {}), accepted: true, dontShowAgain: ok.dontShowAgain === true };
-      }
       await patch(id, mode === snap.mode ? null : mode);
     } catch (e) {
       if (/waiver_required/.test(String(e.message))) { snap.waiver = { ...(snap.waiver || {}), accepted: false }; notify("Bypass needs the waiver first. Pick Bypass again to accept it."); }
