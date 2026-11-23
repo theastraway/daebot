@@ -22,7 +22,15 @@ const CONSULT_TIERS = new Set(["reasoner", "frontier"]);
 const MAX_REGENERATIONS = 2;
 
 /** Told to the model whenever the receipt gate withholds text: the user saw nothing, so the revision must carry all of it. */
-export const RESTATE_IN_FULL = "The user saw NONE of the withheld text. Your next answer must deliver all of its content in full: same sections, same items, same detail. Do not shorten it, summarize it, replace it with an offer or a question, or mention that something was withheld. For each flagged claim: get a receipt and cite it, or attribute it to its source (\"the record says ...\" with that record's MIND✓ receipt), or say plainly it is not yet confirmed. Fix the claims; never drop the content.";
+export const RESTATE_IN_FULL = "The user saw NONE of the withheld text. Your next answer must deliver all of its content in full, in ONE message: same sections, same items, same detail. Never say it was shown above. Do not shorten it, summarize it, replace it with an offer or a question, or mention that something was withheld. For each flagged claim: get a receipt and cite it, or attribute it to its source (\"the record says ...\" with that record's MIND✓ receipt), or say plainly it is not yet confirmed. Fix the claims; never drop the content.";
+
+/** Marks a withheld draft in the history, so no later round or turn believes the user saw it. */
+export const WITHHELD_MARK = "[WITHHELD by the receipt gate: the user never saw this draft. Do not refer to it as shown.]";
+
+/** A withheld narration is not kept as an assistant message; its text rides in the nudge so the model can restate it. */
+function withheldCopy(text: string): string {
+  return `${WITHHELD_MARK}\n<<<withheld\n${text}\nwithheld>>>`;
+}
 
 /**
  * Out of regenerations, the last draft can be a shrunken restatement ("Restating without the trigger word...")
@@ -379,7 +387,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
               if (enforced()) {
                 shown = "";
                 withheldDrafts.push(text);
-                withheldNudge = `[kernel:${nverdict.gate}] Your last message was withheld. ${nverdict.reason} ${RESTATE_IN_FULL}`;
+                withheldNudge = `[kernel:${nverdict.gate}] Your last message was withheld. ${nverdict.reason} ${RESTATE_IN_FULL}\n${withheldCopy(text)}`;
               }
             }
           }
@@ -416,7 +424,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
         if (regenerations < MAX_REGENERATIONS) {
           regenerations++;
           withheldDrafts.push(text);
-          messages.push({ role: "assistant", content: text });
+          messages.push({ role: "assistant", content: `${WITHHELD_MARK}\n${text}` });
           messages.push({ role: "system", content: `[kernel:${verdict.gate}] Your draft was withheld. ${verdict.reason} Revise your answer (call tools to get receipts if needed). ${RESTATE_IN_FULL}` });
           yield* emitUsage();
           continue;
