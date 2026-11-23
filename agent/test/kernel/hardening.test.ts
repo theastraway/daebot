@@ -133,6 +133,19 @@ test("D5: a MIND receipt still satisfies a fact claim", () => {
   assert.equal(pre("Price is $49.\nMIND✓ #c2 pricing"), undefined);
 });
 
+test("receipts across turns: an earlier turn's MIND read still counts, an earlier live check does not", () => {
+  const old = { ...rec("c32", "mind_life", {}, { receipt: "mind" }), result: { ok: true, output: "Sentry hit 100% of error budget" } };
+  const oldSurf = rec("c31", "web_fetch", {}, { receipt: "surface" });
+  const st = (draft: string) => receiptGate.preAnswer!(state({ calls: [], allCalls: [old, oldSurf], userMessage: "review?" } as any), draft);
+  assert.equal(st("Error budget is at 100%.\nMIND✓ #c32 read"), undefined, "earlier MIND receipt");
+  assert.equal(st("Budget is $145.41.\nMIND✓ #c32 read"), undefined, "an earlier MIND receipt covers an ungrounded fact");
+  assert.equal(st("Budget is $145.41.")?.action, "block", "no receipt, not grounded");
+  assert.equal(st("Error budget is at 100%."), undefined, "fact copied verbatim from an earlier tool output is grounded");
+  const v = st("The page is live.\nSURFACE✓ #c31 saw it");
+  assert.equal(v?.action, "block");
+  assert.match(v!.reason, /earlier turn/);
+});
+
 // ---------- D8 vocabulary ----------
 test("D8: new completion words are claims", () => {
   for (const d of ["The migration is complete.", "It is fully operational.", "We launched it yesterday.", "I finished the import.", "I completed the migration.", "The app is now operational."]) {

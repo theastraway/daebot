@@ -100,15 +100,17 @@ export function findClaims(draft: string, opts: { userMessage?: string; grounded
   return claims;
 }
 
-export function validReceipts(draft: string, calls: CallRecord[]): ReceiptCheck[] {
+// earlier: calls from earlier turns of this session. A MIND✓ receipt may cite one (the record was read in this
+// chat, so a follow-up turn need not re-read it); a SURFACE✓ receipt must be from this turn (a live check goes stale).
+export function validReceipts(draft: string, calls: CallRecord[], earlier: CallRecord[] = []): ReceiptCheck[] {
   const out: ReceiptCheck[] = [];
   const src = stripFences(draft);
   for (const m of src.matchAll(RECEIPT_LINE)) {
     const kind = m[1] === "MIND✓" ? "mind" : "surface";
     const id = "c" + m[2];
-    const rec = calls.find((c) => c.receiptId === id);
+    const rec = calls.find((c) => c.receiptId === id) ?? (kind === "mind" ? earlier.find((c) => c.receiptId === id) : undefined);
     let why: string | undefined;
-    if (!rec) why = `#${id} is not a call from this turn`;
+    if (!rec) why = kind === "surface" && earlier.some((c) => c.receiptId === id) ? `#${id} is a live check from an earlier turn; run it again this turn` : `#${id} is not a call from this chat`;
     else if (rec.receipt !== kind) why = `#${id} is a ${rec.receipt ?? "non-receipt"} call, not ${kind}`;
     else if (!rec.result.ok) why = `#${id} failed`;
     out.push({ line: m[0], id, kind, valid: why === undefined, why });
@@ -150,9 +152,12 @@ export function negativeEvidenceOk(calls: CallRecord[]): boolean {
 export const receiptGate: Gate = {
   name: "receipt",
   preAnswer(s, draft) {
-    const claims = findClaims(draft, { userMessage: s.userMessage, grounded: s.calls.filter((c) => c.result.ok).map((c) => squash(c.result.output)) });
+    // Grounding: a fact copied verbatim from any successful tool output in this chat is sourced, not guessed.
+    const earlier = (s.allCalls ?? []).filter((c) => !s.calls.includes(c));
+    const grounded = [...s.calls, ...earlier].filter((c) => c.result.ok).map((c) => squash(c.result.output));
+    const claims = findClaims(draft, { userMessage: s.userMessage, grounded });
     if (claims.length === 0) return undefined;
-    const receipts = validReceipts(draft, s.calls);
+    const receipts = validReceipts(draft, s.calls, earlier);
     const good = receipts.filter((r) => r.valid);
     const block = (reason: string): GateVerdict => ({ gate: "receipt", action: "block", reason });
     if (good.length === 0) {

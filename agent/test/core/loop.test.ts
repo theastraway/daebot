@@ -192,6 +192,18 @@ test("out of regenerations after a shrunken restatement: the full withheld draft
   assert.match(nudge.content, /saw NONE of the withheld text/);
 });
 
+test("withheld drafts are marked in history; a withheld narration rides in the nudge so it can be restated", async () => {
+  const k = new FakeKernel();
+  k.hooks.preAnswer = (_s, d) => (d.includes("REVIEW") ? [block("receipt", "needs receipt")] : []);
+  const t = fakeTool("look", "read");
+  const { session, provider } = make({ kernel: k, tools: [t], rounds: [{ text: "REVIEW body one", calls: [call("1", "look")] }, { text: "REVIEW body two" }, { text: "clean review" }] });
+  await collect(session.send("review"));
+  const second = provider.requests[1].messages;
+  assert.ok(second.some((m) => m.role === "system" && m.content.includes("REVIEW body one") && m.content.includes("never saw")), "narration copy in nudge");
+  const third = provider.requests[2].messages;
+  assert.ok(third.some((m) => m.role === "assistant" && m.content.startsWith("[WITHHELD") && m.content.includes("REVIEW body two")), "final draft marked");
+});
+
 test("shadow mode: verdicts surface as gate events with enforced:false and nothing is blocked", async () => {
   const t = fakeTool("bash", "write");
   const k = new FakeKernel();
