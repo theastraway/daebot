@@ -178,6 +178,20 @@ test("preAnswer block thrice: max 2 regenerations then ship with footer and a vi
   assert.equal(v[0].enforced, true);
 });
 
+test("out of regenerations after a shrunken restatement: the full withheld draft still reaches the user", async () => {
+  const k = new FakeKernel();
+  k.hooks.preAnswer = () => [block("receipt", "needs receipt")];
+  const review = "Review of the board:\n- 2RB merged\n- 2RA open\n- 2R9 open\n- 2R8 open\n- 2R7 open, needs a migration and a test";
+  const { session, provider } = make({ kernel: k, rounds: [{ text: review }, { text: "Restating without the trigger word." }, { text: "Want me to pick one?" }] });
+  const ev = await collect(session.send("review the board"));
+  const final = (ev.at(-1) as any).finalText as string;
+  assert.ok(final.startsWith(review), final);
+  assert.ok(final.includes("Want me to pick one?"));
+  assert.ok(final.endsWith(UNVERIFIED_FOOTER));
+  const nudge = provider.requests[1].messages.at(-1)!;
+  assert.match(nudge.content, /saw NONE of the withheld text/);
+});
+
 test("shadow mode: verdicts surface as gate events with enforced:false and nothing is blocked", async () => {
   const t = fakeTool("bash", "write");
   const k = new FakeKernel();

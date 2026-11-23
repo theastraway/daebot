@@ -20,6 +20,20 @@ export const UNVERIFIED_FOOTER = "[unverified: receipt gate]";
 export const CONSULT_FOOTER = "[advisor: not consulted before done]";
 const CONSULT_TIERS = new Set(["reasoner", "frontier"]);
 const MAX_REGENERATIONS = 2;
+
+/** Told to the model whenever the receipt gate withholds text: the user saw nothing, so the revision must carry all of it. */
+export const RESTATE_IN_FULL = "The user saw NONE of the withheld text. Your next answer must deliver all of its content in full: same sections, same items, same detail. Do not shorten it, summarize it, replace it with an offer or a question, or mention that something was withheld. For each flagged claim: get a receipt and cite it, or attribute it to its source (\"the record says ...\" with that record's MIND✓ receipt), or say plainly it is not yet confirmed. Fix the claims; never drop the content.";
+
+/**
+ * Out of regenerations, the last draft can be a shrunken restatement ("Restating without the trigger word...")
+ * that dropped what the user asked for. When an earlier withheld draft is more than twice as long, it ships
+ * first and the last draft follows, so the content reaches the user (marked unverified by the caller).
+ */
+export function restoreWithheld(last: string, withheld: string[]): string {
+  const fullest = withheld.reduce((a, b) => (b.trim().length > a.trim().length ? b : a), "");
+  if (fullest.trim().length <= 2 * last.trim().length) return last;
+  return last.trim() ? `${fullest.trim()}\n\n${last.trim()}` : fullest.trim();
+}
 const MAX_TOOL_OUTPUT = 100_000;
 
 // Stable JSON (sorted keys) so the same arguments always hash the same.
@@ -293,6 +307,9 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     let finalText: string | undefined;
     let pendingNarration = "";
     let regenerations = 0;
+    // Every draft the receipt gate withheld this turn. The user saw none of it; if the turn runs out of
+    // regenerations, the fullest one ships (marked unverified) so the content is never silently lost.
+    const withheldDrafts: string[] = [];
     let confirmed = false;
     let failed = false;
     blockedThisTurn = [];
@@ -361,7 +378,8 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
               yield { type: "gate", verdict: nverdict, enforced: enforced() };
               if (enforced()) {
                 shown = "";
-                withheldNudge = `[kernel:${nverdict.gate}] Your last message was withheld. ${nverdict.reason} Restate it with receipts once you have them.`;
+                withheldDrafts.push(text);
+                withheldNudge = `[kernel:${nverdict.gate}] Your last message was withheld. ${nverdict.reason} ${RESTATE_IN_FULL}`;
               }
             }
           }
@@ -397,8 +415,9 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
         if (!enforced()) { finalText = text; yield* emitUsage(); break; }
         if (regenerations < MAX_REGENERATIONS) {
           regenerations++;
+          withheldDrafts.push(text);
           messages.push({ role: "assistant", content: text });
-          messages.push({ role: "system", content: `[kernel:${verdict.gate}] Your draft was withheld. ${verdict.reason} Revise your answer (call tools to get receipts if needed).` });
+          messages.push({ role: "system", content: `[kernel:${verdict.gate}] Your draft was withheld. ${verdict.reason} Revise your answer (call tools to get receipts if needed). ${RESTATE_IN_FULL}` });
           yield* emitUsage();
           continue;
         }
@@ -407,7 +426,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
           at: Date.now(), sessionId: id, gate: verdict.gate, action: verdict.action, reason: verdict.reason, enforced: true,
           detail: { shippedUnverified: true, regenerations },
         });
-        finalText = `${text}\n\n${UNVERIFIED_FOOTER}`;
+        finalText = `${restoreWithheld(text, withheldDrafts)}\n\n${UNVERIFIED_FOOTER}`;
         yield { type: "text", delta: finalText };
         yield* emitUsage();
         break;

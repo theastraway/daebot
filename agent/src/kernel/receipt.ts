@@ -1,7 +1,7 @@
 import type { CallRecord, Gate, GateVerdict } from "../types.ts";
 
 export type ClaimKind = "completion" | "negative" | "fact";
-export interface Claim { kind: ClaimKind; text: string }
+export interface Claim { kind: ClaimKind; text: string; attributed?: boolean }
 export interface ReceiptCheck { line: string; id: string; kind: "mind" | "surface"; valid: boolean; why?: string }
 
 // "complete"/"operational" only count as claims in status form ("is complete", "fully operational"), not as ordinary adjectives.
@@ -18,6 +18,10 @@ const NOT_A_CLAIM_SENTENCE = /\b(?:I'll|I will|I'd|I would|I can|I could|I'm goi
 const NEGATIVE = /\b(doesn't exist|does not exist|no such|isn't supported|is not supported|not supported|there is no|there's no|I (?:can't|cannot|couldn't|could not) (?:find|locate|see|access|retrieve|recover|reset|read|open)|not stored|not available|isn't available|is not available|has no|have no|doesn't have|does not have|no support for)\b/i;
 // Attribution makes echoing a figure from the user's own latest message legitimate.
 const ATTRIBUTION = /\b(you said|you mentioned|you noted|you told me|you wrote|you stated|you put it|per your (?:message|note|email|text)|as you (?:said|noted|mentioned|put it)|according to you|by your (?:count|numbers?))\b/i;
+// A completion word the sentence attributes to a record ("the record says PR 3030 merged", "per the ticket it shipped")
+// reports what that record says, not that the assistant saw it done: a valid MIND✓ receipt for the record covers it.
+const RECORD_NOUN = String.raw`(?:MIND\s+)?(?:record|ticket|to-?do|card|entry|log|board|issue|item|document|doc|note|PR description|commit message|changelog)s?`;
+const RECORD_ATTRIBUTION = new RegExp(String.raw`\b(?:(?:the|this|that|its|their|his|her|each)\s+${RECORD_NOUN}\s+(?:says|said|states|stated|shows|showed|lists|listed|reports|reported|claims|claimed|notes|noted|marks|marked|records|recorded)|(?:according to|per|as recorded in|as marked in)\s+(?:the\s+|a\s+|its\s+)?${RECORD_NOUN}|marked\s+(?:as\s+)?(?:done|completed|fixed|merged|shipped|resolved))\b`, "i");
 const FACT_PATTERNS: RegExp[] = [
   /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/,          // email
   /\$\s?\d[\d,]*(?:\.\d+)?/,                                       // dollar amount
@@ -81,7 +85,7 @@ export function findClaims(draft: string, opts: { userMessage?: string; grounded
       const neg = NEGATIVE.exec(sent);
       if (neg) claims.push({ kind: "negative", text: neg[1] });
       const comp = completionClaim(sent);
-      if (comp) claims.push({ kind: "completion", text: comp.toLowerCase() });
+      if (comp) claims.push({ kind: "completion", text: comp.toLowerCase(), ...(RECORD_ATTRIBUTION.test(sent) ? { attributed: true } : {}) });
       const planned = NOT_A_CLAIM_SENTENCE.test(sent);
       for (const re of FACT_PATTERNS) {
         const m = re.exec(sent);
@@ -158,7 +162,7 @@ export const receiptGate: Gate = {
       const kind = first.kind === "negative" ? "MIND✓ #cN after querying" : first.kind === "completion" ? "SURFACE✓ #cN" : "MIND✓ #cN or SURFACE✓ #cN";
       return block(`claim '${first.text}' has no valid receipt${badNote}: run a check and cite it as ${kind}`);
     }
-    const comp = claims.find((c) => c.kind === "completion");
+    const comp = claims.find((c) => c.kind === "completion" && !c.attributed);
     if (comp && !good.some((r) => r.kind === "surface")) {
       return block(`claim '${comp.text}' needs a SURFACE✓ #cN receipt (a MIND✓ receipt does not prove it is done): open the real surface and cite it`);
     }

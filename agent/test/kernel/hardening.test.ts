@@ -119,6 +119,16 @@ test("D5: a MIND receipt alone does not satisfy a completion claim", () => {
   assert.equal(pre("The landing page is live.\nSURFACE✓ #c1 saw it"), undefined);
   assert.equal(pre("The landing page is live.\nMIND✓ #c2 notes\nSURFACE✓ #c1 saw it"), undefined);
 });
+test("D5: a completion the sentence attributes to a record is covered by that record's MIND receipt", () => {
+  for (const d of [
+    "The record says PR 3030 merged and is live.\nMIND✓ #c2 record",
+    "Completed per MIND record ec9d4221: the fix shipped.\nMIND✓ #c2 record",
+    "According to the ticket, the deploy finished.\nMIND✓ #c2 ticket",
+  ]) assert.equal(pre(d), undefined, d);
+  // Unattributed, or attributed with no receipt at all, still blocks.
+  assert.equal(pre("PR 3030 merged and is live.\nMIND✓ #c2 record")?.action, "block");
+  assert.equal(pre("The record says PR 3030 merged.", [])?.action, "block");
+});
 test("D5: a MIND receipt still satisfies a fact claim", () => {
   assert.equal(pre("Price is $49.\nMIND✓ #c2 pricing"), undefined);
 });
