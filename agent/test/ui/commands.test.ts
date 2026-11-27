@@ -15,7 +15,9 @@ test("every documented command routes to its action", () => {
   assert.deepEqual(routeInput("/expand c3"), { type: "expand", arg: "c3" });
   assert.deepEqual(routeInput("/clear"), { type: "clear" });
   assert.deepEqual(routeInput("/quit"), { type: "quit" });
-  assert.equal(COMMANDS.length, 11);
+  assert.deepEqual(routeInput("/loop make the login page premium"), { type: "send", text: "/loop make the login page premium" });
+  assert.equal(routeInput("/loop").type, "error");
+  assert.equal(COMMANDS.length, 12);
 });
 
 test("aliases, case, whitespace", () => {

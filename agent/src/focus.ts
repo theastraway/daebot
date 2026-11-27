@@ -60,12 +60,12 @@ export const GROUP_TRIGGERS: Record<Group, RegExp> = {
   sessions: /\b(?:sessions?|grok|conversations?|chat history|threads?|mind sync|claude code|agent sessions?|inbox)\b/i,
   astra: /\b(?:astra|portfolio|projects? board|astra board)\b/i,
   computer: /\b(?:open|click\w*|screen|window|windows|safari|chrome|firefox|edge|browser|desktop|mouse|keyboard|screenshots?|launch\w*|finder|terminal|powershell|cmd|command prompt|type into|scroll|app|notepad|installer)\b/i,
-  work: /\b(?:search|look ?up|google|find|research|url|https?:\/\/|www\.|website|web ?page|link|fetch|browse|news|weather|price|file|files|folder|script|code|repo|repository|git|github|commit|branch|pr|pull request|test|tests|build|run|install|convert|bash|shell|command|deploy|fix|bug|implement|edit|write|read|download|csv|json|pdf|docx|xlsx)\b/i,
+  work: /(?:^|\s)\/loop\b|\b(?:loops?|rubric|9\/10|delegate|helpers?|sub-?agents?|in parallel|code ?map|codebase|depends? on|dependen\w+|impact|refactor\w*|architecture|search|look ?up|google|find|research|url|https?:\/\/|www\.|website|web ?page|link|fetch|browse|news|weather|price|file|files|folder|script|code|repo|repository|git|github|commit|branch|pr|pull request|test|tests|build|run|install|convert|bash|shell|command|deploy|fix|bug|implement|edit|write|read|download|csv|json|pdf|docx|xlsx)\b/i,
   voice: /\b(?:voice|speak|talk to me|call me|phone|audio|say it)\b/i,
   mail: /\b(?:e-?mails?|mail|inbox|gmail|outlook|calendar|meetings?|events?|appointments?|invites?|contacts?|apple|schedule|availability|free time|reminders?)\b/i,
   connect: /\b(?:connect\w*|connectors?|integrat\w+|mcp|app store|authori[sz]e|sign ?in|re-?sign|install\w*|github|dropbox|n8n|slack|linear|render|vercel|stripe|supabase|cloudflare|notion|jira|asana|google|microsoft|drive|onedrive|sharepoint|apps?)\b/i,
   people: /\b(?:contacts?|persons?|people|who is|crm|leads?|clients?|pipeline|customers?|prospects?|jessica|follow-?ups?)\b/i,
-  mind: /\b(?:mind|folders?|documents?|docs?|notes?|profile|tenants?|feed|share|sense|mood|social|remember|memory|memories|knowledge|context|insights?|history|what do you know)\b/i,
+  mind: /\b(?:knowledge ?graph|kg|charter|taxonomy|bootstrap|organi[sz]e|mind|folders?|documents?|docs?|notes?|profile|tenants?|feed|share|sense|mood|social|remember|memory|memories|knowledge|context|insights?|history|what do you know)\b/i,
   env: /\b(?:render|env(?:ironment)? ?vars?|environment variables?|deploys?|deployment|service)\b/i,
   docs: /\b(?:docs?|documents?|notes?|drafts?|saves?|saved|files?|folders?|dropbox|drive|write|writeup|memo|report)\b/i,
 };
@@ -84,8 +84,9 @@ const TOOL_GROUP: Record<string, Group> = {
   mind_mail: "mail", mind_calendar: "mail", mind_contacts: "mail", mind_apps: "mail", apple_calendar: "mail", send_email: "mail",
   mcp_connect: "connect",
   mind_crm: "people", mind_crm_write: "people",
-  mind_context: "mind", mind_sense: "mind", mind_profile: "mind", mind_tenants: "mind", mind_folders: "mind", mind_folders_read: "mind", mind_social: "mind", mind_feed_post: "mind", mind_agents: "mind",
+  mind_context: "mind", mind_sense: "mind", mind_profile: "mind", mind_tenants: "mind", mind_folders: "mind", mind_folders_read: "mind", mind_social: "mind", mind_feed_post: "mind", mind_agents: "mind", mind_kg: "mind",
   render_env_set: "env",
+  code_map: "work", delegate: "work", loop: "work",
 };
 
 /** Always sent, whatever the message says. */

@@ -11,6 +11,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: "shadow", usage: "/shadow", help: "show kernel mode (on/shadow/off) and shadow-logged violations" },
   { name: "violations", usage: "/violations", help: "list kernel violations for this session" },
   { name: "cost", usage: "/cost", help: "running cost and token usage" },
+  { name: "loop", usage: "/loop <goal>", help: "study, build, check and grade until it clears 9/10 (remembered in MIND)" },
   { name: "expand", usage: "/expand [id|last|all|off]", help: "show full tool output; toggle collapsed rows" },
   { name: "clear", usage: "/clear", help: "clear the screen" },
   { name: "quit", usage: "/quit", help: "exit (also /exit, Ctrl+D on empty input)" },
@@ -66,6 +67,8 @@ export function routeInput(line: string): Action {
     case "violations": return { type: "violations" };
     case "cost": return { type: "cost" };
     case "expand": return { type: "expand", arg: cmd.args };
+    // /loop goes to the agent as typed: the runtime turns it into a loop tool call (agents/loop.ts expandLoopCommand).
+    case "loop": return cmd.args ? { type: "send", text: `/loop ${cmd.args}` } : { type: "error", message: "usage: /loop <goal>, e.g. /loop make the login page premium and accessible" };
     case "clear": return { type: "clear" };
     case "quit": return { type: "quit" };
   }
