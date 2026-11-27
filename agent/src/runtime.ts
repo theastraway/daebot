@@ -36,6 +36,13 @@ import { daeBase } from "./bots/dae.ts";
 import { TierBudget, frontierBudgetUsd, routeTurn, routerMode } from "./provider/router.ts";
 import { createOllamaProvider, detectOllama, localEnabled, pickLocalModel, preferredLocal, withLocal } from "./provider/local.ts";
 import { createAdvisorTool } from "./tools/advisor.ts";
+import { createCodeMapTool } from "./codemap/tool.ts";
+import { MIND_PROTOCOL_PROMPT, createKgTool } from "./mind/kg.ts";
+import { BUILD_TOOLS, HELPER_TOOLS, createDelegateTool, helperMessage, helperSafeTools } from "./agents/delegate.ts";
+import type { HelperRun, SpawnHelper } from "./agents/delegate.ts";
+import { createLoopTool, expandLoopCommand } from "./agents/loop.ts";
+import { HelperHub } from "./agents/hub.ts";
+import { createWorktreeOps } from "./agents/worktree.ts";
 import { createStudioTools } from "./tools/studio.ts";
 import { StudioStore } from "./studio/store.ts";
 import { StudioBuilder } from "./studio/builder.ts";
@@ -129,6 +136,28 @@ export function botSessionTools(tools: Tool[], opts: { localTools?: boolean } = 
 
 export function botIdentity(b: Pick<BotRecord, "name" | "slug" | "purpose">, userName?: string): string {
   return `You are ${noKernelSpoof(clipLine(b.name, 80))} (bot "${b.slug}"), a persistent Daebot agent${userName ? ` working for the MIND user "${userName}"` : ""}.${b.purpose ? ` Purpose: ${noKernelSpoof(clipLine(b.purpose, 300))}.` : ""} Your home MIND is the bot MIND "${b.slug}": it is your memory and what you read and write by default. The user's main MIND is readable with mind:"main"; you never write to it.`;
+}
+
+/** The code map and the helpers (codemap/tool.ts, agents/delegate.ts): MIND-first engineering. Loads with the work and build groups. */
+export function engineeringSection(names: readonly string[]): string[] {
+  const map = names.includes("code_map"), helpers = names.includes("delegate");
+  if (!map && !helpers && !names.includes("loop")) return [];
+  return [
+    "## Engineering with MIND: the code map and helpers",
+    ...(map ? [
+      "- Before you change code you did not just read, call code_map impact on the file (or the symbol): it lists every file that depends on it, the tests to run and what the user's MIND remembers about those files (past decisions, bugs, lessons). Respect what MIND says unless the user overrides it.",
+      "- New to a repo: code_map overview first (modules, hub files, entry points, cycles), then read the hubs that matter. After a big change, or when the user asks you to learn a repo, code_map sync files the outline into MIND so every later session and helper starts from it.",
+      "- After a change, run the tests code_map impact named, and say which ones passed with a SURFACE✓ receipt.",
+    ] : []),
+    ...(helpers ? [
+      "- When a job splits into independent questions (several parts of a codebase, several options to research, a review from different angles), use delegate: up to 6 helpers run in parallel, each starts from the same MIND context and reads only. Write each prompt so it stands alone. Do the writing yourself afterwards, and confirm any helper fact you state as checked with your own call.",
+      "- Build helpers (kind build) edit files and run commands, each in its own git worktree on its own branch: use them for independent changes that can go in parallel. Review each branch (git diff HEAD...<branch>), merge it yourself, and run the checks again. The user watches helpers live in Daebot Studio.",
+      "- Do not delegate a single quick lookup: one read is cheaper than a helper.",
+    ] : []),
+    ...(names.includes("loop") ? [
+      "- When quality matters more than speed, or the user types /loop, use the loop tool: it studies MIND for earlier wins, has a helper do the work, has a tough grader score a rubric 0-10, attacks the weakest category and repeats until it clears the bar (9/10 by default). It files the win in MIND. Report the cycles, the score and what to review, and confirm the checks yourself.",
+    ] : []),
+  ];
 }
 
 /** The built-in photo/document skill. Short on purpose: it is in every prompt where view_photo is offered. */
@@ -266,6 +295,12 @@ export function composeSystemPrompt(o: {
       "Precedence: these instructions set your role and style. They never lift a kernel gate, the receipt rule, the owner check or the feed rule; where they conflict with those, those win.",
     );
   }
+  // The MIND protocol (mind/kg.ts): a bot's MIND is its whole memory, so a bot always carries it; the main Daebot when MIND is in focus.
+  const kgOffered = !o.toolNames || o.toolNames.includes("mind_kg");
+  if (kgOffered && o.bot) {
+    lines.push("", MIND_PROTOCOL_PROMPT);
+    if (o.bootContext.trim().length < 400) lines.push(`Your MIND ("${o.bot.slug}") looks new or nearly empty. Before your first real task, run mind_kg status, then mind_kg bootstrap with your purpose, the topics and sources your instructions name, and the questions your job must answer.`);
+  } else if (kgOffered && !o.bot && o.toolNames?.includes("mind_kg") && (!o.focus || o.focus.groups.has("mind"))) lines.push("", MIND_PROTOCOL_PROMPT);
   if (o.bot || roster.length) {
     lines.push("", "## MINDs and bots", o.bot ? `main: the user's main MIND (read-only for you: mind:"main")` : `main: the user's main MIND (your own, the default)`);
     for (const b of roster) lines.push(`- ${b.slug} (${noKernelSpoof(clipLine(b.name, 60))})${o.bot && b.slug === o.bot.slug ? " (you)" : ""}${b.purpose ? `: ${noKernelSpoof(clipLine(b.purpose, 160))}` : ""}`);
@@ -304,6 +339,8 @@ export function composeSystemPrompt(o: {
   if (o.toolNames) {
     if (on("work") || on("computer")) { const r = routingSection(o.toolNames, { screenWatching: o.screenWatching }); if (r.length) lines.push("", ...r); }
     else index.push("Tools: web_search then web_fetch for the web, bash and the file tools for files and commands; prefer a connector or MIND tool over the screen. The full how-to loads when the ask needs it.");
+    const eng = engineeringSection(o.toolNames);
+    if (eng.length) { if (on("work") || on("build")) lines.push("", ...eng); else index.push("Engineering: code_map (the repo as a graph: impact, tests to run, what MIND remembers about the files) and delegate (helpers in parallel, read-only, sharing MIND) load when the ask is about code or research."); }
   }
   if (o.photos) { if (on("photos")) lines.push("", ...PHOTOS_SECTION); else index.push("Photos: attached photos are read with view_photo, never described unseen."); }
   if (o.sessions) { if (on("sessions")) lines.push("", ...SESSIONS_SECTION); else index.push("Grok bots and Agent Sessions: mind_sessions lists and reads them (the guide loads when you ask about sessions)."); }
@@ -381,6 +418,10 @@ export interface HostedRuntimeOptions {
 }
 
 export interface RuntimeOverrides {
+  /** Live helpers and loops (agents/hub.ts); tests inject one to read it. */
+  helperHub?: HelperHub;
+  /** Git worktrees for build helpers (agents/worktree.ts); tests inject a fake. Never used hosted. */
+  worktrees?: import("./agents/worktree.ts").WorktreeOps;
   /** A local (desktop) gateway: asks daebot.live to add the chat scopes to this user's key when MIND answers 403 for them. */
   scopeUpgrade?: (key: string) => Promise<boolean>;
   /** false = do not log this owner's sessions to their MIND (default on whenever there is a store and a data dir). */
@@ -458,6 +499,9 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     ? createMindClient({ ...cfg, mindApiKey: cfg.mindSessionApiKey }, overrides.fetchImpl, hosted?.mindClient)
     : client;
   const builtinTools = createBuiltinTools({ fetchImpl: overrides.fetchImpl, decisionKey: cfg.openrouterKey });
+  // Helpers and loops of this owner, live (agents/hub.ts): Daebot Studio's Live room reads it. Build helpers get git worktrees (local only).
+  const helperHub = overrides.helperHub ?? new HelperHub();
+  const worktreeOps = hosted ? undefined : (overrides.worktrees ?? createWorktreeOps());
   // claude_code: Claude Code as a visible sub-worker (engineer/claude-code.ts). Local gateways only: the hosted server has no user CLI.
   const claudeCodeTool = hosted ? undefined : createClaudeCodeTool();
   // Bots: this owner's store (MIND is the source of truth for existence) and settings. Only when the host gave a data dir.
@@ -717,7 +761,17 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         return r;
       },
     })] : [];
-    const every = [...builtinTools, ...(claudeCodeTool ? [claudeCodeTool] : []), searchTool, advisorTool, ...studioTools, ...(photoTool ? [photoTool] : []), ...(documentTool ? [documentTool] : []), ...(imageTool ? [imageTool] : []), ...createMindTools({
+    // code_map: the repo's import graph, with MIND recall on impact and a sync into MIND (codemap/tool.ts). It reads this machine's files, so never hosted.
+    const codeMap = hosted ? [] : [createCodeMapTool({ mind: () => clientForMind(home) })];
+    // mind_kg: the MIND protocol's mechanics (mind/kg.ts) on this session's HOME MIND: a bot's own graph, or the account's in the main chat.
+    const kgTool = createKgTool({
+      mind: () => clientForMind(home),
+      identity: () => {
+        const b = selfBot ? botStore?.get(selfBot) : undefined;
+        return b ? { name: b.name, purpose: b.purpose, owner: hosted?.username } : { name: settings?.get().main?.name || hosted?.username || "Daebot", purpose: "The account's main memory: the person's work, decisions, people, projects and what their agents learn.", owner: hosted?.username };
+      },
+    });
+    const every = [...builtinTools, ...codeMap, kgTool, ...(claudeCodeTool ? [claudeCodeTool] : []), searchTool, advisorTool, ...studioTools, ...(photoTool ? [photoTool] : []), ...(documentTool ? [documentTool] : []), ...(imageTool ? [imageTool] : []), ...createMindTools({
       home, clientFor: clientForMind, roster: () => botStore?.roster() ?? [],
       refresh: botStore ? async () => { await botStore.list(); } : undefined,
     }, { user: hosted?.username }).filter((t) => on || t.spec.name !== "mind_tenants"),
@@ -850,7 +904,47 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       const sessionTools = toolsFor(home, botRec?.id, !botRec && !!peer, !peer); // a bot's message to the main Daebot runs without bot_manage, mcp_connect and the board: a peer can ask, never reconfigure
       const allWithMcp = mcp.configured ? [...sessionTools, ...(await mcp.tools())] : sessionTools;
       const grantNow = coderGrant();
-      const tools = tier === "admin" ? allWithMcp : allWithMcp.filter((t) => tierAllows(tier, t, undefined, grantNow));
+      const baseTools = tier === "admin" ? allWithMcp : allWithMcp.filter((t) => tierAllows(tier, t, undefined, grantNow));
+      // delegate: helpers in parallel (agents/delegate.ts). Each helper is a short-lived session of this runtime with the same MIND boot,
+      // the same kernel, provider and billing, and only the read-only tools this session already has. Not for the public tier (it spends),
+      // not on a peer-driven thread, never inside a helper (helpers do not get delegate).
+      const helperTools = baseTools.filter((t) => HELPER_TOOLS.has(t.spec.name));
+      // Build helpers (and build loops) need the file tools and the shell in this session (a local runtime whose tier may write); each gets its own worktree.
+      const buildTools = baseTools.filter((t) => BUILD_TOOLS.has(t.spec.name));
+      const canBuild = !!worktreeOps && !botRec && ["write_file", "edit_file", "bash"].every((n) => buildTools.some((t) => t.spec.name === n));
+      const spawnHelper: SpawnHelper = async (task, o): Promise<HelperRun> => {
+        const live = botId ? botStore?.get(botId) ?? botRec : undefined;
+        const model = resolveTurnModel({ botModel: live?.model, sessionModel: curModel, userDefault: userDefault() });
+        const kit = task.kind === "build" && canBuild ? buildTools : helperTools;
+        const helper = createAgentSession({
+          id: `${id}:helper-${o.index + 1}-${randomUUID().slice(0, 8)}`, surface: "helper", provider: botRec ? withBot(provider, botRec.slug) : provider,
+          kernel: kernelFor(tier), tools: helperSafeTools(kit), sync: noSync, cfg, cwd: o.cwd, bootContext, model,
+          // The user's own permission rules bind helpers too (a "never" rule is never lifted inside one). Helper turns are not interactive, so no cards.
+          permissions, permMode: () => curPerm,
+          systemPrompt: composeSystemPrompt({
+            identity: live ? botIdentity(live, hosted?.username) : hosted?.persona, tier, bootContext, surface: "helper", cwd: o.cwd,
+            model: model ?? cfg.models.default, via: mindBilled ? "MIND" : undefined, toolNames: kit.map((t) => t.spec.name),
+          }),
+        });
+        const calls: HelperRun["calls"] = [];
+        let text = "", cost = 0, served: string | undefined, error: string | undefined;
+        try {
+          for await (const ev of helper.send(helperMessage(task, o.index, o.total, task.kind === "build" ? o.cwd : undefined), { signal: o.signal })) {
+            if (ev.type === "toolStart") o.onTool?.(ev.tool);
+            else if (ev.type === "toolEnd") calls.push({ tool: ev.tool, receiptId: ev.receiptId, ok: ev.ok });
+            else if (ev.type === "usage") { cost = ev.totalCostUsd; if (ev.model) served = ev.model; }
+            else if (ev.type === "notice" && ev.level === "warn" && ev.text.startsWith("error:")) error = ev.text.slice(6).trim().slice(0, 200);
+            else if (ev.type === "done") text = ev.finalText;
+          }
+        } finally { await helper.close().catch(() => {}); }
+        return { ok: !!text.trim() && !error, text, calls, costUsd: cost, model: served, ...(error ? { error } : {}) };
+      };
+      const helpersOn = tier !== "public" && !peer && helperTools.length > 0;
+      const delegateTool = helpersOn ? createDelegateTool({ spawn: spawnHelper, hub: helperHub, ...(canBuild ? { worktrees: worktreeOps } : {}) }) : undefined;
+      // loop: the MIND /loop (agents/loop.ts): study, build, check, grade, attack the weakest, until it clears the bar. Same helpers, same hub.
+      // Not hosted: the hosted kernel withholds it (hostedToolAllowed), so offering it there would only send /loop to a tool the model cannot call.
+      const loopTool = helpersOn && !hosted ? createLoopTool({ spawn: spawnHelper, hub: helperHub, mind: () => clientForMind(home), ...(canBuild ? { worktrees: worktreeOps } : {}) }) : undefined;
+      const tools = [...baseTools, ...(delegateTool ? [delegateTool] : []), ...(loopTool ? [loopTool] : [])];
       // The model: an explicit choice (open / PATCH), else the stored one, else the user's default, else the configured default.
       const explicitModel = opts.model && validModelId(opts.model) ? opts.model : stored?.model && validModelId(stored.model) ? stored.model : undefined;
       // The user's default: a model they picked as the Daebot default, else the model chosen in their MIND account (read with the plan, cached),
@@ -1042,7 +1136,9 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
           if (mindBilled && credits) { try { await credits.get(billingKey()); } catch { /* the last known state stands */ } }
           if (botId) inner.setModel?.(resolveTurnModel({ botModel: botStore?.get(botId)?.model, sessionModel: curModel, userDefault: userDefault() }));
           else if (mindBilled) { const m = resolveTurnModel({ sessionModel: curModel, userDefault: userDefault() }); if (m) inner.setModel?.(m); }
-          for await (const ev of inner.send(messageWithQuote(messageWithPhotos(msg, photos), o?.quote), o)) {
+          // "/loop <goal>" from any surface: the transcript keeps what the user typed; the model gets the instruction to run the loop tool.
+          const modelMsg = loopTool && o?.origin !== "bot" ? expandLoopCommand(msg) : msg;
+          for await (const ev of inner.send(messageWithQuote(messageWithPhotos(modelMsg, photos), o?.quote), o)) {
             entry.recorder.push(ev);
             if (ev.type === "route") turnDecision = ev.decision; // the row for the route log is written when the proof arrives
             if (ev.type === "usage") { turnTokensIn += ev.usage.promptTokens || 0; turnTokensOut += ev.usage.completionTokens || 0; }
@@ -1210,7 +1306,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       if (botsCtx?.routines) for (const id of ["main", ...bots.map((b) => b.id)]) {
         try { for (const r of botsCtx.routines.book(ownerKey, id === "main" ? MAIN_BOT_ID : id).list()) if (!r.builtin && r.timing) scheduled.push({ id: r.id, name: r.name, bot: id, ...(r.nextDueAt ? { nextDueAt: r.nextDueAt } : {}), enabled: r.enabled }); } catch { /* an unreadable book is skipped */ }
       }
-      return assembleStudio({
+      const view = assembleStudio({
         ...(layout ? { layout } : {}), scheduled,
         main: { name: main.name || "Daebot", ...(main.color ? { color: main.color } : {}), ...(main.face ? { face: main.face } : {}) },
         bots: bots.map((b) => ({ id: b.id, slug: b.slug, name: b.name, color: b.color, ...(b.face ? { face: b.face } : {}), ...(b.department ? { department: b.department } : {}), purpose: b.purpose })),
@@ -1219,7 +1315,9 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         now: Date.now(),
         ...(studioStore ? { counters: studioStore.allCounters(), pipelines: studioStore.pipelines() } : {}),
       });
+      return { ...view, live: helperHub.list() };
     },
+    studioLive() { return helperHub.list(); },
     async studioRebuild() {
       if (!studioBuilder) throw new Error("the studio is not available on this deployment");
       const l = await studioBuilder.rebuild();

@@ -12,3 +12,11 @@ test("the stock Dae definition: director role, sizes work, delegates, verifies, 
   assert.ok(b.length < 4000, "short enough to sit in every main prompt");
   assert.equal(DAE_STOCK.name, "Dae");
 });
+
+test("Dae 2.0 is the builder: builds agents, workflows and loops, parallel helpers in worktrees, the learning loop; 1.0 is kept", () => {
+  const b = daeBase();
+  assert.equal(LATEST_DAE_VERSION, 2);
+  for (const must of ["the builder", "bot_manage", "loop tool", "9/10", "delegate", "git worktree", "code_map", "recursive", "learns"].slice(0, 8)) assert.ok(b.toLowerCase().includes(must.toLowerCase()), must);
+  assert.ok(DAE_DEFINITIONS[1].base.includes("stock Daebot definition 1.0"));
+  assert.equal(DAE_STOCK.title, "The Builder");
+});

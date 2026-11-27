@@ -18,8 +18,46 @@ export const VIEW_W = 1000, VIEW_H = 640;
 export const STATUS = { idle: "Idle", working: "Working", blocked: "Needs you" };
 export const FILTERS = [["all", "All"], ["waiting", "Waiting"], ["in_progress", "In progress"], ["not_started", "Backlog"], ["ready_to_test", "Done"]];
 export const LIGHT = { not_started: "red", in_progress: "yellow", ready_to_test: "green", stopped: "red", cancelled: "grey" };
-export const ROOMS = [["overview", "Overview"], ["office", "Manager office"], ["meeting", "Meeting room"], ["lounge", "Lounge"], ["workspaces", "Workspaces"], ["team", "Token team"], ["pipelines", "Pipelines"]];
+export const ROOMS = [["overview", "Overview"], ["live", "Live"], ["office", "Manager office"], ["meeting", "Meeting room"], ["lounge", "Lounge"], ["workspaces", "Workspaces"], ["team", "Token team"], ["pipelines", "Pipelines"]];
 /** Stage marks for an island: done ✓, running ◐, failed ✗, todo ○. */
+/** The Live room (helpers and loops, agents/hub.ts) refreshes this often while something runs or the room is open. */
+export const LIVE_MS = 2000;
+/** Rooms every office has, whatever its saved layout lists. */
+export const ALWAYS_ROOMS = ["overview", "live"];
+export const KIND_LABEL = { explore: "Explore", research: "Research", review: "Review", plan: "Plan", build: "Build", grade: "Grade", draft: "Draft" };
+export const PHASE_LABEL = { study: "Studying MIND", build: "Building", grade: "Grading", cleared: "Cleared", stopped: "Stopped", failed: "Failed" };
+/** Counts for the Live room's tiles and the top bar's live chip. */
+export function liveSummary(live) {
+  const helpers = (live && Array.isArray(live.helpers)) ? live.helpers : [];
+  const loops = (live && Array.isArray(live.loops)) ? live.loops : [];
+  const branches = new Set([...helpers.filter((x) => x.branch).map((x) => x.branch), ...loops.filter((l) => l.branch && l.endedAt).map((l) => l.branch)]);
+  return { working: helpers.filter((x) => x.status === "running").length, loops: loops.filter((l) => !l.endedAt).length, branches: branches.size, done: helpers.filter((x) => x.status === "done").length, failed: helpers.filter((x) => x.status === "failed").length };
+}
+/** One mark per cycle of a loop: a score, "now" for the cycle in flight, or "todo". */
+export function loopRail(l) {
+  const out = [];
+  const n = Math.max(1, Math.min(10, Number(l && l.maxCycles) || 1));
+  const scores = Array.isArray(l && l.scores) ? l.scores : [];
+  for (let i = 0; i < n; i++) {
+    if (i < scores.length) out.push({ kind: scores[i] >= l.bar ? "pass" : "score", score: scores[i] });
+    else if (!l.endedAt && i === scores.length && l.cycle > 0) out.push({ kind: "now" });
+    else out.push({ kind: "todo" });
+  }
+  return out;
+}
+/** "42s", "3m 05s", "1h 02m". */
+export function elapsedText(ms) {
+  const s = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, "0")}s`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+}
+export const LIVE_EXAMPLES = [
+  ["Explore in parallel", "Use helpers in parallel to map how sign-in, billing and the task board work in this codebase, then give me a one-page summary."],
+  ["Run a loop", "/loop write a go-to-market launch plan for Daebot Studio with pricing, ICP and a two-week launch checklist"],
+];
+
 export const STAGE_MARK = { done: "✓", running: "◐", failed: "✗", todo: "○" };
 export const stageMarks = (marks) => (Array.isArray(marks) ? marks.map((m) => STAGE_MARK[m] || STAGE_MARK.todo).join("") : "");
 /** One line for the island card: the newest counters ("applications 389 · docs live 8"). */
@@ -266,7 +304,7 @@ export function brainNodes(n = 16, seed = 7) {
 
 export function initStudio({ json, h, ago, app, els }) {
   if (!els || !els.section) return null;
-  const st = { open: false, view: null, prev: null, filter: "all", room: "overview", dept: "", right: "tasks", timer: 0, clockTimer: 0, loading: false, error: "", meeting: null, log: [], logAt: 0, sendTo: "main", team: null, teamAt: 0, skills: null, skillsAt: 0, skillsError: "", apps: null, appsAt: 0, zoom: { k: 1, x: 0, y: 0 }, sig: "", building: false };
+  const st = { open: false, view: null, prev: null, filter: "all", room: "overview", dept: "", right: "tasks", timer: 0, clockTimer: 0, loading: false, error: "", meeting: null, log: [], logAt: 0, sendTo: "main", team: null, teamAt: 0, skills: null, skillsAt: 0, skillsError: "", apps: null, appsAt: 0, zoom: { k: 1, x: 0, y: 0 }, sig: "", building: false, liveTimer: 0, liveLoading: false };
   const S = (tag, attrs) => { const n = document.createElementNS(NS, tag); for (const k in attrs || {}) n.setAttribute(k, String(attrs[k])); return n; };
   const T = (x, y, cls, text, attrs) => { const t = S("text", { x, y, class: cls, ...(attrs || {}) }); t.textContent = text; return t; };
   const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -290,7 +328,9 @@ export function initStudio({ json, h, ago, app, els }) {
   const chipHost = h("span", "oc-chip", "");
   const chipNeeds = h("button", "oc-chip warn"); chipNeeds.type = "button"; chipNeeds.hidden = true; chipNeeds.title = "Open the task board to reply";
   chipNeeds.addEventListener("click", () => app.openBoard());
-  runs.append(chipModel, chipHost, chipNeeds);
+  const chipLive = h("button", "oc-chip live"); chipLive.type = "button"; chipLive.hidden = true; chipLive.title = "Helpers and loops working right now: open the Live room";
+  chipLive.addEventListener("click", () => { st.room = "live"; paintRooms(); paintStage(); });
+  runs.append(chipModel, chipHost, chipLive, chipNeeds);
   const clock = h("span", "oc-clock", ""); clock.setAttribute("aria-label", "Time");
   top.append(brand, conn, runs, clock);
   const bar = h("div", "oc-bar");
@@ -321,7 +361,7 @@ export function initStudio({ json, h, ago, app, els }) {
   floor.append(world, leaders, cardsLayer);
   const hud = h("div", "oc-hud");
   const kpi = (label) => { const box = h("div", "oc-kpi"); const v = h("b", "", "–"); box.append(v, h("span", "", label)); hud.append(box); return v; };
-  const kActive = kpi("ACTIVE"), kRunning = kpi("RUNNING"), kDone = kpi("DONE TODAY"), kWaiting = kpi("WAITING ON YOU");
+  const kActive = kpi("ACTIVE"), kRunning = kpi("RUNNING"), kHelpers = kpi("HELPERS LIVE"), kDone = kpi("DONE TODAY"), kWaiting = kpi("WAITING ON YOU");
   const zoomBox = h("div", "oc-zoom");
   const zIn = h("button", "oc-zbtn", "+"), zOut = h("button", "oc-zbtn", "−"), zReset = h("button", "oc-zbtn", "⌂");
   zIn.type = zOut.type = zReset.type = "button";
@@ -380,7 +420,10 @@ export function initStudio({ json, h, ago, app, els }) {
   }
   function paintRooms() {
     const allowed = st.view && st.view.layout && st.view.layout.rooms && st.view.layout.rooms.length ? st.view.layout.rooms : ROOMS.map((r) => r[0]);
-    for (const b of rooms.children) { b.hidden = !allowed.includes(b.dataset.key); b.setAttribute("aria-selected", String(b.dataset.key === st.room)); }
+    for (const b of rooms.children) { b.hidden = !allowed.includes(b.dataset.key) && !ALWAYS_ROOMS.includes(b.dataset.key); b.setAttribute("aria-selected", String(b.dataset.key === st.room)); }
+    const n = liveSummary(st.view && st.view.live);
+    const liveTab = [...rooms.children].find((b) => b.dataset.key === "live");
+    if (liveTab) { liveTab.classList.toggle("on-air", n.working + n.loops > 0); liveTab.textContent = n.working + n.loops > 0 ? `Live · ${n.working + n.loops}` : "Live"; }
   }
   const statusChip = (bot) => h("span", `st-status ${bot.status}`, STATUS[bot.status] || bot.status);
 
@@ -934,7 +977,8 @@ export function initStudio({ json, h, ago, app, els }) {
       return;
     }
     roomBox.replaceChildren();
-    if (st.room === "office") roomBox.append(roomOffice(v));
+    if (st.room === "live") roomBox.append(roomLive(v));
+    else if (st.room === "office") roomBox.append(roomOffice(v));
     else if (st.room === "meeting") roomBox.append(roomMeeting(v));
     else if (st.room === "lounge") roomBox.append(roomLounge(v));
     else if (st.room === "workspaces") roomBox.append(roomWorkspaces(v));
@@ -942,11 +986,117 @@ export function initStudio({ json, h, ago, app, els }) {
     else if (st.room === "pipelines") { roomBox.append(roomPipelines(v)); if (st.skills && Date.now() - st.skillsAt > 60_000) void loadSkills(); }
   }
 
+  // ---- the Live room: helpers and loops at work right now (GET /studio/live, agents/hub.ts) ----
+  function roomLive(v) {
+    const live = v.live || { helpers: [], loops: [], running: 0 };
+    const sum = liveSummary(live);
+    const wrap = h("div", "lv-wrap");
+    const head = h("div", "lv-head");
+    const titleBox = h("div", "lv-titlebox");
+    titleBox.append(h("h2", "lv-title", "Live"), h("p", "lv-sub", "Your Daebot's helpers and loops, as they work. Every helper starts from your MIND; builders work in their own branch so nothing collides."));
+    const tiles = h("div", "lv-tiles");
+    const tile = (n, label, cls) => { const t = h("div", `lv-tile ${cls || ""}`); t.append(h("b", "", String(n)), h("span", "", label)); return t; };
+    tiles.append(tile(sum.working, "helpers working", sum.working ? "on" : ""), tile(sum.loops, "loops running", sum.loops ? "on" : ""), tile(sum.branches, "branches to review", sum.branches ? "warn" : ""), tile(sum.done, "finished this hour", ""));
+    head.append(titleBox, tiles);
+    wrap.append(head);
+    if (!live.helpers.length && !live.loops.length) {
+      const empty = h("div", "lv-empty");
+      empty.append(h("strong", "", "Nobody is out on a job right now."), h("p", "", "Ask Dae to split a big job across helpers, or type /loop with a goal: it studies MIND, builds, checks, grades itself and keeps going until the work clears 9/10."));
+      const row = h("div", "lv-empty-row");
+      for (const [label, text] of LIVE_EXAMPLES) {
+        const b = h("button", "lv-try", label); b.type = "button"; b.title = text;
+        b.addEventListener("click", async () => { b.disabled = true; try { await app.sendTo("main", text); } catch { /* the chat shows the error */ } finally { b.disabled = false; } });
+        row.append(b);
+      }
+      empty.append(row);
+      wrap.append(empty);
+      return wrap;
+    }
+    if (live.loops.length) {
+      wrap.append(h("h3", "lv-h", "Loops"));
+      const grid = h("div", "lv-loops");
+      for (const l of live.loops) grid.append(loopCard(l));
+      wrap.append(grid);
+    }
+    if (live.helpers.length) {
+      wrap.append(h("h3", "lv-h", "Helpers"));
+      const grid = h("ul", "lv-helpers");
+      for (const x of live.helpers) grid.append(helperCard(x));
+      wrap.append(grid);
+    }
+    return wrap;
+  }
+  function loopCard(l) {
+    const card = h("button", `lv-loop ${l.endedAt ? l.phase : "running"}`); card.type = "button";
+    card.setAttribute("aria-label", `Loop: ${l.goal}. ${PHASE_LABEL[l.phase] || l.phase}. Open the chat.`);
+    card.addEventListener("click", () => app.openSession(l.session));
+    const top = h("div", "lv-loop-top");
+    top.append(h("span", `lv-phase ${l.phase}`, PHASE_LABEL[l.phase] || l.phase), h("span", "lv-time", l.endedAt ? ago(l.endedAt) : elapsedText(Date.now() - l.startedAt)));
+    const last = l.scores.length ? l.scores[l.scores.length - 1] : null;
+    const score = h("div", "lv-score");
+    score.append(h("b", "", last === null ? "–" : last.toFixed(1)), h("span", "", `/ 10 · bar ${l.bar}`));
+    const rail = h("div", "lv-rail"); rail.setAttribute("aria-label", `Cycle ${l.cycle} of ${l.maxCycles}`);
+    for (const m of loopRail(l)) {
+      const seg = h("i", `lv-seg ${m.kind}`);
+      if (m.score !== undefined) { seg.style.setProperty("--fill", `${Math.max(4, Math.min(100, m.score * 10))}%`); seg.title = `${m.score}/10`; }
+      rail.append(seg);
+    }
+    const meta = h("div", "lv-meta");
+    meta.append(h("span", "", `Cycle ${Math.max(l.cycle, l.scores.length)} of ${l.maxCycles}`));
+    if (l.weakest) meta.append(h("span", "", `weakest: ${l.weakest}`));
+    if (l.branch) meta.append(h("span", "lv-branch", l.branch));
+    card.append(top, h("div", "lv-goal", l.goal), score, rail, meta);
+    return card;
+  }
+  function helperCard(x) {
+    const li = h("li", `lv-helper ${x.status}`);
+    const btn = h("button", "lv-helper-btn"); btn.type = "button";
+    btn.setAttribute("aria-label", `${x.title}, ${x.status}. Open the chat that started it.`);
+    btn.addEventListener("click", () => app.openSession(x.session));
+    const top = h("div", "lv-helper-top");
+    const dot = h("i", `lv-dot ${x.status}`); dot.setAttribute("aria-hidden", "true");
+    top.append(dot, h("span", `lv-kind ${x.kind}`, KIND_LABEL[x.kind] || x.kind), h("span", "lv-time", x.endedAt ? elapsedText(x.endedAt - x.startedAt) : elapsedText(Date.now() - x.startedAt)));
+    const now = x.status === "running" ? (x.tool ? `Using ${x.tool}` : "Thinking…") : x.status === "done" ? "Finished" : (x.note || "Did not finish");
+    btn.append(top, h("div", "lv-helper-title", x.title), h("div", "lv-helper-now", now));
+    const foot = h("div", "lv-meta");
+    foot.append(h("span", "", `${x.calls} tool call${x.calls === 1 ? "" : "s"}`));
+    if (x.loop) foot.append(h("span", "", `loop cycle ${x.cycle || 1}`));
+    if (x.branch) foot.append(h("span", "lv-branch", `${x.branch}${x.files ? ` · ${x.files} file${x.files === 1 ? "" : "s"}` : ""}`));
+    btn.append(foot);
+    li.append(btn);
+    return li;
+  }
+  async function loadLive() {
+    if (st.liveLoading || !st.view) return;
+    st.liveLoading = true;
+    try {
+      const live = await json("/studio/live");
+      st.view = { ...st.view, live };
+      paintLiveBits();
+      if (st.room === "live") paintStage();
+    } catch { /* the next tick tries again */ } finally { st.liveLoading = false; }
+  }
+  function paintLiveBits() {
+    const n = liveSummary(st.view && st.view.live);
+    const busy = n.working + n.loops;
+    chipLive.hidden = !busy;
+    chipLive.textContent = busy ? `● LIVE · ${n.working} helper${n.working === 1 ? "" : "s"}${n.loops ? ` · ${n.loops} loop${n.loops === 1 ? "" : "s"}` : ""}` : "";
+    paintRooms(); paintHud();
+  }
+  function liveTick() {
+    if (!st.open || document.visibilityState === "hidden") return;
+    const n = liveSummary(st.view && st.view.live);
+    if (st.room === "live" || n.working + n.loops > 0) void loadLive();
+  }
+
   function paintHud() {
     const v = st.view;
     if (!v) return;
     kActive.textContent = `${v.bots.filter((b) => b.status !== "idle").length}/${v.bots.length}`;
     kRunning.textContent = String(v.tasks.filter((t) => t.status === "in_progress").length);
+    const ls = liveSummary(v.live);
+    kHelpers.textContent = String(ls.working + ls.loops);
+    kHelpers.parentElement.classList.toggle("live", ls.working + ls.loops > 0);
     kDone.textContent = String(v.today.completed);
     kWaiting.textContent = String(v.needsYou.length);
     kWaiting.parentElement.classList.toggle("warn", v.needsYou.length > 0);
@@ -1074,7 +1224,7 @@ export function initStudio({ json, h, ago, app, els }) {
       st.prev = st.view; st.view = v;
       st.error = "";
       if (!st.building) { note.textContent = ""; note.hidden = true; }
-      paintTop(); paintRooms(); paintHud(); fillDepts(); paintStage(); paintTasks();
+      paintTop(); paintRooms(); paintHud(); paintLiveBits(); fillDepts(); paintStage(); paintTasks();
       if (st.right === "log") void loadLog(false);
       void loadApps();
     } catch (e) {
@@ -1088,8 +1238,8 @@ export function initStudio({ json, h, ago, app, els }) {
     st.open = !!on;
     els.section.hidden = !st.open;
     document.body.classList.toggle("studio-on", st.open);
-    clearInterval(st.timer); st.timer = 0; clearInterval(st.clockTimer); st.clockTimer = 0;
-    if (st.open) { void load(); st.timer = setInterval(tick, REFRESH_MS); st.clockTimer = setInterval(tickClock, 1000); requestAnimationFrame(fit); }
+    clearInterval(st.timer); st.timer = 0; clearInterval(st.clockTimer); st.clockTimer = 0; clearInterval(st.liveTimer); st.liveTimer = 0;
+    if (st.open) { void load(); st.timer = setInterval(tick, REFRESH_MS); st.clockTimer = setInterval(tickClock, 1000); st.liveTimer = setInterval(liveTick, LIVE_MS); requestAnimationFrame(fit); }
   }
   document.addEventListener("visibilitychange", () => { if (st.open && document.visibilityState === "visible") void load(); });
 

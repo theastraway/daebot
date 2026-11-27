@@ -72,7 +72,7 @@ test("the sidebar remembers three views and the arrow keys cycle through them, s
 import { EXAMPLES, LOUNGE_LINES, ROOMS, loungeLine, mergeLog, progressPct, walks } from "../../web/studio.js";
 
 test("Studio 2 to 4: seven rooms, example prompts, and a lounge line that is stable within the hour and varies across bots", () => {
-  assert.deepEqual(ROOMS.map((r: any) => r[0]), ["overview", "office", "meeting", "lounge", "workspaces", "team", "pipelines"]);
+  assert.deepEqual(ROOMS.map((r: any) => r[0]), ["overview", "live", "office", "meeting", "lounge", "workspaces", "team", "pipelines"]);
   assert.ok(EXAMPLES.length >= 3);
   assert.equal(loungeLine("b_1", 9), loungeLine("b_1", 9));
   assert.ok(LOUNGE_LINES.includes(loungeLine("b_1", 9)));

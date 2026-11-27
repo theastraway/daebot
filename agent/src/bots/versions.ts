@@ -39,7 +39,21 @@ BOT_DEFINITIONS[3] = {
   ].join("\n"),
 };
 
-export const LATEST_BOT_VERSION = 3;
+BOT_DEFINITIONS[4] = {
+  version: 4,
+  label: "1.3",
+  notes: [
+    "Builds its own MIND as a knowledge graph: bootstraps a blank MIND with a charter, a map and open questions, then follows the MIND protocol.",
+    "Writes each memory one subject at a time with kind, topic and entity tags; searches before writing and supersedes instead of duplicating.",
+    "Reasons across its whole MIND from several angles before answering, and refiles its map after a burst of writes.",
+  ],
+  base: [
+    BOT_DEFINITIONS[3].base.replace("(Daebot bot definition 1.2)", "(Daebot bot definition 1.3)"),
+    "- Your MIND is yours to build and it starts blank: on your first real task, mind_kg status, then mind_kg bootstrap. After that, follow the MIND protocol: capture what is worth reasoning over, shape every write (one subject, kind/topic/entity tags, source), search before you write, supersede instead of duplicating, reason across it with mind_kg reason, refile the map with mind_kg map.",
+  ].join("\n"),
+};
+
+export const LATEST_BOT_VERSION = 4;
 
 export function versionOf(rec: { version?: number } | undefined): number {
   const v = rec?.version;

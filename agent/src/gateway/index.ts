@@ -1999,7 +1999,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path === "/settings/daebot/guards" || path === "/settings/daebot/coder" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/byo-llm" || path === "/byo-llm/test" || path === "/bridges" || path.startsWith("/bridges/") || path === "/settings/local-llm" || path === "/settings/local-llm/detect" || path === "/settings/engineer" || path === "/settings/engineer/stop" || path === "/board" || path.startsWith("/board/") || path === "/routing" || path === "/studio" || path === "/studio/rebuild" || path === "/studio/team" || path === "/studio/skills" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/devices" || path === "/devices/pty" || path.startsWith("/browser/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
+    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path === "/settings/daebot/guards" || path === "/settings/daebot/coder" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/byo-llm" || path === "/byo-llm/test" || path === "/bridges" || path.startsWith("/bridges/") || path === "/settings/local-llm" || path === "/settings/local-llm/detect" || path === "/settings/engineer" || path === "/settings/engineer/stop" || path === "/board" || path.startsWith("/board/") || path === "/routing" || path === "/studio" || path === "/studio/live" || path === "/studio/rebuild" || path === "/studio/team" || path === "/studio/skills" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/devices" || path === "/devices/pty" || path.startsWith("/browser/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -2862,6 +2862,12 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
       const r = loadSkills();
       return sendJson(res, 200, { skills: r.skills.map((s) => ({ name: s.name, description: s.description, group: s.group, tools: s.tools, needs: s.needs, priority: s.priority, license: s.license ?? null, source: s.source ?? null, origin: s.origin.startsWith("embedded:") ? "embedded" : "file", chars: s.body.length })), problems: r.problems });
+    }
+    if (path === "/studio/live") {
+      // The Live room: helpers and loops of THIS user's runtime right now (agents/hub.ts). No board sync, so it can be polled every few seconds.
+      if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+      const rt = manager.runtimeOf(me.id);
+      return sendJson(res, 200, rt.studioLive?.() ?? { helpers: [], loops: [], running: 0 });
     }
     if (path === "/studio/rebuild") {
       if (method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
