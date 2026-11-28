@@ -60,3 +60,18 @@ test("bot voice wiring: section ids exist, app passes the bot slug to voice, bot
   assert.doesNotMatch(v, /innerHTML|insertAdjacentHTML|eval\(|new Function|document\.write/);
   assert.doesNotMatch(v, /api\((?!`\/voice\/|"\/voice\/|`\/bots\/)/);
 });
+
+test("spoken answers go through the gateway's speech writer (rewrite with the chat id), and a voice send plays the got-it chime", () => {
+  const js = web("voice.js");
+  assert.match(js, /rewrite: true/);
+  assert.match(js, /o\.chatId \? o\.chatId\(\) : ""/);
+  assert.match(js, /chime\(\); \/\/ "got it"/);
+  const app = web("app.js");
+  assert.match(app, /chatId: \(\) => state\.currentId \|\| ""/);
+  assert.match(app, /tellCall\(id, \{ type: "daebot_done", text: ev\.finalText, viaVoice: fromVoice\(lastUser && lastUser\.text\) \}\)/);
+  // barge-in hands the open mic to the recorder and skips calibration on the user's own voice; never on iOS
+  assert.match(js, /startListening\("convo", "voice", \{ stream, floor \}\)/);
+  assert.match(js, /heard: !!given/);
+  assert.match(js, /!r\.calibrated && now - r\.t0 < 350/);
+  assert.match(js, /isIOS\(\)\) return;/);
+});

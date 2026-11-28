@@ -3,7 +3,8 @@
 //              Nothing is sent and nothing is read aloud.
 //   VOICE      (wave-in-bubble button / Right Command, and the hands-free wave button): you talk to Daebot. The words are
 //              SENT when you let go (or stop talking) and the answer is read aloud.
-// Each is hold-to-talk, or click to start and click to stop. Also: spoken answers, and a hands-free conversation mode. Speech to text and text to speech both go through the gateway (/voice/stt, /voice/tts), which bills the
+// Each is hold-to-talk, or click to start and click to stop. Also: spoken answers, and a hands-free conversation mode. Spoken answers are
+// never the screen text read out: the gateway's speech writer (src/voice/speech.ts) says the gist like a person on a call, details stay on screen. Speech to text and text to speech both go through the gateway (/voice/stt, /voice/tts), which bills the
 // signed-in user's own MIND credits. The mascot (m-bot) shows what voice is doing: eyes wide while listening, spinning while
 // transcribing, mouth moving with the audio while speaking. No innerHTML; no third-party code; audio never leaves this
 // origin except through the gateway.
@@ -15,6 +16,10 @@ const SILENCE_MS = 1500;            // click/hands-free: stop this long after sp
 const NO_SPEECH_MS = 9000;          // nothing said at all: give up listening
 const MIN_RMS = 0.02;               // speech floor (also scaled by measured room noise)
 const MAX_SPOKEN_CHARS = 1200;      // never read a whole essay aloud (bounds credits too)
+const BARGE_MS = 420;                // hands-free: this much talking over an answer interrupts it
+const BARGE_CALIBRATE_MS = 600;     // ...after measuring the room and speaker echo for this long
+const BARGE_MIN_RMS = 0.045;        // a louder floor than listening: speakers leak into the mic
+const MAX_REWRITE_CHARS = 40_000;   // the written answer the gateway's speech writer turns into words
 
 export const MOOD = { idle: "idle", listening: "wow", transcribing: "think", thinking: "think", speaking: "talk" };
 
@@ -89,7 +94,7 @@ const rms = (buf) => { let s = 0; for (let i = 0; i < buf.length; i++) s += buf[
 
 /**
  * opts: { els: {mic, speak, convo, dock, status, bars, stop, composer, input}, authHeaders(), onUnauthorized(),
- *         isBusy(), notify(text), creditsChanged(), bots(): HTMLElement[] }
+ *         isBusy(), notify(text), creditsChanged(), bots(): HTMLElement[], botSlug(), chatId() }
  * returns { turnStart(), turnDone(text), cancel(), state() }
  */
 export function initVoice(o) {
@@ -210,13 +215,15 @@ export function initVoice(o) {
     return "Microphone is off for Daebot. Allow it in your system privacy settings, then try again.";
   }
 
-  async function startListening(how, as = "voice") {
-    if (!canRecord || unavailable || state === "listening" || state === "transcribing") return;
+  // given (barge-in): the open mic stream and the room floor the barge watcher measured. The user is ALREADY talking, so the recorder
+  // must not calibrate on their voice (it would never hear them again) and counts them as heard from the first frame.
+  async function startListening(how, as = "voice", given) {
+    if (!canRecord || unavailable || state === "listening" || state === "transcribing") { if (given) given.stream.getTracks().forEach((t) => t.stop()); return; }
     stopSpeaking();
     mode = as === "dictate" ? "dictate" : "voice";
-    let stream;
+    let stream = given ? given.stream : null;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      if (!stream) stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
     } catch (e) {
       convo = false; setState("idle");
       return o.notify(e && (e.name === "NotAllowedError" || e.name === "SecurityError") ? micBlockedHelp() : "No microphone was found.");
@@ -230,7 +237,7 @@ export function initVoice(o) {
     let mr;
     try { mr = recType ? new MediaRecorder(stream, { mimeType: recType }) : new MediaRecorder(stream); }
     catch { stream.getTracks().forEach((t) => t.stop()); ctx.close?.(); convo = false; setState("idle"); return o.notify("This browser could not start recording."); }
-    const r = { mr, stream, ctx, chunks: [], how, mode, t0: performance.now(), heard: false, lastVoice: 0, floor: 0, samples: 0, discard: false, timer: 0 };
+    const r = { mr, stream, ctx, chunks: [], how, mode, t0: performance.now(), heard: !!given, lastVoice: given ? performance.now() : 0, floor: given ? given.floor : 0, calibrated: !!given, samples: 0, discard: false, timer: 0 };
     rec = r;
     mr.ondataavailable = (e) => { if (e.data && e.data.size) r.chunks.push(e.data); };
     mr.onstop = () => { stopTracks(r); if (rec === r) rec = null; finish(r); };
@@ -242,7 +249,7 @@ export function initVoice(o) {
       an.getFloatTimeDomainData(buf);
       const lvl = rms(buf), now = performance.now();
       setBars(Math.min(1, lvl * 16));
-      if (now - r.t0 < 350) { r.floor = Math.max(r.floor, lvl); return; } // measure the room first
+      if (!r.calibrated && now - r.t0 < 350) { r.floor = Math.max(r.floor, lvl); return; } // measure the room first (not after a barge-in)
       const gate = Math.max(MIN_RMS, r.floor * 2.5);
       if (lvl > gate) { r.heard = true; r.lastVoice = now; }
       if (now - r.t0 > MAX_REC_MS) return stopListening();
@@ -326,11 +333,73 @@ export function initVoice(o) {
     els.input.dispatchEvent(new Event("input"));
     pendingTurn = true; voiceTurn = true;
     setState("thinking");
+    chime(); // "got it": the call never sits in dead silence while Daebot works
     els.composer.requestSubmit();
   }
 
+  /** A soft two-note "got it" earcon (Web Audio, no file, no credits) when a spoken message is sent. */
+  function chime() {
+    try {
+      const ctx = playCtx && playCtx.state === "running" ? playCtx : null;
+      if (!ctx) return;
+      const t0 = ctx.currentTime;
+      [[660, 0], [880, 0.09]].forEach(([hz, at]) => {
+        const osc = ctx.createOscillator(), g = ctx.createGain();
+        osc.type = "sine"; osc.frequency.value = hz;
+        g.gain.setValueAtTime(0, t0 + at); g.gain.linearRampToValueAtTime(0.05, t0 + at + 0.015); g.gain.exponentialRampToValueAtTime(0.0001, t0 + at + 0.16);
+        osc.connect(g); g.connect(ctx.destination); osc.start(t0 + at); osc.stop(t0 + at + 0.18);
+      });
+    } catch { /* no audio: silent */ }
+  }
+
   // ---------- speaking ----------
+  // ---------- barge-in (hands-free) ----------
+  // While an answer plays in hands-free mode, the mic listens (echo-cancelled). Talking over it for BARGE_MS stops the answer and
+  // starts listening, like interrupting a person. The first BARGE_CALIBRATE_MS measure the room plus any speaker echo, so the
+  // answer itself does not trigger it.
+  let barge = null;
+  async function startBargeWatch() {
+    stopBargeWatch();
+    if (!convo || !canRecord || isIOS()) return; // iOS: opening the mic mid-playback moves the audio to the earpiece and drops the volume
+    const me = { stream: null, ctx: null, timer: 0, floor: 0, over: 0, t0: performance.now(), dead: false };
+    barge = me;
+    try { me.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false } }); }
+    catch { if (barge === me) barge = null; return; }
+    if (me.dead || barge !== me || state !== "speaking") { me.stream.getTracks().forEach((t) => t.stop()); return; }
+    me.ctx = new AC(); me.ctx.resume?.();
+    const an = me.ctx.createAnalyser(); an.fftSize = 1024;
+    me.ctx.createMediaStreamSource(me.stream).connect(an);
+    const buf = new Float32Array(an.fftSize);
+    me.timer = setInterval(() => {
+      if (state !== "speaking" || !convo) return stopBargeWatch();
+      an.getFloatTimeDomainData(buf);
+      const lvl = rms(buf), now = performance.now();
+      if (now - me.t0 < BARGE_CALIBRATE_MS) { me.floor = Math.max(me.floor, lvl); return; }
+      me.over = lvl > Math.max(BARGE_MIN_RMS, me.floor * 2.2) ? me.over + 60 : Math.max(0, me.over - 30);
+      if (me.over >= BARGE_MS) {
+        // Hand the open mic to the recorder: no reopen delay, no recalibration on the user's own voice.
+        const stream = me.stream; me.stream = null;
+        const floor = me.floor * 0.6; // the floor included speaker echo, which stops with the answer
+        stopBargeWatch(); stopSpeaking();
+        void startListening("convo", "voice", { stream, floor });
+      }
+    }, 60);
+  }
+  function isIOS() {
+    const ua = navigator.userAgent || "";
+    return /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  }
+  function stopBargeWatch() {
+    const b = barge; barge = null;
+    if (!b) return;
+    b.dead = true;
+    clearInterval(b.timer);
+    try { b.stream && b.stream.getTracks().forEach((t) => t.stop()); } catch { /* gone */ }
+    try { b.ctx && b.ctx.close(); } catch { /* gone */ }
+  }
+
   function stopSpeaking() {
+    stopBargeWatch();
     if (abortFetch && state === "speaking") { abortFetch.abort(); abortFetch = null; }
     try { audio.pause(); } catch { /* idle */ }
     if (playUrl) { URL.revokeObjectURL(playUrl); playUrl = ""; }
@@ -348,13 +417,16 @@ export function initVoice(o) {
   }
 
   async function speak(text) {
-    const t = speakable(text);
-    if (!t || unavailable) return convoNext();
+    // The gateway's speech writer turns the WRITTEN answer into what a person would say on a call (rewrite: true); speakable() is only a
+    // pre-check that there is something to say. The full answer stays on screen.
+    const raw = String(text || "").trim().slice(0, MAX_REWRITE_CHARS);
+    if (!speakable(raw) || unavailable) return convoNext();
     setState("speaking");
     const ac = new AbortController(); abortFetch = ac;
     let blob;
     try {
-      const res = await fetch("/voice/tts", { method: "POST", credentials: "same-origin", signal: ac.signal, headers: { ...o.authHeaders(), "content-type": "application/json" }, body: JSON.stringify({ text: t, ...(o.botSlug ? { bot: o.botSlug() } : {}) }) });
+      const chat = o.chatId ? o.chatId() : "";
+      const res = await fetch("/voice/tts", { method: "POST", credentials: "same-origin", signal: ac.signal, headers: { ...o.authHeaders(), "content-type": "application/json" }, body: JSON.stringify({ text: raw, rewrite: true, ...(chat ? { chat } : {}), ...(o.botSlug ? { bot: o.botSlug() } : {}) }) });
       if (!(await okOrExplain(res))) { abortFetch = null; return setState("idle"); }
       blob = await res.blob();
       o.creditsChanged();
@@ -369,9 +441,10 @@ export function initVoice(o) {
     playUrl = URL.createObjectURL(blob);
     audio.src = playUrl;
     wireAnalyser();
-    audio.onended = () => { clearInterval(ticker); if (playUrl) { URL.revokeObjectURL(playUrl); playUrl = ""; } setState("idle"); convoNext(); };
-    audio.onerror = () => { clearInterval(ticker); setState("idle"); };
+    audio.onended = () => { stopBargeWatch(); clearInterval(ticker); if (playUrl) { URL.revokeObjectURL(playUrl); playUrl = ""; } setState("idle"); convoNext(); };
+    audio.onerror = () => { stopBargeWatch(); clearInterval(ticker); setState("idle"); };
     try { await audio.play(); } catch { setState("idle"); return o.notify("The browser blocked audio playback. Tap the speaker button once, then try again."); }
+    void startBargeWatch(); // hands-free: talking over the answer interrupts it
     ticker = setInterval(() => {
       // mouth follows the actual sound when we can read it, else a steady pulse while playing
       let lvl = 0.5;

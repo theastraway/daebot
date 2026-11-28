@@ -3,6 +3,7 @@
 
 import { initVoice } from "/voice.js";
 import { initVoiceAgent } from "/voiceagent.js";
+import { fromVoice } from "/voicechat-bridge.js";
 import { initScreen } from "/screen.js";
 import { initHotkeys } from "/hotkeys.js";
 import { initUpdates } from "/updates.js";
@@ -1549,6 +1550,10 @@ function onEvent(id, ev, asst, toolByReceipt) {
       closeThink(tr);
       if (asst) { asst.streaming = false; paintAssistant(asst); }
       refreshPlan();
+      if (ev.finalText) { // a live voice call on this chat hears what Daebot finished (not what it asked for itself: that comes back as the tool result)
+        const lastUser = tr.items.filter((x) => x.kind === "user").pop();
+        tellCall(id, { type: "daebot_done", text: ev.finalText, viaVoice: fromVoice(lastUser && lastUser.text) });
+      }
       return null;
     default: return asst;
   }
@@ -1817,6 +1822,7 @@ const voice = initVoice({
   creditsChanged: () => refreshPlan(),
   bots: () => [...document.querySelectorAll(".hero-bot, .bot-dock m-bot")],
   botSlug: () => { const b = state.curBot ? bots.bot(state.curBot) : null; return b && b.slug ? b.slug : "main"; }, // whose voice speaks the answer
+  chatId: () => state.currentId || "", // the speech writer reads the user's question from this chat
 });
 
 // Voice chat: a live voice agent for the bot on screen (its voice, its instructions, it can read the user's chats). The bot's start_voice_agent tool opens it too.

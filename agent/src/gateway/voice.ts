@@ -5,10 +5,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Principal } from "../auth/users.ts";
 import { cleanVoice, ttsBodyFor } from "../bots/voice.ts";
+import { fallbackSpeech } from "../voice/speech.ts";
 import type { BotVoice } from "../bots/voice.ts";
 
 export const MAX_AUDIO_BYTES = 10 * 1024 * 1024; // one push-to-talk utterance; MIND itself allows 25 MB
 export const MAX_TTS_CHARS = 3000;               // MIND allows 4000
+export const MAX_REWRITE_INPUT = 40_000;         // a written answer the speech writer turns into words (rewrite: true)
 export const STT_PER_MIN = 20;
 export const TTS_PER_MIN = 30;
 export const CATALOG_PER_MIN = 40;
@@ -25,6 +27,8 @@ export interface VoiceOptions {
   voiceOf?(p: Principal, bot: string): BotVoice | undefined;
   fetchImpl?: typeof fetch;
   now?: () => number;
+  /** The speech writer: what to SAY for a written answer (runtime.spokenReply). Absent = the deterministic fallback only. */
+  spoken?(p: Principal, chatId: string | undefined, text: string, signal?: AbortSignal): Promise<{ text: string; rewritten: boolean }>;
   /** Called with the key after a successful call so the credits chip can refresh. */
   onUsed?(key: string): void;
 }
@@ -130,6 +134,8 @@ export function createVoiceHandler(o: VoiceOptions): (req: IncomingMessage, res:
     const wait = limiter.take(p.id, isStt ? "stt" : "tts", isStt ? STT_PER_MIN : TTS_PER_MIN);
     if (wait > 0) { req.resume(); return json(res, 429, { error: "slow_down", message: "Too many voice requests. Try again shortly." }, { "retry-after": String(wait) }); }
     if (!limiter.enter(p.id)) { req.resume(); return json(res, 429, { error: "slow_down", message: "Another voice request is still running." }, { "retry-after": "2" }); }
+    let spokenText: string | undefined;
+    let rewritten = false;
     try {
       let upstream: Response;
       if (isStt) {
@@ -144,12 +150,25 @@ export function createVoiceHandler(o: VoiceOptions): (req: IncomingMessage, res:
         if (lang && /^[a-z]{2,3}(-[A-Za-z]{2,4})?$/.test(lang)) fd.append("language", lang);
         upstream = await f(`${base}/audio/transcriptions`, { method: "POST", headers: { "X-API-Key": key }, body: fd, signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) });
       } else {
-        const raw = await readCapped(req, 64 * 1024);
+        const raw = await readCapped(req, 256 * 1024);
         if (raw === "too_large") return json(res, 413, { error: "too_large" });
         let b: any;
         try { b = JSON.parse(raw.toString("utf8") || "{}"); } catch { return json(res, 400, { error: "invalid JSON" }); }
-        const text = typeof b?.text === "string" ? b.text.trim() : "";
+        let text = typeof b?.text === "string" ? b.text.trim() : "";
         if (!text) return json(res, 400, { error: "text required" });
+        // rewrite: true = `text` is a WRITTEN answer (markdown, any length). The speech writer turns it into what a person would say on a call;
+        // the deterministic cleanup is the fallback. `chat` names the session so the writer sees the user's question (scoped to this principal).
+        if (b?.rewrite === true) {
+          if (text.length > MAX_REWRITE_INPUT) text = text.slice(0, MAX_REWRITE_INPUT);
+          const chat = typeof b.chat === "string" && /^[A-Za-z0-9_-]{1,120}$/.test(b.chat) ? b.chat : undefined;
+          let spoken: { text: string; rewritten: boolean } | undefined;
+          try { spoken = o.spoken ? await o.spoken(p, chat, text, AbortSignal.timeout(9_000)) : undefined; } catch { spoken = undefined; }
+          const said = (spoken?.text ?? "").trim() || fallbackSpeech(text);
+          if (!said) return json(res, 400, { error: "nothing_to_say", message: "There was nothing to read aloud." });
+          rewritten = !!spoken?.rewritten;
+          text = said.slice(0, MAX_TTS_CHARS);
+          spokenText = text;
+        }
         if (text.length > MAX_TTS_CHARS) return json(res, 413, { error: "too_large", message: `Speak at most ${MAX_TTS_CHARS} characters at a time.` });
         // The voice: an explicit `voice` object (the settings form previewing unsaved edits) or the saved voice of `bot` (a slug, or "main").
         const bot = typeof b?.bot === "string" && /^[a-z0-9-]{1,32}$/.test(b.bot) ? b.bot : undefined;
@@ -169,7 +188,9 @@ export function createVoiceHandler(o: VoiceOptions): (req: IncomingMessage, res:
         return json(res, 200, { text: typeof j.text === "string" ? j.text : "", duration: typeof j.duration === "number" ? j.duration : null }, extra);
       }
       const audio = Buffer.from(await upstream.arrayBuffer());
-      res.writeHead(200, { "content-type": "audio/mpeg", "content-length": String(audio.length), "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer", ...extra });
+      // The words actually spoken (rewrite mode): the client shows them as the caption and tests read them. URI-encoded: headers are latin-1.
+      const said: Record<string, string> = spokenText !== undefined ? { "x-daebot-spoken": encodeURIComponent(spokenText), "x-daebot-rewritten": rewritten ? "1" : "0" } : {};
+      res.writeHead(200, { "content-type": "audio/mpeg", "content-length": String(audio.length), "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer", ...extra, ...said });
       return void res.end(audio);
     } catch (e) {
       if (!res.headersSent) return json(res, 502, { error: "voice_failed", message: e instanceof Error && e.name === "TimeoutError" ? "The voice service timed out." : "The voice service could not be reached." });

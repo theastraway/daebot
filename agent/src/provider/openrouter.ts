@@ -122,7 +122,7 @@ export function createOpenRouterProvider(cfg: Config, fetchImpl: typeof fetch = 
   const backoffMs = opts.backoffMs ?? 800;
   const url = opts.url ?? OPENROUTER_URL;
 
-  async function open(model: string, req: { messages: Message[]; tools: ToolSpec[]; signal?: AbortSignal; bot?: string; effort?: Effort }): Promise<Response> {
+  async function open(model: string, req: { messages: Message[]; tools: ToolSpec[]; signal?: AbortSignal; bot?: string; effort?: Effort; noReasoning?: boolean }): Promise<Response> {
     const body: Record<string, unknown> = {
       model,
       // Never put an image in front of a text-only model: OpenRouter answers 404 "No endpoints found that support image input".
@@ -132,7 +132,8 @@ export function createOpenRouterProvider(cfg: Config, fetchImpl: typeof fetch = 
     };
     if (req.tools.length) { body.tools = toWireTools(req.tools); body.tool_choice = "auto"; }
     // The router's reasoning effort (OpenRouter's unified `reasoning` parameter; a model without reasoning ignores it).
-    if (req.effort) body.reasoning = { effort: req.effort };
+    if (req.noReasoning) body.reasoning = { enabled: false };
+    else if (req.effort) body.reasoning = { effort: req.effort };
     let lastErr: unknown;
     for (let attempt = 0; attempt < 2; attempt++) {
       if (req.signal?.aborted) throw abortError();
