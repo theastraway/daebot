@@ -10,6 +10,8 @@ export interface Seen { method: string; path: string; key: string; body: any; bo
 export interface FakeAgentSession { id: string; user: string; source_key: string; external_session_id: string; title: string; status: string; summary?: string; messages: { role: string; content: string; client_message_id?: string }[] }
 
 export interface FakeMind {
+  /** GET /todos answers { todos } from this list (opening brief tests). */
+  todos?: unknown[];
   /** Focused-context harness: per-section text for /context (a request for sections returns only those it asked for), and /query answers. */
   contextText?: Record<string, string>;
   queryAnswer?: (q: string) => string;
@@ -310,6 +312,7 @@ export async function startFakeMind(initial: Record<string, string> = {}): Promi
       }
       if (rest === "/profile") return json(res, 200, { username, bio: "" });
       if (rest === "/profile/models" && m.models) return json(res, 200, { models: m.models, current: m.models[0]?.id });
+      if (rest === "/todos" && req.method === "GET") return json(res, 200, { todos: m.todos ?? [], total: (m.todos ?? []).length });
       if (rest === "/context" && m.contextText) {
         const want: string[] = Array.isArray(parsed?.sections) && parsed.sections.length ? parsed.sections : ["soul", "user", "rules", "priorities", "recent"];
         return json(res, 200, { sections: want.filter((w) => m.contextText![w]).map((w) => ({ section: w, items: [{ text: m.contextText![w] }] })) });

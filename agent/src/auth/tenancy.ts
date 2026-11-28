@@ -142,6 +142,7 @@ export function createRuntimeHub(o: HubOptions): { runtimeFor(p: Principal): Run
       permissions: inner.permissions,
       suggestReplies: (id, signal) => inner.suggestReplies?.(id, signal) ?? Promise.resolve({ replies: [] }),
       recordSuggestionFeedback: (id, fb) => inner.recordSuggestionFeedback?.(id, fb) ?? false,
+      openingBrief: (o) => inner.openingBrief?.(o) ?? Promise.resolve(undefined),
       spokenReply: (id, text, signal) => inner.spokenReply?.(id, text, signal) ?? Promise.resolve({ text: fallbackSpeech(text ?? ""), rewritten: false }),
       purgeBotSessions: (id) => inner.purgeBotSessions?.(id) ?? Promise.resolve(0),
       deleteSession: (id) => inner.deleteSession?.(id) ?? Promise.resolve(false),

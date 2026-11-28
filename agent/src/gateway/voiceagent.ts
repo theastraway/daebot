@@ -69,6 +69,8 @@ export interface VoiceAgentOptions {
   allowHttpLinks?: boolean;
   /** Shared live-call file (DATA_DIR/voice-calls.json). Omitted: this process only, for tests that do not share a disk. */
   callsFile?: string;
+  /** The spoken first line of a call from the opening brief (what needs the user now), or undefined for the plain hello. Must be quick. */
+  opening?(p: Principal, bot: AgentBot): Promise<string | undefined>;
   /** How long ask_daebot / check_daebot wait for the turn before answering "working". Tests shorten it. */
   askWaitMs?: number;
 }
@@ -150,11 +152,12 @@ export function agentPrompt(bot: AgentBot, sessionPrompt: string | undefined, al
   return parts.filter(Boolean).join("\n\n");
 }
 
-export function sessionBody(secret: string, bot: AgentBot, owner: string, publicBase: string, sessionPrompt: string | undefined, allowHttpLinks = false, work = false): Record<string, unknown> {
+export function sessionBody(secret: string, bot: AgentBot, owner: string, publicBase: string, sessionPrompt: string | undefined, allowHttpLinks = false, work = false, opener?: string): Record<string, unknown> {
   const v = bot.voice ?? {};
   return {
     bot: bot.slug, name: bot.name, prompt: agentPrompt(bot, sessionPrompt, allowHttpLinks, work),
-    first_message: v.agentFirstMessage || `Hey, it's ${bot.name}. What's up?`,
+    // The bot's own first line wins; else the opening brief spoken (what needs the user now); else a plain hello.
+    first_message: v.agentFirstMessage || (opener && opener.trim() ? opener.trim().slice(0, 400) : `Hey, it's ${bot.name}. What's up?`),
     llm: v.agentLlm || "gemini-2.5-flash", language: v.language && /^[a-z]{2,3}$/.test(v.language) ? v.language : "en",
     voice: { ...(v.voiceId ? { voice_id: v.voiceId } : {}), ...(v.model ? { model_id: v.model } : {}), ...(v.stability !== undefined ? { stability: v.stability } : {}), ...(v.similarityBoost !== undefined ? { similarity_boost: v.similarityBoost } : {}), ...(v.speed !== undefined ? { speed: v.speed } : {}) },
     tools_base_url: `${publicBase}${TOOL_PATH.replace(/\/$/, "")}`, tools_token: toolToken(secret, owner, bot.slug), tools: toolsFor(allowHttpLinks, work),
@@ -275,7 +278,9 @@ export function createVoiceAgent(o: VoiceAgentOptions) {
         const requested = typeof b.chat === "string" ? b.chat.trim().slice(0, 200) : "";
         if (requested && o.tools.read(p.id, requested) === undefined) return json(res, 404, { error: "not_found", message: "no such chat" });
         const sp = typeof b.prompt === "string" ? b.prompt : undefined;
-        const r = await mind(key, bot.slug, "/audio/agent/session", { method: "POST", body: sessionBody(o.secret, bot, p.id, pub, sp, allowHttp, !!o.tools.run) });
+        // The opening brief, only if it is already at hand (never delays the call by more than a moment).
+        const opener = !bot.voice?.agentFirstMessage && !sp && o.opening ? await Promise.race([o.opening(p, bot).catch(() => undefined), new Promise<undefined>((r) => setTimeout(() => r(undefined), 1200))]) : undefined;
+        const r = await mind(key, bot.slug, "/audio/agent/session", { method: "POST", body: sessionBody(o.secret, bot, p.id, pub, sp, allowHttp, !!o.tools.run, opener) });
         if (r.status !== 200) return fail(res, r.status, r.body);
         const { signed_url: signedUrl, session, max_seconds: maxSeconds, first_message: firstMessage } = r.body;
         if (typeof signedUrl !== "string" || !/^wss:\/\/api\.elevenlabs\.io\//.test(signedUrl)) return json(res, 502, { error: "voice_failed", message: "Voice chat could not start. Try again." });
