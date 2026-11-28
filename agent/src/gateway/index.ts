@@ -51,6 +51,7 @@ import { EMBEDDED_FILES } from "../embedded.generated.ts";
 import { hasEmbeddedSite } from "../embedded.ts";
 import { acceptWebSocket } from "./ws.ts";
 import { createVoiceHandler } from "./voice.ts";
+import { spokenOpener } from "../home/brief.ts";
 import { createVoiceAgent, TOOL_PATH as VOICE_TOOL_PATH } from "./voiceagent.ts";
 import { buildId, handleAppFeed } from "./appfeed.ts";
 import { createAppsHandler } from "./apps.ts";
@@ -434,6 +435,14 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
           if (slug === "main") { const m = manager.runtimeOf(p.id).settings?.get().main ?? {}; return { id: "main", slug: "main", name: m.name || "Daebot", purpose: "the user's own Daebot", instructions: m.instructions ?? "" }; }
           const b = manager.runtimeOf(p.id).bots?.bySlug(slug);
           return b ? { id: b.id, slug: b.slug, name: b.name, purpose: b.purpose, voice: b.voice, instructions: manager.runtimeOf(p.id).bots?.instructions(b.id) ?? "" } : undefined;
+        },
+        // The call opens with the brief the new-chat screen shows (cached; a missing one is fetched for next time, never awaited).
+        opening: async (p, bot) => {
+          const rt = manager.runtimeOf(p.id);
+          if (!rt.openingBrief) return undefined;
+          const b = await rt.openingBrief({ bot: bot.slug, cachedOnly: true });
+          if (!b) { void rt.openingBrief({ bot: bot.slug }).catch(() => {}); return undefined; }
+          return spokenOpener(b);
         },
         // The call's own thread, opened up front when the client did not name a chat. Same open the transcript save uses.
         openCallChat: async (p, bot) => {
@@ -2040,7 +2049,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     }
 
     // ---- API surface: everything below needs the token (except opted-out webhooks)
-    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path === "/settings/daebot/guards" || path === "/settings/daebot/coder" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/byo-llm" || path === "/byo-llm/test" || path === "/bridges" || path.startsWith("/bridges/") || path === "/settings/local-llm" || path === "/settings/local-llm/detect" || path === "/settings/engineer" || path === "/settings/engineer/stop" || path === "/board" || path.startsWith("/board/") || path === "/routing" || path === "/studio" || path === "/studio/live" || path === "/studio/rebuild" || path === "/studio/team" || path === "/studio/skills" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/devices" || path === "/devices/pty" || path.startsWith("/browser/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
+    const isApi = path === "/envs" || path === "/shared-threads" || path === "/shared-threads/search" || path === "/sessions" || path.startsWith("/sessions/") || path === "/bots" || path.startsWith("/bots/") || path === "/models" || path.startsWith("/models/") || path === "/settings/daebot" || path === "/settings/daebot/instructions" || path === "/settings/daebot/guards" || path === "/settings/daebot/coder" || path.startsWith("/hooks/") || path.startsWith("/voice/") || path.startsWith("/apps/") || path.startsWith("/mcp/") || path === "/permissions" || path.startsWith("/permissions/") || path === "/account" || path === "/home/brief" || path === "/usage" || path === "/usage/additional" || path === "/spend-caps" || path === "/byo-llm" || path === "/byo-llm/test" || path === "/bridges" || path.startsWith("/bridges/") || path === "/settings/local-llm" || path === "/settings/local-llm/detect" || path === "/settings/engineer" || path === "/settings/engineer/stop" || path === "/board" || path.startsWith("/board/") || path === "/routing" || path === "/studio" || path === "/studio/live" || path === "/studio/rebuild" || path === "/studio/team" || path === "/studio/skills" || path === "/exchanges" || path.startsWith("/exchanges/") || path === "/ws" || path.startsWith("/routines/") || path.startsWith("/screen/") || path === "/devices" || path === "/devices/pty" || path.startsWith("/browser/") || path === "/sync/status" || path === "/sync/now" || path === "/envs/rename";
     if (isApi) {
       if (!openHook && !authorized(req, query, false)) {
         res.setHeader("www-authenticate", "Bearer");
@@ -2891,6 +2900,15 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     if (path.startsWith("/voice/")) return voice ? voice(req, res, path, _query, me) : sendJson(res, 404, { error: "voice is not available" });
     if (path.startsWith("/apps/")) return apps ? apps(req, res, path, me) : sendJson(res, 404, { error: "apps are not available" });
     if (path === "/account") return accountApi(res, method);
+    // The opening of a new chat: name, what needs the user, three starters (runtime.openingBrief, cached 10 minutes per bot).
+    if (path === "/home/brief") {
+      if (method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+      const rt = manager.runtimeOf(me.id);
+      const bot = (_query.get("bot") ?? "").trim();
+      const today = (_query.get("today") ?? "").replace(/[^\w ,:-]/g, "").slice(0, 60);
+      const b = rt.openingBrief ? await rt.openingBrief({ ...(bot && /^[a-z0-9-]{1,32}$/.test(bot) ? { bot } : {}), ...(today ? { today } : {}), fresh: _query.get("fresh") === "1" }).catch(() => undefined) : undefined;
+      return sendJson(res, 200, b ?? { name: "", line: "", starters: [], source: "empty", at: Date.now() });
+    }
     if (path === "/usage" || path === "/usage/additional") return usageApi(req, res, path, method, me);
     if (path === "/spend-caps") return spendCapsApi(req, res, method, me, new URLSearchParams((req.url ?? "").includes("?") ? req.url!.slice(req.url!.indexOf("?") + 1) : ""));
     if (path === "/routing") {

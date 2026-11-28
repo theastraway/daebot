@@ -4,6 +4,7 @@
 import { initVoice } from "/voice.js";
 import { initVoiceAgent } from "/voiceagent.js";
 import { fromVoice } from "/voicechat-bridge.js";
+import { createOpening, paintOpening } from "/opening.js";
 import { initScreen } from "/screen.js";
 import { initHotkeys } from "/hotkeys.js";
 import { initUpdates } from "/updates.js";
@@ -278,11 +279,21 @@ function toBottom(force) { if (force || stick) els.scroll.scrollTop = els.scroll
 // The on-screen keyboard rose or fell (shell.js): a reader who was at the bottom stays at the bottom.
 window.addEventListener("daebot:viewport", () => toBottom());
 
+// The opening of a new chat: the greeting at once, then what needs the user and three starters from their MIND (web/opening.js, GET /home/brief).
+const openingBriefs = createOpening({ json });
+function openingSlug() { const b = state.curBot ? bots.bot(state.curBot) : null; return b && b.slug ? b.slug : "main"; }
+function startFromOpening(prompt) {
+  els.input.value = prompt;
+  els.input.dispatchEvent(new Event("input"));
+  els.composer.requestSubmit();
+}
 function renderEmpty() {
-  const box = h("div", "empty");
-  box.append(h("h2", "", "What should we work on?"));
-  box.append(h("p", "", "Every claim here is checked by the kernel. Gate interventions and confirmations show up inline."));
+  const box = h("div", "empty opening");
+  const slug = openingSlug();
+  const held = openingBriefs.cached(slug);
+  paintOpening(box, held, { h, onStart: startFromOpening, loading: true });
   els.thread.append(box);
+  void openingBriefs.load(slug).then((b) => { if (box.isConnected) paintOpening(box, b || held, { h, onStart: startFromOpening, loading: false }); });
 }
 
 function buildItem(it, tr) {

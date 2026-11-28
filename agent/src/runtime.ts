@@ -93,6 +93,8 @@ import { PermissionService, isSessionMode } from "./permissions/index.ts";
 import type { SessionPermMode } from "./permissions/index.ts";
 import { SuggestionStore, awaitsUser, generateReplies, tailOf } from "./suggest/index.ts";
 import { fallbackSpeech, writeForSpeech } from "./voice/speech.ts";
+import { factsBrief, mailFromMind, todosFromMind, writeBrief } from "./home/brief.ts";
+import type { BriefInputs, OpeningBrief } from "./home/brief.ts";
 import type { SuggestionFeedback } from "./suggest/index.ts";
 import { facePersonality, faceOf } from "./bots/faces.ts";
 import type { RunMark, SessionStore, StoredSession } from "./persist.ts";
@@ -392,6 +394,7 @@ const interruptedNotice = (): AgentEvent => ({ type: "notice", level: "warn", te
 const BOARD_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 const BOARD_MAX_SESSIONS = 40;
 
+const BRIEF_TTL_MS = 10 * 60_000; // the opening brief is re-written at most this often per bot (a new chat after that gets a fresh one)
 const DEFAULT_TITLE = /^(New session|Daebot .+ session)$/;
 
 export interface HostedRuntimeOptions {
@@ -598,6 +601,8 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
     t.unref?.();
   }
   const suggestCache = new Map<string, { key: string; replies: string[] }>();
+  const briefCache = new Map<string, OpeningBrief>();
+  const briefInflight = new Map<string, Promise<OpeningBrief | undefined>>();
   const boardCache = new Map<string, { updatedAt: number; rows: BoardRow[] }>();
   // One client per bot MIND, all on the MAIN key (the bot is addressed by the X-MIND-Bot header, never by a key of its own).
   const botClients = new Map<string, MindClient>();
@@ -1368,6 +1373,44 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       suggestCache.set(id, { key, replies: r.replies });
       if (suggestCache.size > 200) suggestCache.delete(suggestCache.keys().next().value as string);
       return { replies: r.replies };
+    },
+    async openingBrief(o) {
+      const botRec = o.bot && o.bot !== "main" ? botStore?.bySlug(o.bot) : undefined;
+      if (o.bot && o.bot !== "main" && !botRec) return undefined;
+      const k = botRec ? `bot:${botRec.slug}` : "main";
+      const hit = briefCache.get(k);
+      if (hit && !o.fresh && Date.now() - hit.at < BRIEF_TTL_MS) return hit;
+      if (o.cachedOnly) return hit;
+      const running = briefInflight.get(k);
+      if (running) return running;
+      const p = (async (): Promise<OpeningBrief | undefined> => {
+        const within = <T>(pr: Promise<T>, ms: number): Promise<T | undefined> => new Promise((res) => { const t = setTimeout(() => res(undefined), ms); t.unref?.(); pr.then((v) => { clearTimeout(t); res(v); }, () => { clearTimeout(t); res(undefined); }); });
+        const home = botRec ? clientForMind(botRec.slug) : client;
+        const bootKey = botRec ? `${cfg.mindApiKey}|bot:${botRec.slug}` : cfg.mindApiKey;
+        const peeked = bootCache.peek(bootKey);
+        const [ctx, todosRaw, mailRaw] = await Promise.all([
+          peeked?.ok && peeked.context ? Promise.resolve(peeked.context) : within(home.context(["user", "priorities", "recent"]), 10_000),
+          botRec ? Promise.resolve(undefined) : within(client.call("todos", { action: "list", status: "in_progress" }), 6_000),
+          botRec ? Promise.resolve(undefined) : within(client.call("email", { action: "inbox", unread_only: true, top: 5 }), 5_000),
+        ]);
+        const inputs: BriefInputs = {
+          context: String(ctx ?? ""), todos: todosFromMind(todosRaw), mail: mailFromMind(mailRaw),
+          today: o.today && o.today.length <= 60 ? o.today : new Date().toDateString(),
+          ...(botRec ? { bot: { name: botRec.name, purpose: botRec.purpose ?? "" } } : {}),
+        };
+        let brief: OpeningBrief = factsBrief(inputs);
+        if (brief.source !== "empty" && !(userCap?.exceeded() || costCap?.exceeded())) {
+          const r = await writeBrief({ provider, model: cfg.speechModel || cfg.models.cheap, inputs });
+          if (r?.usage) { costCap?.add(r.usage.costUsd); userCap?.add(r.usage.costUsd); }
+          if (r) brief = { ...r.brief, name: r.brief.name || brief.name };
+        }
+        // The name does not change: a brief whose identity read timed out keeps the one we already learned.
+        if (!brief.name) brief = { ...brief, name: hit?.name || briefCache.get("main")?.name || "" };
+        briefCache.set(k, brief);
+        return brief;
+      })().finally(() => briefInflight.delete(k));
+      briefInflight.set(k, p);
+      return p;
     },
     async spokenReply(id, text, signal) {
       const e = sessions.get(id);

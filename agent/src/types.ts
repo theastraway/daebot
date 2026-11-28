@@ -387,6 +387,9 @@ export interface Runtime {
   /** What to SAY for an answer on a voice call: a fast model rewrites the written answer for the ear (voice/speech.ts). `text` defaults to the
    *  latest assistant answer of the session. Always returns words (the deterministic fallback when the writer is slow, fails or the cap is hit). */
   spokenReply?(id: string, text?: string, signal?: AbortSignal): Promise<{ text: string; rewritten: boolean }>;
+  /** What a new chat (and a voice call) opens with: the user's first name, one or two lines of what needs them, three starters (home/brief.ts).
+   *  bot: a bot slug ("main" or absent = the main Daebot). today: the user's local date. Cached 10 minutes per bot; fresh skips the cache. Never throws. */
+  openingBrief?(o: { bot?: string; today?: string; fresh?: boolean; cachedOnly?: boolean }): Promise<import("./home/brief.ts").OpeningBrief | undefined>;
   /** This owner's photo store (photos attached to chat messages). Absent on runtimes built without a data dir: attaching is then refused. */
   photos?: import("./photos.ts").PhotoStore;
   /** Task board rows of this owner: only the tasks Daebot declared (task_board). Most recent sessions first. */

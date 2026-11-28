@@ -469,3 +469,19 @@ test("a job belongs to its call: a new call is not blocked or answered by an ear
   const next = await r.call("tool", `${TOOL_PATH}ask_daebot`, "POST", { request: "quick one" }, bearer());
   assert.equal(next.body.status, "done"); assert.equal(next.body.answer, "Second call answer.");
 });
+
+test("a call opens with the spoken brief unless the bot has its own first line or a prompt was given", async () => {
+  const plain: AgentBot = { ...BOT, voice: { ...BOT.voice, agentFirstMessage: undefined } };
+  const r = rig({ botOf: (p, slug) => (slug === "sam" ? plain : undefined), opening: async () => "Hey Alice. The Q4 budget is waiting on you. Want to start there?" }, () => signed());
+  await r.call("handle", "/voice/agent/session", "POST", { bot: "sam" });
+  assert.equal(JSON.parse(r.calls[0].init.body).first_message, "Hey Alice. The Q4 budget is waiting on you. Want to start there?");
+  await r.call("handle", "/voice/agent/session", "POST", { bot: "sam", prompt: "Talk about the launch." });
+  assert.equal(JSON.parse(r.calls[1].init.body).first_message, "Hey, it's Sam. What's up?");
+  const own = rig({ opening: async () => "Hey Alice." }, () => signed());
+  await own.call("handle", "/voice/agent/session", "POST", { bot: "sam" });
+  assert.equal(JSON.parse(own.calls[0].init.body).first_message, "Yo", "the bot's own first line wins");
+  const slow = rig({ botOf: (p, slug) => (slug === "sam" ? plain : undefined), opening: () => new Promise((res) => setTimeout(() => res("late"), 3000)) }, () => signed());
+  const t0 = Date.now();
+  await slow.call("handle", "/voice/agent/session", "POST", { bot: "sam" });
+  assert.ok(Date.now() - t0 < 2500); assert.equal(JSON.parse(slow.calls[0].init.body).first_message, "Hey, it's Sam. What's up?");
+});

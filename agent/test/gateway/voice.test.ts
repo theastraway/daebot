@@ -224,3 +224,29 @@ test("handler unit: rewrite falls back to the deterministic cleanup when the wri
   assert.match(bodies[0].input, /The details are in the chat\.$/);
   assert.equal(out.headers["x-daebot-rewritten"], "0");
 });
+
+test("GET /home/brief: the user's opening from their MIND to-dos, written by the model, cached per bot", async () => {
+  const writer = new FakeProvider([{ text: '{"name":"Alice","line":"The Q4 budget is waiting on you.","starters":[{"label":"Finish Q4 budget","prompt":"Help me finish the Q4 budget."},{"label":"Plan my day","prompt":"Plan my day."}]}' }]);
+  const r = await rig(writer);
+  try {
+    r.fake.todos = [{ todo_id: "t1", title: "Finish the Q4 budget", status: "in_progress", priority: "high", waiting_on_reply: true }];
+    const alice = await r.cookie(r.keys.alice);
+    assert.equal((await http(r.gw.url, "GET", "/home/brief", { headers: H })).status, 401);
+    const a = await http(r.gw.url, "GET", "/home/brief?bot=main&today=Friday%2C%20November%2027%2C%202026", { headers: alice });
+    assert.equal(a.status, 200, a.body);
+    const b = JSON.parse(a.body);
+    assert.equal(b.source, "model"); assert.equal(b.name, "Alice"); assert.equal(b.line, "The Q4 budget is waiting on you.");
+    assert.deepEqual(b.starters.map((s: any) => s.label), ["Finish Q4 budget", "Plan my day"]);
+    const sent = writer.requests.at(-1)!.messages[1].content;
+    assert.match(sent, /WAITING ON THE USER\] Finish the Q4 budget/, "the writer saw the user's real to-do");
+    assert.match(sent, /Today is Friday, November 27, 2026/);
+    assert.ok(r.fake.seen.some((x) => x.path.startsWith("/developer/v1/todos") && x.key === r.keys.alice), "read with the user's own key");
+    const n = writer.requests.length;
+    const again = JSON.parse((await http(r.gw.url, "GET", "/home/brief", { headers: alice })).body);
+    assert.equal(again.line, b.line); assert.equal(writer.requests.length, n, "cached: no second model call");
+    const fresh = await http(r.gw.url, "GET", "/home/brief?fresh=1", { headers: alice });
+    assert.equal(fresh.status, 200); assert.equal(writer.requests.length, n + 1);
+    const unknownBot = JSON.parse((await http(r.gw.url, "GET", "/home/brief?bot=nobody", { headers: alice })).body);
+    assert.equal(unknownBot.source, "empty");
+  } finally { await r.close(); }
+});
