@@ -161,7 +161,7 @@ test("app.js: sends the capability only when the device has the bridge, and hand
   const app = web("app.js");
   assert.match(app, /import \{ calendarCapabilities, createDeviceCalls \} from "\/device-calendar\.js";/);
   assert.match(app, /device-result/);
-  assert.match(app, /const capabilities = calendarCapabilities\(\)/);
+  assert.match(app, /const capabilities = \[\.\.\.calendarCapabilities\(\)\]/); // plus "spoken" when the answer will be read aloud
   assert.match(app, /\.\.\.\(capabilities\.length \? \{ capabilities \} : \{\}\)/);
   const handlers = app.match(/ev\.type === "device_call"\) \{ void deviceCalls\.handle\(id, ev\); return; \}/g) ?? [];
   assert.equal(handlers.length, 2, "the live send stream and the re-attached stream");

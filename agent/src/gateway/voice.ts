@@ -101,6 +101,11 @@ function mapError(status: number, body: string): { status: number; body: Record<
   return { status: 502, body: { error: "voice_failed", message: "The voice service could not finish that request." } };
 }
 
+/** Speech-to-text mishears the product's name ("Jaybot", "Day bot", "Davebot"): fix it before it reaches the chat. */
+export function fixWakeWords(text: string): string {
+  return text.replace(/\b(?:jay|j|day|dey|dae|dey|they|de|dee|dave|deb|daybe)[ -]?bots?\b/gi, (m) => (/s$/i.test(m) ? "Daebots" : "Daebot"));
+}
+
 export function createVoiceHandler(o: VoiceOptions): (req: IncomingMessage, res: ServerResponse, path: string, query: URLSearchParams, p: Principal) => Promise<void> {
   const f = o.fetchImpl ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
   const base = o.baseUrl.replace(/\/+$/, "");
@@ -185,7 +190,7 @@ export function createVoiceHandler(o: VoiceOptions): (req: IncomingMessage, res:
       o.onUsed?.(key);
       if (isStt) {
         const j = (await upstream.json().catch(() => ({}))) as Record<string, unknown>;
-        return json(res, 200, { text: typeof j.text === "string" ? j.text : "", duration: typeof j.duration === "number" ? j.duration : null }, extra);
+        return json(res, 200, { text: typeof j.text === "string" ? fixWakeWords(j.text) : "", duration: typeof j.duration === "number" ? j.duration : null }, extra);
       }
       const audio = Buffer.from(await upstream.arrayBuffer());
       // The words actually spoken (rewrite mode): the client shows them as the caption and tests read them. URI-encoded: headers are latin-1.

@@ -250,3 +250,10 @@ test("GET /home/brief: the user's opening from their MIND to-dos, written by the
     assert.equal(unknownBot.source, "empty");
   } finally { await r.close(); }
 });
+
+test("fixWakeWords: misheard product names become Daebot; ordinary words are untouched", async () => {
+  const { fixWakeWords } = await import("../../src/gateway/voice.ts");
+  assert.equal(fixWakeWords("Good morning, Jaybot. How are you?"), "Good morning, Daebot. How are you?");
+  assert.equal(fixWakeWords("hey day bot and Dave bots"), "hey Daebot and Daebots");
+  assert.equal(fixWakeWords("the robot and a daybed"), "the robot and a daybed");
+});

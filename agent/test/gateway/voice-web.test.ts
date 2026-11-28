@@ -75,3 +75,18 @@ test("spoken answers go through the gateway's speech writer (rewrite with the ch
   assert.match(js, /!r\.calibrated && now - r\.t0 < 350/);
   assert.match(js, /isIOS\(\)\) return;/);
 });
+
+test("phone mode: a tap on the voice button starts a call that keeps listening; bye ends it; a filler covers slow answers; spoken turns are marked", () => {
+  const js = web("voice.js");
+  assert.match(js, /else \{ rec\.how = "click"; if \(rec\.mode === "voice"\) startCall\(\); \}/);
+  assert.match(js, /if \(r\.mode === "voice" && convo && END_CALL\.test\(text\)\) \{ endConvo\(\);/);
+  assert.match(js, /CONVO_NO_SPEECH_MS = 30_000/);
+  assert.match(js, /fillerTimer = setTimeout\(\(\) => \{ if \(state === "thinking" && pendingTurn\) void sayFiller\(\); \}, FILLER_AFTER_MS\)/);
+  assert.match(js, /spokenTurn: \(\) => pendingTurn \|\| convo \|\| speakOn/);
+  assert.match(web("app.js"), /capabilities\.push\("spoken"\)/);
+  const v: any = { END_CALL: /x/ };
+  const m = /const END_CALL = (\/.*\/i);/.exec(js)!;
+  v.END_CALL = new Function(`return ${m[1]}`)();
+  for (const t of ["Bye.", "okay, bye", "hang up", "That's all", "end the call"]) assert.ok(v.END_CALL.test(t), t);
+  for (const t of ["Don't stop the deploy", "bye the way what's next"]) assert.ok(!v.END_CALL.test(t), t);
+});

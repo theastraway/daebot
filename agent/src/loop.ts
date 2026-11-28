@@ -37,6 +37,9 @@ function withheldCopy(text: string): string {
  * that dropped what the user asked for. When an earlier withheld draft is more than twice as long, it ships
  * first and the last draft follows, so the content reaches the user (marked unverified by the caller).
  */
+/** On a spoken turn the model gets this many rounds of tool calls, then must answer (the user is listening, not reading). */
+export const SPOKEN_TOOL_ROUNDS = 2;
+
 export function restoreWithheld(last: string, withheld: string[]): string {
   const fullest = withheld.reduce((a, b) => (b.trim().length > a.trim().length ? b : a), "");
   if (fullest.trim().length <= 2 * last.trim().length) return last;
@@ -321,6 +324,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     let confirmed = false;
     let failed = false;
     blockedThisTurn = [];
+    let spokenToolRounds = 0;
 
     try {
       for (let round = 0; cfg.maxToolRoundsPerTurn === undefined || round < cfg.maxToolRoundsPerTurn; round++) {
@@ -345,7 +349,11 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
           offered = offered.filter((t) => f.toolNames.has(t.spec.name));
           if (f.key !== focusKey) { focusKey = f.key; try { if (messages[0]?.role === "system") messages[0] = { role: "system", content: buildSystem(f) }; } catch { /* keep */ } }
         }
-        const specs = offered.map((t) => t.spec);
+        // A spoken turn (the user is on a voice call, waiting in silence): after SPOKEN_TOOL_ROUNDS rounds of lookups the model must answer
+        // with what it has. No tools, and a transient note that never enters the transcript.
+        const answerNow = turnCaps.includes("spoken") && spokenToolRounds >= SPOKEN_TOOL_ROUNDS;
+        const specs = answerNow ? [] : offered.map((t) => t.spec);
+        const sendMessages = answerNow ? [...messages, { role: "user" as const, content: "(Voice call: the user is waiting. Answer now in one to three spoken sentences from what you already have; offer to dig deeper.)" }] : messages;
 
         // ---- provider call. Text streams to the client as it arrives; if pre_answer then withholds the draft,
         // a `retract` event tells every surface to take it back before the regenerated text streams.
@@ -356,7 +364,7 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
         const useModel = turnRoute?.applied ? turnRoute.model : modelNow();
         const useEffort = turnRoute?.applied ? turnRoute.effort : undefined;
         let servedBy = useModel;
-        for await (const ev of provider.stream({ model: useModel, messages: [...messages], tools: specs, signal, ...(useEffort ? { effort: useEffort } : {}) }) as AsyncIterable<StreamEvent>) {
+        for await (const ev of provider.stream({ model: useModel, messages: [...sendMessages], tools: specs, signal, ...(useEffort ? { effort: useEffort } : {}) }) as AsyncIterable<StreamEvent>) {
           if (ev.type === "text") { text += ev.delta; if (ev.delta) yield { type: "text", delta: ev.delta }; }
           else if (ev.type === "thinking") { if (ev.delta) yield { type: "thinking", delta: ev.delta }; } // inner voice: shown, never part of `text`
           else if (ev.type === "toolCall") toolCalls.push(ev.call);
@@ -369,8 +377,10 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
           if (usage) { totalCost += usage.costUsd; yield { type: "usage", usage, totalCostUsd: totalCost, model: servedBy }; }
         };
 
+        if (answerNow && toolCalls.length) toolCalls.length = 0; // offered no tools: a call it invents anyway is dropped, the text is the answer
         // ---- tool round
         if (toolCalls.length) {
+          spokenToolRounds++;
           // Narration is user-visible text: it gets the same pre_answer check as a final draft (this also covers the
           // confirm path, where the narration of the round that ends in a confirmation is the turn's last text).
           // A blocked narration is withheld and the model is told to restate it with receipts. The calls that came

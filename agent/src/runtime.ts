@@ -93,7 +93,7 @@ import { PermissionService, isSessionMode } from "./permissions/index.ts";
 import type { SessionPermMode } from "./permissions/index.ts";
 import { SuggestionStore, awaitsUser, generateReplies, tailOf } from "./suggest/index.ts";
 import { fallbackSpeech, writeForSpeech } from "./voice/speech.ts";
-import { factsBrief, mailFromMind, todosFromMind, writeBrief } from "./home/brief.ts";
+import { agendaFacts, factsBrief, mailFromMind, todosFromMind, writeBrief } from "./home/brief.ts";
 import type { BriefInputs, OpeningBrief } from "./home/brief.ts";
 import type { SuggestionFeedback } from "./suggest/index.ts";
 import { facePersonality, faceOf } from "./bots/faces.ts";
@@ -225,6 +225,10 @@ export function composeSystemPrompt(o: {
   roster?: RosterEntry[];
   /** The "User's permission preferences" block built from this user's own rules (empty = nothing to say). */
   permissions?: string;
+  /** "## Right now" facts from MIND (to-dos, unread email) for a spoken turn or a question about the user's day. */
+  agendaFacts?: string;
+  /** The client will read this turn's answer aloud (voice button, hands-free, spoken answers): answer like a person on a call. */
+  spoken?: boolean;
   /** Connecting MCP servers is available in this session (mcp_connect is offered). */
   mcp?: boolean;
   /** A bot thread of a user who can have connected apps: their <server>__<tool> tools are in the list (the user's account, not per bot). */
@@ -372,6 +376,8 @@ export function composeSystemPrompt(o: {
   }
   if (o.connectedApps?.length && (on("connect") || on("mail") || on("docs"))) lines.push("", ...o.connectedApps);
   if (o.permissions?.trim()) lines.push("", o.permissions.trim());
+  if (o.spoken) lines.push("", SPOKEN_TURN_PROMPT);
+  if (o.agendaFacts?.trim()) lines.push("", o.agendaFacts.trim());
   // Beside the boot block, including a failed or degraded boot. Outside the boot text so the boot cap is unchanged. The date line stays last.
   lines.push("", MIND_GROUND_TRUTH);
   if (o.bootContext.trim()) lines.push("", "## MIND context (booted this session)", o.bootContext.trim());
@@ -394,6 +400,16 @@ const interruptedNotice = (): AgentEvent => ({ type: "notice", level: "warn", te
 const BOARD_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 const BOARD_MAX_SESSIONS = 40;
 
+/** A turn the user is HEARING (voice button, hands-free): speed and brevity beat thoroughness. */
+export const SPOKEN_TURN_PROMPT = [
+  "## Voice: the user is talking to you and will HEAR this answer",
+  "- Answer in one to three short spoken sentences. Lead with the answer. No lists, tables, code or links unless they asked; offer to put details in the chat.",
+  "- Be fast: they are waiting in silence. Use at most one quick lookup unless they asked you to do real work. For their day, plate, to-dos, schedule or what needs them, call mind_todos and the calendar directly, never several mind_query searches.",
+  "- If a lookup will take a while, say what you are doing in one short line first.",
+  "- Their words came through speech-to-text: read past misheard words (\"Jaybot\", \"Day bot\" mean you) and never comment on them.",
+].join("\n");
+/** Questions about the user's day, plate, to-dos or what needs them: answered from the brief's MIND read first. */
+const AGENDA_QUESTION = /\b(?:on my plate|my day|today|tonight|tomorrow|agenda|catch me up|brief(?:ing)?|what needs me|needs my attention|overdue|deadlines?|to-?dos?|what (?:do|should) i (?:have|do|work on|focus on)|plan (?:my|the) (?:day|week)|what'?s (?:up|new|next))\b/i;
 const BRIEF_TTL_MS = 10 * 60_000; // the opening brief is re-written at most this often per bot (a new chat after that gets a fresh one)
 const DEFAULT_TITLE = /^(New session|Daebot .+ session)$/;
 
@@ -603,6 +619,16 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
   const suggestCache = new Map<string, { key: string; replies: string[] }>();
   const briefCache = new Map<string, OpeningBrief>();
   const briefInflight = new Map<string, Promise<OpeningBrief | undefined>>();
+  const briefFacts = new Map<string, { at: number; inputs: BriefInputs }>(); // what the last brief read from MIND, for spoken and day questions
+  /** The "## Right now" block from the main brief's MIND read (fresh within 15 minutes, else read now with a deadline). "" when none. */
+  async function agendaFactsNow(deadlineMs: number): Promise<string> {
+    let f = briefFacts.get("main");
+    if (!f || Date.now() - f.at > 15 * 60_000) {
+      await new Promise<void>((res) => { const t = setTimeout(res, deadlineMs); t.unref?.(); void runtime.openingBrief?.({ fresh: !!f }).finally(() => { clearTimeout(t); res(); }); });
+      f = briefFacts.get("main");
+    }
+    return f ? agendaFacts(f.inputs, f.at) : "";
+  }
   const boardCache = new Map<string, { updatedAt: number; rows: BoardRow[] }>();
   // One client per bot MIND, all on the MAIN key (the bot is addressed by the X-MIND-Bot header, never by a key of its own).
   const botClients = new Map<string, MindClient>();
@@ -961,6 +987,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       let curPerm: SessionPermMode | undefined = isSessionMode(stored?.permMode) ? stored!.permMode as SessionPermMode : undefined;
       // What the client of the CURRENT turn can do (e.g. the iPhone or Mac app's Apple Calendar bridge). Set at the start of every send, never stored.
       let curCaps: string[] = [];
+      let curAgendaFacts = "";
 
       const focusedOn = focusedContextOn();
       // File skills (agent/skills + DAEBOT_SKILLS_DIR), read once per process; the loop decides per turn which are in play.
@@ -1067,6 +1094,8 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
             appleCalendar: botId ? undefined : curCaps.includes("apple_calendar"),
             connectedApps: botId || !appsOn() ? undefined : connectedAppsLines(connectedApps.state(), { servers: serverLites(), tools: new Set(tools.map((t) => t.spec.name)), deviceCalendar: curCaps.includes("apple_calendar") }),
             permissions: permissions?.preferencesText(),
+            spoken: curCaps.includes("spoken"),
+            agendaFacts: botId ? undefined : curAgendaFacts,
           });
         },
         restore: stored ? { ...stored.state, messages: opts.fresh ? [] : repairMessages(wasInterrupted ? dropOpenTurn(stored.state.messages) : stored.state.messages), violations: stored.violations } : undefined,
@@ -1105,6 +1134,10 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
         surface: inner.surface,
         async *send(msg, o) {
           curCaps = Array.isArray(o?.capabilities) ? o!.capabilities! : [];
+          // A spoken turn, or a question about their day: hand the model what MIND already says needs them (the opening brief's read),
+          // so it answers at once instead of searching. Main Daebot only; at most ~6 s when nothing is cached yet.
+          curAgendaFacts = "";
+          if (!botId && o?.origin !== "bot" && (curCaps.includes("spoken") || AGENDA_QUESTION.test(msg))) curAgendaFacts = await agendaFactsNow(6_000);
           entry.updatedAt = Date.now();
           // The user is replying: whatever was stopped waiting on them goes back to in progress.
           if (o?.origin !== "bot" && entry.board?.some((t) => t.status === "stopped")) {
@@ -1398,6 +1431,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
           today: o.today && o.today.length <= 60 ? o.today : new Date().toDateString(),
           ...(botRec ? { bot: { name: botRec.name, purpose: botRec.purpose ?? "" } } : {}),
         };
+        briefFacts.set(k, { at: Date.now(), inputs });
         let brief: OpeningBrief = factsBrief(inputs);
         if (brief.source !== "empty" && !(userCap?.exceeded() || costCap?.exceeded())) {
           const r = await writeBrief({ provider, model: cfg.speechModel || cfg.models.cheap, inputs });
