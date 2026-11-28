@@ -26,6 +26,10 @@ export const RESTATE_IN_FULL = "The user saw NONE of the withheld text. Your nex
 
 /** Marks a withheld draft in the history, so no later round or turn believes the user saw it. */
 export const WITHHELD_MARK = "[WITHHELD by the receipt gate: the user never saw this draft. Do not refer to it as shown.]";
+/** The model sometimes copies the withheld marker from its own earlier draft into the next one: it is internal and never reaches the user. */
+export function stripWithheldMarks(text: string): string {
+  return text.split(WITHHELD_MARK).join("").replace(/^\s*\n+/, "").replace(/\n{3,}/g, "\n\n");
+}
 
 /** A withheld narration is not kept as an assistant message; its text rides in the nudge so the model can restate it. */
 function withheldCopy(text: string): string {
@@ -427,10 +431,10 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
         const answerVerdicts = safe(() => kernel.preAnswer(state, text), [] as GateVerdict[]);
         for (const n of answerVerdicts) if (isShadowNote(n)) yield { type: "gate", verdict: n, enforced: false };
         const verdict = answerVerdicts.find((v) => v.action !== "allow");
-        if (!verdict) { finalText = text; yield* emitUsage(); break; }
+        if (!verdict) { finalText = stripWithheldMarks(text); yield* emitUsage(); break; }
         if (enforced()) yield { type: "retract", reason: verdict.reason };
         yield { type: "gate", verdict, enforced: enforced() };
-        if (!enforced()) { finalText = text; yield* emitUsage(); break; }
+        if (!enforced()) { finalText = stripWithheldMarks(text); yield* emitUsage(); break; }
         if (regenerations < MAX_REGENERATIONS) {
           regenerations++;
           withheldDrafts.push(text);
