@@ -3,6 +3,7 @@
 
 import { initVoice } from "/voice.js";
 import { initVoiceAgent } from "/voiceagent.js";
+import { fromVoice } from "/voicechat-bridge.js";
 import { initScreen } from "/screen.js";
 import { initHotkeys } from "/hotkeys.js";
 import { initUpdates } from "/updates.js";
@@ -1549,7 +1550,10 @@ function onEvent(id, ev, asst, toolByReceipt) {
       closeThink(tr);
       if (asst) { asst.streaming = false; paintAssistant(asst); }
       refreshPlan();
-      if (ev.finalText) tellCall(id, { type: "daebot_done", text: ev.finalText }); // a live voice call on this chat hears what Daebot finished
+      if (ev.finalText) { // a live voice call on this chat hears what Daebot finished (not what it asked for itself: that comes back as the tool result)
+        const lastUser = tr.items.filter((x) => x.kind === "user").pop();
+        tellCall(id, { type: "daebot_done", text: ev.finalText, viaVoice: fromVoice(lastUser && lastUser.text) });
+      }
       return null;
     default: return asst;
   }

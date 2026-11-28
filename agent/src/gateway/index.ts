@@ -412,6 +412,12 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
       })
     : undefined;
   // ---- Voice chat: a live ElevenLabs agent per bot (MIND makes the session and bills it; its server tools call back into /voice-agent/tools/*).
+  /** Resolves when a live session has no turn running (checked every 400 ms, gives up waiting after 15 minutes and resolves anyway). */
+  const whenIdle = (ls: { busy: boolean }): Promise<void> => new Promise((resolve) => {
+    const t0 = Date.now();
+    const tick = () => { if (!ls.busy || Date.now() - t0 > 15 * 60_000) resolve(); else setTimeout(tick, 400); };
+    tick();
+  });
   const voiceChatTitle = () => `Voice chat ${new Date().toISOString().slice(0, 16).replace("T", " ")}`;
   const voiceAgent = voiceBase
     ? createVoiceAgent({
@@ -440,7 +446,10 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
           if (id) {
             // Resume the bound chat (a saved one comes back live) instead of opening a second thread for this call.
             if (!rt.history?.(id)) return undefined;
-            try { await manager.open({ surface: "voice", resumeId: id, owner: p.id }); } catch { return undefined; }
+            let ls;
+            try { ls = await manager.open({ surface: "voice", resumeId: id, owner: p.id }); } catch { return undefined; }
+            // Hung up while Daebot is still answering: append the call AFTER that turn, never spliced into it.
+            if (ls.busy) { const cid = id; void whenIdle(ls).then(async () => { if (await rt.appendVoiceTranscript?.(cid, lines)) broadcast(cid, { type: "notice", level: "info", text: "Voice chat transcript saved." }); }); return cid; }
           } else {
             id = (await manager.open({ surface: "voice", title: voiceChatTitle(), owner: p.id, ...(bot.id !== "main" ? { bot: bot.id } : {}) })).id;
           }
@@ -478,6 +487,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
                 try { onEvent(ev as unknown as { type: string }); } catch { /* the watcher never breaks the turn */ }
                 if (ev.type === "done") final = ev.finalText;
                 else if (ev.type === "notice" && /^Turn failed/.test(ev.text)) failed = ev.text.replace(/^Turn failed:\s*/, "");
+                else if (ev.type === "notice" && ev.text === "Turn aborted.") failed = "The user stopped that turn.";
               }, undefined, "user", true);
             } catch (e) {
               if (e instanceof BusyError) return { ok: false, finalText: "", error: "busy" }; // lost a race with a send: finally closes this feed
@@ -490,10 +500,12 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
           say: async (owner, id, text) => {
             const rt = manager.runtimeOf(owner);
             if (!rt.history?.(id)) return "missing";
-            try { await manager.open({ surface: "voice", resumeId: id, owner }); } catch { return "missing"; }
-            if (!(await rt.appendVoiceTranscript?.(id, [{ role: "agent", text }]))) return "missing";
-            broadcast(id, { type: "text", delta: text });
-            return "sent";
+            let ls;
+            try { ls = await manager.open({ surface: "voice", resumeId: id, owner }); } catch { return "missing"; }
+            const post = async () => { if (await rt.appendVoiceTranscript?.(id, [{ role: "agent", text }])) { broadcast(id, { type: "text", delta: text }); return true; } return false; };
+            // Daebot is mid-answer in this chat: the post lands right after that turn instead of being merged into its text.
+            if (ls.busy) { void whenIdle(ls).then(post); return "sent"; }
+            return (await post()) ? "sent" : "missing";
           },
         },
       })

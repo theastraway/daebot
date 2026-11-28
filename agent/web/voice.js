@@ -215,13 +215,15 @@ export function initVoice(o) {
     return "Microphone is off for Daebot. Allow it in your system privacy settings, then try again.";
   }
 
-  async function startListening(how, as = "voice") {
-    if (!canRecord || unavailable || state === "listening" || state === "transcribing") return;
+  // given (barge-in): the open mic stream and the room floor the barge watcher measured. The user is ALREADY talking, so the recorder
+  // must not calibrate on their voice (it would never hear them again) and counts them as heard from the first frame.
+  async function startListening(how, as = "voice", given) {
+    if (!canRecord || unavailable || state === "listening" || state === "transcribing") { if (given) given.stream.getTracks().forEach((t) => t.stop()); return; }
     stopSpeaking();
     mode = as === "dictate" ? "dictate" : "voice";
-    let stream;
+    let stream = given ? given.stream : null;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      if (!stream) stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
     } catch (e) {
       convo = false; setState("idle");
       return o.notify(e && (e.name === "NotAllowedError" || e.name === "SecurityError") ? micBlockedHelp() : "No microphone was found.");
@@ -235,7 +237,7 @@ export function initVoice(o) {
     let mr;
     try { mr = recType ? new MediaRecorder(stream, { mimeType: recType }) : new MediaRecorder(stream); }
     catch { stream.getTracks().forEach((t) => t.stop()); ctx.close?.(); convo = false; setState("idle"); return o.notify("This browser could not start recording."); }
-    const r = { mr, stream, ctx, chunks: [], how, mode, t0: performance.now(), heard: false, lastVoice: 0, floor: 0, samples: 0, discard: false, timer: 0 };
+    const r = { mr, stream, ctx, chunks: [], how, mode, t0: performance.now(), heard: !!given, lastVoice: given ? performance.now() : 0, floor: given ? given.floor : 0, calibrated: !!given, samples: 0, discard: false, timer: 0 };
     rec = r;
     mr.ondataavailable = (e) => { if (e.data && e.data.size) r.chunks.push(e.data); };
     mr.onstop = () => { stopTracks(r); if (rec === r) rec = null; finish(r); };
@@ -247,7 +249,7 @@ export function initVoice(o) {
       an.getFloatTimeDomainData(buf);
       const lvl = rms(buf), now = performance.now();
       setBars(Math.min(1, lvl * 16));
-      if (now - r.t0 < 350) { r.floor = Math.max(r.floor, lvl); return; } // measure the room first
+      if (!r.calibrated && now - r.t0 < 350) { r.floor = Math.max(r.floor, lvl); return; } // measure the room first (not after a barge-in)
       const gate = Math.max(MIN_RMS, r.floor * 2.5);
       if (lvl > gate) { r.heard = true; r.lastVoice = now; }
       if (now - r.t0 > MAX_REC_MS) return stopListening();
@@ -374,7 +376,13 @@ export function initVoice(o) {
       const lvl = rms(buf), now = performance.now();
       if (now - me.t0 < BARGE_CALIBRATE_MS) { me.floor = Math.max(me.floor, lvl); return; }
       me.over = lvl > Math.max(BARGE_MIN_RMS, me.floor * 2.2) ? me.over + 60 : Math.max(0, me.over - 30);
-      if (me.over >= BARGE_MS) { stopBargeWatch(); stopSpeaking(); startListening("convo"); }
+      if (me.over >= BARGE_MS) {
+        // Hand the open mic to the recorder: no reopen delay, no recalibration on the user's own voice.
+        const stream = me.stream; me.stream = null;
+        const floor = me.floor * 0.6; // the floor included speaker echo, which stops with the answer
+        stopBargeWatch(); stopSpeaking();
+        void startListening("convo", "voice", { stream, floor });
+      }
     }, 60);
   }
   function isIOS() {

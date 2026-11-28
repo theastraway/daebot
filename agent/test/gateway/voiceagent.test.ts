@@ -390,7 +390,7 @@ test("ask_daebot: runs in the bound chat and returns the written answer with how
   await r.call("handle", "/voice/agent/session", "POST", { bot: "sam" });
   assert.equal((await r.call("tool", `${TOOL_PATH}ask_daebot`, "POST", {}, bearer())).body.error, "request is required");
   const out = await r.call("tool", `${TOOL_PATH}ask_daebot`, "POST", { request: "what shipped?" }, bearer());
-  assert.deepEqual(ran, [{ o: "u_alice", id: "s1", text: "what shipped?" }]);
+  assert.deepEqual(ran, [{ o: "u_alice", id: "s1", text: "🎙️ what shipped?" }], "marked as asked by voice");
   assert.equal(out.body.status, "done");
   assert.match(out.body.answer, /PR 392 merged/);
   assert.equal(out.body.has_details, true);
@@ -444,4 +444,28 @@ test("bridge: a finished Daebot reply reaches the call as [Daebot finished] cont
   const long = b.chatEventToCall({ type: "daebot_done", text: "x".repeat(5000) });
   assert.ok(long.text.length < 2700); assert.match(long.text, /rest is in the chat/);
   assert.equal(b.chatEventToCall({ type: "daebot_done", text: "  " }), null);
+});
+
+test("bridge: the agent's own requests and their answers are never echoed back into the call", async () => {
+  const b: any = await import(new URL("../../web/voicechat-bridge.js", import.meta.url).href);
+  assert.equal(b.chatEventToCall({ type: "user", text: "🎙️ what shipped?" }), null);
+  assert.equal(b.chatEventToCall({ type: "daebot_done", text: "Shipped.", viaVoice: true }), null);
+  assert.ok(b.chatEventToCall({ type: "daebot_done", text: "Shipped.", viaVoice: false }));
+  assert.equal(b.fromVoice("🎙️ x"), true); assert.equal(b.fromVoice("x"), false); assert.equal(b.fromVoice(undefined), false);
+  const { VOICE_MARK } = await import("../../src/gateway/voiceagent.ts");
+  assert.equal(b.VOICE_MARK, VOICE_MARK, "server and browser agree on the marker");
+});
+
+test("a job belongs to its call: a new call is not blocked or answered by an earlier call's request", async () => {
+  let n = 0;
+  const pending = new Promise<{ ok: boolean; finalText: string }>(() => {});
+  const run: RunFn = async () => { n++; return n === 1 ? pending : { ok: true, finalText: "Second call answer." }; };
+  let t = 1_000_000;
+  const r = rig({ askWaitMs: 10, now: () => t, openCallChat: async () => "s1", tools: { run } }, () => signed());
+  await r.call("handle", "/voice/agent/session", "POST", { bot: "sam" });
+  assert.equal((await r.call("tool", `${TOOL_PATH}ask_daebot`, "POST", { request: "slow one" }, bearer())).body.status, "working");
+  t += 5_000;
+  await r.call("handle", "/voice/agent/session", "POST", { bot: "sam" }); // the user hung up and called again
+  const next = await r.call("tool", `${TOOL_PATH}ask_daebot`, "POST", { request: "quick one" }, bearer());
+  assert.equal(next.body.status, "done"); assert.equal(next.body.answer, "Second call answer.");
 });

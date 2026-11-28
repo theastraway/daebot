@@ -34,13 +34,18 @@ export const SPEECH_SYSTEM = [
 
 /** True when the written answer carries things the ear should not get: code, lists, tables, links, long ids. */
 export function hasVisualDetail(md: string): boolean {
-  const s = String(md || "");
+  const s = String(md || "").slice(0, MAX_PLAIN_INPUT);
   if (/```/.test(s)) return true;
-  if (/^\s*\|.+\|\s*$/m.test(s)) return true;
+  if (/^[ \t]*\|[^\n]*\|[ \t]*$/m.test(s)) return true;
   if (/\]\(https?:\/\//.test(s) || /https?:\/\/\S+/.test(s)) return true;
-  const items = s.split("\n").filter((l) => /^\s*(?:[-*+]|\d+[.)])\s+\S/.test(l)).length;
+  const items = s.split("\n").filter((l) => /^[ \t]*(?:[-*+]|\d{1,3}[.)])[ \t]+\S/.test(l)).length;
   return items >= 3;
 }
+
+const MAX_PLAIN_INPUT = 12_000;           // plainSpeech never looks further than this (the writer reads the same amount)
+const FILE_RE = /^[\w.-]{1,200}\.(?:ts|tsx|js|jsx|mjs|py|json|md|sh|css|html|yml|yaml)$/i;
+/** A whole token that is a file path, absolute ("/a/b", "~/a/b", "../a/b") or relative with an extension ("src/a.ts"); group 2 keeps trailing punctuation. */
+const PATH_TOKEN_RE = /^((?:~|\.{1,2})?(?:\/[\w.@-]{1,120}){2,}\/?|[\w.@-]{1,120}(?:\/[\w.@-]{1,120})+\.(?:ts|tsx|js|jsx|mjs|py|json|md|sh|css|html|yml|yaml))([.,;:!?)]*)$/i;
 
 /** Collapse a path-like token to the name a person would say ("agent/src/gateway/voice.ts" -> "voice"). */
 function sayPath(p: string): string {
@@ -53,40 +58,51 @@ function sayPath(p: string): string {
  * stray symbols; capped at a sentence boundary. Used on the writer's output (belt and braces) and as the whole fallback.
  */
 export function plainSpeech(md: string, max = MAX_SPOKEN_CHARS): string {
-  let t = String(md || "")
-    .replace(/```[\s\S]*?(```|$)/g, " ")                                   // code blocks: never spoken
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")                                  // images
-    .replace(/\[([^\]\n]+)\]\((?:[^)\s]+)\)/g, "$1")                        // [label](url) -> label
+  // Linear-time by construction (this runs synchronously on the gateway, on user-supplied text): the input is capped and its whitespace
+  // normalised FIRST, line-anchored patterns use [ \t] never \s, lazy spans are bounded, and paths are matched per token.
+  let t = String(md || "").slice(0, MAX_PLAIN_INPUT)
+    .replace(/\r/g, "")
+    .replace(/[ \t]+$/gm, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/```[^]*?(?:```|$)/g, " ")                                      // code blocks: never spoken
+    .replace(/!\[[^\]\n]{0,300}\]\([^)\n]{0,2000}\)/g, " ")                  // images
+    .replace(/\[([^\]\n]{1,300})\]\([^)\s]{1,2000}\)/g, "$1")                // [label](url) -> label
     .replace(/<https?:\/\/[^>\s]+>/g, " ")
     .replace(/https?:\/\/\S+/g, " ")                                        // bare URLs
-    .replace(/`([^`\n]+)`/g, (_m, c: string) => (/[\\/]/.test(c) && !/\s/.test(c) ? sayPath(c) : /^[\w.-]+\.(?:ts|js|py|json|md|tsx|jsx)$/i.test(c) ? sayPath(c) : /[(){};=<>$]/.test(c) ? " " : c))
-    .replace(/(?:^|\s)(?:~|\.{1,2})?(?:\/[\w.@-]+){2,}\/?/g, (m) => " " + sayPath(m.trim()))   // absolute paths
-    .replace(/\b[\w.@-]+(?:\/[\w.@-]+){1,}\.(?:ts|tsx|js|jsx|py|json|md|sh|css|html)\b/g, (m) => sayPath(m)) // relative file paths
+    .replace(/`([^`\n]{1,300})`/g, (_m, c: string) => (/[\\/]/.test(c) && !/\s/.test(c) ? sayPath(c) : FILE_RE.test(c) ? sayPath(c) : /[(){};=<>$]/.test(c) ? " " : c))
+    .replace(/[^\s`]+/g, (tok) => {                                         // paths, per token
+      if (tok.length > 300) return tok;
+      const m = PATH_TOKEN_RE.exec(tok);
+      return m ? sayPath(m[1]) + m[2] : tok;
+    })
     .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, " ")     // uuids
     .replace(/\b[0-9a-f]{7,40}\b/gi, (m) => (/\d/.test(m) && /[a-f]/i.test(m) ? " " : m))   // commit hashes and hex ids
-    .replace(/^\s{0,3}#{1,6}\s+(.*)$/gm, "$1.")                              // headings become sentences
-    .replace(/^\s*(?:[-*+•]|\d+[.)])\s+/gm, "")                             // list marks
-    .replace(/^\s*>\s?/gm, "")                                              // quotes
-    .replace(/^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/gm, " ")    // table rules
-    .replace(/(\*\*|__)(\S(?:.*?\S)?)\1/g, "$2")
-    .replace(/(^|[\s(])[*_](\S(?:.*?\S)?)[*_](?=[\s).,!?;:]|$)/gm, "$1$2")
-    .replace(/\s*(?:->|=>|→|⇒|➜)\s*/g, " to ")
-    .replace(/\s*(?:<-|←)\s*/g, " from ")
-    .replace(/\s+&\s+/g, " and ")
-    .replace(/(\d)\s*[–-]\s*(\$?\d)/g, "$1 to $2")
-    .replace(/\s+[—–]\s+/g, ", ")
+    .replace(/^ ?#{1,6} +([^\n]*)$/gm, "$1.")                                // headings become sentences
+    .replace(/^ *(?:[-*+•]|\d{1,3}[.)]) +/gm, "")                            // list marks
+    .replace(/^ *> ?/gm, "")                                                 // quotes
+    .replace(/^[ |:-]*-{2,}[ |:-]*$/gm, " ")                                 // table rules
+    .replace(/(\*\*|__)(?=\S)([^\n]{0,300}?\S)\1/g, "$2")
+    .replace(/(^|[ \t(])[*_](?=\S)([^\n*_]{0,300}?\S)?[*_](?=[\s).,!?;:]|$)/gm, "$1$2")
+    .replace(/ ?(?:->|=>|→|⇒|➜) ?/g, " to ")
+    .replace(/ ?(?:<-|←) ?/g, " from ")
+    .replace(/ & /g, " and ")
+    .replace(/\band\/or\b/gi, "and or")
+    .replace(/(\$?\d[\d,.]*) ?– ?(\$?\d)/g, "$1 to $2")                      // en dash ranges: "$1,200 – $1,500"
+    .replace(/(?<![\d-])(\d[\d,.]*)-(\$?\d[\d,.]*)(?![\d-])/g, "$1 to $2")   // "9-5"; never dates, phone numbers or "5 - 3"
+    .replace(/ [—–] /g, ", ")
     .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}]/gu, "") // emoji and dingbats
     .replace(/[|*_~^#<>{}[\]\\`=]+/g, " ")
-    .replace(/\s+\/\s+/g, " or ")
-    .replace(/\b([A-Za-z]\w*)\/(\w*[A-Za-z]\w*)\b/g, "$1 or $2")
+    .replace(/ \/ /g, " or ")
+    .replace(/\b([A-Za-z]\w{0,40})\/(\w{0,40}[A-Za-z]\w{0,40})\b/g, "$1 or $2")
     .replace(/[ \t]+/g, " ")
     .replace(/\n{2,}/g, ". ")
     .replace(/\n/g, ". ")
-    .replace(/\s+([.,!?;:])/g, "$1")
-    .replace(/([.,!?;:])(?:\s*[.,;:])+/g, "$1")
+    .replace(/ ([.,!?;:])/g, "$1")
+    .replace(/([.,!?;:])(?: ?[.,;:])+/g, "$1")
     .replace(/^[\s.,;:]+/, "")
-    .replace(/\(\s*\)/g, "")
-    .replace(/\s{2,}/g, " ")
+    .replace(/\( ?\)/g, "")
+    .replace(/ {2,}/g, " ")
     .trim();
   if (t.length > max) {
     const cut = t.slice(0, max);

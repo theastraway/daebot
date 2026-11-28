@@ -70,3 +70,34 @@ test("writeForSpeech: the model's words, cleaned; short plain answers skip the m
   assert.ok(Date.now() - t0 < 2_000);
   assert.equal(await writeForSpeech({ provider: new Writer("ok"), model: "c", question: "", answer: "  " }), undefined);
 });
+
+test("plainSpeech and hasVisualDetail stay linear on hostile input (they run synchronously on the gateway)", () => {
+  const hostile = [
+    "a" + "\n".repeat(39_000) + "a",
+    "a" + " \n".repeat(19_000) + "a",
+    "|" + " ".repeat(39_000) + "x",
+    "**" + "a ".repeat(19_000),
+    "a/".repeat(19_000) + "b",
+    "- ".repeat(19_000),
+    "1-".repeat(19_000) + "1",
+    "_" + "x".repeat(39_000),
+    "[".repeat(39_000),
+    "`" + "a".repeat(39_000),
+  ];
+  for (const h of hostile) {
+    const t0 = performance.now();
+    plainSpeech(h); fallbackSpeech(h); hasVisualDetail(h);
+    const ms = performance.now() - t0;
+    assert.ok(ms < 400, `${JSON.stringify(h.slice(0, 12))}… took ${ms.toFixed(0)} ms`);
+  }
+});
+
+test("plainSpeech keeps the meaning of ordinary prose", () => {
+  assert.equal(plainSpeech("We met on 2026-11-27."), "We met on 2026-11-27.");
+  assert.equal(plainSpeech("Call 555-123-4567 today."), "Call 555-123-4567 today.");
+  assert.equal(plainSpeech("5 - 3 is 2."), "5 - 3 is 2.");
+  assert.equal(plainSpeech("Bring snacks and/or drinks."), "Bring snacks and or drinks.");
+  assert.equal(plainSpeech("Open 9-5 on weekdays."), "Open 9 to 5 on weekdays.");
+  assert.equal(plainSpeech("It's a well-known, up-to-date plan."), "It's a well-known, up-to-date plan.");
+  assert.equal(plainSpeech("See src/gateway/voice.ts, then ~/code/daebot."), "See voice, then daebot.");
+});

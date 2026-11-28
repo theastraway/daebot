@@ -21,6 +21,9 @@ const MAX_LINK_LABEL = 120;
 const NO_LIVE_CHAT = "No live call chat. Start voice chat from a chat first.";
 /** ElevenLabs gives a server tool 20 s (MIND sets response_timeout_secs). Answer inside that, with room for the network. */
 export const ASK_WAIT_MS = 14_000;
+/** Prefix of every request the voice agent hands Daebot: the chat shows it came from the call, and the browser never echoes it (or its
+ *  answer) back into the call, whichever path delivers it (live stream, re-attach, idle sync). Keep in sync with web/voicechat-bridge.js. */
+export const VOICE_MARK = "🎙️ ";
 const MAX_ANSWER_CHARS = 3500;
 const MAX_ASK_CHARS = 4000;
 const SAY_IT = "This is Daebot's WRITTEN answer and it is already in the chat on the user's screen. Do not read it out. Say the gist in one to three short spoken sentences in your own words, lead with the outcome, never say symbols, paths, ids or links. If it asks the user something, ask that. If there are details (lists, code, links), say they're in the chat.";
@@ -217,11 +220,12 @@ export function createVoiceAgent(o: VoiceAgentOptions) {
     const t = now();
     const sec = typeof maxSeconds === "number" && maxSeconds > 0 ? maxSeconds : 900;
     calls.put(owner, slug, { chatId, startedAt: t, expiresAt: t + sec * 1000 + 60_000 });
+    for (const [k, j] of jobs) if (k.startsWith(`${owner}\u0000${slug}\u0000`) && j.status !== "working") jobs.delete(k); // a new call starts clean
   };
   const clearCall = (owner: string, slug: string) => { calls.delete(owner, slug); };
   // The work brain: the latest request per (owner, bot) the voice agent handed to Daebot. In memory: a job outlives a tool call, not a restart.
   const jobs = new Map<string, Job>();
-  const jobKey = (owner: string, slug: string) => `${owner}\u0000${slug}`;
+  const jobKey = (owner: string, slug: string, chatId: string) => `${owner}\u0000${slug}\u0000${chatId}`; // per call: a job from an earlier call never blocks or answers this one
   const sleep = (ms: number) => new Promise<void>((r) => { setTimeout(r, ms); }); // ref'd: it only runs inside a live tool request
   const waitMs = () => o.askWaitMs ?? ASK_WAIT_MS;
   function jobView(j: Job): Record<string, unknown> {
@@ -345,7 +349,9 @@ export function createVoiceAgent(o: VoiceAgentOptions) {
     }
     if (name === "ask_daebot" || name === "check_daebot") {
       if (!T.run) return json(res, 200, { error: "Daebot is not reachable from this call." });
-      const k = jobKey(who.owner, who.slug);
+      const call = liveCall(who.owner, who.slug);
+      if (!call) return json(res, 200, { error: NO_LIVE_CHAT });
+      const k = jobKey(who.owner, who.slug, `${call.chatId}\u0000${call.startedAt}`);
       const cur = jobs.get(k);
       if (name === "check_daebot") {
         if (!cur) return json(res, 200, { status: "idle", note: "Nothing is running. Use ask_daebot to hand Daebot a request." });
@@ -355,10 +361,8 @@ export function createVoiceAgent(o: VoiceAgentOptions) {
       const request = str("request", MAX_ASK_CHARS).trim();
       if (!request) return json(res, 200, { error: "request is required" });
       if (cur && cur.status === "working") return json(res, 200, { ...jobView(cur), note: `Daebot is still on the last request (${flat(cur.request).slice(0, 120)}). Tell the user, and call check_daebot; ask again when it is done.` });
-      const call = liveCall(who.owner, who.slug);
-      if (!call) return json(res, 200, { error: NO_LIVE_CHAT });
       const job: Job = { id: randomUUID(), request, startedAt: now(), status: "working", answer: "", delivered: false, done: Promise.resolve() };
-      job.done = T.run(who.owner, call.chatId, request, (ev) => {
+      job.done = T.run(who.owner, call.chatId, VOICE_MARK + request, (ev) => {
         if (ev.type === "permission" && typeof ev.title === "string") job.approval = ev.title.slice(0, 200);
         else if (ev.type === "permissionResolved") job.approval = undefined;
       }).then((r) => {
