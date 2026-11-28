@@ -1376,7 +1376,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     const have = auth.store.creds(uid);
     if (!have || (have.kind === "key" && have.mindKey !== key)) {
       auth.store.upsert(name, { kind: "key", mindKey: key });
-      auth.evict(uid);
+      // Same user, another key (a second device): swap it in place. Only a user with no live runtime is rebuilt.
+      if (!(have && auth.rekey?.(uid, key))) auth.evict(uid);
     }
     const principal = auth.store.principal(uid);
     if (!principal) { sendJson(res, 500, { error: "could not load the user" }); return undefined; }
@@ -1747,7 +1748,8 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     const have = auth.store.creds(uid);
     if (!have || (have.kind === "key" && have.mindKey !== key)) {
       auth.store.upsert(name, { kind: "key", mindKey: key });
-      auth.evict(uid);
+      // Same user, another key (a second device): swap it in place. Only a user with no live runtime is rebuilt.
+      if (!(have && auth.rekey?.(uid, key))) auth.evict(uid);
     }
     const principal = auth.store.principal(uid);
     if (!principal) { sendJson(res, 500, { error: "could not load the user" }); return undefined; }

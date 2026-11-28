@@ -75,6 +75,6 @@ export function createAuthContext(o: {
       const c = store.creds(p.id);
       return c ? (c.kind === "key" ? c.mindKey : c.accessToken) : undefined;
     },
-    runtimeFor: hub.runtimeFor, evict: hub.evict, mindBaseUrl: o.cfg.mindBaseUrl, fetchImpl: o.fetchImpl,
+    runtimeFor: hub.runtimeFor, evict: hub.evict, rekey: hub.rekey, mindBaseUrl: o.cfg.mindBaseUrl, fetchImpl: o.fetchImpl,
   };
 }
