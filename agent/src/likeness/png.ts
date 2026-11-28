@@ -32,8 +32,9 @@ export function decodePng(buf: Uint8Array): Raster {
     off += 12 + len;
   }
   if (!ch || !idat.length) throw new Error("png: no image data");
-  const raw = inflateSync(Buffer.concat(idat.map((b) => Buffer.from(b.buffer, b.byteOffset, b.byteLength))));
   const stride = width * ch;
+  // Never inflate past what the header promises (a compression bomb in IDAT cannot blow up memory).
+  const raw = inflateSync(Buffer.concat(idat.map((b) => Buffer.from(b.buffer, b.byteOffset, b.byteLength))), { maxOutputLength: (stride + 1) * height });
   if (raw.length < (stride + 1) * height) throw new Error("png: truncated");
   const px = new Uint8Array(stride * height);
   for (let y = 0; y < height; y++) {

@@ -698,7 +698,8 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     let wake: (() => void) | undefined;
     let settled: ToolResult | undefined;
     const progress = (ev: ToolProgressEvent): void => {
-      if (!ev || ev.type !== "loop" || !ev.loop || pending.length > 200) return;
+      if (!ev || ev.type !== "loop" || !ev.loop) return;
+      if (pending.length >= 200) pending.shift(); // a full queue drops the OLDEST snapshot; the latest (the final one) always gets through
       pending.push(ev); wake?.();
     };
     void execute(tool, args, progress).then((r) => { settled = r; wake?.(); });

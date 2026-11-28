@@ -151,3 +151,27 @@ test("the transcript keeps one scorecard per loop: the newest snapshot, where th
   assert.equal(loops[0].loop.cycle, 3); assert.equal(loops[0].loop.done, true); assert.equal(loops[0].rid, "r1");
   assert.equal(ev.indexOf(loops[0]), 2, "stays where the first one was");
 });
+
+test("review fixes: a URL alone is not a match goal; build mode only for code work", () => {
+  assert.ok(!isLikenessGoal("Summarize https://example.com/post into three bullet points"));
+  assert.ok(isLikenessGoal("make my landing page look like https://stripe.com"));
+  assert.ok(isLikenessGoal("clone https://example.com/pricing"));
+  const mode = (t: string) => /mode "(\w+)"/.exec(expandCraftMessage(t, { canBuild: true }))![1];
+  assert.equal(mode("write an essay about the app design process"), "write");
+  assert.equal(mode("write a launch email for the new app"), "write");
+  assert.equal(mode("fix the bug in the login component"), "build");
+  assert.equal(mode("build a pricing page for the site"), "build");
+  assert.equal(/mode "(\w+)"/.exec(expandCraftMessage("fix the bug in the login component", { canBuild: false }))![1], "write");
+});
+
+test("review fixes: the loop stops before a cycle when over budget; hosted runs at most 3 cycles", async () => {
+  const many = Array.from({ length: 6 }, () => ({ correctness: 5, completeness: 5, clarity: 5 }));
+  let spent = 0;
+  const a = writeSpawn(many);
+  const over = await createLoopTool({ spawn: a.spawn, overBudget: () => spent++ >= 1 }).run({ goal: "write a launch plan doc for the sales team", max_cycles: 6 }, { cwd: "/r", sessionId: "b1", capabilities: ["craft"] });
+  assert.match(over.output, /daily cost cap/);
+  const b = writeSpawn(many);
+  const evs: ToolProgressEvent[] = [];
+  await createLoopTool({ spawn: b.spawn, hosted: true }).run({ goal: "write a launch plan doc for the sales team", max_cycles: 6 }, { cwd: "/r", sessionId: "b2", capabilities: ["craft"], progress: (e) => evs.push(e) });
+  assert.equal(evs.at(-1)!.loop.cycles, 3, "hosted cycles clamp to 3");
+});

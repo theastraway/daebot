@@ -20,8 +20,9 @@ export function referenceUrl(goal: string): string | undefined {
 /** A UI/website/page/screen goal with something to match (a "look like", a URL or an image). */
 export function isLikenessGoal(goal: string): boolean {
   const g = String(goal ?? "");
-  if (!UI_RE.test(g) && !referenceUrl(g)) return false;
-  return MATCH_RE.test(g) || !!referenceUrl(g) || (IMAGE_RE.test(g) && UI_RE.test(g));
+  // A URL alone is not a match goal ("summarize https://..." is text work): it needs a match verb or UI words with it.
+  if (referenceUrl(g)) return MATCH_RE.test(g) || UI_RE.test(g);
+  return UI_RE.test(g) && (MATCH_RE.test(g) || IMAGE_RE.test(g));
 }
 
 /** "PREVIEW: <url>" in a builder's report: where the built page can be opened for the likeness capture. */
@@ -38,7 +39,9 @@ export function expandCraftMessage(text: string, o: { canBuild: boolean }): stri
   const raw = String(text ?? "");
   const goal = raw.replace(/^\s*\/loop\b\s*/i, "").trim();
   if (goal.length < 12) return `${raw}\n\n[Craft mode is on: the user wants something made and graded. This is too short to grade. Ask in one line what to make, for whom, and what done looks like.]`;
-  const build = o.canBuild && /\b(code|build|fix|implement|refactor|feature|bug|test|app|page|site|website|screen|component|api|ui)\b/i.test(goal);
+  // Build mode (a git worktree and a shell) only for code work: a code noun AND a making verb, or an explicit repo/file/bug/test word.
+  const build = o.canBuild && (/\b(repo|repository|codebase|bug|failing test|unit tests?|refactor|pull request|endpoint|component|function|module)\b/i.test(goal) ||
+    (/\b(build|implement|code|fix|ship|make|create)\b/i.test(goal) && /\b(app|page|site|website|screen|ui|api|feature|tool|script|extension|cli)\b/i.test(goal) && !/\b(essay|post|article|email|copy|script for a video|outline|plan|strategy|memo|report)\b/i.test(goal)));
   const like = isLikenessGoal(goal);
   return `${raw}\n\n[Craft mode: call the loop tool now with goal set to the user's words above, mode "${build ? "build" : "write"}", no rubric (the categories are picked from the goal) and bar ${CRAFT_BAR}. ` +
     `${like ? "It is a UI goal with something to match: the loop also measures likeness where it can. " : ""}` +

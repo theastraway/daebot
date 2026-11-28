@@ -21,6 +21,7 @@ import { likenessMode, type Raster } from "../likeness/score.ts";
 
 export const DEFAULT_BAR = 9;
 export const MAX_CYCLES = 6;
+export const HOSTED_MAX_CYCLES = 3;
 
 /** The universal rubric library (a slice of MINDloop's), picked by what the goal is about. */
 const LIBRARY: { key: string; when: RegExp; what: string }[] = [
@@ -90,6 +91,8 @@ export function parseGrade(text: string, rubric: readonly string[]): Grade | und
 }
 
 export interface LoopOptions {
+  /** True when the user or the deployment is out of budget: checked before every cycle, so a Craft run never spends past the caps. */
+  overBudget?(): boolean;
   spawn: SpawnHelper;
   worktrees?: WorktreeOps;
   hub?: HelperHub;
@@ -203,7 +206,8 @@ export function createLoopTool(o: LoopOptions): Tool {
       const canMeasure = !!ref && !!o.likeness?.available();
       const cats = loopRubric(goal, args.rubric, { craft, likeness: canMeasure });
       const bar = craft ? CRAFT_BAR : Math.max(1, Math.min(10, Number(args.bar) || DEFAULT_BAR));
-      const maxCycles = Math.max(1, Math.min(MAX_CYCLES, Math.round(Number(args.max_cycles) || 3)));
+      // Hosted runs at most HOSTED_MAX_CYCLES (each cycle is a builder and a grader session billed to the user).
+      const maxCycles = Math.max(1, Math.min(o.hosted ? HOSTED_MAX_CYCLES : MAX_CYCLES, Math.round(Number(args.max_cycles) || 3)));
       running.add(ctx.sessionId);
       const lid = o.hub?.startLoop({ session: ctx.sessionId, goal, bar, maxCycles });
       // The live scorecard: a full snapshot through the tool's progress channel on every change (the chat replaces its card with it).
@@ -244,6 +248,7 @@ export function createLoopTool(o: LoopOptions): Tool {
         let cleared = false, stopReason = "";
         for (let cycle = 1; cycle <= maxCycles; cycle++) {
           if (ctx.signal?.aborted) { stopReason = "stopped"; break; }
+          if (o.overBudget?.()) { stopReason = "the daily cost cap was reached"; break; }
           if (lid) o.hub?.updateLoop(lid, { cycle, phase: "build" });
           emit({ cycle, phase: "build" });
           const buildTask: HelperTask = { title: `Cycle ${cycle}: ${mode === "build" ? "build" : "draft"}`, kind: mode === "build" ? "build" : "draft", prompt: builderPrompt({ goal, rubric: cats, bar, cycle, maxCycles, mode, recall: cycle === 1 ? recall : undefined, last, ...(canMeasure ? { likeness: { reference: ref!, last: lastLikeness } } : {}) }) };

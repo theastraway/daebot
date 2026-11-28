@@ -981,7 +981,7 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       // Hosted (Craft mode on daebot.live): write loops only (draft helpers + grader, no shell, no worktree); the hosted kernel refuses mode build too.
       // Likeness capture needs the desktop browser pane, so only a local runtime that offers the browser tool gets one.
       const likenessCapture = !hosted && baseTools.some((t) => t.spec.name === "browser") ? createBrowserCapture(() => bridgeHost(browserBridge())) : undefined;
-      const loopTool = helpersOn ? createLoopTool({ spawn: spawnHelper, hub: helperHub, mind: () => clientForMind(home), hosted: !!hosted, ...(canBuild && !hosted ? { worktrees: worktreeOps } : {}), ...(likenessCapture ? { likeness: likenessCapture } : {}), env: overrides.env }) : undefined;
+      const loopTool = helpersOn ? createLoopTool({ spawn: spawnHelper, hub: helperHub, mind: () => clientForMind(home), hosted: !!hosted, overBudget: () => !!(userCap?.exceeded() || costCap?.exceeded()), ...(canBuild && !hosted ? { worktrees: worktreeOps } : {}), ...(likenessCapture ? { likeness: likenessCapture } : {}), env: overrides.env }) : undefined;
       const tools = [...baseTools, ...(delegateTool ? [delegateTool] : []), ...(loopTool ? [loopTool] : [])];
       // The model: an explicit choice (open / PATCH), else the stored one, else the user's default, else the configured default.
       const explicitModel = opts.model && validModelId(opts.model) ? opts.model : stored?.model && validModelId(stored.model) ? stored.model : undefined;
