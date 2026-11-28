@@ -32,6 +32,8 @@ export interface AuthContext {
   runtimeFor(p: Principal): Runtime;
   /** Drops a user's cached runtime (call after they sign in again with fresh credentials). */
   evict(uid: string): void;
+  /** Use another valid key of the same user in place, keeping their runtime. false = no cached runtime (the caller evicts as before). */
+  rekey?(uid: string, key: string): boolean;
   /** DAEBOT_BILLING=mind only: tier + credits cache shared with every provider, and the MIND key a principal's calls are billed to. */
   credits?: MindCredits;
   billingKey(p: Principal): string | undefined;
@@ -67,8 +69,9 @@ export interface HubOptions {
 
 interface UserSlot { runtime: Runtime; key: string; refreshing?: Promise<boolean> }
 
-export function createRuntimeHub(o: HubOptions): { runtimeFor(p: Principal): Runtime; userCap(uid: string): DailyCostCap; evict(uid: string): void } {
+export function createRuntimeHub(o: HubOptions): { runtimeFor(p: Principal): Runtime; userCap(uid: string): DailyCostCap; evict(uid: string): void; rekey(uid: string, key: string): boolean } {
   const runtimes = new Map<string, Runtime>(); // keyed by `${userId}:${tier}` so a tier change rebuilds
+  const slots = new Map<string, UserSlot>(); // userId -> the live credential slot of their cached runtime (rekey swaps the key in place)
   const caps = new Map<string, DailyCostCap>();
 
   function userCap(uid: string): DailyCostCap {
@@ -104,6 +107,7 @@ export function createRuntimeHub(o: HubOptions): { runtimeFor(p: Principal): Run
     if (!creds) return { openSession: async () => { throw new Error("Your MIND sign-in expired. Sign in again."); }, listSessions: () => [] };
     const key = creds.kind === "key" ? creds.mindKey : creds.accessToken;
     const slot: UserSlot = { runtime: undefined as unknown as Runtime, key };
+    slots.set(p.id, slot);
     // The user's own tenant: their key for everything (tools, boot, Agent Session sync). Never the server's key.
     const cfg: Config = { ...o.baseCfg, mindApiKey: key, mindSessionApiKey: "" };
     const inner = createRuntime(cfg, {
@@ -188,7 +192,15 @@ export function createRuntimeHub(o: HubOptions): { runtimeFor(p: Principal): Run
       return rt;
     },
     userCap,
-    evict(uid) { for (const k of [...runtimes.keys()]) if (k.startsWith(`${uid}:`)) runtimes.delete(k); },
+    evict(uid) { slots.delete(uid); for (const k of [...runtimes.keys()]) if (k.startsWith(`${uid}:`)) runtimes.delete(k); },
+    // Another valid key of the SAME user (a second desktop, a re-issued key): use it from now on without throwing the runtime away.
+    // Evicting here rebuilt the user's whole workspace (caches, live sessions) on every request when two devices sync with different keys.
+    rekey(uid, key) {
+      const s = slots.get(uid);
+      if (!s || ![...runtimes.keys()].some((k) => k.startsWith(`${uid}:`))) return false;
+      s.key = key;
+      return true;
+    },
   };
 }
 
