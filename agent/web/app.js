@@ -351,8 +351,11 @@ function buildThink(it) {
 }
 function paintThink(it) { if (it.paint) it.paint(); }
 function closeThink(tr) { const th = tr.curThink; if (th && !th.done) { th.done = true; paintThink(th); } tr.curThink = null; }
+// The receipt gate's internal marker; a model sometimes copies it into a later draft. Never shown (agent/src/loop.ts WITHHELD_MARK).
+const WITHHELD_MARK = "[WITHHELD by the receipt gate: the user never saw this draft. Do not refer to it as shown.]";
+const shownText = (t) => String(t || "").split(WITHHELD_MARK).join("").replace(/^\s*\n+/, "");
 function updateAssistant(node, it) {
-  node.replaceChildren(renderMarkdown(it.text));
+  node.replaceChildren(renderMarkdown(shownText(it.text)));
   node.classList.toggle("streaming", !!it.streaming);
   // Emoji reactions sit under the message; tapping one toggles your own.
   if (it.reactions?.length && !it.streaming) {
