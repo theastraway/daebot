@@ -1549,6 +1549,7 @@ function onEvent(id, ev, asst, toolByReceipt) {
       closeThink(tr);
       if (asst) { asst.streaming = false; paintAssistant(asst); }
       refreshPlan();
+      if (ev.finalText) tellCall(id, { type: "daebot_done", text: ev.finalText }); // a live voice call on this chat hears what Daebot finished
       return null;
     default: return asst;
   }
@@ -1817,6 +1818,7 @@ const voice = initVoice({
   creditsChanged: () => refreshPlan(),
   bots: () => [...document.querySelectorAll(".hero-bot, .bot-dock m-bot")],
   botSlug: () => { const b = state.curBot ? bots.bot(state.curBot) : null; return b && b.slug ? b.slug : "main"; }, // whose voice speaks the answer
+  chatId: () => state.currentId || "", // the speech writer reads the user's question from this chat
 });
 
 // Voice chat: a live voice agent for the bot on screen (its voice, its instructions, it can read the user's chats). The bot's start_voice_agent tool opens it too.

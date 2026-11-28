@@ -20,6 +20,10 @@ const DEFAULTS = {
   // live model metadata (supported_parameters), one of the free models that supports tool calling, which the agent loop needs.
   // 262k context; the other free picks are smaller, vision/omni variants, or have no tool support.
   freeModel: "nvidia/nemotron-3-super-120b-a12b:free",
+  // The speech writer (voice/speech.ts): turns a written answer into what to SAY on a call, with the user waiting in silence. Measured live through
+  // MIND on 2026-11-27 (same status answer, reasoning off): gemini-2.5-flash-lite 0.56-0.75 s and the best phrasing (dropped the build hash, kept
+  // the question); llama-4-scout 0.84 s; qwen3.8-flash 2.4-12 s and spelled out a commit hash.
+  speechModel: "google/gemini-2.5-flash-lite",
   // view_photo (src/tools/photo.ts). The chat model is text-first and answers an image with nothing, so photos are read by a
   // dedicated vision model. Measured live through MIND on a 1024x700 estimate: gemini-2.5-flash-lite read every line item exactly
   // in 2.4s for $0.000087; claude-haiku-5.5 was exact too in 8.1s for $0.00018. Explorer (free) users get the free gemma.
@@ -113,6 +117,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       fallback: visionFallback.length ? visionFallback : [...DEFAULTS.visionFallback],
       freeModel: str(env.DAEBOT_VISION_FREE_MODEL) ?? DEFAULTS.visionFreeModel,
     },
+    speechModel: str(env.DAEBOT_SPEECH_MODEL) ?? DEFAULTS.speechModel,
     models: {
       // The main model comes from the environment only (MINDCLAW_MODEL); a stray config file never picks it.
       default: str(env.MINDCLAW_MODEL) ?? DEFAULTS.defaultModel,

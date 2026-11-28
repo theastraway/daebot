@@ -4,16 +4,23 @@
 // and must not be sent back into the call.
 
 const AGENT_KINDS = new Set(["assistant", "agent", "text"]);
+const MAX_DONE_CHARS = 2500;
 
 /**
  * @param {{ type?: string, kind?: string, role?: string, text?: string, delta?: string, interrupt?: boolean, fromAgent?: boolean }} ev
  * @param {{ speaking?: boolean }} [opts]
+ * A { type: "daebot_done", text } event (Daebot finished a reply in the bound chat) becomes a contextual_update tagged [Daebot finished].
  * @returns {{ type: "contextual_update" | "user_message", text: string, stopPlayback?: boolean } | null}
  */
 export function chatEventToCall(ev, opts) {
   if (!ev || typeof ev !== "object") return null;
   if (ev.fromAgent === true) return null;
   const kind = typeof ev.type === "string" ? ev.type : (typeof ev.kind === "string" ? ev.kind : (typeof ev.role === "string" ? ev.role : ""));
+  // Daebot (the work brain) finished a reply in the call's chat: the voice agent gets it as silent context, to tell the user in its own words.
+  if (kind === "daebot_done") {
+    const done = typeof ev.text === "string" ? ev.text.trim() : "";
+    return done ? { type: "contextual_update", text: "[Daebot finished] " + (done.length > MAX_DONE_CHARS ? done.slice(0, MAX_DONE_CHARS) + " …(the rest is in the chat)" : done) } : null;
+  }
   if (AGENT_KINDS.has(kind)) return null;
   if (kind !== "user") return null;
   const text = typeof ev.text === "string" ? ev.text.trim() : "";

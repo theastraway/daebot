@@ -358,3 +358,90 @@ test("voice chat bridge: typed chat is context, bang and interrupt barge in, own
   assert.doesNotMatch(app, /onChatEvent\(\{ type: "text"/);
   assert.doesNotMatch(app, /tellCall\([^)]*type: "text"/);
 });
+
+// ---- The work brain: ask_daebot / check_daebot run a real Daebot turn in the call's chat. ----
+type RunFn = NonNullable<ToolBackend["run"]>;
+function deferred<T>() { let resolve!: (v: T) => void; const p = new Promise<T>((r) => { resolve = r; }); return { p, resolve }; }
+
+test("work tools are offered only when the gateway can run turns; the prompt makes the agent the voice", () => {
+  const plain: any = sessionBody(SECRET, BOT, "u_alice", "https://daebot.live", undefined);
+  assert.ok(!plain.tools.some((t: any) => t.name === "ask_daebot"));
+  assert.doesNotMatch(plain.prompt, /ask_daebot/);
+  const work: any = sessionBody(SECRET, BOT, "u_alice", "https://daebot.live", undefined, false, true);
+  assert.deepEqual(work.tools.slice(0, 2).map((t: any) => t.name), ["ask_daebot", "check_daebot"]);
+  assert.equal(work.tools.length, 9);
+  assert.match(work.prompt, /You are the voice\. Daebot is the full agent behind you/);
+  assert.match(work.prompt, /Never read it out/); assert.match(work.prompt, /One sec/); assert.match(work.prompt, /check_daebot/);
+  assert.match(work.prompt, /\[Daebot finished\]/); assert.match(work.prompt, /Never say markdown, symbols/);
+});
+
+test("/voice/agent/session sends the work tools to MIND when run is wired", async () => {
+  const r = rig({ openCallChat: async () => "s1", tools: { run: async () => ({ ok: true, finalText: "x" }) } }, () => signed());
+  await r.call("handle", "/voice/agent/session", "POST", { bot: "sam" });
+  const body = JSON.parse(r.calls[0].init.body);
+  assert.equal(body.tools[0].name, "ask_daebot");
+});
+
+test("ask_daebot: runs in the bound chat and returns the written answer with how to say it", async () => {
+  const ran: any[] = [];
+  const run: RunFn = async (o, id, text) => { ran.push({ o, id, text }); return { ok: true, finalText: "## Shipped\n- PR 392 merged\n- 0.3.61 live\n- [notes](https://x.y)" }; };
+  const r = rig({ openCallChat: async () => "s1", tools: { run } }, () => signed());
+  assert.equal((await r.call("tool", `${TOOL_PATH}ask_daebot`, "POST", { request: "what shipped?" }, bearer())).body.error, NO_LIVE);
+  await r.call("handle", "/voice/agent/session", "POST", { bot: "sam" });
+  assert.equal((await r.call("tool", `${TOOL_PATH}ask_daebot`, "POST", {}, bearer())).body.error, "request is required");
+  const out = await r.call("tool", `${TOOL_PATH}ask_daebot`, "POST", { request: "what shipped?" }, bearer());
+  assert.deepEqual(ran, [{ o: "u_alice", id: "s1", text: "what shipped?" }]);
+  assert.equal(out.body.status, "done");
+  assert.match(out.body.answer, /PR 392 merged/);
+  assert.equal(out.body.has_details, true);
+  assert.match(out.body.how_to_say_it, /Do not read it out/);
+  const again = await r.call("tool", `${TOOL_PATH}check_daebot`, "POST", {}, bearer());
+  assert.equal(again.body.status, "done", "the last answer stays readable");
+});
+
+test("ask_daebot: a slow turn says working, check_daebot waits for it; a second ask while working is held", async () => {
+  const d = deferred<{ ok: boolean; finalText: string }>();
+  let n = 0;
+  const run: RunFn = async () => { n++; return d.p; };
+  const r = rig({ askWaitMs: 30, openCallChat: async () => "s1", tools: { run } }, () => signed());
+  await r.call("handle", "/voice/agent/session", "POST", { bot: "sam" });
+  const first = await r.call("tool", `${TOOL_PATH}ask_daebot`, "POST", { request: "research the market" }, bearer());
+  assert.equal(first.body.status, "working");
+  assert.match(first.body.note, /check_daebot/);
+  const held = await r.call("tool", `${TOOL_PATH}ask_daebot`, "POST", { request: "and another thing" }, bearer());
+  assert.equal(held.body.status, "working"); assert.match(held.body.note, /still on the last request \(research the market\)/);
+  assert.equal(n, 1, "no second turn while one is running");
+  assert.equal((await r.call("tool", `${TOOL_PATH}check_daebot`, "POST", {}, bearer())).body.status, "working");
+  d.resolve({ ok: true, finalText: "Three competitors matter." });
+  const done = await r.call("tool", `${TOOL_PATH}check_daebot`, "POST", {}, bearer());
+  assert.equal(done.body.status, "done"); assert.equal(done.body.answer, "Three competitors matter."); assert.equal(done.body.has_details, false);
+});
+
+test("ask_daebot: a permission card surfaces as needs_approval; busy and failures are plain words", async () => {
+  const d = deferred<{ ok: boolean; finalText: string }>();
+  const run: RunFn = async (_o, _id, _t, onEvent) => { onEvent({ type: "permission", title: "Send email to Jane" }); return d.p; };
+  const r = rig({ askWaitMs: 20, openCallChat: async () => "s1", tools: { run } }, () => signed());
+  await r.call("handle", "/voice/agent/session", "POST", { bot: "sam" });
+  const a = await r.call("tool", `${TOOL_PATH}ask_daebot`, "POST", { request: "email Jane" }, bearer());
+  assert.equal(a.body.status, "needs_approval"); assert.equal(a.body.approval, "Send email to Jane"); assert.match(a.body.note, /approve/);
+  d.resolve({ ok: true, finalText: "Sent." });
+  assert.equal((await r.call("tool", `${TOOL_PATH}check_daebot`, "POST", {}, bearer())).body.status, "done");
+
+  const busy = rig({ openCallChat: async () => "s1", tools: { run: async () => ({ ok: false, finalText: "", error: "busy" }) } }, () => signed());
+  await busy.call("handle", "/voice/agent/session", "POST", { bot: "sam" });
+  const b = await busy.call("tool", `${TOOL_PATH}ask_daebot`, "POST", { request: "x" }, bearer());
+  assert.equal(b.body.status, "failed"); assert.match(b.body.error, /busy/);
+
+  const none = rig({ openCallChat: async () => "s1" }, () => signed());
+  assert.match((await none.call("tool", `${TOOL_PATH}ask_daebot`, "POST", { request: "x" }, bearer())).body.error, /not reachable/);
+  assert.equal((await none.call("tool", `${TOOL_PATH}check_daebot`, "POST", {}, bearer())).status, 200);
+  assert.equal((await r.call("tool", `${TOOL_PATH}ask_daebot`, "POST", { request: "x" }, bearer("u_bob"))).status, 401);
+});
+
+test("bridge: a finished Daebot reply reaches the call as [Daebot finished] context, capped", async () => {
+  const b: any = await import(new URL("../../web/voicechat-bridge.js", import.meta.url).href);
+  assert.deepEqual(b.chatEventToCall({ type: "daebot_done", text: " All three tasks are done. " }), { type: "contextual_update", text: "[Daebot finished] All three tasks are done." });
+  const long = b.chatEventToCall({ type: "daebot_done", text: "x".repeat(5000) });
+  assert.ok(long.text.length < 2700); assert.match(long.text, /rest is in the chat/);
+  assert.equal(b.chatEventToCall({ type: "daebot_done", text: "  " }), null);
+});

@@ -404,6 +404,11 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         fetchImpl: opts.voice?.fetchImpl ?? opts.auth?.fetchImpl,
         now: opts.voice?.now,
         onUsed: opts.voice?.onUsed ?? ((key) => { try { auth?.credits?.get(key, true).catch(() => {}); } catch { /* best effort */ } }),
+        // The speech writer runs on the user's own runtime (their model, their caps). An unknown chat id is just "no question" there.
+        spoken: opts.voice?.spoken ?? (async (p, chatId, text, signal) => {
+          const rt = manager.runtimeOf(p.id);
+          return rt.spokenReply ? rt.spokenReply(chatId && rt.history?.(chatId) ? chatId : "", text, signal) : { text: "", rewritten: false };
+        }),
       })
     : undefined;
   // ---- Voice chat: a live ElevenLabs agent per bot (MIND makes the session and bills it; its server tools call back into /voice-agent/tools/*).
@@ -456,6 +461,30 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
             try { await manager.open({ surface: "voice", resumeId: id, owner }); } catch { return "missing"; }
             void manager.turn(id, text, (ev) => broadcast(id, ev), undefined, "user", false).catch(() => {});
             return "sent";
+          },
+          // The work brain of a live call: a real, interactive user turn in the call's chat (the user is on that screen, so permission cards reach them).
+          // Same run feed as a send from the composer: every open tab streams it and a reload reattaches.
+          run: async (owner, id, text, onEvent) => {
+            if (!manager.runtimeOf(owner).history?.(id)) return { ok: false, finalText: "", error: "missing" };
+            let ls;
+            try { ls = await manager.open({ surface: "voice", resumeId: id, owner }); } catch { return { ok: false, finalText: "", error: "missing" }; }
+            if (ls.busy) return { ok: false, finalText: "", error: "busy" }; // never start a second run feed over a turn in progress
+            const run = runs.start(id, text);
+            let final = "", failed = "";
+            try {
+              await manager.turn(id, text, (ev) => {
+                run.publish(ev);
+                broadcast(id, ev);
+                try { onEvent(ev as unknown as { type: string }); } catch { /* the watcher never breaks the turn */ }
+                if (ev.type === "done") final = ev.finalText;
+                else if (ev.type === "notice" && /^Turn failed/.test(ev.text)) failed = ev.text.replace(/^Turn failed:\s*/, "");
+              }, undefined, "user", true);
+            } catch (e) {
+              if (e instanceof BusyError) return { ok: false, finalText: "", error: "busy" }; // lost a race with a send: finally closes this feed
+              failed = String((e as Error)?.message ?? e).split("\n")[0].slice(0, 200);
+              run.publish({ type: "notice", level: "warn", text: failed });
+            } finally { run.finish(); }
+            return failed ? { ok: false, finalText: final, error: failed } : { ok: true, finalText: final };
           },
           // As the bot, into the call's chat, with no bot turn. { type: "text" } is the assistant text open windows already render.
           say: async (owner, id, text) => {

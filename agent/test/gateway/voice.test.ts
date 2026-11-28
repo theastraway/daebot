@@ -34,7 +34,7 @@ function raw(base: string, path: string, headers: Record<string, string>, body: 
   });
 }
 
-async function rig() {
+async function rig(providerOverride?: FakeProvider) {
   const keys = { alice: "mind_" + rnd(), bob: "mind_" + rnd() };
   const ownerKey = "server-owner-key-" + rnd();
   const fake = await startFakeMind({ [keys.alice]: "alice", [keys.bob]: "bob", [ownerKey]: "owner" });
@@ -42,7 +42,7 @@ async function rig() {
   for (const [f, c] of [["login.html", "<!doctype html><title>login</title>"], ["login.js", "export {}"], ["login.css", "body{}"], ["favicon.svg", "<svg/>"]]) writeFileSync(join(st.dir, f), c);
   const token = rnd();
   const dir = mkdtempSync(join(tmpdir(), "daebot-voice-"));
-  const provider = new FakeProvider([{ text: "hi" }]);
+  const provider = providerOverride ?? new FakeProvider([{ text: "hi" }]);
   const hostedOpts = { token, allowedHosts: ["daebot.live", "localhost"] };
   const cfg = baseCfg({ mindBaseUrl: fake.base, mindApiKey: ownerKey });
   const globalCap = new DailyCostCap(50);
@@ -177,4 +177,50 @@ test("handler unit: a principal without a MIND key gets 503 and MIND is never ca
 test("audioExt accepts MediaRecorder containers and rejects others", () => {
   for (const [t, e] of [["audio/webm;codecs=opus", "webm"], ["audio/mp4", "mp4"], ["audio/ogg; codecs=opus", "ogg"], ["audio/wav", "wav"]] as const) assert.equal(audioExt(t), e);
   for (const t of ["text/html", "application/octet-stream", undefined, ""]) assert.equal(audioExt(t), undefined);
+});
+
+test("rewrite: a written answer is spoken the way a person would say it (the speech writer), never read out with its symbols", async () => {
+  const writer = new FakeProvider([{ text: '"Done, the voice fix is live. The steps are in the chat."' }]);
+  const r = await rig(writer);
+  try {
+    const alice = await r.cookie(r.keys.alice);
+    const md = "## Shipped ✅\n\n- Fixed `agent/src/gateway/voice.ts` → TTS\n- Commit 854228b\n- [PR](https://github.com/x/y/pull/1)\n\n```ts\nconst a = 1;\n```";
+    const out = await raw(r.gw.url, "/voice/tts", { ...alice, "content-type": "application/json" }, Buffer.from(JSON.stringify({ text: md, rewrite: true })));
+    assert.equal(out.status, 200);
+    assert.equal(out.body.toString(), "ID3fakemp3");
+    const spoken = decodeURIComponent(String(out.headers["x-daebot-spoken"]));
+    assert.equal(spoken, "Done, the voice fix is live. The steps are in the chat.");
+    assert.equal(out.headers["x-daebot-rewritten"], "1");
+    const sent = r.fake.seen.filter((x) => x.path === "/developer/v1/audio/speech").pop();
+    assert.deepEqual(sent?.body, { input: spoken }, "MIND speaks the writer's words, not the markdown");
+    assert.match(writer.requests.at(-1)!.messages[0].content, /Never say symbols/);
+    assert.match(writer.requests.at(-1)!.messages[1].content, /agent\/src\/gateway\/voice\.ts/, "the writer sees the written answer");
+    // A plain short answer needs no model: spoken as is.
+    const before = writer.requests.length;
+    const plain = await raw(r.gw.url, "/voice/tts", { ...alice, "content-type": "application/json" }, Buffer.from(JSON.stringify({ text: "Yes, it shipped this morning.", rewrite: true })));
+    assert.equal(decodeURIComponent(String(plain.headers["x-daebot-spoken"])), "Yes, it shipped this morning.");
+    assert.equal(plain.headers["x-daebot-rewritten"], "0");
+    assert.equal(writer.requests.length, before);
+    // Without rewrite the old contract holds (no spoken header).
+    const old = await tts(r, alice, "Good morning.");
+    assert.equal(old.headers["x-daebot-spoken"], undefined);
+  } finally { await r.close(); }
+});
+
+test("handler unit: rewrite falls back to the deterministic cleanup when the writer throws", async () => {
+  const bodies: any[] = [];
+  const h = createVoiceHandler({
+    baseUrl: "http://x/developer/v1", keyFor: () => "k",
+    spoken: async () => { throw new Error("model down"); },
+    fetchImpl: (async (_u: string, init: any) => { bodies.push(JSON.parse(init.body)); return new Response(Buffer.from("ID3"), { status: 200 }); }) as unknown as typeof fetch,
+  });
+  const body = Buffer.from(JSON.stringify({ text: "- one `a/b/c.ts`\n- two\n- three https://x.y", rewrite: true }));
+  const req: any = Object.assign((await import("node:stream")).Readable.from([body]), { method: "POST", headers: { "content-type": "application/json" } });
+  const out: { status?: number; headers?: any } = {};
+  const res: any = { headersSent: false, writeHead(s: number, hd: any) { out.status = s; out.headers = hd; }, end() {} };
+  await h(req, res, "/voice/tts", new URLSearchParams(), { id: "u", username: "u", owner: false, tier: "staff" } as any);
+  assert.equal(out.status, 200);
+  assert.doesNotMatch(bodies[0].input, /[`/]|https/);
+  assert.match(bodies[0].input, /The details are in the chat\.$/);
+  assert.equal(out.headers["x-daebot-rewritten"], "0");
 });

@@ -47,7 +47,8 @@ export type Effort = "low" | "medium" | "high";
 export interface Provider {
   readonly name: string;
   /** pinModel: use exactly req.model, with no tier swap and no fallback list (a vision call must not land on a text-only chat model). effort: reasoning effort for this call (router). */
-  stream(req: { model: string; messages: Message[]; tools: ToolSpec[]; signal?: AbortSignal; pinModel?: boolean; bot?: string; effort?: Effort }): AsyncIterable<StreamEvent>;
+  /** noReasoning: ask the model to answer straight away (OpenRouter `reasoning.enabled: false`): latency-bound calls such as the speech writer. */
+  stream(req: { model: string; messages: Message[]; tools: ToolSpec[]; signal?: AbortSignal; pinModel?: boolean; bot?: string; effort?: Effort; noReasoning?: boolean }): AsyncIterable<StreamEvent>;
 }
 
 /** The model tiers the router chooses between (provider/policy.ts has the table; cheapest first). */
@@ -245,6 +246,7 @@ export interface Config {
   freeModel?: string;        // env DAEBOT_FREE_MODEL; the model MIND's free tier (Explorer) runs on
   vision?: VisionConfig;     // models behind the view_photo tool (env DAEBOT_VISION_MODEL, DAEBOT_VISION_FALLBACK, DAEBOT_VISION_FREE_MODEL)
   models: { default: string; cheap: string; fallback: string[] };
+  speechModel?: string;      // env DAEBOT_SPEECH_MODEL; the speech writer (voice/speech.ts). Unset = models.cheap
   shadow: boolean;           // MINDCLAW_SHADOW=1
   kernel: boolean;           // MINDCLAW_KERNEL=0 turns the kernel off (used by the eval harness)
   maxToolRoundsPerTurn?: number; // optional operator override (env MINDCLAW_MAX_TOOL_ROUNDS); unset = no round limit
@@ -382,6 +384,9 @@ export interface Runtime {
   /** Suggested replies for the user's next message (1-3, in their voice) and the learning feedback. Absent = not offered. */
   suggestReplies?(id: string, signal?: AbortSignal): Promise<{ replies: string[] }>;
   recordSuggestionFeedback?(id: string, fb: import("./suggest/index.ts").SuggestionFeedback): boolean;
+  /** What to SAY for an answer on a voice call: a fast model rewrites the written answer for the ear (voice/speech.ts). `text` defaults to the
+   *  latest assistant answer of the session. Always returns words (the deterministic fallback when the writer is slow, fails or the cap is hit). */
+  spokenReply?(id: string, text?: string, signal?: AbortSignal): Promise<{ text: string; rewritten: boolean }>;
   /** This owner's photo store (photos attached to chat messages). Absent on runtimes built without a data dir: attaching is then refused. */
   photos?: import("./photos.ts").PhotoStore;
   /** Task board rows of this owner: only the tasks Daebot declared (task_board). Most recent sessions first. */

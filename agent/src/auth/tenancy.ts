@@ -14,6 +14,7 @@ import type { TenantDirectory } from "./tenants.ts";
 import type { EntryCodes, RuntimeAllowList } from "./provision.ts";
 import type { Principal, UserStore } from "./users.ts";
 import type { CoderGrant } from "../kernel/coder.ts";
+import { fallbackSpeech } from "../voice/speech.ts";
 
 export interface AuthContext {
   store: UserStore;
@@ -141,6 +142,7 @@ export function createRuntimeHub(o: HubOptions): { runtimeFor(p: Principal): Run
       permissions: inner.permissions,
       suggestReplies: (id, signal) => inner.suggestReplies?.(id, signal) ?? Promise.resolve({ replies: [] }),
       recordSuggestionFeedback: (id, fb) => inner.recordSuggestionFeedback?.(id, fb) ?? false,
+      spokenReply: (id, text, signal) => inner.spokenReply?.(id, text, signal) ?? Promise.resolve({ text: fallbackSpeech(text ?? ""), rewritten: false }),
       purgeBotSessions: (id) => inner.purgeBotSessions?.(id) ?? Promise.resolve(0),
       deleteSession: (id) => inner.deleteSession?.(id) ?? Promise.resolve(false),
       renameSession: (id, title) => inner.renameSession?.(id, title) ?? Promise.resolve(false),

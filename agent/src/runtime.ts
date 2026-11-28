@@ -92,6 +92,7 @@ import { botBase } from "./bots/versions.ts";
 import { PermissionService, isSessionMode } from "./permissions/index.ts";
 import type { SessionPermMode } from "./permissions/index.ts";
 import { SuggestionStore, awaitsUser, generateReplies, tailOf } from "./suggest/index.ts";
+import { fallbackSpeech, writeForSpeech } from "./voice/speech.ts";
 import type { SuggestionFeedback } from "./suggest/index.ts";
 import { facePersonality, faceOf } from "./bots/faces.ts";
 import type { RunMark, SessionStore, StoredSession } from "./persist.ts";
@@ -1367,6 +1368,19 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       suggestCache.set(id, { key, replies: r.replies });
       if (suggestCache.size > 200) suggestCache.delete(suggestCache.keys().next().value as string);
       return { replies: r.replies };
+    },
+    async spokenReply(id, text, signal) {
+      const e = sessions.get(id);
+      const tail = e ? tailOf(e.recorder.events()) : undefined;
+      const answer = (typeof text === "string" && text.trim() ? text : tail?.lastText ?? "").trim();
+      if (!answer) return { text: "", rewritten: false };
+      const fallback = { text: fallbackSpeech(answer), rewritten: false };
+      if (userCap?.exceeded() || costCap?.exceeded()) return fallback;
+      const question = [...(tail?.transcript ?? [])].reverse().find((m) => m.role === "user")?.text ?? "";
+      const botName = e?.bot ? botStore?.get(e.bot)?.name : settings?.get().main?.name || "Daebot";
+      const r = await writeForSpeech({ provider, model: cfg.speechModel || cfg.models.cheap, question, answer, botName, signal });
+      if (r?.usage) { costCap?.add(r.usage.costUsd); userCap?.add(r.usage.costUsd); }
+      return r ? { text: r.text, rewritten: !r.skipped } : fallback;
     },
     recordSuggestionFeedback(id, fb: SuggestionFeedback) {
       const e = sessions.get(id);
