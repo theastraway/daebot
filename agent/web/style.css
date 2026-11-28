@@ -894,7 +894,7 @@ a.bd-chip.decision:hover { text-decoration: underline; }
 /* ---- per-chat permission mode (composer) ---- */
 /* sits on the composer's column: same 740px measure, and the glyph lines up with the text inside the composer (8px + 1px border + 8px = its 16px + 1px) */
 .mode-row { display: flex; align-items: center; gap: 8px; max-width: 740px; margin: 0 auto 2px; padding: 0 8px; min-height: 0; }
-.mode-row:not(:has(.mode-btn:not([hidden]))) { display: none; }
+.mode-row:not(:has(.mode-btn:not([hidden]))):not(:has(.craft-switch)) { display: none; }
 .mode-wrap { position: relative; }
 .mode-menu { position: absolute; z-index: 25; left: 0; bottom: calc(100% + 6px); width: min(340px, 88vw); display: grid; gap: 1px; padding: 6px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; box-shadow: var(--shadow); }
 .mode-menu[hidden] { display: none; }
@@ -2022,4 +2022,57 @@ button.oc-chip { cursor: pointer; border: 0; }
   .lv-head { padding: 14px; }
   .lv-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
   .lv-loops, .lv-helpers { grid-template-columns: 1fr; }
+}
+
+/* ---- Craft mode (web/craft.js): the Chat | Craft switch beside the permission control, and the live scorecard in the thread ---- */
+/* Chat theme tokens only, so light and dark both follow :root; the rail reads like the Live room's loop card (studio.js). */
+.craft-switch { display: inline-flex; padding: 2px; gap: 2px; border-radius: 999px; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line); }
+.craft-opt { border: 0; padding: 4px 12px; min-height: 28px; border-radius: 999px; background: none; color: var(--ink-3); font: 600 12.5px var(--sans); cursor: pointer; transition: background-color .15s ease, color .15s ease; }
+.craft-opt[aria-checked="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--line-strong); }
+.craft-switch.is-craft .craft-opt[aria-checked="true"] { color: var(--led-ink); box-shadow: 0 0 0 1px var(--led-deep); }
+.craft-opt:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.craft-card { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow); font: 500 13px/1.45 var(--sans); color: var(--ink); max-width: 100%; box-sizing: border-box; }
+.craft-card.running { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
+.craft-card.cleared { border-color: var(--ok); }
+.craft-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.craft-phase { padding: 3px 8px; border-radius: 999px; font: 700 10px var(--mono); letter-spacing: .06em; text-transform: uppercase; background: var(--surface-2); color: var(--ink-2); box-shadow: 0 0 0 1px var(--line); }
+.craft-phase.build, .craft-phase.grade, .craft-phase.study { color: var(--ok); }
+.craft-phase.cleared { background: var(--ok); color: var(--surface); box-shadow: none; }
+.craft-phase.failed { color: var(--accent); }
+.craft-round { font-weight: 650; color: var(--ink-2); }
+.craft-time { margin-left: auto; font: 600 12px var(--mono); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.craft-goal { font: 600 14.5px/1.4 var(--sans); overflow-wrap: anywhere; }
+.craft-score { display: flex; align-items: baseline; gap: 6px; }
+.craft-big { font: 750 26px/1 var(--display); font-variant-numeric: tabular-nums; }
+.craft-bar { color: var(--ink-3); font-size: 12px; }
+.craft-rail { display: flex; gap: 4px; }
+.craft-seg { --fill: 0%; position: relative; flex: 1; height: 8px; border-radius: 4px; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line); overflow: hidden; }
+.craft-seg::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--fill); background: var(--warn); }
+.craft-seg.pass::after { background: var(--ok); }
+.craft-seg.now { background: linear-gradient(90deg, var(--surface-2), color-mix(in srgb, var(--ok) 40%, var(--surface-2)), var(--surface-2)); background-size: 200% 100%; animation: craft-scan 1.6s linear infinite; }
+.craft-cats { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.craft-cat { display: grid; grid-template-columns: minmax(90px, 1.2fr) 2fr 34px auto; align-items: center; gap: 8px; padding: 3px 6px; border-radius: 8px; }
+.craft-cat-name { color: var(--ink-2); text-transform: capitalize; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.craft-meter { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+.craft-meter i { display: block; height: 100%; background: var(--ok); }
+.craft-cat-val { text-align: right; font-variant-numeric: tabular-nums; }
+.craft-cat.weakest { background: var(--warn-soft); }
+.craft-cat.weakest .craft-cat-name, .craft-cat.weakest .craft-cat-val { color: var(--warn); font-weight: 700; }
+.craft-cat.weakest .craft-meter i { background: var(--warn); }
+.craft-weak { font: 700 9.5px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--warn); }
+.craft-like { margin: 0; font: 600 12px var(--mono); color: var(--ink-3); overflow-wrap: anywhere; }
+.craft-finish { margin: 0; font-weight: 700; color: var(--ink); }
+.craft-card.cleared .craft-finish { color: var(--ok); }
+.craft-like[hidden], .craft-finish[hidden], .craft-cats[hidden] { display: none; }
+@keyframes craft-scan { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .craft-seg.now { animation: none; background: color-mix(in srgb, var(--ok) 30%, var(--surface-2)); }
+  .craft-opt { transition: none; }
+}
+@media (max-width: 520px) {
+  .craft-card { padding: 12px; }
+  .craft-cat { grid-template-columns: minmax(70px, 1fr) 1.4fr 30px; }
+  .craft-weak { grid-column: 1 / -1; }
+  .craft-big { font-size: 22px; }
 }

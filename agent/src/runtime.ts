@@ -41,6 +41,10 @@ import { MIND_PROTOCOL_PROMPT, createKgTool } from "./mind/kg.ts";
 import { BUILD_TOOLS, HELPER_TOOLS, createDelegateTool, helperMessage, helperSafeTools } from "./agents/delegate.ts";
 import type { HelperRun, SpawnHelper } from "./agents/delegate.ts";
 import { createLoopTool, expandLoopCommand } from "./agents/loop.ts";
+import { CRAFT_CAPABILITY, expandCraftMessage } from "./agents/craft.ts";
+import { createBrowserCapture } from "./likeness/measure.ts";
+import { browserBridge } from "./browser/bridge.ts";
+import { bridgeHost } from "./tools/browser.ts";
 import { HelperHub } from "./agents/hub.ts";
 import { createWorktreeOps } from "./agents/worktree.ts";
 import { createStudioTools } from "./tools/studio.ts";
@@ -974,8 +978,10 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
       const helpersOn = tier !== "public" && !peer && helperTools.length > 0;
       const delegateTool = helpersOn ? createDelegateTool({ spawn: spawnHelper, hub: helperHub, ...(canBuild ? { worktrees: worktreeOps } : {}) }) : undefined;
       // loop: the MIND /loop (agents/loop.ts): study, build, check, grade, attack the weakest, until it clears the bar. Same helpers, same hub.
-      // Not hosted: the hosted kernel withholds it (hostedToolAllowed), so offering it there would only send /loop to a tool the model cannot call.
-      const loopTool = helpersOn && !hosted ? createLoopTool({ spawn: spawnHelper, hub: helperHub, mind: () => clientForMind(home), ...(canBuild ? { worktrees: worktreeOps } : {}) }) : undefined;
+      // Hosted (Craft mode on daebot.live): write loops only (draft helpers + grader, no shell, no worktree); the hosted kernel refuses mode build too.
+      // Likeness capture needs the desktop browser pane, so only a local runtime that offers the browser tool gets one.
+      const likenessCapture = !hosted && baseTools.some((t) => t.spec.name === "browser") ? createBrowserCapture(() => bridgeHost(browserBridge())) : undefined;
+      const loopTool = helpersOn ? createLoopTool({ spawn: spawnHelper, hub: helperHub, mind: () => clientForMind(home), hosted: !!hosted, ...(canBuild && !hosted ? { worktrees: worktreeOps } : {}), ...(likenessCapture ? { likeness: likenessCapture } : {}), env: overrides.env }) : undefined;
       const tools = [...baseTools, ...(delegateTool ? [delegateTool] : []), ...(loopTool ? [loopTool] : [])];
       // The model: an explicit choice (open / PATCH), else the stored one, else the user's default, else the configured default.
       const explicitModel = opts.model && validModelId(opts.model) ? opts.model : stored?.model && validModelId(stored.model) ? stored.model : undefined;
@@ -1176,7 +1182,10 @@ export function createRuntime(cfg: Config, overrides: RuntimeOverrides = {}): Ru
           if (botId) inner.setModel?.(resolveTurnModel({ botModel: botStore?.get(botId)?.model, sessionModel: curModel, userDefault: userDefault() }));
           else if (mindBilled) { const m = resolveTurnModel({ sessionModel: curModel, userDefault: userDefault() }); if (m) inner.setModel?.(m); }
           // "/loop <goal>" from any surface: the transcript keeps what the user typed; the model gets the instruction to run the loop tool.
-          const modelMsg = loopTool && o?.origin !== "bot" ? expandLoopCommand(msg) : msg;
+          // Craft mode (capability "craft" from the composer switch): the same loop, bar 9, the auto rubric; the transcript keeps the user's words.
+          const craftTurn = curCaps.includes(CRAFT_CAPABILITY) && o?.origin !== "bot";
+          if (craftTurn && !loopTool) { const n: AgentEvent = { type: "notice", level: "info", text: "Craft mode is not available in this chat, so this went as a normal message." }; entry.recorder.push(n); yield n; }
+          const modelMsg = craftTurn && loopTool ? expandCraftMessage(msg, { canBuild: canBuild && !hosted }) : loopTool && o?.origin !== "bot" ? expandLoopCommand(msg) : msg;
           for await (const ev of inner.send(messageWithQuote(messageWithPhotos(modelMsg, photos), o?.quote), o)) {
             entry.recorder.push(ev);
             if (ev.type === "route") turnDecision = ev.decision; // the row for the route log is written when the proof arrives

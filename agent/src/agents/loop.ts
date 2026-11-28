@@ -7,7 +7,7 @@
 //   - score: weakest-governed (0.7 x weakest + 0.3 x mean), the Rate-9 rule: work is only as good as its worst part.
 //   - remember: a cleared loop files a win in MIND so the next loop on a similar goal starts from it.
 // Helpers come from the same spawn as delegate (same MIND boot, same kernel); everything is recorded live in the HelperHub.
-import type { MindClient, Tool, ToolResult } from "../types.ts";
+import type { LoopProgress, MindClient, Tool, ToolResult } from "../types.ts";
 import { done, failed } from "../tools/contract.ts";
 import { MIND_RECALL_HEADER, withOriginTag } from "../mind/origin.ts";
 import { screenUntrustedText, withScreenNotice } from "../tools/text-screen.ts";
@@ -15,6 +15,9 @@ import { redactSecrets } from "../learn/guard.ts";
 import { runHelpers, type HelperOutcome, type HelperTask, type SpawnHelper } from "./delegate.ts";
 import type { HelperHub } from "./hub.ts";
 import type { Worktree, WorktreeOps } from "./worktree.ts";
+import { CRAFT_BAR, CRAFT_CAPABILITY, isLikenessGoal, previewUrl, referenceUrl } from "./craft.ts";
+import { measureLikeness, type LikenessResult, type PageCapture } from "../likeness/measure.ts";
+import { likenessMode, type Raster } from "../likeness/score.ts";
 
 export const DEFAULT_BAR = 9;
 export const MAX_CYCLES = 6;
@@ -91,6 +94,13 @@ export interface LoopOptions {
   worktrees?: WorktreeOps;
   hub?: HelperHub;
   mind?: () => MindClient | undefined;
+  /** Hosted (daebot.live): write loops only, whatever else is passed. Build mode (worktrees, shell) is desktop-only. */
+  hosted?: boolean;
+  /** Page capture for likeness (desktop browser pane). Absent or unavailable: the card says "likeness: not measured here". */
+  likeness?: PageCapture;
+  /** Ceiling for one round's likeness measurement (default 75 s). It never blocks the loop past that. */
+  likenessMs?: number;
+  env?: Record<string, string | undefined>;
   /** Per helper (default 6 minutes; build helpers get twice that). */
   timeoutMs?: number;
   recallMs?: number;
@@ -104,7 +114,7 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | undefined>
   try { return await Promise.race([p, new Promise<undefined>((r) => { t = setTimeout(() => r(undefined), ms); })]); } catch { return undefined; } finally { if (t) clearTimeout(t); }
 }
 
-export function builderPrompt(o: { goal: string; rubric: readonly string[]; bar: number; cycle: number; maxCycles: number; mode: "build" | "write"; recall?: string; last?: { grade: Grade; score: number; artifact?: string } }): string {
+export function builderPrompt(o: { goal: string; rubric: readonly string[]; bar: number; cycle: number; maxCycles: number; mode: "build" | "write"; recall?: string; last?: { grade: Grade; score: number; artifact?: string }; likeness?: { reference: string; last?: LikenessResult } }): string {
   const lines = [
     `Loop goal: ${o.goal}`,
     `Cycle ${o.cycle} of ${o.maxCycles}. The work is graded 0-10 on: ${o.rubric.join(", ")}. It must reach ${o.bar}/10, where the score is governed by the weakest category.`,
@@ -115,26 +125,46 @@ export function builderPrompt(o: { goal: string; rubric: readonly string[]; bar:
       `Attack the weakest category first: ${o.last.grade.weakest}. The grader said:`, clip(o.last.grade.notes || "(no notes)", 2000));
     if (o.mode === "write" && o.last.artifact) lines.push("", "The current draft (improve it; return the whole new version):", clip(o.last.artifact, 8000));
   }
+  if (o.likeness) {
+    lines.push("", `It must look like ${o.likeness.reference} at 390, 768 and 1280 px wide; likeness is measured from screenshots and graded.`,
+      "Serve the built page locally and end your report with one line: PREVIEW: <http url where it opens>.");
+    if (o.likeness.last?.measured) lines.push(`Last measured likeness: ${o.likeness.last.similarity}% (${(o.likeness.last.widths ?? []).map((w) => `${w.width}px ${w.similarity}%`).join(", ")}). Fix the worst width first.`);
+  }
   lines.push("", o.mode === "build"
     ? "Make the change in your checkout (your edits from earlier cycles are already there), run the checks that prove it, and report what you changed and the check result lines."
     : "Return the complete artifact as your report, ready to use, with no commentary before or after it.");
   return lines.join("\n");
 }
 
-export function graderPrompt(o: { goal: string; rubric: readonly string[]; bar: number; mode: "build" | "write"; artifact: string; builderReport?: string }): string {
+export function graderPrompt(o: { goal: string; rubric: readonly string[]; bar: number; mode: "build" | "write"; artifact: string; builderReport?: string; likeness?: LikenessResult }): string {
+  const like = o.likeness && o.rubric.includes("likeness")
+    ? (o.likeness.measured
+      ? [`Measured likeness to the original (screenshots, layout + detail): ${o.likeness.similarity}% overall; ${(o.likeness.widths ?? []).map((w) => `${w.width}px ${w.similarity}%`).join(", ")}. Score "likeness" from it (about the percentage / 10).`]
+      : [`Likeness was ${o.likeness.note ?? "not measured"}. Score "likeness" from what you can check yourself, and say so in notes.`])
+    : [];
   return [
     `Grade this work for the goal: ${o.goal}`,
     o.mode === "build" ? "The work is the change in your checkout (read the changed files; run the checks yourself where you can, e.g. the tests named in the report). The builder's report, a claim until you check it:" : "The artifact:",
     clip(o.mode === "build" ? (o.builderReport ?? "") : o.artifact, 10_000),
     "",
+    ...like,
     `Score every category 0-10, honestly (a ${o.bar} means you would ship it as is): ${o.rubric.join(", ")}.`,
     "End your reply with ONE JSON object and nothing after it:",
     `{"scores": {${o.rubric.map((k) => `"${k}": 0`).join(", ")}}, "notes": "the concrete fixes, weakest category first", "checks": "the checks you ran and their result lines"}`,
   ].join("\n");
 }
 
+/** Rubric for a run: the given one, else picked from the goal; Craft always picks from the goal. A likeness goal that can be measured adds "likeness". */
+export function loopRubric(goal: string, given: unknown, o: { craft?: boolean; likeness?: boolean } = {}): string[] {
+  const rubric = (!o.craft && Array.isArray(given) ? given.map((r) => one(r, 40)).filter(Boolean) : []).slice(0, 8);
+  const cats = rubric.length ? [...new Set(rubric)] : suggestRubric(goal);
+  if (o.likeness && !cats.includes("likeness")) cats.push("likeness");
+  return cats;
+}
+
 export function createLoopTool(o: LoopOptions): Tool {
   const timeoutMs = o.timeoutMs ?? 6 * 60_000;
+  const worktrees = o.hosted ? undefined : o.worktrees; // hosted never builds, even if a caller passed worktrees
   const running = new Set<string>();
   return {
     class: "read",
@@ -144,13 +174,13 @@ export function createLoopTool(o: LoopOptions): Tool {
       description:
         "Run it until it is a 9/10 (the MIND /loop). Give a goal; the loop studies MIND for earlier wins, has a helper do the work, has a separate tough grader check it and score every rubric category 0-10, " +
         "then attacks the weakest category and goes again until the score (governed by the weakest category) clears the bar or the cycles run out. A cleared loop is remembered in MIND so the next one starts smarter. " +
-        (o.worktrees ? "mode build: the helper edits code in its own git worktree that carries across cycles; you get the branch to review and merge. " : "") +
+        (worktrees ? "mode build: the helper edits code in its own git worktree that carries across cycles; you get the branch to review and merge. " : "") +
         "mode write: the result is a text artifact (plan, spec, document, prompt, workflow). Use it when quality matters more than speed; it takes several minutes.",
       parameters: {
         type: "object",
         properties: {
           goal: { type: "string", description: "The outcome, specific enough to grade (what, for whom, what done looks like)" },
-          mode: { type: "string", enum: o.worktrees ? ["write", "build"] : ["write"], description: "build = change code in a worktree; write = produce a text artifact (default write)" },
+          mode: { type: "string", enum: worktrees ? ["write", "build"] : ["write"], description: "build = change code in a worktree; write = produce a text artifact (default write)" },
           rubric: { type: "array", items: { type: "string" }, description: "Categories to grade (default: picked from the goal, e.g. correctness, completeness, verification)" },
           bar: { type: "number", description: "Score to clear, 1-10 (default 9)" },
           max_cycles: { type: "number", description: `Cycles at most, 1-${MAX_CYCLES} (default 3)` },
@@ -164,14 +194,32 @@ export function createLoopTool(o: LoopOptions): Tool {
       const goal = one(args.goal, 1500);
       if (goal.length < 12) return failed("loop needs a goal specific enough to grade (a sentence: what, for whom, what done looks like)", { retry: "pointless" });
       const mode: "build" | "write" = args.mode === "build" ? "build" : "write";
-      if (mode === "build" && !o.worktrees) return failed("build loops are not available here (no file tools in this session, or a hosted deployment)", { retry: "pointless", next: "use mode write" });
+      if (mode === "build" && !worktrees) return failed(o.hosted ? "build loops run only in the desktop app (the hosted deployment has no shell or worktrees)" : "build loops are not available here (no file tools in this session)", { retry: "pointless", next: "use mode write" });
       if (running.has(ctx.sessionId)) return failed("a loop is already running in this chat", { retry: "pointless", next: "wait for it to finish" });
-      const rubric = (Array.isArray(args.rubric) ? args.rubric.map((r) => one(r, 40)).filter(Boolean) : []).slice(0, 8);
-      const cats = rubric.length ? [...new Set(rubric)] : suggestRubric(goal);
-      const bar = Math.max(1, Math.min(10, Number(args.bar) || DEFAULT_BAR));
+      // Craft mode (the composer's switch): bar 9 and the auto rubric, whatever the model passed.
+      const craft = !!ctx.capabilities?.includes(CRAFT_CAPABILITY);
+      // Likeness: a UI goal with a reference URL, measured only where pages can be captured; otherwise the card says why not.
+      const ref = isLikenessGoal(goal) ? referenceUrl(goal) : undefined;
+      const canMeasure = !!ref && !!o.likeness?.available();
+      const cats = loopRubric(goal, args.rubric, { craft, likeness: canMeasure });
+      const bar = craft ? CRAFT_BAR : Math.max(1, Math.min(10, Number(args.bar) || DEFAULT_BAR));
       const maxCycles = Math.max(1, Math.min(MAX_CYCLES, Math.round(Number(args.max_cycles) || 3)));
       running.add(ctx.sessionId);
       const lid = o.hub?.startLoop({ session: ctx.sessionId, goal, bar, maxCycles });
+      // The live scorecard: a full snapshot through the tool's progress channel on every change (the chat replaces its card with it).
+      const live: LoopProgress = {
+        id: lid ?? `l${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, goal: one(goal, 300), bar, cycle: 0, cycles: maxCycles, phase: "study",
+        scores: [], categories: {}, rubric: cats, startedAt: Date.now(), done: false, mode, ...(craft ? { craft: true } : {}),
+        ...(isLikenessGoal(goal) ? { likeness: canMeasure ? { measured: false, note: "measured after the first build" } : { measured: false, note: !ref ? "not measured: no reference URL in the goal" : "not measured here (no browser to capture pages in this environment)" } } : {}),
+      };
+      const emit = (patch: Partial<LoopProgress> = {}): void => {
+        Object.assign(live, patch);
+        if (!ctx.progress) return;
+        try { ctx.progress({ type: "loop", loop: { ...live, scores: [...live.scores], categories: { ...live.categories }, rubric: [...live.rubric], ...(live.likeness ? { likeness: { ...live.likeness } } : {}) } }); } catch { /* a listener never breaks the loop */ }
+      };
+      const refCache = new Map<string, Raster>();
+      let lastLikeness: LikenessResult | undefined;
+      emit();
       let tree: Worktree | undefined;
       try {
         // study: earlier wins and what MIND knows about the goal.
@@ -182,10 +230,11 @@ export function createLoopTool(o: LoopOptions): Tool {
           if (text?.trim()) recall = `${MIND_RECALL_HEADER}\n${withScreenNotice(screenUntrustedText(clip(text.trim(), 3000)))}`;
         }
         if (mode === "build") {
-          const wt = o.worktrees!.prepare(ctx.cwd, `loop ${goal}`);
-          if ("error" in wt) { if (lid) o.hub?.updateLoop(lid, { phase: "failed" }); return failed(wt.error, { retry: "pointless" }); }
+          const wt = worktrees!.prepare(ctx.cwd, `loop ${goal}`);
+          if ("error" in wt) { if (lid) o.hub?.updateLoop(lid, { phase: "failed" }); emit({ phase: "failed", done: true, endedAt: Date.now() }); return failed(wt.error, { retry: "pointless" }); }
           tree = wt;
           if (lid) o.hub?.updateLoop(lid, { branch: wt.branch });
+          emit({ branch: wt.branch });
         }
         // Every helper of a build loop works in the one worktree (the work carries over); the loop itself owns it, so no per-helper worktree.
         const spawnIn: SpawnHelper = tree ? (task, so) => o.spawn(task, { ...so, cwd: tree!.cwd }) : o.spawn;
@@ -196,7 +245,8 @@ export function createLoopTool(o: LoopOptions): Tool {
         for (let cycle = 1; cycle <= maxCycles; cycle++) {
           if (ctx.signal?.aborted) { stopReason = "stopped"; break; }
           if (lid) o.hub?.updateLoop(lid, { cycle, phase: "build" });
-          const buildTask: HelperTask = { title: `Cycle ${cycle}: ${mode === "build" ? "build" : "draft"}`, kind: mode === "build" ? "build" : "draft", prompt: builderPrompt({ goal, rubric: cats, bar, cycle, maxCycles, mode, recall: cycle === 1 ? recall : undefined, last }) };
+          emit({ cycle, phase: "build" });
+          const buildTask: HelperTask = { title: `Cycle ${cycle}: ${mode === "build" ? "build" : "draft"}`, kind: mode === "build" ? "build" : "draft", prompt: builderPrompt({ goal, rubric: cats, bar, cycle, maxCycles, mode, recall: cycle === 1 ? recall : undefined, last, ...(canMeasure ? { likeness: { reference: ref!, last: lastLikeness } } : {}) }) };
           // build-kind helpers normally get their own worktree from runHelpers; here the loop's tree is shared, so no worktrees are passed.
           const [b] = await runHelpers([buildTask], { spawn: spawnIn, hub: o.hub, parallel: 1, timeoutMs, /* runHelpers already doubles the limit for build helpers */ sessionId: ctx.sessionId, cwd: tree?.cwd ?? ctx.cwd, signal: ctx.signal, worktrees: mode === "build" ? sharedTree(tree!) : undefined, loop: lid ? { id: lid, cycle } : undefined });
           cost += b.costUsd || 0;
@@ -204,26 +254,42 @@ export function createLoopTool(o: LoopOptions): Tool {
           lastReport = b.text;
           if (mode === "write") artifact = b.text.trim();
           if (lid) o.hub?.updateLoop(lid, { phase: "grade" });
-          const gradeTask: HelperTask = { title: `Cycle ${cycle}: grade`, kind: "grade", prompt: graderPrompt({ goal, rubric: cats, bar, mode, artifact, builderReport: lastReport }) };
+          emit({ phase: "grade" });
+          // Likeness (shadow-safe): measured with a ceiling; a failure is a note on the card, never a stop.
+          let likeness: LikenessResult | undefined;
+          if (canMeasure) {
+            likeness = await withTimeout(measureLikeness({ capture: o.likeness, reference: ref, build: previewUrl(b.text), signal: ctx.signal, refCache }), o.likenessMs ?? 75_000) ?? { measured: false, note: "not measured: the capture took too long" };
+            lastLikeness = likeness;
+            emit({ likeness: { measured: likeness.measured, ...(likeness.similarity !== undefined ? { similarity: likeness.similarity } : {}), ...(likeness.widths ? { widths: likeness.widths } : {}), ...(likeness.note ? { note: likeness.note } : {}) } });
+          }
+          const gradeTask: HelperTask = { title: `Cycle ${cycle}: grade`, kind: "grade", prompt: graderPrompt({ goal, rubric: cats, bar, mode, artifact, builderReport: lastReport, likeness }) };
           const [g] = await runHelpers([gradeTask], { spawn: spawnIn, hub: o.hub, parallel: 1, timeoutMs, sessionId: ctx.sessionId, cwd: tree?.cwd ?? ctx.cwd, signal: ctx.signal, loop: lid ? { id: lid, cycle } : undefined });
           cost += g.costUsd || 0;
           const grade = parseGrade(g.text, cats);
           if (!grade) { stopReason = `the grader gave no readable scores${g.error ? ` (${g.error})` : ""}`; break; }
+          // DAEBOT_LIKENESS=on: the measured likeness IS the likeness score. Shadow/off (default): the grader scores it with the measurement as evidence.
+          if (likeness?.measured && likeness.similarity !== undefined && likenessMode(o.env ?? process.env) === "on" && "likeness" in grade.scores) {
+            grade.scores.likeness = Math.round(likeness.similarity) / 10;
+            grade.weakest = Object.entries(grade.scores).sort((x, y) => x[1] - y[1])[0]?.[0] ?? grade.weakest;
+          }
           const score = overallScore(grade.scores);
           history.push({ cycle, score, grade });
           if (lid) o.hub?.updateLoop(lid, { score, weakest: grade.weakest });
+          emit({ scores: [...live.scores, score], categories: { ...grade.scores }, weakest: grade.weakest });
           last = { grade, score, artifact };
           if (score >= bar) { cleared = true; break; }
         }
         const best = history.length ? history[history.length - 1] : undefined;
-        if (lid) o.hub?.updateLoop(lid, { phase: cleared ? "cleared" : stopReason === "stopped" ? "stopped" : history.length ? "stopped" : "failed" });
+        const endPhase = cleared ? "cleared" : stopReason === "stopped" ? "stopped" : history.length ? "stopped" : "failed";
+        if (lid) o.hub?.updateLoop(lid, { phase: endPhase });
         let branch: string | undefined, files: string[] = [];
         if (tree) {
-          const fin = o.worktrees!.finish(tree, `Daebot loop: ${goal.slice(0, 120)}`);
+          const fin = worktrees!.finish(tree, `Daebot loop: ${goal.slice(0, 120)}`);
           branch = fin.branch; files = fin.files;
           tree = undefined;
           if (lid && branch) o.hub?.updateLoop(lid, { branch });
         }
+        emit({ phase: endPhase, done: true, endedAt: Date.now(), ...(branch ? { branch } : {}) });
         // remember: a cleared loop is a win in MIND (the next loop's study step finds it).
         let remembered = "";
         if (cleared && client && best) {
@@ -253,7 +319,8 @@ export function createLoopTool(o: LoopOptions): Tool {
         if (!best) return failed(summary + (stopReason ? `: ${stopReason}` : ""), { retry: "safe", stop: "after one retry, do the work directly", output: out, meta });
         return done(summary, { output: out, partial: !cleared, ...(branch ? { artifacts: [branch] } : {}), meta });
       } finally {
-        if (tree) { try { o.worktrees!.finish(tree, `Daebot loop (interrupted): ${goal.slice(0, 100)}`); } catch { /* best effort */ } }
+        if (!live.done) emit({ phase: ctx.signal?.aborted ? "stopped" : "failed", done: true, endedAt: Date.now() });
+        if (tree) { try { worktrees!.finish(tree, `Daebot loop (interrupted): ${goal.slice(0, 100)}`); } catch { /* best effort */ } }
         running.delete(ctx.sessionId);
       }
     },

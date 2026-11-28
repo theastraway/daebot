@@ -9,7 +9,7 @@ import type { TurnDigest } from "./provider/router.ts";
 import type { LearnHooks } from "./learn/types.ts";
 import type {
   AgentEvent, AgentSession, CallRecord, Config, DecisionReceipt, GateVerdict, Kernel, Message, Provider,
-  DeviceBridge, SessionState, SessionSync, StreamEvent, Tool, ToolCall, ToolResult, TurnState, Usage, Violation, Effort, RouteDecision, TurnProof, ModelTier } from "./types.ts";
+  DeviceBridge, SessionState, SessionSync, StreamEvent, Tool, ToolCall, ToolResult, TurnState, Usage, Violation, Effort, RouteDecision, TurnProof, ModelTier, ToolProgressEvent } from "./types.ts";
 import { clipToolOutputs, compactMessages, estimateTokens, needsCompaction } from "./compact.ts";
 import { describeCall, factsOf } from "./permissions/rules.ts";
 import type { CallFacts } from "./permissions/rules.ts";
@@ -693,7 +693,22 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
     const receiptId = `c${++receiptCounter}`;
     const execCall: ToolCall = args === call.args ? call : { ...call, args };
     yield { type: "toolStart", receiptId, tool: tool.spec.name, args };
-    const result = await execute(tool, args);
+    // A long tool (loop) reports progress while it runs: each report is yielded as it arrives, then the result.
+    const pending: ToolProgressEvent[] = [];
+    let wake: (() => void) | undefined;
+    let settled: ToolResult | undefined;
+    const progress = (ev: ToolProgressEvent): void => {
+      if (!ev || ev.type !== "loop" || !ev.loop || pending.length > 200) return;
+      pending.push(ev); wake?.();
+    };
+    void execute(tool, args, progress).then((r) => { settled = r; wake?.(); });
+    while (settled === undefined) {
+      if (!pending.length) await new Promise<void>((r) => { wake = r; if (pending.length || settled !== undefined) r(); });
+      wake = undefined;
+      while (pending.length) yield pending.shift()!;
+    }
+    while (pending.length) yield pending.shift()!;
+    const result: ToolResult = settled;
     const rec: CallRecord = { receiptId, call: execCall, tool: tool.spec.name, class: effectiveClass(tool, args), receipt: tool.receipt, result, at: Date.now() };
     state.calls.push(rec);
     state.allCalls.push(rec);
@@ -735,9 +750,9 @@ export function createAgentSession(deps: SessionDeps): AgentSession {
   }
 
   let currentSignal: AbortSignal | undefined;
-  async function execute(tool: Tool, args: Record<string, unknown>): Promise<ToolResult> {
+  async function execute(tool: Tool, args: Record<string, unknown>, progress?: (ev: ToolProgressEvent) => void): Promise<ToolResult> {
     try {
-      const r = await tool.run(args, { cwd, signal: currentSignal, sessionId: id, origin: turnOrigin, capabilities: turnCaps, device: turnDevice, decisions: turnDecisions, calls: state.calls, ...(turnPeerReceipt ? { peerReceipt: turnPeerReceipt } : {}) });
+      const r = await tool.run(args, { cwd, signal: currentSignal, sessionId: id, origin: turnOrigin, capabilities: turnCaps, device: turnDevice, decisions: turnDecisions, calls: state.calls, ...(turnPeerReceipt ? { peerReceipt: turnPeerReceipt } : {}), ...(progress ? { progress } : {}) });
       return r && typeof r.output === "string" ? r : { ok: false, output: "tool returned an invalid result" };
     } catch (e) {
       return { ok: false, output: `${tool.spec.name}: ${String((e as Error)?.message ?? e).split("\n")[0].slice(0, 300)}` };

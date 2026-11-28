@@ -57,9 +57,18 @@ export function hostedPort(env: NodeJS.ProcessEnv = process.env): number | undef
 // ---------- tools ----------
 // The ONLY tools a hosted session may offer or run (never bash, process, terminal, or browser: no shell and no desktop pane run on the hosted server): web_fetch, web_search (ranked web results, billed to the user's own MIND credits), image_generate (an image saved as a chat photo, billed the same way), decide (read-only decision advice), advisor (one frontier-model call for a stuck point, billed like the chat), view_photo (reads the photos the user attached to this chat), apple_calendar (runs on the USER's device through the relay, never on this host), bot_talk, bot_manage (creates and configures the user's own bots), mcp_connect, task_board and task_decision (the user's task board and the OOC/EMR decision skill: they write only this chat and the user's own MIND), the mind_* family (incl. mind_tenants and the connected-app tools mind_apps, mind_mail, mind_calendar and mind_contacts: they call MIND with the signed-in user's own key and never touch this host), and tools of remote MCP servers
 // the operator listed in MINDCLAW_MCP_SERVERS (named `<server>__<tool>`; no host tool name contains "__").
+// loop (agents/loop.ts, Craft mode) runs here in mode "write" only: draft helpers and a grader with this same list, no shell, no worktree.
+// mode "build" is refused by hostedCallAllowed (the kernel's hosted gate) and by the loop tool itself (createLoopTool hosted:true).
 // delegate (agents/delegate.ts) runs here too: its helpers get only the tools of the session that spawns them, which on hosted are already this list, and their spend lands in the turn's usage (so the daily caps count it).
 export function hostedToolAllowed(name: string): boolean {
-  return name === "web_fetch" || name === "web_search" || name === "image_generate" || name === "decide" || name === "advisor" || name === "delegate" || name === "studio_counter" || name === "studio_pipeline" || name === "studio_build" || name === "studio_edit" || name === "view_photo" || name === "read_document" || name === "apple_calendar" || name === "bot_talk" || name === "start_voice_agent" || name === "bot_manage" || name === "bot_self" || name === "mcp_connect" || name === "task_board" || name === "astra_board" || name === "task_decision" || name === "mind_tenants" || /^mind_[a-z0-9_]+$/.test(name) || /^[a-z0-9][a-z0-9-]{0,30}__[A-Za-z0-9_-]+$/.test(name);
+  return name === "web_fetch" || name === "web_search" || name === "image_generate" || name === "decide" || name === "advisor" || name === "delegate" || name === "loop" || name === "studio_counter" || name === "studio_pipeline" || name === "studio_build" || name === "studio_edit" || name === "view_photo" || name === "read_document" || name === "apple_calendar" || name === "bot_talk" || name === "start_voice_agent" || name === "bot_manage" || name === "bot_self" || name === "mcp_connect" || name === "task_board" || name === "astra_board" || name === "task_decision" || name === "mind_tenants" || /^mind_[a-z0-9_]+$/.test(name) || /^[a-z0-9][a-z0-9-]{0,30}__[A-Za-z0-9_-]+$/.test(name);
+}
+
+/** A hosted CALL (name and arguments): the name must be allowed, and a loop may only write (build mode needs a shell and a worktree). */
+export function hostedCallAllowed(name: string, args: Record<string, unknown> | undefined): boolean {
+  if (!hostedToolAllowed(name)) return false;
+  if (name === "loop" && args && args.mode !== undefined && args.mode !== "write") return false;
+  return true;
 }
 
 export function filterHostedTools(tools: Tool[]): Tool[] {

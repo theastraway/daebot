@@ -44,6 +44,7 @@ import { initSimulatorPane } from "/simulator-pane.js";
 import { initBrowserPane, browserActionLabel, browserArgsForCard } from "/browser-pane.js";
 import { initStudio } from "/studio.js";
 import { argSummary } from "/toolargs.js";
+import { CHAT_PLACEHOLDER, CRAFT_CAP, CRAFT_PLACEHOLDER, buildScorecard, craftOn, initCraftSwitch, moveCraft } from "/craft.js";
 initScrollbars(); // scrollbars stay hidden until the user scrolls
 
 const $ = (id) => document.getElementById(id);
@@ -68,6 +69,8 @@ const store = {
 // ---------- token: read ?token= once, keep in sessionStorage, scrub the URL ----------
 let account; // the sidebar bar + account menu (account.js), assigned below once the helpers it needs exist
 let chatMode; // the per-chat permission control above the composer
+let craftSwitch; // Chat | Craft next to it (web/craft.js)
+const craftStore = (() => { try { return localStorage; } catch { return null; } })(); // null in a locked-down webview: Craft is then never remembered
 let token = store.get("sessionStorage", "mc_token") || "";
 {
   const u = new URL(location.href);
@@ -318,6 +321,7 @@ function buildItem(it, tr) {
     case "mcp": node = mcp.buildCard(it.pending, () => { it.done = true; }); if (it.done) node.classList.add("done"); break;
     case "appcard": node = buildAppCard({ provider: it.provider, h, apps, onDone: () => { it.done = true; } }); if (it.done) node.classList.add("done"); break; // Authorize card for a MIND app (Google, Dropbox, ...)
     case "exchange": case "xin": node = xchg ? xchg.buildCard(it) : h("div", "notice", "Agent exchange"); break; // bot_talk cards: "Messaged <agent>" and "<agent> messaged you"
+    case "loop": node = buildScorecard(it.loop, { h }); break; // Craft mode / /loop: the live scorecard (web/craft.js)
     default: // a billing notice carries an upgrade link; anything else stays plain text
       node = h("div", `notice ${it.level === "warn" ? "warn" : ""}`, /https?:\/\//.test(it.text) ? undefined : it.text);
       if (/https?:\/\//.test(it.text)) inline(node, it.text);
@@ -568,12 +572,20 @@ function itemsFromHistory(events) {
       case "permissionResolved": { const it = permById.get(ev.id); if (it) resolvePermission(it, ev); break; }
       case "notice": items.push({ kind: "notice", level: ev.level, text: ev.text, ...(ev.action ? { action: ev.action } : {}) }); break;
       case "exchange": asst = null; items.push({ kind: "exchange", exchangeId: ev.exchangeId, from: ev.from, to: ev.to, message: ev.message, reply: ev.reply, at: ev.at }); break;
+      case "loop": { // the server keeps the newest snapshot per loop; a saved one that never finished (a restart) shows as stopped
+        if (!ev.loop || !ev.loop.id) break;
+        asst = null;
+        const old = items.find((x) => x.kind === "loop" && x.loop.id === ev.loop.id);
+        if (old) old.loop = ev.loop; else items.push({ kind: "loop", loop: ev.loop });
+        break;
+      }
       case "usage": usage.in += ev.usage.promptTokens; usage.out += ev.usage.completionTokens; usage.cost = ev.totalCostUsd; if (ev.model) model = ev.model; break;
       case "done": asst = null; break; // a later assistant post (the voice agent writing into this chat) is its own message
       default: break;
     }
   }
   for (const it of items) if (it.kind === "tool" && it.status === "run") it.status = "fail";
+  for (const it of items) if (it.kind === "loop" && !it.loop.done) it.loop = { ...it.loop, done: true, phase: "stopped", endedAt: it.loop.endedAt || Date.now() };
   for (const it of items) if (it.kind === "permission" && it.state === "pending") it.state = "gone"; // a finished transcript has no card still waiting
   return { items, usage, model };
 }
@@ -819,7 +831,8 @@ function renderHeader() {
   // A thread shared with you as view only: the box says so and does not take words. (Everything else about it works like any chat.)
   const viewOnly = !!shared && shared.role === "viewer";
   els.input.disabled = viewOnly;
-  els.input.placeholder = viewOnly ? "You can read this thread but not post in it" : "Message Daebot";
+  els.input.placeholder = viewOnly ? "You can read this thread but not post in it" : craftOn(craftStore, tkey()) ? CRAFT_PLACEHOLDER : CHAT_PLACEHOLDER;
+  craftSwitch?.render();
   els.composer.classList.toggle("view-only", viewOnly);
 }
 // Messages sent while Dae is working wait here (per chat) and go out in order, one per turn, when Dae finishes (drainQueue).
@@ -1315,6 +1328,7 @@ async function sendMessage(text, attached = [], quote) {
   suggest.onSend(text); // tells Dae whether the suggested replies were taken, edited or ignored, and clears them
   // Show the message immediately; opening a session can take several seconds while MIND boots.
   const startKey = tkey();
+  const craft = craftOn(craftStore, startKey); // the composer's Chat | Craft switch for this chat, read before the chat gets its id
   const userItem = addItem(startKey, { kind: "user", text, ...(currentMeta()?.shared ? { mine: true } : {}), ...(quote ? { quote: { id: quote.mid, text: quote.text } } : {}), ...(attached.length ? { photos: attached.map((p) => ({ name: p.name, dataUrl: p.dataUrl, width: p.width, height: p.height, ...(p.kind === "document" ? { kind: "document" } : {}) })) } : {}) });
   voice.turnStart();
   const waiting = addItem(startKey, { kind: "notice", level: "info", text: "Thinking…" });
@@ -1332,7 +1346,7 @@ async function sendMessage(text, attached = [], quote) {
     if (attached.length && !photos.count()) photos.set(attached);
     return notify(`Could not start a session: ${e.message}`);
   }
-  if (startKey !== id) { state.busy.delete(startKey); state.busy.add(id); }
+  if (startKey !== id) { state.busy.delete(startKey); state.busy.add(id); moveCraft(craftStore, startKey, id); }
   // Before the SSE read: the send button. interrupt barges in only while the agent is speaking; "!" always does.
   if (text) tellCall(id, { type: "user", text, interrupt: true });
   markInflight(id, true); // a reload or reopen mid-reply lands back on this chat and picks the reply up
@@ -1355,6 +1369,7 @@ async function sendMessage(text, attached = [], quote) {
   try {
     const capabilities = [...calendarCapabilities()]; // ["apple_calendar"] inside the iPhone and Mac apps, [] anywhere else
     if (voice.spokenTurn && voice.spokenTurn()) capabilities.push("spoken"); // the answer will be heard: short, fast, one lookup
+    if (craft) capabilities.push(CRAFT_CAP); // Craft: the server runs this message as a loop (bar 9) and streams the scorecard
     const body = { text, ...(quote ? { quote: { id: quote.mid, text: (quote.full || quote.text).slice(0, 600) } } : {}), ...(attached.length ? { photos: attached.map(({ name, dataUrl }) => ({ name, dataUrl })) } : {}), ...(capabilities.length ? { capabilities } : {}) };
     let res = await api(`/sessions/${encodeURIComponent(id)}/send`, { method: "POST", body: JSON.stringify(body) });
     if (res.status === 404 && (await res.clone().json().catch(() => ({}))).error === "no such session") {
@@ -1552,6 +1567,14 @@ function onEvent(id, ev, asst, toolByReceipt) {
       addItem(id, { kind: "exchange", exchangeId: ev.exchangeId, from: ev.from, to: ev.to, message: ev.message, reply: ev.reply, at: ev.at });
       if (xchg) xchg.poke();
       return null;
+    case "loop": { // a loop's newest snapshot: update its scorecard in place, or put one in the thread
+      if (!ev.loop || !ev.loop.id) return asst;
+      const it = tr.items.find((x) => x.kind === "loop" && x.loop.id === ev.loop.id);
+      if (it) { it.loop = ev.loop; if (it.node && it.node.update) it.node.update(ev.loop); return asst; }
+      if (asst) { asst.streaming = false; paintAssistant(asst); }
+      addItem(id, { kind: "loop", loop: ev.loop });
+      return null;
+    }
     case "usage":
       tr.usage.in += ev.usage.promptTokens; tr.usage.out += ev.usage.completionTokens; tr.usage.cost = ev.totalCostUsd;
       if (ev.model) tr.model = ev.model;
@@ -1866,6 +1889,11 @@ const suggest = initSuggest({
 });
 const permissions = initPermissions({ json, h, icon, notify, button: $("btn-perms") });
 $("btn-perms").addEventListener("click", closeSidebar);
+// Chat | Craft, next to the permission control: per chat, remembered on this device (web/craft.js).
+craftSwitch = initCraftSwitch({
+  h, mount: document.getElementById("mode-row"), storage: craftStore, getKey: () => tkey(),
+  onChange: (on) => { els.input.placeholder = on ? CRAFT_PLACEHOLDER : CHAT_PLACEHOLDER; els.input.focus(); },
+});
 chatMode = initChatMode({
   json, h, icon, notify,
   ids: { btn: "mode-btn", label: "mode-label", menu: "mode-menu" },
