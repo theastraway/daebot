@@ -54,7 +54,7 @@ test("paintOpening: greeting, the line, starters that send their prompt; a quiet
 
 test("web/app.js parses as a module (a duplicate declaration would blank the whole page)", async () => {
   const { spawnSync } = await import("node:child_process");
-  for (const f of ["app.js", "opening.js", "voice.js", "voicechat-bridge.js", "voiceagent.js"]) {
+  for (const f of ["app.js", "opening.js", "voice.js", "voicechat-bridge.js", "voiceagent.js", "craft.js"]) {
     const r = spawnSync(process.execPath, ["--check", "--input-type=module"], { input: web(f), encoding: "utf8" });
     assert.equal(r.status, 0, `${f}: ${r.stderr.split("\n").slice(0, 6).join("\n")}`);
   }

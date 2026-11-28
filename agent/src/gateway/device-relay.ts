@@ -6,8 +6,8 @@ import { randomUUID } from "node:crypto";
 import type { AgentEvent, DeviceBridge, DeviceReply } from "../types.ts";
 
 /** Capabilities a client may list on a send. Anything else is dropped. */
-export const CLIENT_CAPABILITIES: ReadonlySet<string> = new Set(["apple_calendar", "spoken"]);
-/** The capabilities that need a device relay (the others only shape the prompt, e.g. "spoken": the answer will be read aloud). */
+export const CLIENT_CAPABILITIES: ReadonlySet<string> = new Set(["apple_calendar", "spoken", "craft"]);
+/** The capabilities that need a device relay (the others only shape the turn, e.g. "spoken": the answer will be read aloud; "craft": the composer's Craft switch, the message runs as a loop). */
 export const DEVICE_CAPABILITIES: ReadonlySet<string> = new Set(["apple_calendar"]);
 
 /** The capabilities named in a send body: known names only, each once. */

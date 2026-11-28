@@ -51,6 +51,16 @@ export class HistoryRecorder {
       else this.items.push({ type: "text", delta: ev.delta, id: newMessageId(), ...(this.runId ? { rid: this.runId } : {}) });
       return;
     }
+    if (ev.type === "loop") {
+      // A loop reports a full snapshot many times: the transcript keeps only the newest one per loop, where the first one stood.
+      for (let i = this.items.length - 1; i >= 0 && i >= this.items.length - 400; i--) {
+        const it = this.items[i];
+        if (it.type === "loop" && it.loop.id === ev.loop.id) { this.items[i] = { ...ev, ...(it.rid ? { rid: it.rid } : {}) }; return; }
+      }
+      this.items.push({ ...ev, ...(this.runId ? { rid: this.runId } : {}) });
+      this.trim();
+      return;
+    }
     this.items.push(ev);
     this.trim();
   }

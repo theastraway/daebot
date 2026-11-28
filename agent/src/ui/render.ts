@@ -62,6 +62,12 @@ export class TurnFolder {
       case "proof":
       case "handoff":
         return [];
+      case "loop": { // the web shows a live scorecard; the terminal prints one line when the loop ends
+        const l = ev.loop;
+        if (!l.done) return [];
+        const best = l.scores.length ? Math.max(...l.scores) : undefined;
+        return [{ kind: "notice", level: "info", text: l.phase === "cleared" ? `loop cleared ${l.scores[l.scores.length - 1]} in ${l.scores.length} round(s)` : best !== undefined ? `loop best ${best} after ${l.scores.length} round(s)${l.weakest ? `; weakest: ${l.weakest}` : ""}` : "loop ended with no graded round" }];
+      }
       case "notice":
         return [{ kind: "notice", level: ev.level, text: ev.text }];
       case "exchange":
