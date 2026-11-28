@@ -20,7 +20,13 @@
     <div class="ghost-m" aria-hidden="true"></div>
     <m-bot class="face" intro playful></m-bot>
     <div class="wm">__WORDMARK__<i class="wm-flame" aria-hidden="true"></i></div>
-    <p class="stage-sub">Private agent. Every claim checked by the kernel.</p>
+    <h2 class="stage-title">The pinnacle of private agents.</h2>
+    <p class="stage-sub">Daebot boots from your own MIND, checks every claim against the kernel before it reaches you, and brings every agent you run into one window.</p>
+    <ul class="stage-points">
+      <li><b>Kernel-checked.</b> Every claim is checked before it reaches you. Risky actions ask first.</li>
+      <li><b>Boots from your memory.</b> Your knowledge graph, every session, every device.</li>
+      <li><b>One cockpit.</b> Claude Code, Grok bots, Codex, Cursor and n8n sessions, side by side, synced both ways.</li>
+    </ul>
     <div class="powered"><span>Powered by</span><i class="mind-logo" role="img" aria-label="MIND"></i></div>
   </section>
   <section class="panel">
@@ -48,7 +54,7 @@
       </details>
       <p class="err" id="login-err" role="alert" aria-live="polite" hidden></p>
     </div>
-    <p class="login-foot">Sessions are private to your account. Sign out from the sidebar when you are done. <a class="login-foot-link" href="/download/">Download the desktop app</a></p>
+    <p class="login-foot">Sessions are private to your account. Apps update themselves. <a class="login-foot-link" href="/download/">Download the desktop app</a></p>
   </section>
 </main>
 <script type="module" src="/brand/mbot.js"></script>

@@ -15,7 +15,12 @@
 .wm { display: flex; align-items: flex-end; justify-content: center; margin-top: 34px; }
 .wm-flame { flex: none; width: clamp(11px, 3.4vw, 16px); aspect-ratio: 112 / 133; margin: 0 0 .35em .3em; background: url("data:image/png;base64,__FLAME__") center / contain no-repeat; }
 .wordmark { width: min(300px, 62vw); height: auto; color: #f6ead8; overflow: visible; }
-.stage-sub { margin: 18px 0 0; font-size: 15px; color: #b9ad98; max-width: 34ch; text-wrap: balance; }
+.stage-title { margin: 26px 0 0; font: 700 clamp(24px, 2.6vw, 34px)/1.1 var(--sans); letter-spacing: -.03em; color: #f6ead8; max-width: 20ch; text-wrap: balance; }
+.stage-sub { margin: 14px 0 0; font-size: 15px; line-height: 1.5; color: #b9ad98; max-width: 44ch; text-wrap: balance; }
+.stage-points { list-style: none; margin: 22px 0 0; padding: 0; display: grid; gap: 10px; max-width: 46ch; text-align: left; font-size: 13.5px; line-height: 1.45; color: #a79c88; }
+.stage-points li { position: relative; padding-left: 18px; }
+.stage-points li::before { content: ""; position: absolute; left: 0; top: .55em; width: 7px; height: 7px; border-radius: 50%; background: #d92d2d; }
+.stage-points b { color: #f6ead8; font-weight: 650; }
 .ghost-m { position: absolute; z-index: -1; right: -120px; bottom: -120px; width: 420px; height: 420px; background: url("data:image/png;base64,__MGHOST__") center / contain no-repeat; opacity: .045; transform: rotate(-8deg); }
 .tile { width: 56px; height: 56px; border-radius: 15px; background: url("data:image/png;base64,__TILE__") center / cover no-repeat; box-shadow: 0 0 0 1px var(--line), 0 12px 24px -12px rgba(0,0,0,.5); margin-bottom: 18px; }
 .powered { position: absolute; left: 0; right: 0; bottom: 32px; display: flex; align-items: center; justify-content: center; gap: 12px; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: #a79c88; }
@@ -51,7 +56,9 @@
   .stage { padding: 30px 20px 64px; }
   .face { width: 150px; }
   .wordmark { width: 190px; margin-top: 18px; }
-  .stage-sub { margin-top: 10px; font-size: 14px; }
+  .stage-title { margin-top: 14px; font-size: 22px; }
+  .stage-sub { margin-top: 8px; font-size: 14px; }
+  .stage-points { display: none; }
   .powered { bottom: 20px; }
   .mind-logo { width: 78px; height: 20px; }
   .panel { padding: 28px 20px 40px; align-content: start; }
