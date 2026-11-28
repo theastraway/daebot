@@ -358,7 +358,7 @@ export function initVoice(o) {
   let barge = null;
   async function startBargeWatch() {
     stopBargeWatch();
-    if (!convo || !canRecord) return;
+    if (!convo || !canRecord || isIOS()) return; // iOS: opening the mic mid-playback moves the audio to the earpiece and drops the volume
     const me = { stream: null, ctx: null, timer: 0, floor: 0, over: 0, t0: performance.now(), dead: false };
     barge = me;
     try { me.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false } }); }
@@ -376,6 +376,10 @@ export function initVoice(o) {
       me.over = lvl > Math.max(BARGE_MIN_RMS, me.floor * 2.2) ? me.over + 60 : Math.max(0, me.over - 30);
       if (me.over >= BARGE_MS) { stopBargeWatch(); stopSpeaking(); startListening("convo"); }
     }, 60);
+  }
+  function isIOS() {
+    const ua = navigator.userAgent || "";
+    return /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
   }
   function stopBargeWatch() {
     const b = barge; barge = null;
