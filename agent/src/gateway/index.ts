@@ -12,7 +12,7 @@ import { COOKIE_NAME, hostnameOf, isLocalHost, isLocalOrigin, loadOrCreateToken,
 import { HostedConfigError, LoginLimiter, MIN_TOKEN_LEN, SESSION_TTL_MS, issueSession, parseSession } from "../hosted.ts";
 import type { HostedOptions } from "../hosted.ts";
 import { RunRegistry } from "./runs.ts";
-import { DeviceRelay, parseCapabilities } from "./device-relay.ts";
+import { DEVICE_CAPABILITIES, DeviceRelay, parseCapabilities } from "./device-relay.ts";
 import type { Run } from "./runs.ts";
 import { BusyError, ForbiddenError, NotFoundError, SessionManager } from "./sessions.ts";
 import type { LiveSession } from "./sessions.ts";
@@ -1893,7 +1893,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
     res.writeHead(200, sseHeaders(extraHeaders));
     const run = runs.start(id, text, photos);
     // A client that listed a capability (e.g. the iPhone or Mac app's Apple Calendar bridge) gets a relay for this turn: tools ask the device through the run feed.
-    const device = me && capabilities.length
+    const device = me && capabilities.some((c) => DEVICE_CAPABILITIES.has(c))
       ? deviceRelay.bridge({ sessionId: id, owner: me.id, publish: (ev) => { run.publish(ev); broadcast(id, ev); } })
       : undefined;
     // The run is detached from this request: it publishes into the run feed, the WebSocket subscribers and (via the runtime) the disk.
@@ -1906,7 +1906,7 @@ export async function startGateway(opts: GatewayOptions): Promise<GatewayHandle>
         await manager.turn(id, text, (ev) => {
           run.publish(ev);
           broadcast(id, ev);
-        }, undefined, "user", interactive, photos, device ? { capabilities, device } : undefined, quote);
+        }, undefined, "user", interactive, photos, capabilities.length ? { capabilities, ...(device ? { device } : {}) } : undefined, quote);
       } catch (err) {
         const msg = err instanceof BusyError || err instanceof NotFoundError ? err.message : "internal error";
         run.publish({ type: "notice", level: "warn", text: msg });

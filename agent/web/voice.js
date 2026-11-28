@@ -14,6 +14,10 @@ const MAX_REC_MS = 60_000;          // one utterance
 const HOLD_MS = 380;                // press longer than this = hold-to-talk
 const SILENCE_MS = 1500;            // click/hands-free: stop this long after speech ends
 const NO_SPEECH_MS = 9000;          // nothing said at all: give up listening
+const CONVO_NO_SPEECH_MS = 30_000;  // in a call: wait longer before pausing (people think before they talk)
+const FILLER_AFTER_MS = 2800;       // a spoken answer not started by then: say "one sec" so the call is never dead air
+const FILLERS = ["One sec.", "Let me check.", "On it."];
+const END_CALL = /^(?:ok(?:ay)?[, ]+)?(?:bye|goodbye|bye bye|stop|hang up|end (?:the )?call|that'?s all|that'?s it|thanks,? that'?s all)[.!]?$/i;
 const MIN_RMS = 0.02;               // speech floor (also scaled by measured room noise)
 const MAX_SPOKEN_CHARS = 1200;      // never read a whole essay aloud (bounds credits too)
 const BARGE_MS = 420;                // hands-free: this much talking over an answer interrupts it
@@ -132,7 +136,7 @@ export function initVoice(o) {
     els.mic.classList.toggle("on", state === "listening" && mode === "dictate");
     if (els.voiceBtn) {
       els.voiceBtn.setAttribute("aria-pressed", String(state === "listening" && mode === "voice"));
-      els.voiceBtn.classList.toggle("on", state === "listening" && mode === "voice");
+      els.voiceBtn.classList.toggle("on", (state === "listening" && mode === "voice") || convo);
     }
     els.dock.dataset.mode = live ? mode : "";
     if (els.pill) {
@@ -255,7 +259,7 @@ export function initVoice(o) {
       if (now - r.t0 > MAX_REC_MS) return stopListening();
       if (r.how !== "hold" && r.how !== "key") {
         if (r.heard && now - r.lastVoice > SILENCE_MS) return stopListening();
-        if (!r.heard && now - r.t0 > NO_SPEECH_MS) { r.discard = true; if (convo) { convo = false; o.notify("Hands-free paused: I did not hear anything. Tap the wave button to continue."); } return stopListening(); }
+        if (!r.heard && now - r.t0 > (convo ? CONVO_NO_SPEECH_MS : NO_SPEECH_MS)) { r.discard = true; if (convo) { convo = false; o.notify("Call paused: I did not hear anything for a while. Tap the voice button to pick it up again."); } return stopListening(); }
       }
     }, 60);
   }
@@ -286,6 +290,7 @@ export function initVoice(o) {
       o.creditsChanged();
       const text = (j.text || "").trim();
       if (!text) { setState("idle"); bots().forEach((b) => b.flash?.("sad", 1400)); o.notify("I could not make out any words. Try again a little closer to the mic."); return r.mode === "voice" ? convoNext() : undefined; }
+      if (r.mode === "voice" && convo && END_CALL.test(text)) { endConvo(); return o.notify("Call ended."); }
       deliverTranscript(r.mode, text, { insert: dictateInto, send: submit });
     } catch (e) {
       abortFetch = null;
@@ -334,8 +339,31 @@ export function initVoice(o) {
     pendingTurn = true; voiceTurn = true;
     setState("thinking");
     chime(); // "got it": the call never sits in dead silence while Daebot works
+    clearTimeout(fillerTimer);
+    fillerTimer = setTimeout(() => { if (state === "thinking" && pendingTurn) void sayFiller(); }, FILLER_AFTER_MS);
     els.composer.requestSubmit();
   }
+
+  // ---------- filler: "One sec." while Daebot works (fetched once per phrase, then replayed from memory) ----------
+  let fillerTimer = 0, fillerN = 0;
+  const fillerAudio = new Audio();
+  const fillerBlobs = new Map();
+  async function sayFiller() {
+    const phrase = FILLERS[fillerN++ % FILLERS.length];
+    try {
+      let url = fillerBlobs.get(phrase);
+      if (!url) {
+        const res = await fetch("/voice/tts", { method: "POST", credentials: "same-origin", headers: { ...o.authHeaders(), "content-type": "application/json" }, body: JSON.stringify({ text: phrase, ...(o.botSlug ? { bot: o.botSlug() } : {}) }) });
+        if (!res.ok) return;
+        url = URL.createObjectURL(await res.blob());
+        fillerBlobs.set(phrase, url);
+      }
+      if (state !== "thinking" || !pendingTurn) return; // the answer beat us to it
+      fillerAudio.src = url;
+      await fillerAudio.play();
+    } catch { /* a missing filler is only silence */ }
+  }
+  function stopFiller() { clearTimeout(fillerTimer); try { fillerAudio.pause(); } catch { /* idle */ } }
 
   /** A soft two-note "got it" earcon (Web Audio, no file, no credits) when a spoken message is sent. */
   function chime() {
@@ -417,6 +445,7 @@ export function initVoice(o) {
   }
 
   async function speak(text) {
+    stopFiller();
     // The gateway's speech writer turns the WRITTEN answer into what a person would say on a call (rewrite: true); speakable() is only a
     // pre-check that there is something to say. The full answer stays on screen.
     const raw = String(text || "").trim().slice(0, MAX_REWRITE_CHARS);
@@ -475,14 +504,23 @@ export function initVoice(o) {
     btn.addEventListener("click", (e) => {
       if (e.detail !== 0) return; // pointer clicks are handled above
       unlock();
-      if (state === "listening") stopListening(); else startListening("click", as);
+      if (state === "listening") stopListening(); else { startListening("click", as); if (as === "voice") startCall(); }
     });
   }
   const release = () => {
     if (!press.down) return;
     press.down = false; press.upT = performance.now();
-    if (rec && rec.how === "hold") { if (press.upT - press.t >= HOLD_MS) stopListening(); else rec.how = "click"; }
+    if (rec && rec.how === "hold") {
+      if (press.upT - press.t >= HOLD_MS) stopListening(); // held: walkie-talkie, one turn
+      else { rec.how = "click"; if (rec.mode === "voice") startCall(); } // tapped: a call that keeps listening after every answer
+    }
   };
+  /** Phone mode: the voice button was tapped. Answers are spoken and the mic reopens after each one, until stop, Esc, "bye" or silence. */
+  function startCall() {
+    if (convo) return;
+    convo = true; mode = "voice";
+    paint();
+  }
   wirePress(els.mic, "dictate");
   if (els.voiceBtn) wirePress(els.voiceBtn, "voice");
 
@@ -518,6 +556,7 @@ export function initVoice(o) {
 
   function endConvo() { convo = false; cancel(); }
   function cancel() {
+    stopFiller();
     pendingTurn = false; voiceTurn = false; keyHeld = false;
     if (abortFetch) { abortFetch.abort(); abortFetch = null; }
     stopListening(true);
@@ -549,6 +588,8 @@ export function initVoice(o) {
       if (text && text.trim()) speak(text); else convoNext();
     },
     cancel,
+    /** This turn's answer will be read aloud (a voice send, a call, or spoken answers on): the server answers like a person on a call. */
+    spokenTurn: () => pendingTurn || convo || speakOn,
     holdStart,
     holdEnd,
     mode: () => mode,

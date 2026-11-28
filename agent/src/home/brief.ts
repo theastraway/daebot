@@ -188,3 +188,18 @@ export function spokenOpener(b: Pick<OpeningBrief, "name" | "line">): string | u
   if (!line) return undefined;
   return `Hey${b.name ? ` ${b.name}` : ""}. ${line}${/[?]$/.test(line) ? "" : " Want to start there?"}`;
 }
+
+/** The "## Right now" system-prompt block: what MIND says needs the user, so a spoken or day question is answered without a search. */
+export function agendaFacts(inp: BriefInputs, at: number): string {
+  const top = pickTodos(inp.todos, new Date(at).toISOString().slice(0, 10));
+  if (!top.length && !inp.mail.length) return "";
+  const when = new Date(at).toISOString().slice(11, 16);
+  const lines = [`## Right now (read from the user's MIND at ${when} UTC)`];
+  if (top.length) {
+    lines.push(`To-dos in progress, most pressing first (${inp.todos.length} open in all):`);
+    for (const t of top) lines.push(`- ${t.title}${t.priority ? ` [${t.priority}]` : ""}${t.due ? ` due ${t.due.slice(0, 10)}` : ""}${t.waiting ? " WAITING ON THEM" : ""}${t.project ? ` (${t.project})` : ""}`);
+  }
+  if (inp.mail.length) { lines.push("Unread email:"); for (const m of inp.mail) lines.push(`- ${m.from}: ${m.subject}`); }
+  lines.push("For questions about their day, plate, to-dos, email or what needs them, answer from this list straight away. Call mind_todos, mind_calendar or mind_mail only for more detail or to change something. Never say you cannot see their to-dos.");
+  return lines.join("\n");
+}

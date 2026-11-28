@@ -209,3 +209,12 @@ test("learned recall needs two shared terms (the one-word rule is gone) and the 
   assert.match(some.note ?? "", /plain-text prose emails/);
   assert.doesNotMatch(some.note ?? "", /caveman/);
 });
+
+test("agenda questions load the to-do and calendar tools (a 45 s blind search before)", async () => {
+  const { groupsForMessage } = await import("../../src/focus.ts");
+  for (const q of ["What's on my plate today?", "catch me up", "plan my day", "what needs me?", "anything overdue?", "what should I work on"]) {
+    const g = groupsForMessage(q);
+    assert.ok(g.has("board"), `${q} -> board`);
+  }
+  assert.ok(groupsForMessage("What's on my plate today?").has("mail"), "plate -> calendar too");
+});

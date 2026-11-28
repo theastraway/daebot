@@ -1353,7 +1353,8 @@ async function sendMessage(text, attached = [], quote) {
   };
   let refused = false; // the server turned the message away before any turn started
   try {
-    const capabilities = calendarCapabilities(); // ["apple_calendar"] inside the iPhone and Mac apps, [] anywhere else
+    const capabilities = [...calendarCapabilities()]; // ["apple_calendar"] inside the iPhone and Mac apps, [] anywhere else
+    if (voice.spokenTurn && voice.spokenTurn()) capabilities.push("spoken"); // the answer will be heard: short, fast, one lookup
     const body = { text, ...(quote ? { quote: { id: quote.mid, text: (quote.full || quote.text).slice(0, 600) } } : {}), ...(attached.length ? { photos: attached.map(({ name, dataUrl }) => ({ name, dataUrl })) } : {}), ...(capabilities.length ? { capabilities } : {}) };
     let res = await api(`/sessions/${encodeURIComponent(id)}/send`, { method: "POST", body: JSON.stringify(body) });
     if (res.status === 404 && (await res.clone().json().catch(() => ({}))).error === "no such session") {
